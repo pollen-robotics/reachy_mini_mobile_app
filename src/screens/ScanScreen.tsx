@@ -53,7 +53,11 @@ import {
   extractRobotName,
   type CentralRobotEntry,
 } from '../auth/fetchRobotsFromCentral';
-import { useRemoteRobots } from '../auth/useRemoteRobots';
+import {
+  useCentralSource,
+  type CentralSourceState,
+} from '../presence/centralSource';
+import type { ConnectionDiagnostic } from '../presence/types';
 import HeroIllustration from '../components/HeroIllustration';
 import detectiveSvg from '../assets/reachy-detective.svg';
 import reachiesSvg from '../assets/reachies.svg';
@@ -67,7 +71,7 @@ interface ScanScreenProps {
    * HF token is guaranteed to be present here (the App-level auth
    * gate renders RemoteSignInScreen otherwise). We still pass it
    * through so the remote section can display the username and
-   * forward it to `useRemoteRobots`.
+   * forward it to `useCentralSource`.
    */
   token: string;
   username: string | null;
@@ -85,7 +89,7 @@ export default function ScanScreen({
   username,
 }: ScanScreenProps) {
   const { status, devices, adapterUnavailable, startScanning } = useBleSession();
-  const remote = useRemoteRobots(token, { pollMs: 30_000 });
+  const remote = useCentralSource(token);
 
   const started = useRef(false);
   useEffect(() => {
@@ -261,7 +265,7 @@ function RemoteSection({
   onRefresh,
 }: {
   username: string | null;
-  state: ReturnType<typeof useRemoteRobots>['state'];
+  state: CentralSourceState;
   onPick: (robot: CentralRobotEntry) => void;
   onSignOut: () => void;
   onRefresh: () => void;
@@ -311,11 +315,10 @@ function RemoteSection({
           </Typography>
         </Stack>
       ) : state.kind === 'error' && state.robots.length === 0 ? (
-        <SectionEmpty
-          text="Couldn't reach Hugging Face"
-          hint={state.reason}
-          actionLabel="Retry"
-          onAction={onRefresh}
+        <DiagnosticEmpty
+          diagnostic={state.diagnostic}
+          onRefresh={onRefresh}
+          onSignOut={onSignOut}
         />
       ) : state.kind !== 'no-token' && state.robots.length > 0 ? (
         <List
@@ -438,6 +441,87 @@ function Section({
       {children}
     </Stack>
   );
+}
+
+/**
+ * Render the central diagnostic with an action button picked from
+ * the typed `kind`. Token rejection routes the user to the sign-in
+ * gate; everything else offers a retry.
+ */
+function DiagnosticEmpty({
+  diagnostic,
+  onRefresh,
+  onSignOut,
+}: {
+  diagnostic: ConnectionDiagnostic;
+  onRefresh: () => void;
+  onSignOut: () => void;
+}) {
+  switch (diagnostic.kind) {
+    case 'token_rejected':
+      return (
+        <SectionEmpty
+          text="Hugging Face rejected your token"
+          hint="Sign in again to refresh your access."
+          actionLabel="Sign in"
+          onAction={onSignOut}
+        />
+      );
+    case 'network_error':
+      return (
+        <SectionEmpty
+          text="Network unreachable"
+          hint="Check your connection and try again."
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      );
+    case 'timeout':
+      return (
+        <SectionEmpty
+          text="Hugging Face took too long"
+          hint="The request timed out. Try again in a moment."
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      );
+    case 'http_5xx':
+      return (
+        <SectionEmpty
+          text="Hugging Face is having trouble"
+          hint={`Server returned HTTP ${diagnostic.status}. Try again shortly.`}
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      );
+    case 'http_4xx':
+      return (
+        <SectionEmpty
+          text="Hugging Face refused the request"
+          hint={`Returned HTTP ${diagnostic.status}.`}
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      );
+    case 'permission_denied':
+      return (
+        <SectionEmpty
+          text="Permission required"
+          hint={diagnostic.message}
+        />
+      );
+    case 'empty_list':
+    case 'unknown':
+    default:
+      return (
+        <SectionEmpty
+          text="Couldn't reach Hugging Face"
+          hint={diagnostic.message}
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      );
+  }
 }
 
 function SectionEmpty({
