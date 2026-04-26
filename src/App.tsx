@@ -11,6 +11,7 @@ import {
   useBleSession,
   useInitBleListeners,
 } from './ble/useBleSession';
+import { useHfTokenRefresh } from './auth/useHfTokenRefresh';
 import { useRemoteHfToken } from './auth/useRemoteHfToken';
 import { createLogger } from './logger';
 
@@ -53,9 +54,14 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('scan');
   const [target, setTarget] = useState<ConnectionTarget | null>(null);
   const { disconnectDevice, connectedAddress } = useBleSession();
-  const { token, username, setToken, clear } = useRemoteHfToken();
+  const tokenState = useRemoteHfToken();
+  const { token, username, setToken, clear } = tokenState;
 
   useInitBleListeners();
+  // Auto-refresh the HF access token in the background. When HF
+  // doesn't issue a refresh token (depending on client config) this
+  // is a no-op and the user re-auths on next 401 instead.
+  useHfTokenRefresh(tokenState);
 
   const backToScan = async (): Promise<void> => {
     if (connectedAddress) {
@@ -91,8 +97,12 @@ export default function App() {
         }}
       >
         <RemoteSignInScreen
-          onSignedIn={(t, u) => {
-            setToken(t, u);
+          onSignedIn={(result) => {
+            setToken(result.token, {
+              username: result.username,
+              refreshToken: result.refreshToken,
+              expiresInSec: result.expiresInSec,
+            });
             setScreen('scan');
           }}
         />

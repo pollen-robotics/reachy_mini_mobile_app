@@ -21,11 +21,17 @@ import LoginIcon from '@mui/icons-material/Login';
 import {
   cancelLoginFlow,
   loginWithHuggingFace,
+  type HfLoginResult,
 } from '../auth/oauthLoopback';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
 interface RemoteSignInScreenProps {
-  onSignedIn: (token: string, username: string | null) => void;
+  /**
+   * Receives the full login result so callers can persist the refresh
+   * token + expiry alongside the access token. Older call sites that
+   * only need `(token, username)` can ignore the extra fields.
+   */
+  onSignedIn: (result: HfLoginResult) => void;
   /**
    * Optional. When provided, a back arrow is shown in the header.
    * Omit when this screen is used as the app's entry gate (no
@@ -46,7 +52,7 @@ export default function RemoteSignInScreen({
     setBusy(true);
     try {
       const result = await loginWithHuggingFace();
-      onSignedIn(result.token, result.username);
+      onSignedIn(result);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Sign-in failed';

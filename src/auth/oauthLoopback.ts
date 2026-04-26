@@ -61,15 +61,20 @@ interface PkcePair {
   challenge: string;
 }
 
+export interface HfLoginResult {
+  token: string;
+  username: string | null;
+  refreshToken: string | null;
+  /** Lifetime of the access token in seconds, when HF tells us. */
+  expiresInSec: number | null;
+}
+
 /**
  * Run the full sign-in dance and return the freshly minted access
  * token plus the username we get back from `/oauth/userinfo`. The
  * caller is expected to persist both via `useRemoteHfToken.setToken`.
  */
-export async function loginWithHuggingFace(): Promise<{
-  token: string;
-  username: string | null;
-}> {
+export async function loginWithHuggingFace(): Promise<HfLoginResult> {
   logger.info('signin.start');
   try {
     const pkce = await generatePkcePair();
@@ -102,13 +107,87 @@ export async function loginWithHuggingFace(): Promise<{
 
     const username = await fetchUsername(tokenPayload.access_token);
 
-    logger.info('signin.success', { username });
-    return { token: tokenPayload.access_token, username };
+    logger.info('signin.success', {
+      username,
+      has_refresh: tokenPayload.refresh_token !== undefined,
+      expires_in: tokenPayload.expires_in ?? null,
+    });
+    return {
+      token: tokenPayload.access_token,
+      username,
+      refreshToken: tokenPayload.refresh_token ?? null,
+      expiresInSec: tokenPayload.expires_in ?? null,
+    };
   } catch (err) {
     logger.warn('signin.failure', {
       message: err instanceof Error ? err.message : String(err),
     });
     throw err;
+  }
+}
+
+/**
+ * Exchange a refresh token for a fresh access token without going
+ * through the browser flow. Returns `null` if the server rejects the
+ * refresh (token revoked, expired, scope changed) so the caller can
+ * fall back to a forced sign-out.
+ *
+ * HF's behaviour for PKCE public clients varies by client config; if
+ * `refresh_token` was never issued in the first place, callers should
+ * not invoke this and should plan for a periodic re-loopback instead.
+ */
+export async function refreshHfAccessToken(
+  refreshToken: string,
+): Promise<HfLoginResult | null> {
+  logger.info('refresh.start');
+  try {
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: HF_OAUTH_CLIENT_ID,
+    });
+    const resp = await fetch(HF_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      logger.warn('refresh.rejected', {
+        status: resp.status,
+        // Body kept short: HF errors are like {"error":"invalid_grant"}
+        body: text.slice(0, 200),
+      });
+      return null;
+    }
+    const data = (await resp.json()) as TokenResponse;
+    if (!data.access_token) {
+      logger.warn('refresh.rejected', { reason: 'no_access_token' });
+      return null;
+    }
+    // Username doesn't change across refresh, but we re-fetch anyway
+    // so the caller can rely on the same shape as `loginWithHuggingFace`.
+    const username = await fetchUsername(data.access_token);
+    logger.info('refresh.success', {
+      // HF may issue a new refresh-token (rotation) - keep whichever is
+      // newer; fall through to the existing one when not rotated.
+      rotated_refresh: data.refresh_token !== undefined,
+      expires_in: data.expires_in ?? null,
+    });
+    return {
+      token: data.access_token,
+      username,
+      refreshToken: data.refresh_token ?? refreshToken,
+      expiresInSec: data.expires_in ?? null,
+    };
+  } catch (err) {
+    logger.warn('refresh.failure', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
 }
 
