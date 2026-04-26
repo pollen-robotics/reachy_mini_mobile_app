@@ -113,6 +113,7 @@ import {
 import { useDaemonStatus } from '../daemon/useDaemonStatus';
 import { createLogger, newTraceId, setTraceId } from '../logger';
 import { createRobotClient } from '../robot-client';
+import type { RobotClient } from '../robot-client/types';
 
 const logger = createLogger('session');
 import astronautSvg from '../assets/astronaut.svg';
@@ -672,6 +673,7 @@ export default function RobotSessionScreen({
             isAuthenticated={isAuthenticated}
             daemonHost={resolvedDaemonHost}
             remotePeerId={remotePeerId}
+            robotClient={robotClient}
             daemonProbeLabel={isLocal ? 'LAN' : 'WebRTC'}
             daemonProbe={daemonProbe}
             daemonVersion={daemonVersion}
@@ -684,20 +686,23 @@ export default function RobotSessionScreen({
         ) : null}
       </Box>
 
-      {/* Local-only Forget Wi-Fi dialog. The menu opens it; success
-          re-uses the same back path as a manual disconnect so the
-          robot still gets a goto_sleep + endSession on the way out. */}
-      {isLocal ? (
-        <ForgetWifiDialog
-          open={forgetOpen}
-          robotName={displayName}
-          onClose={() => setForgetOpen(false)}
-          onForgotten={() => {
-            setForgetOpen(false);
-            handleBack();
-          }}
-        />
-      ) : null}
+      {/* Forget Wi-Fi dialog. Available for both LAN and remote
+          sessions thanks to `RobotClient`: the dialog drives the
+          flow over whatever transport the rest of the screen uses
+          (LAN HTTP locally, `http_proxy` data channel for remote).
+          Success re-uses the same back path as a manual disconnect
+          so the robot still gets `goto_sleep` + `endSession` on the
+          way out, before the network change kicks in. */}
+      <ForgetWifiDialog
+        open={forgetOpen}
+        robotName={displayName}
+        client={robotClient}
+        onClose={() => setForgetOpen(false)}
+        onForgotten={() => {
+          setForgetOpen(false);
+          handleBack();
+        }}
+      />
     </Stack>
   );
 }
@@ -803,25 +808,26 @@ function SessionTopBar({
               />
             ) : null}
             {isLocal ? <Divider /> : null}
-            {isLocal ? (
-              <MenuItem
-                onClick={() => {
-                  setMenuAnchor(null);
-                  onForgetWifi();
-                }}
-              >
-                <ListItemIcon>
-                  <DeleteOutlineIcon fontSize="small" color="warning" />
-                </ListItemIcon>
-                <ListItemText
-                  primary="Forget Wi-Fi"
-                  secondary="Robot will reopen its hotspot"
-                  primaryTypographyProps={{ fontWeight: 600 }}
-                  secondaryTypographyProps={{ fontSize: '0.7rem' }}
-                />
-              </MenuItem>
-            ) : null}
-            {isLocal ? <Divider /> : null}
+            {/* Available for both transports since PR-F. The remote
+                path drives the same daemon endpoints through the
+                WebRTC HTTP proxy. */}
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                onForgetWifi();
+              }}
+            >
+              <ListItemIcon>
+                <DeleteOutlineIcon fontSize="small" color="warning" />
+              </ListItemIcon>
+              <ListItemText
+                primary="Forget Wi-Fi"
+                secondary="Robot will reopen its hotspot"
+                primaryTypographyProps={{ fontWeight: 600 }}
+                secondaryTypographyProps={{ fontSize: '0.7rem' }}
+              />
+            </MenuItem>
+            <Divider />
             <MenuItem
               onClick={() => {
                 setMenuAnchor(null);
@@ -1080,6 +1086,13 @@ interface ConversationAreaProps {
   isAuthenticated: boolean;
   daemonHost: string | null;
   remotePeerId: string | null;
+  /**
+   * Transport-agnostic client. AppsPanel uses it to fetch the HF
+   * token from the daemon; with PR-F the Apps tab is no longer
+   * gated on `isLocal` because the WebRTC `http_proxy` path makes
+   * the same daemon endpoint reachable remotely.
+   */
+  robotClient: RobotClient | null;
   daemonProbeLabel: string;
   daemonProbe: ReturnType<typeof useDaemonStatus>;
   /** PR-D: surfaces the outdated-daemon banner when applicable. */
@@ -1097,6 +1110,7 @@ function ConversationArea({
   isAuthenticated,
   daemonHost,
   remotePeerId,
+  robotClient,
   daemonProbeLabel,
   daemonProbe,
   daemonVersion,
@@ -1109,7 +1123,11 @@ function ConversationArea({
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<'converse' | 'apps'>('converse');
 
-  const showAppsTab = isLocal && isAuthenticated;
+  // PR-F: Apps tab now lives behind RobotClient, so it's available
+  // remotely too. The only gate left is "user is signed in", which
+  // applies in both modes (LAN: daemon-side HF token; remote:
+  // mobile-side HF token forwarded into the iframe by AppsPanel).
+  const showAppsTab = isAuthenticated && robotClient !== null;
   const visible = phase === 'live';
 
   return (
@@ -1184,7 +1202,7 @@ function ConversationArea({
               }}
             >
               <AppsPanel
-                daemonHost={daemonHost}
+                client={robotClient}
                 isAuthenticated={isAuthenticated}
               />
             </Box>

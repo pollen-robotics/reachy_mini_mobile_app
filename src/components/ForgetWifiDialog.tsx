@@ -1,19 +1,35 @@
 /**
- * "Forget WiFi" flow from the connected view.
+ * "Forget Wi-Fi" dialog. Reachable from the live-session menu for
+ * both LAN and remote sessions.
  *
- * UX rules (see ASCII mockup 4d/4e):
- *   - Idle: short explanation + PIN input + Cancel/Forget buttons.
- *   - Running: Cancel button hidden, input hidden, step list visible
- *     with a clear "which step is happening now" indicator.
+ * What changed in PR-F
+ * ────────────────────
+ * Pre-PR-F this dialog drove a BLE-only choreography (PIN auth →
+ * `WIFI_STATUS` over BLE → `WIFI_FORGET ssid` over BLE) and was
+ * gated on `isLocal`. With `RobotClient` in place the same intent
+ * is now expressed against the daemon's HTTP surface, which routes
+ * over LAN HTTP or the WebRTC proxy depending on transport. The
+ * feature is therefore available at parity for both modes, and the
+ * BLE PIN gate is dropped (the HTTP endpoint is already trust-bound
+ * by transport, see `forgetCurrentNetwork.ts`).
  *
- * BLE choreography (unchanged):
- *   1. `PIN_xxxxx`        - authenticate the privileged command.
- *   2. `WIFI_STATUS`      - learn the current SSID.
- *   3. `WIFI_FORGET ssid` - drop it.
- *   4. `disconnectDevice` - close BLE, bounce to scan screen.
+ * UX rules
+ * ────────
+ *   - Idle: short explanation + Cancel/Forget buttons. No PIN input.
+ *   - Running: Cancel hidden, step list visible with a clear
+ *     active/done/failed indicator on each step.
+ *   - Failure: list shows which step broke, with a typed message,
+ *     and a Retry button reuses the same handler.
+ *
+ * Choreography (transport-agnostic)
+ * ─────────────────────────────────
+ *   1. `GET /api/wifi/status`        - learn the current SSID.
+ *   2. `POST /api/wifi/forget?ssid=` - drop it (daemon falls back
+ *                                      to hotspot server-side).
+ *   3. The parent reuses its normal "back" path so the engine
+ *      teardown still lands `endSession` and motors get put to
+ *      sleep before the BLE/WebRTC link is severed.
  */
-
-import { useState } from 'react';
 import {
   Box,
   Button,
@@ -23,60 +39,63 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import { useState } from 'react';
 
-import { formatBlecError, useBleSession } from '../ble/useBleSession';
+import type { RobotClient } from '../robot-client/types';
+import { forgetCurrentNetwork } from '../wifi/forgetCurrentNetwork';
 
 interface ForgetWifiDialogProps {
   open: boolean;
   robotName: string;
+  /**
+   * Transport-agnostic client. When `null` (e.g. the live phase has
+   * been left), the dialog disables its primary action so the user
+   * can't trigger a no-op request.
+   */
+  client: RobotClient | null;
   onClose: () => void;
+  /**
+   * Called once the daemon confirmed it forgot the network. The
+   * parent typically follows up with the same teardown it runs on a
+   * manual back, since the robot is about to drop the network the
+   * current transport rides on (LAN HTTP) or the BLE-paired SSID is
+   * gone (remote keeps working until the daemon flips to hotspot).
+   */
   onForgotten: () => void;
 }
 
-type Stage = 'idle' | 'auth' | 'reading' | 'forgetting' | 'disconnecting' | 'done';
+type Stage = 'idle' | 'reading' | 'forgetting' | 'done';
 
-const STAGE_ORDER: Stage[] = [
-  'auth',
-  'reading',
-  'forgetting',
-  'disconnecting',
-];
+const STAGE_ORDER: Stage[] = ['reading', 'forgetting'];
 
 const STAGE_LABELS: Record<Stage, string> = {
   idle: 'Idle',
-  auth: 'Authenticating',
   reading: 'Reading current network',
   forgetting: 'Forgetting network',
-  disconnecting: 'Closing Bluetooth',
   done: 'Done',
 };
 
 export default function ForgetWifiDialog({
   open,
   robotName,
+  client,
   onClose,
   onForgotten,
 }: ForgetWifiDialogProps) {
-  const { sendCommand, disconnectDevice } = useBleSession();
-
-  const [pin, setPin] = useState('');
   const [stage, setStage] = useState<Stage>('idle');
   const [failedAt, setFailedAt] = useState<Stage | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const cleanPin = pin.replace(/\D/g, '').slice(0, 5);
   const busy = stage !== 'idle' && stage !== 'done';
-  const canSubmit = !busy && cleanPin.length >= 4;
+  const canSubmit = !busy && client !== null;
 
   const reset = (): void => {
-    setPin('');
     setStage('idle');
     setFailedAt(null);
     setError(null);
@@ -88,52 +107,29 @@ export default function ForgetWifiDialog({
     onClose();
   };
 
-  const fail = (at: Stage, message: string): void => {
-    setFailedAt(at);
-    setError(message);
-    setStage('idle');
-  };
-
   const handleSubmit = async (): Promise<void> => {
+    if (!client) return;
     setError(null);
     setFailedAt(null);
 
-    try {
-      setStage('auth');
-      const authResp = await sendCommand(`PIN_${cleanPin}`);
-      if (!authResp.startsWith('OK:')) {
-        fail(
-          'auth',
-          authResp.toLowerCase().includes('incorrect pin')
-            ? 'Incorrect PIN. Check the 5-digit code on the robot.'
-            : authResp || 'Authentication failed.'
-        );
-        return;
-      }
+    setStage('reading');
+    const result = await forgetCurrentNetwork(client);
 
-      setStage('reading');
-      const statusRaw = await sendCommand('WIFI_STATUS');
-      const ssid = extractSsid(statusRaw);
-      if (!ssid) {
-        fail('reading', 'The robot does not appear to be on a WiFi network.');
-        return;
-      }
-
-      setStage('forgetting');
-      const forgetResp = await sendCommand(`WIFI_FORGET ${ssid}`);
-      if (forgetResp.startsWith('ERROR:')) {
-        fail('forgetting', forgetResp.slice('ERROR:'.length).trim() || 'WIFI_FORGET failed.');
-        return;
-      }
-
-      setStage('disconnecting');
-      await disconnectDevice();
-      setStage('done');
-      reset();
-      onForgotten();
-    } catch (err) {
-      fail(stage === 'idle' ? 'auth' : stage, formatBlecError(err));
+    if (!result.ok) {
+      // Map the typed error code into the step that broke. The
+      // error codes are stable so the dialog doesn't rely on
+      // free-form parsing.
+      const at: Stage =
+        result.error === 'forget-failed' ? 'forgetting' : 'reading';
+      setFailedAt(at);
+      setError(result.errorMessage ?? 'Failed to forget the network.');
+      setStage('idle');
+      return;
     }
+
+    setStage('done');
+    reset();
+    onForgotten();
   };
 
   return (
@@ -145,7 +141,7 @@ export default function ForgetWifiDialog({
       slotProps={{ paper: { sx: { borderRadius: 3 } } }}
     >
       <DialogTitle sx={{ pb: 1, fontWeight: 700 }}>
-        {busy ? 'Forgetting WiFi' : `Forget WiFi on ${robotName}`}
+        {busy ? 'Forgetting Wi-Fi' : `Forget Wi-Fi on ${robotName}`}
       </DialogTitle>
 
       <DialogContent>
@@ -153,31 +149,27 @@ export default function ForgetWifiDialog({
           <StepList currentStage={stage} failedAt={null} />
         ) : failedAt ? (
           <Stack spacing={2}>
-            <StepList currentStage={'idle'} failedAt={failedAt} />
-            {error && (
+            <StepList currentStage="idle" failedAt={failedAt} />
+            {error ? (
               <Typography variant="body2" color="error.main">
                 ⚠ {error}
               </Typography>
-            )}
+            ) : null}
             <Typography variant="body2" color="text.secondary">
-              Enter PIN to try again:
+              Tap retry to try again.
             </Typography>
-            <PinField pin={cleanPin} setPin={setPin} disabled={false} />
           </Stack>
         ) : (
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
-              The robot will drop its current network and reopen its hotspot.
+              The robot will drop its current Wi-Fi network and reopen its hotspot.
+              You may need to re-pair from the discovery screen afterwards.
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Enter PIN to confirm:
-            </Typography>
-            <PinField pin={cleanPin} setPin={setPin} disabled={busy} />
           </Stack>
         )}
       </DialogContent>
 
-      {!busy && (
+      {!busy ? (
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={handleClose} color="inherit">
             Cancel
@@ -192,7 +184,7 @@ export default function ForgetWifiDialog({
             {failedAt ? 'Retry' : 'Forget'}
           </Button>
         </DialogActions>
-      )}
+      ) : null}
     </Dialog>
   );
 }
@@ -237,16 +229,16 @@ function StepList({
             }}
           >
             <Box sx={{ width: 18, display: 'flex', justifyContent: 'center' }}>
-              {status === 'done' && (
+              {status === 'done' ? (
                 <CheckCircleIcon color="success" sx={{ fontSize: 18 }} />
-              )}
-              {status === 'active' && <CircularProgress size={16} />}
-              {status === 'pending' && (
+              ) : null}
+              {status === 'active' ? <CircularProgress size={16} /> : null}
+              {status === 'pending' ? (
                 <RadioButtonUncheckedIcon color="disabled" sx={{ fontSize: 18 }} />
-              )}
-              {status === 'failed' && (
+              ) : null}
+              {status === 'failed' ? (
                 <ErrorOutlineIcon color="error" sx={{ fontSize: 18 }} />
-              )}
+              ) : null}
             </Box>
             <Typography
               variant="body2"
@@ -260,56 +252,4 @@ function StepList({
       })}
     </Stack>
   );
-}
-
-/* --- PIN input -------------------------------------------------------- */
-
-function PinField({
-  pin,
-  setPin,
-  disabled,
-}: {
-  pin: string;
-  setPin: (v: string) => void;
-  disabled: boolean;
-}) {
-  return (
-    <TextField
-      value={pin}
-      onChange={e => setPin(e.target.value)}
-      inputProps={{
-        inputMode: 'numeric',
-        pattern: '[0-9]*',
-        autoComplete: 'off',
-        maxLength: 5,
-        style: {
-          fontSize: '1.4rem',
-          letterSpacing: '0.5em',
-          textAlign: 'center',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        },
-      }}
-      placeholder="• • • • •"
-      autoFocus
-      disabled={disabled}
-      fullWidth
-    />
-  );
-}
-
-/* --- Helpers ---------------------------------------------------------- */
-
-function extractSsid(raw: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const { mode, connected } = parsed as { mode?: unknown; connected?: unknown };
-    if (mode !== 'wlan') return null;
-    if (typeof connected !== 'string') return null;
-    const trimmed = connected.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'hotspot') return null;
-    return trimmed;
-  } catch {
-    return null;
-  }
 }
