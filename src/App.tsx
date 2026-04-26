@@ -12,6 +12,9 @@ import {
   useInitBleListeners,
 } from './ble/useBleSession';
 import { useRemoteHfToken } from './auth/useRemoteHfToken';
+import { createLogger } from './logger';
+
+const logger = createLogger('app');
 
 type Screen = 'scan' | 'session' | 'wifi-setup';
 
@@ -65,12 +68,14 @@ export default function App() {
   const handleSignOut = async (): Promise<void> => {
     // Tear down any in-flight robot connection before dropping the
     // token so the SDK / BLE layer don't keep stale auth in memory.
+    logger.info('signout.start');
     if (connectedAddress) {
       await disconnectDevice();
     }
     setTarget(null);
     setScreen('scan');
     clear();
+    logger.info('signout.complete');
   };
 
   // Auth gate: no token => sign-in is the whole UI.

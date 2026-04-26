@@ -36,7 +36,10 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 
+import { createLogger } from '../logger';
 import { openExternalUrl } from '../utils/openUrl';
+
+const logger = createLogger('auth.oauth');
 
 const HF_OAUTH_CLIENT_ID = '71146982-8184-45a2-b05a-d561b3cd701d';
 const HF_OAUTH_REDIRECT_URI = 'http://localhost:8000/api/hf-auth/oauth/callback';
@@ -67,35 +70,46 @@ export async function loginWithHuggingFace(): Promise<{
   token: string;
   username: string | null;
 }> {
-  const pkce = await generatePkcePair();
-  const state = randomUrlSafe(32);
+  logger.info('signin.start');
+  try {
+    const pkce = await generatePkcePair();
+    const state = randomUrlSafe(32);
 
-  // Kick off the loopback listener BEFORE opening the browser, so
-  // there's no race where HF redirects faster than we can bind.
-  const callbackPromise = invoke<OAuthCallbackResult>('start_oauth_callback', {
-    expectedState: state,
-  });
+    // Kick off the loopback listener BEFORE opening the browser, so
+    // there's no race where HF redirects faster than we can bind.
+    const callbackPromise = invoke<OAuthCallbackResult>('start_oauth_callback', {
+      expectedState: state,
+    });
 
-  // Best-effort: if the user closes the browser without completing,
-  // we surface that to the UI as a Cancelled error from the Rust
-  // side after FLOW_TIMEOUT (10 min). For tighter UX we expose a
-  // `cancel()` helper below.
-  const authorizeUrl = buildAuthorizeUrl({
-    state,
-    codeChallenge: pkce.challenge,
-  });
-  await openExternalUrl(authorizeUrl);
+    // Best-effort: if the user closes the browser without completing,
+    // we surface that to the UI as a Cancelled error from the Rust
+    // side after FLOW_TIMEOUT (10 min). For tighter UX we expose a
+    // `cancel()` helper below.
+    const authorizeUrl = buildAuthorizeUrl({
+      state,
+      codeChallenge: pkce.challenge,
+    });
+    await openExternalUrl(authorizeUrl);
+    logger.debug('browser.opened');
 
-  const callback = await callbackPromise;
+    const callback = await callbackPromise;
+    logger.debug('callback.received');
 
-  const tokenPayload = await exchangeCodeForToken({
-    code: callback.code,
-    codeVerifier: pkce.verifier,
-  });
+    const tokenPayload = await exchangeCodeForToken({
+      code: callback.code,
+      codeVerifier: pkce.verifier,
+    });
 
-  const username = await fetchUsername(tokenPayload.access_token);
+    const username = await fetchUsername(tokenPayload.access_token);
 
-  return { token: tokenPayload.access_token, username };
+    logger.info('signin.success', { username });
+    return { token: tokenPayload.access_token, username };
+  } catch (err) {
+    logger.warn('signin.failure', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 /**

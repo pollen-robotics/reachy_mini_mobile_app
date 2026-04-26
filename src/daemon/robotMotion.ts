@@ -64,6 +64,9 @@
  */
 
 import type { RobotClient } from '../robot-client';
+import { createLogger } from '../logger';
+
+const logger = createLogger('motion');
 
 export type RobotState = 'awake' | 'sleeping';
 
@@ -140,19 +143,27 @@ async function postNoBody(
 
 async function doWakeUp(client: RobotClient): Promise<void> {
   console.info('[robotMotion] wake sequence → enable motors');
+  logger.info('wake.start', { transport: client.transport });
+  const t0 = performance.now();
   const enabled = await postNoBody(
     client,
     '/api/motors/set_mode/enabled',
     'enable motors',
   );
-  if (!enabled) return;
+  if (!enabled) {
+    logger.warn('wake.enable_failed');
+    return;
+  }
   await sleep(WAKE_UP_SETTLE_MS);
   console.info('[robotMotion] wake sequence → play wake_up');
   await postNoBody(client, '/api/move/play/wake_up', 'play wake_up');
+  logger.info('wake.complete', { latency_ms: Math.round(performance.now() - t0) });
 }
 
 async function doGotoSleep(client: RobotClient): Promise<void> {
   console.info('[robotMotion] sleep sequence → play goto_sleep');
+  logger.info('sleep.start', { transport: client.transport });
+  const t0 = performance.now();
   const played = await postNoBody(
     client,
     '/api/move/play/goto_sleep',
@@ -163,6 +174,7 @@ async function doGotoSleep(client: RobotClient): Promise<void> {
   }
   console.info('[robotMotion] sleep sequence → disable motors');
   await postNoBody(client, '/api/motors/set_mode/disabled', 'disable motors');
+  logger.info('sleep.complete', { latency_ms: Math.round(performance.now() - t0) });
 }
 
 /**

@@ -106,7 +106,10 @@ import {
   setDesiredState,
 } from '../daemon/robotMotion';
 import { useDaemonStatus } from '../daemon/useDaemonStatus';
+import { createLogger, newTraceId, setTraceId } from '../logger';
 import { createRobotClient } from '../robot-client';
+
+const logger = createLogger('session');
 import astronautSvg from '../assets/astronaut.svg';
 import connectionLostSvg from '../assets/connection-lost.svg';
 import rocketSvg from '../assets/rocket.svg';
@@ -202,7 +205,42 @@ export default function RobotSessionScreen({
   } = useBleSession();
 
   // ── Phase + handshake state ──────────────────────────────────────────
-  const [phase, setPhase] = useState<Phase>('handshake');
+  const [phase, setPhaseRaw] = useState<Phase>('handshake');
+  // Wrap `setPhase` so every transition emits a structured log line.
+  // `setPhase(prev => next)` is supported, but RobotSessionScreen only
+  // ever uses the direct form, which keeps the wrapper simple.
+  const setPhase = useCallback(
+    (next: Phase) => {
+      setPhaseRaw((prev) => {
+        if (prev !== next) {
+          logger.info('phase.transition', { from: prev, to: next });
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Mint a fresh trace-id for the entire session, propagated as
+  // `X-Trace-Id` on every daemon HTTP call (PR-A, picked up by PR-B
+  // on the daemon). One id per visit to this screen makes the log
+  // story easy to follow: "this whole connection attempt was abc1".
+  useEffect(() => {
+    const trace = newTraceId();
+    setTraceId(trace);
+    logger.info('mount', {
+      trace,
+      target_kind: target.kind,
+      target_id:
+        target.kind === 'local'
+          ? target.device.address
+          : extractRobotId(target.robot),
+    });
+    return () => {
+      logger.info('unmount');
+      setTraceId(null);
+    };
+  }, [target]);
   const [activeStep, setActiveStep] = useState(0);
   const [handshakeError, setHandshakeError] = useState<HandshakeError | null>(
     null,
@@ -390,7 +428,7 @@ export default function RobotSessionScreen({
       setActiveStep(stepLabels.length);
       setPhase('live');
     }
-  }, [engineState, phase, stepLabels.length]);
+  }, [engineState, phase, stepLabels.length, setPhase]);
 
   // Remote-only: advance the 'WebRTC' and 'Daemon' steps based on
   // engine state and daemon-status probe. In local mode steps 0-2 are
@@ -425,7 +463,7 @@ export default function RobotSessionScreen({
   // ── Back navigation with graceful teardown ───────────────────────────
   const handleBack = useCallback(() => {
     setPhase('leaving');
-  }, []);
+  }, [setPhase]);
 
   useEffect(() => {
     if (phase !== 'leaving') return;
@@ -491,7 +529,7 @@ export default function RobotSessionScreen({
     setHandshakeError(null);
     setActiveStep(0);
     setPhase('handshake');
-  }, []);
+  }, [setPhase]);
 
   // ── Subtitle for top bar / handshake header ──────────────────────────
   const subtitle = useMemo(() => {

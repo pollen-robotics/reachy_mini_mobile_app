@@ -39,7 +39,10 @@
  *     endpoint. No retries, no loops - if auto-heal doesn't fix the
  *     desync in one shot, something is wrong that needs a human.
  */
+import { createLogger } from '../logger';
 import { daemonFetch } from './daemonFetch';
+
+const logger = createLogger('daemon.health');
 
 /**
  * Summary of the daemon ↔ central handshake health.
@@ -119,6 +122,10 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
     ]);
 
     if (!relayResp.ok || !centralResp.ok) {
+      logger.warn('check.unreachable', {
+        relay_status: relayResp.status,
+        central_status: centralResp.status,
+      });
       return {
         status: 'unreachable',
         relayState: relayResp.data?.state,
@@ -161,6 +168,7 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
     // The split-brain signature. Relay says connected, but central
     // doesn't list any robot for this account - our cue to self-heal.
     if (robots.length === 0) {
+      logger.warn('check.zombie_relay', { relay_state: relayState });
       return {
         status: 'zombie-relay',
         relayState,
@@ -168,6 +176,10 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
       };
     }
 
+    logger.debug('check.healthy', {
+      relay_state: relayState,
+      robot_count: robots.length,
+    });
     return {
       status: 'healthy',
       relayState,
@@ -175,6 +187,9 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
     };
   } catch (err) {
     console.warn('[daemonHealth] check failed:', err);
+    logger.warn('check.error', {
+      message: err instanceof Error ? err.message : String(err),
+    });
     return { status: 'unreachable' };
   }
 }
@@ -213,6 +228,7 @@ export async function autoHealRelay(
   // *would have* succeeded two seconds later.
   maxWaitMs: number = 15_000
 ): Promise<DaemonHealth> {
+  logger.info('autoheal.start', { max_wait_ms: maxWaitMs });
   try {
     const resp = await daemonFetch<RefreshRelayPayload>(
       host,
@@ -249,9 +265,13 @@ export async function autoHealRelay(
       await new Promise((r) => setTimeout(r, 1_000));
       latest = await checkDaemonHealth(host);
     }
+    logger.info('autoheal.complete', { status: latest.status });
     return { ...latest, refreshEndpointAvailable: true };
   } catch (err) {
     console.warn('[daemonHealth] autoHeal failed:', err);
+    logger.error('autoheal.error', {
+      message: err instanceof Error ? err.message : String(err),
+    });
     return { status: 'unreachable' };
   }
 }

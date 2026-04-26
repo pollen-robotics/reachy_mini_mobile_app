@@ -25,10 +25,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { createLogger } from '../logger';
 import {
   fetchRobotsFromCentral,
   type CentralRobotEntry,
 } from './fetchRobotsFromCentral';
+
+const logger = createLogger('central.poll');
 
 export type RemoteRobotsState =
   | { kind: 'no-token' }
@@ -64,10 +67,20 @@ export function useRemoteRobots(
   const runFetch = useCallback(
     async (currentToken: string, previousRobots: CentralRobotEntry[]) => {
       const id = ++fetchIdRef.current;
+      const t0 = performance.now();
+      logger.debug('start');
       setState({ kind: 'loading', robots: previousRobots });
       const result = await fetchRobotsFromCentral(currentToken);
-      if (id !== fetchIdRef.current) return;
+      if (id !== fetchIdRef.current) {
+        logger.debug('superseded');
+        return;
+      }
+      const latencyMs = Math.round(performance.now() - t0);
       if (!result.ok) {
+        logger.warn('error', {
+          reason: result.reason ?? 'unknown',
+          latency_ms: latencyMs,
+        });
         setState({
           kind: 'error',
           robots: previousRobots,
@@ -75,6 +88,10 @@ export function useRemoteRobots(
         });
         return;
       }
+      logger.info('success', {
+        robot_count: result.robots.length,
+        latency_ms: latencyMs,
+      });
       setState({ kind: 'ready', robots: result.robots });
     },
     [],

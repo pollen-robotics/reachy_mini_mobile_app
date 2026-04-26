@@ -50,6 +50,9 @@ import {
   SCAN_TIMEOUT_MS,
   STATUS_SERVICE_UUID,
 } from './constants';
+import { createLogger } from '../logger';
+
+const logger = createLogger('ble');
 
 // ===========================================================================
 // Types
@@ -218,6 +221,7 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
       set({ error: null, devices: {}, status: 'scanning' });
     }
     await get().initListeners();
+    logger.info('scan.start', { preserve: options?.preserve === true });
     try {
       const handle = startScan((found: BleDevice[]) => {
         const next = { ...get().devices };
@@ -227,6 +231,13 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
           if (!name) continue;
           const normalized = name.toLowerCase().replace(/-/g, '');
           if (!normalized.includes(REACHY_NAME_SUBSTRING)) continue;
+          if (!(raw.address in next)) {
+            logger.info('scan.discovered', {
+              name,
+              address: raw.address,
+              rssi: raw.rssi ?? 0,
+            });
+          }
           next[raw.address] = {
             address: raw.address,
             name,
@@ -277,11 +288,18 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
     set({ status: 'connecting' });
     try {
       console.info('[ble] connecting to', device.name, device.address);
+      logger.info('connect.start', { name: device.name, address: device.address });
+      const t0 = performance.now();
       await blecConnect(device.address, () => {
         console.info('[ble] peripheral closed the connection');
+        logger.info('disconnect', { reason: 'peripheral_closed' });
         set({ connectedAddress: null, status: 'idle', networkStatus: null });
       });
       set({ connectedAddress: device.address, status: 'connected' });
+      logger.info('connect.success', {
+        name: device.name,
+        latency_ms: Math.round(performance.now() - t0),
+      });
       console.info('[ble] connected, will read NETWORK_STATUS');
       // Best-effort read of NETWORK_STATUS right after the connect.
       // The read itself is fire-and-forget for `connectToDevice`'s
@@ -300,6 +318,7 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
     } catch (err) {
       const msg = formatBlecError(err);
       console.warn('[ble] connect failed', msg, err);
+      logger.warn('connect.failure', { name: device.name, message: msg });
       set({ error: msg, status: 'error', connectedAddress: null });
       return false;
     }
@@ -307,12 +326,15 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
 
   disconnectDevice: async () => {
     set({ status: 'disconnecting' });
+    logger.info('disconnect.start');
     try {
       await blecDisconnect();
     } catch (err) {
       console.warn('[ble] disconnect error', err);
+      logger.warn('disconnect.error', { message: formatBlecError(err) });
     }
     set({ connectedAddress: null, status: 'idle' });
+    logger.info('disconnect.complete');
   },
 
   sendCommand: async (command: string, options) => {

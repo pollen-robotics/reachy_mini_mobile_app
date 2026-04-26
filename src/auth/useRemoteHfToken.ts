@@ -27,6 +27,10 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import { createLogger } from '../logger';
+
+const logger = createLogger('auth.token');
+
 const STORAGE_KEY = 'remote_hf_token';
 const USERNAME_KEY = 'remote_hf_username';
 
@@ -93,11 +97,13 @@ export function useRemoteHfToken(): RemoteHfTokenState {
     const cleanToken = nextToken.trim();
     const cleanUsername = nextUsername ?? null;
     writeStored(cleanToken || null, cleanUsername);
+    logger.info('token.set', { username: cleanUsername });
     setState({ token: cleanToken || null, username: cleanUsername });
   }, []);
 
   const clear = useCallback(() => {
     writeStored(null, null);
+    logger.info('token.clear');
     setState({ token: null, username: null });
   }, []);
 
