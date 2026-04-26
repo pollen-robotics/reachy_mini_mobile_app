@@ -8,6 +8,15 @@
  *     `consumeTokenFromHash`).
  *   - A top row in the opened view lets the user go back to the list.
  *
+ * Transport
+ * ─────────
+ * Pre-PR-F this panel only worked on LAN: it took a raw `daemonHost`
+ * and used `fetchHfToken(host)` to read the daemon-stored token over
+ * HTTP. With `RobotClient` the same fetch routes through either LAN
+ * HTTP or the WebRTC `http_proxy` data channel, so the Apps tab can
+ * be used even when the user is connected via Hugging Face central
+ * signaling.
+ *
  * The catalog is hardcoded for now (user's choice). It's easy to move to
  * a daemon-served manifest later if / when we want apps to be
  * dynamically discoverable.
@@ -25,7 +34,8 @@ import {
 } from '@mui/material';
 import { useEffect, useRef, useState } from 'react';
 
-import { fetchHfToken } from '../auth/fetchHfToken';
+import { fetchHfTokenViaClient } from '../auth/fetchHfToken';
+import type { RobotClient } from '../robot-client/types';
 
 export interface AppCatalogEntry {
   id: string;
@@ -46,18 +56,24 @@ const APPS: readonly AppCatalogEntry[] = [
 ];
 
 interface AppsPanelProps {
-  daemonHost: string | null;
+  /**
+   * Transport-agnostic client. The panel uses it to fetch the HF
+   * token from the daemon for iframe bridging. `null` is allowed
+   * (e.g. before the live phase) and short-circuits to a friendly
+   * "no daemon yet" state.
+   */
+  client: RobotClient | null;
   isAuthenticated: boolean;
 }
 
-export function AppsPanel({ daemonHost, isAuthenticated }: AppsPanelProps): React.ReactElement {
+export function AppsPanel({ client, isAuthenticated }: AppsPanelProps): React.ReactElement {
   const [openedApp, setOpenedApp] = useState<AppCatalogEntry | null>(null);
 
   if (openedApp) {
     return (
       <AppViewer
         app={openedApp}
-        daemonHost={daemonHost}
+        client={client}
         isAuthenticated={isAuthenticated}
         onBack={() => setOpenedApp(null)}
       />
@@ -164,12 +180,12 @@ function AppsList({
 
 function AppViewer({
   app,
-  daemonHost,
+  client,
   isAuthenticated,
   onBack,
 }: {
   app: AppCatalogEntry;
-  daemonHost: string | null;
+  client: RobotClient | null;
   isAuthenticated: boolean;
   onBack: () => void;
 }): React.ReactElement {
@@ -187,14 +203,14 @@ function AppViewer({
       setError('Sign in with Hugging Face from the menu to run apps.');
       return;
     }
-    if (!daemonHost) {
-      setError('No daemon host available.');
+    if (!client) {
+      setError('No connection to the robot daemon.');
       return;
     }
 
     void (async () => {
       try {
-        const token = await fetchHfToken(daemonHost);
+        const token = await fetchHfTokenViaClient(client);
         if (cancelledRef.current) return;
         if (!token) {
           setError('Sign-in lost. Please sign in again from the menu.');
@@ -212,7 +228,7 @@ function AppViewer({
     return () => {
       cancelledRef.current = true;
     };
-  }, [app.spaceUrl, daemonHost, isAuthenticated, theme.palette.mode]);
+  }, [app.spaceUrl, client, isAuthenticated, theme.palette.mode]);
 
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>

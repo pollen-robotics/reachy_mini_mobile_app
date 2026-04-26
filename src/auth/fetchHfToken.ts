@@ -32,6 +32,7 @@
 
 import { daemonFetch } from '../daemon/daemonFetch';
 import { decodeHfTokenExpiry, type HfSessionSeed } from '../conversation/useReachySdk';
+import type { RobotClient } from '../robot-client/types';
 
 interface HfTokenPayload {
   token: string;
@@ -49,6 +50,27 @@ interface HfStatusPayload {
  */
 export async function fetchHfToken(host: string): Promise<string | null> {
   const response = await daemonFetch<HfTokenPayload>(host, '/api/hf-auth/token', {
+    timeoutMs: 4_000,
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Daemon /hf-auth/token replied ${response.status}`);
+  }
+  const token = response.data?.token;
+  return typeof token === 'string' && token.length > 0 ? token : null;
+}
+
+/**
+ * Same intent as `fetchHfToken` but routed through `RobotClient` so
+ * the call works on both LAN HTTP and WebRTC `http_proxy` paths.
+ * Picked up by `AppsPanel` (PR-F) so the Apps tab is no longer
+ * gated on the user being on the same Wi-Fi as the robot.
+ */
+export async function fetchHfTokenViaClient(
+  client: RobotClient,
+): Promise<string | null> {
+  const response = await client.fetch<HfTokenPayload>('/api/hf-auth/token', {
+    method: 'GET',
     timeoutMs: 4_000,
   });
   if (response.status === 404) return null;
