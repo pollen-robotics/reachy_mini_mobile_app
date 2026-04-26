@@ -36,7 +36,10 @@ import {
   type ConversationEngineHandle,
 } from './conversation-engine';
 import { seedHfToken, useReachySdk } from './useReachySdk';
+import { createLogger } from '../logger';
 import './conversation.css';
+
+const engineLogger = createLogger('engine');
 
 // Module-level serialisation of engine lifecycles.
 //
@@ -433,9 +436,11 @@ export function ConversePanel({
       }
       try {
         console.info(`[ConversePanel] mounting engine (token=${token})`);
+        engineLogger.info('mount', { token, preselected: preselectedRobotId ?? null });
         const handle = mountConversation(root, {
           preselectedRobotId,
           onStateChange: (state) => {
+            engineLogger.info('state.transition', { to: state });
             // Watchdog transitions are a simple edge-detector: we
             // arm on entry to a transient state, disarm otherwise.
             // Re-arming while already armed is a no-op so
@@ -488,10 +493,16 @@ export function ConversePanel({
         }
         if (!handle) return;
         console.info(`[ConversePanel] unmounting engine (token=${token})`);
+        engineLogger.info('unmount.start', { token });
         try {
           await handle.unmount();
+          engineLogger.info('unmount.complete', { token });
         } catch (err) {
           console.warn('[ConversePanel] unmount error:', err);
+          engineLogger.warn('unmount.error', {
+            token,
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
     };

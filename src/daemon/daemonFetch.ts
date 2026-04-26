@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import { CONFIG } from '../config';
+import { createLogger, getTraceId } from '../logger';
+
+const logger = createLogger('daemon.http');
 
 /**
  * Response shape returned by the Rust `daemon_fetch` command.
@@ -44,16 +47,36 @@ export async function daemonFetch<T = unknown>(
   path: string,
   opts: DaemonFetchOptions = {}
 ): Promise<DaemonResponse<T>> {
+  // Inject the active trace-id as a request header so daemon-side logs
+  // (PR-B) can correlate. Caller-supplied headers win, so an explicit
+  // override is always respected.
+  const trace = getTraceId();
+  const headers = trace
+    ? { 'X-Trace-Id': trace, ...(opts.headers ?? {}) }
+    : opts.headers ?? null;
+
+  const method = opts.method ?? 'GET';
+  const t0 = performance.now();
+  logger.debug('request', { method, host, path });
+
   const raw = await invoke<DaemonResponseRaw>('daemon_fetch', {
     req: {
       host,
       path,
-      method: opts.method ?? 'GET',
+      method,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : null,
-      headers: opts.headers ?? null,
+      headers,
       timeout_ms: opts.timeoutMs ?? CONFIG.DAEMON_TIMEOUT_MS,
     },
   });
+
+  const latencyMs = Math.round(performance.now() - t0);
+  // Successes at DEBUG, failures at WARN. Everyone wants 4xx/5xx surfaced.
+  if (raw.ok) {
+    logger.debug('response', { method, path, status: raw.status, latency_ms: latencyMs });
+  } else {
+    logger.warn('response', { method, path, status: raw.status, latency_ms: latencyMs });
+  }
 
   let data: T | null = null;
   if (raw.body.length > 0) {

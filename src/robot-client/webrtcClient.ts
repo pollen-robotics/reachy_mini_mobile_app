@@ -33,11 +33,14 @@
  * doesn't recognise: the SDK's own typed-command responses keep
  * flowing to its onmessage handler unchanged.
  */
+import { createLogger, getTraceId } from '../logger';
 import {
   getActiveDataChannel,
   subscribeDataChannel,
 } from './dataChannelRegistry';
 import type { RobotClient, RobotFetchOptions, RobotResponse } from './types';
+
+const logger = createLogger('webrtc.proxy');
 
 /** Daemon → mobile reply shape (mirrors `_async_http_proxy`). */
 interface ProxyResponseMsg {
@@ -198,20 +201,32 @@ export function createWebRtcClient(
       // give up before the daemon's own retry/abort.
       const daemonTimeoutS = Math.max(0.5, Math.min(300, (timeoutMs / 1000) * 0.9));
 
+      // Inject the active trace-id into the proxied headers so daemon
+      // logs (PR-B) can correlate with mobile-side ones. Caller-set
+      // headers win, mirroring `daemonFetch`.
+      const trace = getTraceId();
+      const headers = trace
+        ? { 'X-Trace-Id': trace, ...(fopts.headers ?? {}) }
+        : fopts.headers ?? null;
+
       const cmd = {
         type: 'http_proxy' as const,
         request_id: requestId,
         method: fopts.method ?? 'GET',
         path,
         body: fopts.body !== undefined ? fopts.body : null,
-        headers: fopts.headers ?? null,
+        headers,
         timeout_s: daemonTimeoutS,
       };
+
+      const t0 = performance.now();
+      logger.debug('request', { method: cmd.method, path });
 
       return new Promise<RobotResponse<T>>(resolve => {
         const timer = setTimeout(() => {
           if (!pending.has(requestId)) return;
           pending.delete(requestId);
+          logger.warn('timeout', { method: cmd.method, path, timeout_ms: timeoutMs });
           resolve({
             status: 0,
             ok: false,
@@ -221,7 +236,26 @@ export function createWebRtcClient(
         }, timeoutMs);
 
         pending.set(requestId, {
-          resolve: r => resolve(r as RobotResponse<T>),
+          resolve: r => {
+            const latencyMs = Math.round(performance.now() - t0);
+            const typed = r as RobotResponse<unknown>;
+            if (typed.ok) {
+              logger.debug('response', {
+                method: cmd.method,
+                path,
+                status: typed.status,
+                latency_ms: latencyMs,
+              });
+            } else {
+              logger.warn('response', {
+                method: cmd.method,
+                path,
+                status: typed.status,
+                latency_ms: latencyMs,
+              });
+            }
+            resolve(r as RobotResponse<T>);
+          },
           timer,
         });
 
@@ -230,6 +264,11 @@ export function createWebRtcClient(
         } catch (err) {
           pending.delete(requestId);
           clearTimeout(timer);
+          logger.error('send.error', {
+            method: cmd.method,
+            path,
+            message: err instanceof Error ? err.message : String(err),
+          });
           resolve({
             status: 0,
             ok: false,
