@@ -18,6 +18,9 @@ export function createLocalHttpClient(host: string): RobotClient {
       path: string,
       opts: RobotFetchOptions = {},
     ): Promise<RobotResponse<T>> {
+      // Trace-id stamping happens inside `daemonFetch` itself, so we
+      // can keep this layer as a thin envelope adapter: just forward
+      // the call and re-shape the response.
       const resp = await daemonFetch<T>(host, path, {
         method: opts.method,
         body: opts.body,
