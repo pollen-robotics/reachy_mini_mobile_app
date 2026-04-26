@@ -1,0 +1,48 @@
+{
+  "name": "reachy_mini_mobile_app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Minimal cross-platform (iOS/Android, desktop-ready) Tauri app that auto-discovers Reachy Minis on the local network (mDNS) and opens the conversation UI",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "ios:dev": "tauri ios dev --open",
+    "ios:build": "tauri ios build",
+    "android:dev": "tauri android dev --open",
+    "android:build": "tauri android build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "format": "prettier --write src"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mnlphlp/plugin-blec": "^0.8.0",
+    "@mui/icons-material": "^7.3.5",
+    "@mui/material": "^7.3.5",
+    "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-opener": "^2.5.3",
+    "@tauri-apps/plugin-os": "^2.3.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@tauri-apps/cli": "^2.10.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react-swc": "^4.0.0",
+    "eslint": "^9.20.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.7.4",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vite": "^7.2.1"
+  }
+}

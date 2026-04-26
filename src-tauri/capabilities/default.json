@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimum capabilities for the Reachy Mini mobile client: OS detection + daemon fetch + mDNS discovery events.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "os:allow-platform",
+    "os:allow-version",
+    "os:allow-os-type",
+    "blec:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://huggingface.co/*" },
+        { "url": "https://*.hf.space/*" },
+        { "url": "https://*.huggingface.co/*" }
+      ]
+    }
+  ]
+}

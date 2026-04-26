@@ -1,0 +1,74 @@
+[package]
+name = "reachy_mini_mobile_app"
+version = "0.1.0"
+description = "Minimal Tauri client for Reachy Mini (BLE discovery + conversation iframe)"
+authors = ["Thibaud Frere"]
+edition = "2021"
+rust-version = "1.77"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# `lib` is required for mobile targets (iOS/Android) which build a shared
+# library rather than a standalone binary. The `_lib` suffix avoids a clash
+# with the `[[bin]]` target.
+name = "reachy_mini_mobile_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-os = "2"
+tauri-plugin-http = "2"
+
+# Opens a URL in the user's default browser. We use it for two things:
+#   1. Launching the HuggingFace OAuth flow in the system browser (so the
+#      WKWebView / Android WebView never sees `huggingface.co/login`, which
+#      sends `X-Frame-Options: SAMEORIGIN`).
+#   2. Opening the conversation Space (`*.hf.space`) in the system browser
+#      since its own OAuth flow hits the same SAMEORIGIN wall when iframed.
+# Same plugin the desktop app relies on for `openUrl`.
+tauri-plugin-opener = "2"
+
+# BLE client plugin - exact same dependency the desktop app uses. The
+# plugin gives us a single-connection model that naturally fits the
+# "persistent session" pattern we need for WiFi provisioning, and ships
+# native Android support through the Tauri plugin system (on iOS, macOS,
+# Linux and Windows it delegates to btleplug the same way we used to do
+# directly). The bulk of the BLE logic now lives on the TS side, mirroring
+# `reachy_mini_desktop_app/src/hooks/bluetooth/useBluetooth.ts`.
+tauri-plugin-blec = "0.8"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# HTTP client used by `daemon_fetch` and by the discovery probe step.
+# Mobile WebViews refuse to call an unencrypted `http://` host from an
+# `https://tauri.localhost` page (mixed content). Routing daemon calls
+# through reqwest on the Rust side dodges that restriction and gives us a
+# single source of truth for timeouts.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "gzip",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }
+
+# Local IP enumeration (used to detect whether the phone is on the same
+# subnet as the robot). Works on macOS, Linux, Windows, iOS, Android.
+local-ip-address = "0.6"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Local patch for btleplug CoreBluetooth panic
+# "Got descriptors for a characteristic we don't know about".
+# See: https://github.com/deviceplug/btleplug/issues/397
+# Same patch the desktop app uses. `tauri-plugin-blec` transitively
+# pulls in btleplug on iOS / macOS / Linux / Windows, so we still need
+# this override until upstream is fixed.
+[patch.crates-io]
+btleplug = { path = "btleplug-patch" }

@@ -1,0 +1,464 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6C8142930119D1DA3D0F2AE6 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E9375BEF65576CDA5A041BFA /* LaunchScreen.storyboard */; };
+		72B046DAA618362BD4249C97 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6CE97E2ED160B943A227663 /* MetalKit.framework */; };
+		793E513574B4D402BB6875B3 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = CBB82F3E92A51A02146AC107 /* main.mm */; };
+		8D1213716647D4354521C4F0 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = F184C6BCD7EC7AA25167AF69 /* assets */; };
+		8F21AF672D0A20FA8C6840B6 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0FDF5300F421F386E18493EE /* libapp.a */; };
+		A3FCAC5783D2B6A43CDB7B60 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 97AEE65F5C2817C51454A8A1 /* QuartzCore.framework */; };
+		B85DEFD1371DC3C3C688C93D /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E898BC87981DDCFF37BE25A /* Security.framework */; };
+		D10DC9F766FAF556F1F919E2 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 579ED7F640CF23E0B7881DDE /* WebKit.framework */; };
+		DA868B3F4B903057F6698BAC /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */; };
+		DC6DB658D0D452FC20A23B0D /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71EB51793491EB5A2A3559D /* CoreGraphics.framework */; };
+		FA47719D6FDB9B5037F097C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C80A72A80DB7C32F03A1E534 /* Assets.xcassets */; };
+		FF8EB75A8C1AC8C70457E446 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA7703A7D2C4F932BFBA870C /* UIKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0FDF5300F421F386E18493EE /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		3E898BC87981DDCFF37BE25A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		4A3374C4249B8F54AC164F98 /* reachy_mini_mobile_app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = reachy_mini_mobile_app_iOS.entitlements; sourceTree = "<group>"; };
+		579ED7F640CF23E0B7881DDE /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		6A8B419C5F8A5F4B19B08A21 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		97AEE65F5C2817C51454A8A1 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		B71EB51793491EB5A2A3559D /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		B9E0A8C41A31A38DD7330B78 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		C5CF03AD24E5601F1A5AA0D2 /* reachy_mini_mobile_app_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = reachy_mini_mobile_app_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C80A72A80DB7C32F03A1E534 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CBB82F3E92A51A02146AC107 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		D4B92A66AABA5829FDF67EB6 /* oauth.rs */ = {isa = PBXFileReference; path = oauth.rs; sourceTree = "<group>"; };
+		D583C8562EC52E50DBE118E4 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		D6CE97E2ED160B943A227663 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		E9375BEF65576CDA5A041BFA /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		EB8EF94E52DD27D6A89110E7 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		EDFE271E88D7EB92DCACD79E /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		F184C6BCD7EC7AA25167AF69 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		FA7703A7D2C4F932BFBA870C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4E94F0A049ECC5A0D15B668F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F21AF672D0A20FA8C6840B6 /* libapp.a in Frameworks */,
+				DC6DB658D0D452FC20A23B0D /* CoreGraphics.framework in Frameworks */,
+				DA868B3F4B903057F6698BAC /* Metal.framework in Frameworks */,
+				72B046DAA618362BD4249C97 /* MetalKit.framework in Frameworks */,
+				A3FCAC5783D2B6A43CDB7B60 /* QuartzCore.framework in Frameworks */,
+				B85DEFD1371DC3C3C688C93D /* Security.framework in Frameworks */,
+				FF8EB75A8C1AC8C70457E446 /* UIKit.framework in Frameworks */,
+				D10DC9F766FAF556F1F919E2 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A163D7FE812B1B0C73B3EA9 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		3DB4E92565106DC702FEE829 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B71EB51793491EB5A2A3559D /* CoreGraphics.framework */,
+				0FDF5300F421F386E18493EE /* libapp.a */,
+				82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */,
+				D6CE97E2ED160B943A227663 /* MetalKit.framework */,
+				97AEE65F5C2817C51454A8A1 /* QuartzCore.framework */,
+				3E898BC87981DDCFF37BE25A /* Security.framework */,
+				FA7703A7D2C4F932BFBA870C /* UIKit.framework */,
+				579ED7F640CF23E0B7881DDE /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		53A76FA485B90A4A0B2C8A7D /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				EDFE271E88D7EB92DCACD79E /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		775B8D92995E193C10EAD2CE = {
+			isa = PBXGroup;
+			children = (
+				F184C6BCD7EC7AA25167AF69 /* assets */,
+				C80A72A80DB7C32F03A1E534 /* Assets.xcassets */,
+				E9375BEF65576CDA5A041BFA /* LaunchScreen.storyboard */,
+				1A163D7FE812B1B0C73B3EA9 /* Externals */,
+				C2FAEC41A57439ECC75748DD /* reachy_mini_mobile_app_iOS */,
+				BD36901DDB3978D00D6A3C68 /* Sources */,
+				F30658FDA47A5C3550A58E42 /* src */,
+				3DB4E92565106DC702FEE829 /* Frameworks */,
+				91F72BFF517921BD308FFAD9 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		91F72BFF517921BD308FFAD9 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C5CF03AD24E5601F1A5AA0D2 /* reachy_mini_mobile_app_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		93232DE291B7AE1A82DFA0FF /* reachy_mini_mobile_app */ = {
+			isa = PBXGroup;
+			children = (
+				CBB82F3E92A51A02146AC107 /* main.mm */,
+				53A76FA485B90A4A0B2C8A7D /* bindings */,
+			);
+			path = reachy_mini_mobile_app;
+			sourceTree = "<group>";
+		};
+		BD36901DDB3978D00D6A3C68 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				93232DE291B7AE1A82DFA0FF /* reachy_mini_mobile_app */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		C2FAEC41A57439ECC75748DD /* reachy_mini_mobile_app_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				6A8B419C5F8A5F4B19B08A21 /* Info.plist */,
+				4A3374C4249B8F54AC164F98 /* reachy_mini_mobile_app_iOS.entitlements */,
+			);
+			path = reachy_mini_mobile_app_iOS;
+			sourceTree = "<group>";
+		};
+		F30658FDA47A5C3550A58E42 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				EB8EF94E52DD27D6A89110E7 /* commands.rs */,
+				D583C8562EC52E50DBE118E4 /* lib.rs */,
+				B9E0A8C41A31A38DD7330B78 /* main.rs */,
+				D4B92A66AABA5829FDF67EB6 /* oauth.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		242EFEBB9F86023DE30BAFD1 /* reachy_mini_mobile_app_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF53886E590EE498F1942A4A /* Build configuration list for PBXNativeTarget "reachy_mini_mobile_app_iOS" */;
+			buildPhases = (
+				1D0BBA863CCD35698E67C42B /* Build Rust Code */,
+				58A9498C9A8E9730B07DC3E8 /* Sources */,
+				8B0A84ECDFCC2FCA658BA01B /* Resources */,
+				4E94F0A049ECC5A0D15B668F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = reachy_mini_mobile_app_iOS;
+			packageProductDependencies = (
+			);
+			productName = reachy_mini_mobile_app_iOS;
+			productReference = C5CF03AD24E5601F1A5AA0D2 /* reachy_mini_mobile_app_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9813EC6103B9D4D5E310AFDD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 15EAB7CF4A4B56B2AAEDF1D4 /* Build configuration list for PBXProject "reachy_mini_mobile_app" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 775B8D92995E193C10EAD2CE;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 91F72BFF517921BD308FFAD9 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				242EFEBB9F86023DE30BAFD1 /* reachy_mini_mobile_app_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8B0A84ECDFCC2FCA658BA01B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FA47719D6FDB9B5037F097C7 /* Assets.xcassets in Resources */,
+				6C8142930119D1DA3D0F2AE6 /* LaunchScreen.storyboard in Resources */,
+				8D1213716647D4354521C4F0 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		1D0BBA863CCD35698E67C42B /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "yarn tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} 0 ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		58A9498C9A8E9730B07DC3E8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				793E513574B4D402BB6875B3 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		479BA98DF5831535B90D0946 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		5C63E793090935DC8EBEF9E9 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = reachy_mini_mobile_app_iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.reachymini.app;
+				PRODUCT_NAME = "Reachy Mini";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		8138C36F83C20B0D8F418418 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+		8A871F9723BAA36A0A68EC64 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = reachy_mini_mobile_app_iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.reachymini.app;
+				PRODUCT_NAME = "Reachy Mini";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		15EAB7CF4A4B56B2AAEDF1D4 /* Build configuration list for PBXProject "reachy_mini_mobile_app" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8138C36F83C20B0D8F418418 /* debug */,
+				479BA98DF5831535B90D0946 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		DF53886E590EE498F1942A4A /* Build configuration list for PBXNativeTarget "reachy_mini_mobile_app_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8A871F9723BAA36A0A68EC64 /* debug */,
+				5C63E793090935DC8EBEF9E9 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9813EC6103B9D4D5E310AFDD /* Project object */;
+}
