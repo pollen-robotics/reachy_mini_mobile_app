@@ -33,28 +33,52 @@ const logger = createLogger('auth.token');
 
 const STORAGE_KEY = 'remote_hf_token';
 const USERNAME_KEY = 'remote_hf_username';
+// PR-D adds two optional fields. Older app versions just ignore them
+// (and fall through to "no expiry tracking, no auto-refresh"), so the
+// migration is a no-op.
+const REFRESH_TOKEN_KEY = 'remote_hf_refresh_token';
+const EXPIRES_AT_KEY = 'remote_hf_expires_at';
 
-function readStored(): { token: string | null; username: string | null } {
+interface StoredAuth {
+  token: string | null;
+  username: string | null;
+  refreshToken: string | null;
+  /** Epoch ms when the access token expires, or `null` if HF didn't tell us. */
+  expiresAt: number | null;
+}
+
+function readStored(): StoredAuth {
   if (typeof localStorage === 'undefined') {
-    return { token: null, username: null };
+    return { token: null, username: null, refreshToken: null, expiresAt: null };
   }
   try {
+    const expiresRaw = localStorage.getItem(EXPIRES_AT_KEY);
+    const expiresAt = expiresRaw ? Number(expiresRaw) : null;
     return {
       token: localStorage.getItem(STORAGE_KEY),
       username: localStorage.getItem(USERNAME_KEY),
+      refreshToken: localStorage.getItem(REFRESH_TOKEN_KEY),
+      expiresAt:
+        expiresAt !== null && Number.isFinite(expiresAt) ? expiresAt : null,
     };
   } catch {
-    return { token: null, username: null };
+    return { token: null, username: null, refreshToken: null, expiresAt: null };
   }
 }
 
-function writeStored(token: string | null, username: string | null): void {
+function writeStored(next: StoredAuth): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    if (token) localStorage.setItem(STORAGE_KEY, token);
+    if (next.token) localStorage.setItem(STORAGE_KEY, next.token);
     else localStorage.removeItem(STORAGE_KEY);
-    if (username) localStorage.setItem(USERNAME_KEY, username);
+    if (next.username) localStorage.setItem(USERNAME_KEY, next.username);
     else localStorage.removeItem(USERNAME_KEY);
+    if (next.refreshToken)
+      localStorage.setItem(REFRESH_TOKEN_KEY, next.refreshToken);
+    else localStorage.removeItem(REFRESH_TOKEN_KEY);
+    if (next.expiresAt !== null)
+      localStorage.setItem(EXPIRES_AT_KEY, String(next.expiresAt));
+    else localStorage.removeItem(EXPIRES_AT_KEY);
   } catch {
     // localStorage can be unavailable in private browsing;
     // failing to persist is recoverable, the user just has to
@@ -72,10 +96,21 @@ function syncSessionStorage(token: string | null): void {
   }
 }
 
+export interface SetTokenOptions {
+  username?: string | null;
+  /** Refresh token issued alongside the access token, when HF returns one. */
+  refreshToken?: string | null;
+  /** Lifetime of the access token in seconds (HF's `expires_in` field). */
+  expiresInSec?: number | null;
+}
+
 export interface RemoteHfTokenState {
   token: string | null;
   username: string | null;
-  setToken: (token: string, username?: string | null) => void;
+  refreshToken: string | null;
+  /** Epoch ms when the access token expires, or `null` if unknown. */
+  expiresAt: number | null;
+  setToken: (token: string, opts?: SetTokenOptions) => void;
   clear: () => void;
 }
 
@@ -83,29 +118,62 @@ export function useRemoteHfToken(): RemoteHfTokenState {
   // Seed both states AND sessionStorage in the initializer so the
   // SDK can read `sessionStorage.hf_token` on the very first render
   // of any descendant component (no useEffect race window).
-  const [{ token, username }, setState] = useState(() => {
-    const stored = readStored();
-    syncSessionStorage(stored.token);
-    return stored;
-  });
+  const [{ token, username, refreshToken, expiresAt }, setState] = useState(
+    () => {
+      const stored = readStored();
+      syncSessionStorage(stored.token);
+      return stored;
+    },
+  );
 
   useEffect(() => {
     syncSessionStorage(token);
   }, [token]);
 
-  const setToken = useCallback((nextToken: string, nextUsername?: string | null) => {
-    const cleanToken = nextToken.trim();
-    const cleanUsername = nextUsername ?? null;
-    writeStored(cleanToken || null, cleanUsername);
-    logger.info('token.set', { username: cleanUsername });
-    setState({ token: cleanToken || null, username: cleanUsername });
-  }, []);
+  const setToken = useCallback(
+    (nextToken: string, opts: SetTokenOptions = {}) => {
+      const cleanToken = nextToken.trim() || null;
+      const cleanUsername = opts.username ?? null;
+      const cleanRefresh = opts.refreshToken ?? null;
+      // HF returns `expires_in` in seconds. Store an absolute epoch ms
+      // (rather than the relative `expiresIn`) so a hot-reload or page
+      // navigation doesn't reset the countdown.
+      const cleanExpiresAt =
+        opts.expiresInSec && opts.expiresInSec > 0
+          ? Date.now() + opts.expiresInSec * 1000
+          : null;
+      const next: StoredAuth = {
+        token: cleanToken,
+        username: cleanUsername,
+        refreshToken: cleanRefresh,
+        expiresAt: cleanExpiresAt,
+      };
+      writeStored(next);
+      logger.info('token.set', {
+        username: cleanUsername,
+        has_refresh: cleanRefresh !== null,
+        expires_at: cleanExpiresAt,
+      });
+      setState(next);
+    },
+    [],
+  );
 
   const clear = useCallback(() => {
-    writeStored(null, null);
+    writeStored({
+      token: null,
+      username: null,
+      refreshToken: null,
+      expiresAt: null,
+    });
     logger.info('token.clear');
-    setState({ token: null, username: null });
+    setState({
+      token: null,
+      username: null,
+      refreshToken: null,
+      expiresAt: null,
+    });
   }, []);
 
-  return { token, username, setToken, clear };
+  return { token, username, refreshToken, expiresAt, setToken, clear };
 }

@@ -93,6 +93,7 @@ import DaemonStatusPill from '../components/DaemonStatusPill';
 import ForgetWifiDialog from '../components/ForgetWifiDialog';
 import HeroIllustration from '../components/HeroIllustration';
 import HfLoginOverlay from '../components/HfLoginOverlay';
+import OutdatedDaemonBanner from '../components/OutdatedDaemonBanner';
 import StepperHeader from '../components/StepperHeader';
 import { AppsPanel } from '../conversation/AppsPanel';
 import {
@@ -101,6 +102,10 @@ import {
 } from '../conversation/ConversePanel';
 import type { AppState } from '../conversation/conversation-engine';
 import { daemonFetch } from '../daemon/daemonFetch';
+import {
+  probeDaemonVersion,
+  type DaemonVersionInfo,
+} from '../daemon/daemonProbeVersion';
 import {
   flushPending as flushMotionPending,
   setDesiredState,
@@ -282,6 +287,28 @@ export default function RobotSessionScreen({
   const daemonProbe = useDaemonStatus(robotClient, {
     pollMs: phase === 'live' ? 5_000 : 1_500,
   });
+
+  // ── One-shot daemon version probe ─────────────────────────────────────
+  // Runs as soon as we have a client. The result is purely advisory:
+  // it drives the OutdatedDaemonBanner above the conversation area
+  // when the daemon is older than the mobile app expects. Failures
+  // (network, 404 on old daemons) are logged at WARN by the probe
+  // itself and don't surface in the UI beyond the banner.
+  const [daemonVersion, setDaemonVersion] = useState<DaemonVersionInfo | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!robotClient) return;
+    let cancelled = false;
+    void (async () => {
+      const info = await probeDaemonVersion(robotClient);
+      if (cancelled) return;
+      setDaemonVersion(info);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [robotClient]);
 
   // ── Local HF auth (LAN flow only) ────────────────────────────────────
   // The LAN path requires the daemon to hold an HF token (so its relay
@@ -647,6 +674,7 @@ export default function RobotSessionScreen({
             remotePeerId={remotePeerId}
             daemonProbeLabel={isLocal ? 'LAN' : 'WebRTC'}
             daemonProbe={daemonProbe}
+            daemonVersion={daemonVersion}
             authLogin={() => void auth.login()}
             authIsLoading={auth.isLoading}
             authIsWaitingForAuth={auth.isWaitingForAuth}
@@ -1054,6 +1082,8 @@ interface ConversationAreaProps {
   remotePeerId: string | null;
   daemonProbeLabel: string;
   daemonProbe: ReturnType<typeof useDaemonStatus>;
+  /** PR-D: surfaces the outdated-daemon banner when applicable. */
+  daemonVersion: DaemonVersionInfo | null;
   authLogin: () => void;
   authIsLoading: boolean;
   authIsWaitingForAuth: boolean;
@@ -1069,6 +1099,7 @@ function ConversationArea({
   remotePeerId,
   daemonProbeLabel,
   daemonProbe,
+  daemonVersion,
   authLogin,
   authIsLoading,
   authIsWaitingForAuth,
@@ -1106,6 +1137,9 @@ function ConversationArea({
         />
       ) : (
         <>
+          {visible && daemonVersion?.outdated ? (
+            <OutdatedDaemonBanner daemonVersion={daemonVersion.version} />
+          ) : null}
           <Box
             sx={{
               flex: 1,
