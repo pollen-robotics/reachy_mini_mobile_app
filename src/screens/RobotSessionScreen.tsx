@@ -93,7 +93,9 @@ import DaemonStatusPill from '../components/DaemonStatusPill';
 import ForgetWifiDialog from '../components/ForgetWifiDialog';
 import HeroIllustration from '../components/HeroIllustration';
 import HfLoginOverlay from '../components/HfLoginOverlay';
+import SessionBanner from '../components/SessionBanner';
 import StepperHeader from '../components/StepperHeader';
+import { useSessionHealth } from '../session/useSessionHealth';
 import { AppsPanel } from '../conversation/AppsPanel';
 import {
   ConversePanel,
@@ -282,6 +284,12 @@ export default function RobotSessionScreen({
   const daemonProbe = useDaemonStatus(robotClient, {
     pollMs: phase === 'live' ? 5_000 : 1_500,
   });
+
+  // ── Session health (PR-E) ────────────────────────────────────────────
+  // Fold the daemon probe + engine state into a single health bucket so
+  // the live chrome can show a soft banner on degraded/lost without
+  // forcing the user back to discovery on every transient flap.
+  const sessionHealth = useSessionHealth(daemonProbe, engineState);
 
   // ── Local HF auth (LAN flow only) ────────────────────────────────────
   // The LAN path requires the daemon to hold an HF token (so its relay
@@ -647,11 +655,14 @@ export default function RobotSessionScreen({
             remotePeerId={remotePeerId}
             daemonProbeLabel={isLocal ? 'LAN' : 'WebRTC'}
             daemonProbe={daemonProbe}
+            sessionHealth={sessionHealth}
             authLogin={() => void auth.login()}
             authIsLoading={auth.isLoading}
             authIsWaitingForAuth={auth.isWaitingForAuth}
             authError={auth.error}
             onAppStateChange={setEngineState}
+            onRetry={handleRetry}
+            onDisconnect={handleBack}
           />
         ) : null}
       </Box>
@@ -1054,11 +1065,14 @@ interface ConversationAreaProps {
   remotePeerId: string | null;
   daemonProbeLabel: string;
   daemonProbe: ReturnType<typeof useDaemonStatus>;
+  sessionHealth: ReturnType<typeof useSessionHealth>;
   authLogin: () => void;
   authIsLoading: boolean;
   authIsWaitingForAuth: boolean;
   authError: string | null;
   onAppStateChange: (s: AppState) => void;
+  onRetry: () => void;
+  onDisconnect: () => void;
 }
 
 function ConversationArea({
@@ -1069,11 +1083,14 @@ function ConversationArea({
   remotePeerId,
   daemonProbeLabel,
   daemonProbe,
+  sessionHealth,
   authLogin,
   authIsLoading,
   authIsWaitingForAuth,
   authError,
   onAppStateChange,
+  onRetry,
+  onDisconnect,
 }: ConversationAreaProps) {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<'converse' | 'apps'>('converse');
@@ -1097,6 +1114,13 @@ function ConversationArea({
           completes. We render it inside the live area so the stepper
           on top stays the only chrome the user sees in the handshake
           phase. */}
+      {visible ? (
+        <SessionBanner
+          health={sessionHealth}
+          onRetry={onRetry}
+          onDisconnect={onDisconnect}
+        />
+      ) : null}
       {isLocal && !isAuthenticated && phase === 'live' ? (
         <HfLoginOverlay
           onLogin={authLogin}
