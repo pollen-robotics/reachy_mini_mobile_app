@@ -36,10 +36,13 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import WifiIcon from '@mui/icons-material/Wifi';
 
 import HeroIllustration from '../components/HeroIllustration';
+import NameRobotPanel from '../components/NameRobotPanel';
 import NetworkSelect from '../components/NetworkSelect';
 import StepperHeader from '../components/StepperHeader';
 import { useBleSession } from '../ble/useBleSession';
 import { daemonFetch } from '../daemon/daemonFetch';
+import { getRobotNameOverLan } from '../daemon/daemonRobotName';
+import { shouldPromptRobotName } from '../daemon/robotName';
 import { useWifiSetup } from '../wifi/useWifiSetup';
 import blueprintSvg from '../assets/blueprint.svg';
 import connectionLostSvg from '../assets/connection-lost.svg';
@@ -75,7 +78,12 @@ type Phase =
   | 'pin-failed'
   | 'picker-idle'
   | 'connecting'
-  | 'connect-failed';
+  | 'connect-failed'
+  // After the HTTP probe succeeds, we surface a mandatory naming prompt
+  // when the robot is still labelled with the daemon default. Picking a
+  // name here lets the rest of the app disambiguate this Reachy from any
+  // sibling that lives in the same fleet.
+  | 'naming';
 
 type ConnectingSubstate =
   | 'sending' // waiting for BLE WIFI_CONNECT ack
@@ -108,6 +116,14 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
    *  transitions through sub-states even when `setup.status` stays
    *  identical. Only active during `connectTarget !== null`. */
   const [, setNowTick] = useState(0);
+  /**
+   * IP the HTTP probe successfully reached. When non-null, we are past
+   * the WiFi-join phase: the daemon is alive on this address and the
+   * naming gate is mounted (or about to be).
+   */
+  const [namingHost, setNamingHost] = useState<string | null>(null);
+  /** Initial value for the naming input, sourced from `GET robot-name`. */
+  const [namingInitial, setNamingInitial] = useState<string>('');
 
   // Fallback to scan screen if BLE session dropped.
   useEffect(() => {
@@ -145,24 +161,43 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
     if (doneRef.current) return;
     let cancelled = false;
 
-    const probe = async (): Promise<boolean> => {
+    const probe = async (): Promise<string | null> => {
       try {
         const ns = await readNetworkStatus();
-        if (cancelled || !ns.ip) return false;
+        if (cancelled || !ns.ip) return null;
         const resp = await daemonFetch(ns.ip, '/api/daemon/status', { timeoutMs: 4_000 });
-        return resp.ok;
+        return resp.ok ? ns.ip : null;
       } catch {
-        return false;
+        return null;
       }
     };
 
     const tick = async (): Promise<void> => {
       if (cancelled || doneRef.current) return;
-      const ok = await probe();
+      const reachableIp = await probe();
       if (cancelled) return;
-      if (ok) {
+      if (reachableIp !== null) {
         doneRef.current = true;
-        onConnected();
+        // The daemon is up. Read its current name and either route the
+        // user through the mandatory naming prompt (when the robot is
+        // still on the default label) or short-circuit to onConnected.
+        // Failure to read the name is non-fatal - we surface the prompt
+        // anyway so the user can set one, with a sensible empty default.
+        const info = await getRobotNameOverLan(reachableIp).catch(() => null);
+        if (cancelled) return;
+        const mustPrompt =
+          info === null ||
+          shouldPromptRobotName({ name: info.name, source: info.source });
+        if (mustPrompt) {
+          setNamingHost(reachableIp);
+          // Pre-fill with whatever the daemon currently advertises, but
+          // blank out the literal default so the user starts on a fresh
+          // empty input - typing a few characters feels nicer than
+          // editing "reachy_mini" by hand.
+          setNamingInitial(info && info.name !== 'reachy_mini' ? info.name : '');
+        } else {
+          onConnected();
+        }
         return;
       }
       setProbeFailedAt(prev => prev ?? Date.now());
@@ -232,10 +267,18 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
       if (pinError) return 'pin-failed';
       return 'pin-idle';
     }
+    if (namingHost !== null) return 'naming';
     if (connectTarget && connectError) return 'connect-failed';
     if (connectTarget) return 'connecting';
     return 'picker-idle';
-  }, [setup.isAuthenticated, setup.isBusy, pinError, connectTarget, connectError]);
+  }, [
+    setup.isAuthenticated,
+    setup.isBusy,
+    pinError,
+    connectTarget,
+    connectError,
+    namingHost,
+  ]);
 
   // Derive the sub-state of the "connecting" takeover from live BLE data.
   const connectingSub: ConnectingSubstate | null = useMemo(() => {
@@ -288,6 +331,29 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
         onTryAnotherNetwork={handleTryAnotherNetwork}
         onBackToScan={() => void handleBack()}
       />
+    );
+  }
+
+  if (phase === 'naming' && namingHost !== null) {
+    return (
+      <Stack
+        sx={{
+          height: '100%',
+          width: '100%',
+          alignItems: 'center',
+          justifyContent: 'center',
+          px: 3,
+          pt: LAYOUT.safeAreaTop,
+          pb: 4,
+        }}
+      >
+        <NameRobotPanel
+          host={namingHost}
+          initialName={namingInitial}
+          subtitle="Pick a short name (1-32 characters) so this Reachy is easy to recognise in your fleet. You can rename it later from Settings."
+          onSaved={() => onConnected()}
+        />
+      </Stack>
     );
   }
 
@@ -402,8 +468,13 @@ function stepperIndexFor(phase: Phase): number {
       return 0;
     case 'picker-idle':
       return 1;
+    // ``naming`` shares step 2 with connect: from the user's perspective
+    // it's still the "join the network" leg of the flow. The naming UI
+    // takes over the whole screen so the stepper itself isn't visible
+    // there - this case only exists to keep the switch exhaustive.
     case 'connecting':
     case 'connect-failed':
+    case 'naming':
       return 2;
   }
 }
@@ -418,6 +489,7 @@ function heroForPhase(phase: Phase): string {
     case 'picker-idle':
       return blueprintSvg;
     case 'connecting':
+    case 'naming':
       return rocketSvg;
     case 'connect-failed':
       return connectionLostSvg;
@@ -434,6 +506,7 @@ function titleFor(phase: Phase): string {
     case 'picker-idle':
       return 'Choose a WiFi';
     case 'connecting':
+    case 'naming':
       return '';
     case 'connect-failed':
       return "Couldn't join";
@@ -450,6 +523,7 @@ function subtitleFor(phase: Phase, robotName: string, target: string | null): st
     case 'picker-idle':
       return 'Pick a network the robot can reach.';
     case 'connecting':
+    case 'naming':
       return '';
     case 'connect-failed':
       return target ? `We couldn't join "${target}".` : '';

@@ -132,6 +132,14 @@ export default function App() {
             setTarget({ kind: 'remote', robot });
             setScreen('session');
           }}
+          onLocalhostPicked={(daemon) => {
+            setTarget({
+              kind: 'localhost',
+              host: daemon.host,
+              robotName: daemon.robotName,
+            });
+            setScreen('session');
+          }}
           onSignOutRemote={() => void handleSignOut()}
         />
       )}

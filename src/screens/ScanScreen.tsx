@@ -42,6 +42,7 @@ import {
 } from '@mui/material';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import LaptopMacIcon from '@mui/icons-material/LaptopMac';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -57,6 +58,10 @@ import {
   useCentralSource,
   type CentralSourceState,
 } from '../presence/centralSource';
+import {
+  useLocalDaemonSource,
+  type LocalDaemonInfo,
+} from '../presence/localDaemonSource';
 import type { ConnectionDiagnostic } from '../presence/types';
 import HeroIllustration from '../components/HeroIllustration';
 import detectiveSvg from '../assets/reachy-detective.svg';
@@ -66,6 +71,12 @@ import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 interface ScanScreenProps {
   onRobotPicked: (device: ReachyBleDevice) => void;
   onRemotePicked: (robot: CentralRobotEntry) => void;
+  /**
+   * Routed when the user taps a row in the "Reachy Mini tray (this Mac)"
+   * section. Only ever fires on builds where a daemon answers on
+   * `127.0.0.1:8000` (typically the desktop tray app on the same machine).
+   */
+  onLocalhostPicked: (daemon: LocalDaemonInfo) => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -84,12 +95,14 @@ const SCAN_REFRESH_MS = Math.max(3_000, SCAN_TIMEOUT_MS - 1_000);
 export default function ScanScreen({
   onRobotPicked,
   onRemotePicked,
+  onLocalhostPicked,
   onSignOutRemote,
   token,
   username,
 }: ScanScreenProps) {
   const { status, devices, adapterUnavailable, startScanning } = useBleSession();
   const remote = useCentralSource(token);
+  const localDaemon = useLocalDaemonSource();
 
   const started = useRef(false);
   useEffect(() => {
@@ -106,6 +119,7 @@ export default function ScanScreen({
   const isScanning = status === 'scanning';
   const bleList = Object.values(devices);
   const hasAnyRobot =
+    localDaemon.state.kind === 'ready' ||
     bleList.length > 0 ||
     (remote.state.kind === 'ready' && remote.state.robots.length > 0) ||
     (remote.state.kind === 'loading' && remote.state.robots.length > 0);
@@ -145,6 +159,18 @@ export default function ScanScreen({
           {hasAnyRobot ? 'Choose your Reachy' : 'Looking for your Reachy'}
         </Typography>
 
+        {/* "On this Mac" comes first when present: physically the
+            closest of the three sources, and zero-friction (no BLE
+            scan, no Wi-Fi onboarding required to land in a session).
+            Hidden entirely when no daemon answers on the loopback,
+            which is the steady state on mobile builds. */}
+        {localDaemon.state.kind === 'ready' ? (
+          <LocalDaemonSection
+            daemon={localDaemon.state.daemon}
+            onPick={onLocalhostPicked}
+          />
+        ) : null}
+
         <BluetoothSection
           devices={bleList}
           isScanning={isScanning}
@@ -161,6 +187,102 @@ export default function ScanScreen({
         />
       </Stack>
     </Stack>
+  );
+}
+
+/* --- Local daemon section (loopback / tray app) --------------------- */
+
+const DEFAULT_ROBOT_NAME = 'reachy_mini';
+
+function LocalDaemonSection({
+  daemon,
+  onPick,
+}: {
+  daemon: LocalDaemonInfo;
+  onPick: (daemon: LocalDaemonInfo) => void;
+}) {
+  // The "needs naming" signal in the row caption is a hint, not a
+  // gate: tapping still works. The session screen takes over and
+  // forces the naming overlay before bridging when the name is the
+  // default, so we simply surface the situation here.
+  const isDefaultName = daemon.robotName === DEFAULT_ROBOT_NAME;
+  return (
+    <Section
+      title="Reachy Mini tray (this Mac)"
+      subtitle={`Daemon on ${daemon.host} · API rev ${daemon.apiRevision ?? '?'}`}
+    >
+      <List
+        disablePadding
+        sx={{
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+        }}
+      >
+        <LocalDaemonCard
+          daemon={daemon}
+          isDefaultName={isDefaultName}
+          onTap={() => onPick(daemon)}
+        />
+      </List>
+    </Section>
+  );
+}
+
+function LocalDaemonCard({
+  daemon,
+  isDefaultName,
+  onTap,
+}: {
+  daemon: LocalDaemonInfo;
+  isDefaultName: boolean;
+  onTap: () => void;
+}) {
+  const caption = isDefaultName
+    ? 'Needs a name · USB / loopback'
+    : `${daemon.robotName} · USB / loopback`;
+  return (
+    <ListItemButton
+      onClick={onTap}
+      sx={{
+        p: 2,
+        borderRadius: 2,
+        bgcolor: 'background.paper',
+        border: theme => `1px solid ${theme.palette.divider}`,
+        '&:hover': {
+          bgcolor: 'action.hover',
+          borderColor: 'primary.main',
+        },
+      }}
+    >
+      <Stack direction="row" alignItems="center" spacing={2} sx={{ width: '100%' }}>
+        <Avatar
+          sx={{
+            bgcolor: 'success.main',
+            color: 'success.contrastText',
+            width: 40,
+            height: 40,
+          }}
+        >
+          <LaptopMacIcon fontSize="small" />
+        </Avatar>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body1" fontWeight={600} noWrap>
+            {isDefaultName ? 'Unnamed Reachy' : daemon.robotName}
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            fontFamily="monospace"
+            noWrap
+          >
+            {caption}
+          </Typography>
+        </Stack>
+        <ChevronRightIcon color="action" />
+      </Stack>
+    </ListItemButton>
   );
 }
 

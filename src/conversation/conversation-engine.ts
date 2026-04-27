@@ -61,6 +61,32 @@ export interface ConversationEngineHandle {
    * `unmount()` on back navigation), but exposed for symmetry.
    */
   stopConversation: () => Promise<void>;
+  /**
+   * Toggle the robot microphone gate from the host UI (the React orb's
+   * "mute" side button). Mirrors what the engine's own DOM mute button
+   * used to do: flips the SDK's `setMicMuted()` and notifies anyone
+   * listening through `onMicMutedChange`. Safe to call before the SDK
+   * is ready - the latest value is replayed once a robot session is
+   * established.
+   */
+  setMicMuted: (muted: boolean) => void;
+  /**
+   * Host-driven request to end the current conversation, equivalent
+   * to the engine's old "stop" side button: tears the session down
+   * via `teardown()` and parks the state machine on the closest
+   * sensible idle (`authenticated` or `signed-out`). The host
+   * usually prefers `unmount()` for this, but this entrypoint lets
+   * the orb itself surface a Stop control without forcing the parent
+   * screen to navigate away.
+   */
+  requestStop: () => Promise<void>;
+  /**
+   * Forward a click on the React orb. Used to keep the engine's
+   * single-button UX (sign-in / connect / retry) without re-introducing
+   * a DOM click handler on `#main-circle`. The engine decides what
+   * "clicking the orb" means based on `currentState`.
+   */
+  triggerOrbAction: () => Promise<void>;
 }
 
 /**
@@ -146,7 +172,106 @@ export interface ConversationEngineOptions {
    * "Start conversation".
    */
   autoStartConversation?: boolean;
+
+  /**
+   * Fires whenever the active ICE candidate pair classification changes
+   * (`checking` → `lan` / `direct` / `relay`). The mobile app uses it to
+   * feed `connectionSummary` so the connection log line carries the
+   * actual transport in use, without having to peek at internal stats.
+   *
+   * Called once on every distinct kind, including the initial
+   * `checking` while ICE is still gathering. The engine itself owns
+   * the dedup, so the callback won't fire twice for the same kind in
+   * a row. Cleared on `unmount()`.
+   */
+  onTransportChange?: (kind: ConversationTransportKind) => void;
+
+  /**
+   * Element on which the engine writes audio-reactive CSS custom
+   * properties (`--audio-level`, `--ai-audio-level`, `--bar0..--bar4`)
+   * at display rate. The React orb passes its own root here so the
+   * audio loop drives only that node's style, instead of polluting
+   * `document.documentElement` (which used to leak across HMR /
+   * StrictMode remounts).
+   *
+   * When `null` / omitted the engine writes nowhere - the host gets
+   * the levels via `onLevels` if it cares.
+   */
+  audioLevelsTarget?: HTMLElement | null;
+
+  /**
+   * Optional structured stream of audio-reactivity updates. Mostly
+   * useful for tests / instrumentation; the typical UI path goes
+   * through `audioLevelsTarget` and CSS variables instead, since
+   * pumping a 60 Hz callback through React reconciliation is wasteful.
+   *
+   * Fired from inside the same rAF tick that updates the CSS
+   * variables, after the smoothing pass. Either `user` or `ai` is
+   * always non-null on a given call, never both.
+   */
+  onLevels?: (level: ConversationLevelEvent) => void;
+
+  /**
+   * Notifies the host when the model triggered a tool call. The React
+   * UI surfaces a small pill below the orb with the supplied label
+   * for `durationMs`, then dismisses it. Replaces the engine's old
+   * imperative `#tool-toast` DOM ping.
+   */
+  onToolToast?: (toast: ConversationToolToastEvent) => void;
+
+  /**
+   * Notifies the host whenever the robot's mic gate flips. Used by
+   * the React side controls to render the right icon (mute vs unmute)
+   * without keeping a parallel state mirror that could drift from
+   * the engine's truth.
+   */
+  onMicMutedChange?: (muted: boolean) => void;
+
+  /**
+   * Lifts the engine's per-error message out of the imperative
+   * `#circle-caption` DOM and into a callback. Fired with the message
+   * when entering the `error` state, and with `null` whenever we leave
+   * it. The host typically renders it as a small caption / tooltip
+   * under the orb.
+   */
+  onErrorMessageChange?: (message: string | null) => void;
 }
+
+/**
+ * Single-frame audio-reactivity snapshot. Either side can be `null`
+ * on a given event because the two analysers run on independent rAF
+ * loops; consumers should merge by side as they arrive.
+ */
+export interface ConversationLevelEvent {
+  /** Mic side, `[0..1]` smoothed RMS. */
+  user: number | null;
+  /** AI side, `[0..1]` smoothed RMS. */
+  ai: number | null;
+  /** Mic side, `[0..1]` per-band levels (5 log-spaced buckets). */
+  bands: readonly [number, number, number, number, number] | null;
+}
+
+export interface ConversationToolToastEvent {
+  /** Pre-formatted, user-facing label (e.g. `"Move head: tilt left"`). */
+  label: string;
+  /** Hint for how long the host should keep the pill visible. */
+  durationMs: number;
+}
+
+/**
+ * Active ICE candidate pair classification. Exported so external
+ * callers can type their `onTransportChange` callback. Values:
+ *
+ *   checking - ICE still gathering / no pair nominated yet
+ *   lan      - both ends are host candidates on the same LAN
+ *   direct   - peer-to-peer through NAT (STUN-discovered candidate)
+ *   relay    - traffic going through a TURN relay
+ */
+export type ConversationTransportKind =
+  | "checking"
+  | "lan"
+  | "direct"
+  | "relay";
 
 /**
  * Alias kept for symmetry with the option-name `onStateChange`. Some
@@ -179,6 +304,49 @@ const preselectedRobotId: string | null =
 // mount returns - the consumer disposes by unmounting the engine.
 const onStateChange: ((state: AppState) => void) | null =
   typeof options.onStateChange === "function" ? options.onStateChange : null;
+
+// Optional external ICE-transport observer. Fired by `TransportMonitor`
+// every time the active candidate pair classification changes
+// (`checking` → `lan`/`direct`/`relay`). The mobile app feeds it into
+// `connectionSummary` so the structured log line carries the live
+// transport without needing to call `pc.getStats()` itself.
+const onTransportChange: ((kind: ConversationTransportKind) => void) | null =
+  typeof options.onTransportChange === "function" ? options.onTransportChange : null;
+
+// ─── Headless UI hooks ──────────────────────────────────────────────────
+//
+// The mobile app no longer ships any of the conversation engine's old
+// DOM (no `#main-circle`, `#circle-caption`, `#tool-toast`, side
+// buttons, settings modal, …): React owns the orb and its companions
+// in `ConversePanel`. The callbacks below replace what the engine
+// used to do imperatively to the DOM, so the React UI stays the
+// single source of truth for visuals while the engine keeps its full
+// behavioural surface (state machine, audio analysers, tool calls).
+//
+// All four are optional - falsy means "host doesn't care", and the
+// engine quietly skips that emission. We capture them once here so
+// the rest of the engine can read them through stable closure refs.
+
+const audioLevelsTarget: HTMLElement | null =
+  options.audioLevelsTarget instanceof HTMLElement
+    ? options.audioLevelsTarget
+    : null;
+
+const onLevels: ((level: ConversationLevelEvent) => void) | null =
+  typeof options.onLevels === "function" ? options.onLevels : null;
+
+const onToolToast: ((toast: ConversationToolToastEvent) => void) | null =
+  typeof options.onToolToast === "function" ? options.onToolToast : null;
+
+const onMicMutedChange: ((muted: boolean) => void) | null =
+  typeof options.onMicMutedChange === "function"
+    ? options.onMicMutedChange
+    : null;
+
+const onErrorMessageChange: ((message: string | null) => void) | null =
+  typeof options.onErrorMessageChange === "function"
+    ? options.onErrorMessageChange
+    : null;
 
 // ─── Conversation auto-start gate ───────────────────────────────────────
 //
@@ -310,13 +478,11 @@ function loadSettings(): Settings {
   };
 }
 
-function saveSettings(s: Settings): void {
-  localStorage.setItem(STORAGE_KEYS.hfClientId, s.hfClientId);
-  localStorage.setItem(STORAGE_KEYS.apiKey, s.apiKey);
-  localStorage.setItem(STORAGE_KEYS.model, s.model);
-  localStorage.setItem(STORAGE_KEYS.voice, s.voice);
-  localStorage.setItem(STORAGE_KEYS.instructions, s.instructions);
-}
+// `saveSettings` was the writeback path for the in-engine settings
+// modal. The mobile app configures these values through the parent
+// `Settings` screen (HF token, API keys, …), so the engine now only
+// reads. Keeping this stub off-tree prevents accidental "edit
+// settings from inside the orb" behaviour from creeping back in.
 
 // ─── App state machine ──────────────────────────────────────────────────
 // `AppState` itself is defined at module scope (above `mountConversation`)
@@ -324,145 +490,30 @@ function saveSettings(s: Settings): void {
 // closure still uses it via the normal outer-scope lookup, nothing else
 // to thread.
 
-interface StateView {
-  /**
-   * Short caption shown below the orb. Empty string = no caption row at
-   * all (the orb's visual state is enough). We only surface a caption
-   * when it's actionable (call-to-action / ambiguous states); during an
-   * active conversation the orb's animations speak for themselves.
-   */
-  caption: string;
-  /** If true the orb looks disabled and ignores clicks. */
-  disabled: boolean;
-}
+// Per-state caption + disabled mapping used to live here as
+// `STATE_VIEWS` / `STATE_CLASS`. Both are now owned by the React orb
+// (see `reachy_mini_mobile_app/src/conversation/orb/ConversationCaption.tsx`
+// and the per-state CSS in `orb.css`). The engine just emits
+// transitions through `onStateChange` and lets the host translate
+// them into a visual.
 
-// Captions kept deliberately short AND deliberately sparse:
-//  - CTA states ("sign in", "tap to start", "tap to retry") → show text
-//    so the user knows what to do.
-//  - Transitional / waiting states ("connecting", "starting") → show a
-//    very short hint so the pause doesn't feel broken.
-//  - Live voice states (listening / user-speaking / processing /
-//    ai-speaking) → NO text, the orb (bars, rings, speaker icon) is the
-//    single source of truth. Keeps the UI quiet once the conversation
-//    is actually happening.
-const STATE_VIEWS: Record<AppState, StateView> = {
-  "signed-out":     { caption: "Sign in",         disabled: false },
-  authenticated:    { caption: "Tap to start",    disabled: false },
-  connecting:       { caption: "Connecting",      disabled: true  },
-  connected:        { caption: "Connecting",      disabled: true  },
-  "auto-selecting": { caption: "Connecting",      disabled: true  },
-  starting:         { caption: "Starting",        disabled: true  },
-  listening:        { caption: "",                disabled: false },
-  "user-speaking":  { caption: "",                disabled: false },
-  processing:       { caption: "",                disabled: false },
-  "ai-speaking":    { caption: "",                disabled: false },
-  error:            { caption: "Tap to retry",    disabled: false },
-};
+// ─── Headless surface ───────────────────────────────────────────────────
+//
+// The engine used to look up half a dozen DOM refs inside `root` and
+// drive them imperatively (`#main-circle`, `#circle-caption`, side
+// buttons, settings modal, HF user pill, transport pill, …). The React
+// host now owns all of that and consumes the engine through callbacks
+// (`onStateChange`, `onLevels`, `onToolToast`, …) and handle methods
+// (`setMicMuted`, `requestStop`, `triggerOrbAction`). We keep the
+// `root` parameter only for `audioLevelsTarget` defaults and as a
+// future optional render slot, but we no longer require any specific
+// markup inside it.
+//
+// Anything in this file that used to read or mutate those nodes was
+// removed in the same refactor; if you find a stray reference, it
+// belongs in the React layer (`reachy_mini_mobile_app/src/conversation/orb`).
 
-// Every state maps one-to-one to a CSS class so the stylesheet can swap
-// the orb's colour theme and pick which indicator (icon / spinner / bars)
-// to reveal. Keep in sync with `.circle.state-*` selectors in style.css.
-const STATE_CLASS: Record<AppState, string> = {
-  "signed-out": "state-signed-out",
-  authenticated: "state-authenticated",
-  connecting: "state-connecting",
-  connected: "state-connected",
-  "auto-selecting": "state-auto-selecting",
-  starting: "state-starting",
-  listening: "state-listening",
-  "user-speaking": "state-user-speaking",
-  processing: "state-processing",
-  "ai-speaking": "state-ai-speaking",
-  error: "state-error",
-};
-
-// States that represent an active voice session - used to toggle the
-// mic / stop side controls and the "live" wrap class.
-const LIVE_STATES: ReadonlySet<AppState> = new Set([
-  "listening",
-  "user-speaking",
-  "processing",
-  "ai-speaking",
-  "starting",
-]);
-
-// ─── DOM refs ───────────────────────────────────────────────────────────
-
-const $ = <T extends HTMLElement>(selector: string): T => {
-  const el = root.querySelector<T>(selector);
-  if (!el) throw new Error(`Missing element: ${selector}`);
-  return el;
-};
-
-/**
- * Re-resolve a DOM ref if the cached one fell out of the live tree.
- *
- * The conversation markup is rendered by React via
- * `dangerouslySetInnerHTML`, so in steady state the inner nodes
- * survive every parent re-render. But the dev workflow (Vite HMR
- * + StrictMode) and a couple of edge cases on the React side
- * (parent unmount/remount that still calls into the engine before
- * its cleanup runs) can leave us holding a node that's been
- * replaced. Writes to a detached node *succeed* silently - the
- * `setState` log fires, but the user keeps seeing the stale
- * "Connecting" caption from the original markup.
- *
- * `ensureRef` is the cheapest insurance against that: a single
- * `isConnected` check on every UI-touching call, with a fallback
- * `querySelector` only when the cache is stale. It's a noop in
- * production builds (no HMR, no StrictMode unmount) and saves the
- * caption from getting orphaned in dev.
- */
-const ensureRef = <T extends HTMLElement>(
-  cached: T,
-  selector: string,
-): T => {
-  if (cached.isConnected) return cached;
-  const fresh = root.querySelector<T>(selector);
-  return fresh ?? cached;
-};
-
-let circleBtn = $<HTMLButtonElement>("#main-circle");
-let circleCaption = $<HTMLParagraphElement>("#circle-caption");
-const toolToast = $<HTMLElement>("#tool-toast");
-const toolToastText = toolToast.querySelector<HTMLSpanElement>(".tool-toast-text")!;
-const orbWrap = $<HTMLElement>(".orb-wrap");
-const micBtn = $<HTMLButtonElement>("#mic-btn");
-const stopBtn = $<HTMLButtonElement>("#stop-btn");
-// Robot picker markup was removed in the mobile port: we're always on
-// the same LAN as the Reachy we just paired via Bluetooth, so asking
-// the user to "Choose a Reachy" from the HF central listing on top of
-// that adds no value and only surfaces robots they may not own.
-// `renderRobotList` now auto-selects the first robot it sees instead
-// of rendering any UI, so these refs intentionally don't exist in the
-// DOM anymore. Kept as local `null`s so the rest of the engine (state
-// machine, doStart, …) stays a mechanical port of the Space app.
-const robotPicker: HTMLElement | null = null;
-const robotList: HTMLElement | null = null;
-const hfUser = $<HTMLSpanElement>("#hf-user");
-const hfAvatar = $<HTMLImageElement>("#hf-avatar");
-const hfUserName = $<HTMLSpanElement>("#hf-user-name");
-
-const settingsBtn = $<HTMLButtonElement>("#settings-btn");
-const settingsModal = $<HTMLDialogElement>("#settings-modal");
-const inputClientId = $<HTMLInputElement>("#hf-client-id");
-const hfClientIdField = $<HTMLLabelElement>("#hf-client-id-field");
-const inputApiKey = $<HTMLInputElement>("#openai-key");
-const inputModel = $<HTMLInputElement>("#openai-model");
-const inputVoice = $<HTMLSelectElement>("#openai-voice");
-const inputInstructions = $<HTMLTextAreaElement>("#openai-instructions");
-const restartBtn = $<HTMLButtonElement>("#restart-conversation");
-const restartHint = $<HTMLElement>("#restart-hint");
-const hfLogoutBtn = $<HTMLButtonElement>("#hf-logout");
-const settingsForm = settingsModal.querySelector<HTMLFormElement>("form")!;
-const settingsTabs = Array.from(
-  settingsModal.querySelectorAll<HTMLButtonElement>(".tab"),
-);
-const settingsPanels = Array.from(
-  settingsModal.querySelectorAll<HTMLElement>("[data-tab-panel]"),
-);
-
-type SettingsTab = "access" | "conversation";
+void root;
 
 // ─── Runtime state ──────────────────────────────────────────────────────
 
@@ -477,7 +528,7 @@ type SettingsTab = "access" | "conversation";
 // straight to `connecting`) takes over almost immediately.
 let currentState: AppState = "connecting";
 let selectedRobotId: string | null = null;
-let settings: Settings = loadSettings();
+const settings: Settings = loadSettings();
 
 // Last known robot list from the SDK's `robotsChanged` event. Cached so we
 // can re-evaluate (e.g. after `robot.connect()` resolves) without waiting
@@ -540,19 +591,16 @@ let wakeLock: { release(): Promise<void> } | null = null;
 // Prevents spamming the console on every visibilitychange afterwards.
 let wakeLockUnavailable = false;
 
-// ─── UI rendering ───────────────────────────────────────────────────────
-
-// Whether the user has muted the robot microphone for this session. We
-// track it locally so the mic button can render its active variant and
-// we can restore the state on re-connect.
-let micMuted = false;
+// The mic-muted flag used to live here so the engine could re-paint
+// its own button. The React side controls own that state now (kept
+// in sync through `onMicMutedChange`), so the engine just forwards
+// the new value to the SDK and lets the host render.
 
 function setState(next: AppState): void {
+  const wasError = currentState === "error";
   currentState = next;
-  // Fire the external observer FIRST so watchers see every transition
-  // even if the UI-update code below throws (unlikely, but we keep the
-  // contract honest). We also don't guard against re-entrancy: the
-  // callback is expected to be lightweight React state bookkeeping.
+  // Fan the transition out to the host. The React UI maps this to a
+  // visual orb state + caption; tests / loggers may also subscribe.
   if (onStateChange) {
     try {
       onStateChange(next);
@@ -560,64 +608,20 @@ function setState(next: AppState): void {
       console.warn("[conversation-engine] onStateChange threw:", err);
     }
   }
-  const view = STATE_VIEWS[next];
-  circleBtn = ensureRef(circleBtn, "#main-circle");
-  circleBtn.disabled = view.disabled;
-  circleBtn.className = `circle ${STATE_CLASS[next]}`;
-
-  // Default caption comes from the state view; error state overrides it
-  // with the real message via setCaption() below.
-  if (next !== "error") {
-    setCaption(view.caption);
+  // Leaving `error` clears the host's error message so a recovery
+  // transition (e.g. user tapped retry → `authenticated`) drops the
+  // detail line. Entering `error` is paired with an explicit
+  // `onErrorMessageChange(message)` from `onFatalError`.
+  if (wasError && next !== "error" && onErrorMessageChange) {
+    try {
+      onErrorMessageChange(null);
+    } catch (err) {
+      console.warn(
+        "[conversation-engine] onErrorMessageChange threw:",
+        err,
+      );
+    }
   }
-
-  // Side controls (mic / stop) fade in during a live session and disappear
-  // everywhere else so the idle UI stays to a single bouncy orb.
-  const live = LIVE_STATES.has(next);
-  orbWrap.classList.toggle("live", live);
-  micBtn.setAttribute("aria-hidden", live ? "false" : "true");
-  stopBtn.setAttribute("aria-hidden", live ? "false" : "true");
-  micBtn.tabIndex = live ? 0 : -1;
-  stopBtn.tabIndex = live ? 0 : -1;
-
-  // Robot picker is only relevant in the `connected` state (waiting for
-  // a robot to pick). Any other state should keep it hidden.
-  if (next !== "connected") {
-    showRobotPicker(false);
-  }
-
-  // Keep the "Restart conversation" button in sync: only clickable when
-  // there's actually a session running to restart.
-  updateRestartAvailability();
-}
-
-/**
- * Enable / disable the "Restart conversation" button based on whether we
- * currently have a live session. Called on every state transition + once
- * on modal open so the hint reflects the up-to-date situation.
- */
-function updateRestartAvailability(): void {
-  const live = LIVE_STATES.has(currentState);
-  restartBtn.disabled = !live;
-  restartHint.hidden = live;
-}
-
-/**
- * Update the caption line under the orb.
- *
- *  - empty `text`      → the row fully collapses (via `.empty` class + no
- *                        text), so the orb stays optically centered.
- *  - `kind: "error"`   → paints it in the error accent.
- *  - `kind: "muted"`   → dims it for secondary hints.
- *
- * The default style is intentionally discreet (uppercase micro-label, no
- * glow accent) so the orb remains the primary focal point.
- */
-function setCaption(text: string, kind: "" | "error" | "muted" = ""): void {
-  const trimmed = text.trim();
-  circleCaption = ensureRef(circleCaption, "#circle-caption");
-  circleCaption.textContent = trimmed;
-  circleCaption.className = `circle-caption${kind ? ` ${kind}` : ""}${trimmed ? "" : " empty"}`;
 }
 
 /**
@@ -638,12 +642,7 @@ function renderRobotList(robots: RobotInfo[]): void {
   knownRobots = robots;
 
   if (currentState !== "connected") return;
-
-  if (!robots.length) {
-    setCaption("Waiting for Reachy", "muted");
-    return;
-  }
-
+  if (!robots.length) return;
   if (selectedRobotId) return;
 
   const picked = robots[0];
@@ -654,156 +653,26 @@ function renderRobotList(robots: RobotInfo[]): void {
   }, 300);
 }
 
-// Retained as a no-op so references elsewhere in the engine (defensive
-// hide-on-state-change) don't need to be rewritten. Any remaining call
-// site is now dead UI code.
-function showRobotPicker(_show: boolean): void {
-  void _show;
-  void robotPicker;
-  void robotList;
-}
-
-// ─── Settings modal ─────────────────────────────────────────────────────
-
-/**
- * Open the settings panel. Optionally focuses a specific tab.
- *
- * Policy:
- *   - "access" is the landing tab for first-run / missing credentials.
- *   - "conversation" is where the prompt / voice / model live, plus the
- *     "Restart conversation" button that re-applies them to a running
- *     session.
- */
-function openSettings(tab: SettingsTab = "access"): void {
-  inputClientId.value = settings.hfClientId;
-  inputApiKey.value = settings.apiKey;
-  inputModel.value = settings.model;
-  inputVoice.value = settings.voice;
-  inputInstructions.value = settings.instructions;
-
-  // Only show the HF client ID field when it's actually relevant: either
-  // we're on localhost (no HF-injected clientId available), or the user
-  // already has a custom one saved and might want to clear / edit it.
-  const needsClientIdField =
-    location.hostname === "localhost" ||
-    location.hostname === "127.0.0.1" ||
-    Boolean(settings.hfClientId);
-  hfClientIdField.classList.toggle("hidden", !needsClientIdField);
-
-  setSettingsTab(tab);
-  updateRestartAvailability();
-  settingsModal.showModal();
-}
-
-function setSettingsTab(tab: SettingsTab): void {
-  for (const btn of settingsTabs) {
-    const isActive = btn.dataset.tab === tab;
-    btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-  }
-  for (const panel of settingsPanels) {
-    const isActive = panel.dataset.tabPanel === tab;
-    panel.classList.toggle("active", isActive);
-    panel.hidden = !isActive;
-  }
-}
-
-for (const btn of settingsTabs) {
-  btn.addEventListener("click", () => {
-    const tab = btn.dataset.tab as SettingsTab | undefined;
-    if (tab) setSettingsTab(tab);
-  });
-}
-
-settingsBtn.addEventListener("click", () => openSettings("access"));
-
-settingsForm.addEventListener("submit", (event) => {
-  const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
-  if (submitter?.value !== "save") return;
-
-  const previousClientId = settings.hfClientId;
-  settings = {
-    hfClientId: inputClientId.value.trim(),
-    apiKey: inputApiKey.value.trim(),
-    model: inputModel.value.trim() || DEFAULT_MODEL,
-    voice: inputVoice.value || DEFAULT_VOICE,
-    instructions: inputInstructions.value.trim() || DEFAULT_INSTRUCTIONS,
-  };
-  saveSettings(settings);
-
-  // Re-create the robot SDK instance if the client ID changed (so the next
-  // login uses the new OAuth app).
-  if (settings.hfClientId !== previousClientId) {
-    location.reload();
-  }
-});
-
-// Restart the live OpenAI session with whatever is currently in the form
-// (user may have edited the prompt / voice / model without hitting Save
-// yet - we read from the inputs, save, then bounce the session).
-restartBtn.addEventListener("click", async () => {
-  if (!LIVE_STATES.has(currentState)) return;
-
-  settings = {
-    ...settings,
-    model: inputModel.value.trim() || DEFAULT_MODEL,
-    voice: inputVoice.value || DEFAULT_VOICE,
-    instructions: inputInstructions.value.trim() || DEFAULT_INSTRUCTIONS,
-  };
-  saveSettings(settings);
-
-  settingsModal.close();
-
-  // Tear down the current session and immediately spin up a new one with
-  // the same robot. We keep `selectedRobotId` around so doStart picks up
-  // where we left off.
-  try {
-    await teardown();
-    if (selectedRobotId) {
-      await doStart();
-    } else if (robot?.isAuthenticated) {
-      setState("authenticated");
-    }
-  } catch (err) {
-    onFatalError(err);
-  }
-});
-
-hfLogoutBtn.addEventListener("click", () => {
-  if (!robot) return;
-  robot.logout();
-  settingsModal.close();
-  location.reload();
-});
-
-// ─── Click handler for the central circle ──────────────────────────────
+// ─── Host-driven controls ──────────────────────────────────────────────
 //
-// One tap, one forward move. There is never a "Connect" button and a
-// separate "Start" button: the signed-in user taps once, we run the
-// whole signaling → robot-pick → session-start pipeline behind the
-// animated orb. The only exception is the 2-robot case, where we pause
-// on the picker until the user picks one card.
+// Equivalent of the original DOM click handlers (`#main-circle`,
+// `#mic-btn`, `#stop-btn`) but exposed on the `ConversationEngineHandle`
+// so the React layer can wire its own components without us touching
+// the DOM. Each function is identical in behaviour to its Space-app
+// counterpart - the engine still owns the state-machine decisions
+// ("error → reset to authenticated", "stop → re-park on connected /
+// authenticated"). Only the trigger surface moved from the DOM to a
+// method call.
 
-circleBtn.addEventListener("click", async () => {
+async function handleOrbClick(): Promise<void> {
   try {
     switch (currentState) {
       case "signed-out":
         if (!robot) return;
-        if (!settings.hfClientId && location.hostname === "localhost") {
-          setCaption("Add HF client ID in settings", "error");
-          openSettings();
-          return;
-        }
         await robot.login();
-        // login() triggers a full page redirect; nothing else to do.
         return;
 
       case "authenticated":
-        if (!settings.apiKey) {
-          setCaption("Add OpenAI key in settings", "error");
-          openSettings();
-          return;
-        }
         await doConnect();
         return;
 
@@ -822,32 +691,31 @@ circleBtn.addEventListener("click", async () => {
   } catch (err) {
     onFatalError(err);
   }
-});
+}
 
-// ─── Side controls (mic mute + stop) ────────────────────────────────────
+function applyMicMuted(next: boolean): void {
+  // The SDK's "mic muted" actually gates the OUTBOUND track sent to
+  // the robot's speakers. Since we route OpenAI's audio there,
+  // muting = the robot stops speaking. That's the right mapping for
+  // a "pause the assistant" button.
+  try {
+    robot?.setMicMuted(next);
+  } catch (err) {
+    console.warn("[conversation-engine] setMicMuted failed:", err);
+  }
+  if (onMicMutedChange) {
+    try {
+      onMicMutedChange(next);
+    } catch (err) {
+      console.warn("[conversation-engine] onMicMutedChange threw:", err);
+    }
+  }
+}
 
-micBtn.addEventListener("click", () => {
-  if (!robot) return;
-  micMuted = !micMuted;
-  // The SDK's "mic muted" actually gates the OUTBOUND track sent to the
-  // robot's speakers. Since we route OpenAI's audio there, muting =
-  // the robot stops speaking. That's the right mapping for a "pause
-  // the assistant" button.
-  robot.setMicMuted(micMuted);
-  micBtn.classList.toggle("muted", micMuted);
-  micBtn.setAttribute("aria-label", micMuted ? "Unmute" : "Mute");
-  micBtn.title = micMuted ? "Unmute" : "Mute";
-});
-
-stopBtn.addEventListener("click", async () => {
+async function handleHostStop(): Promise<void> {
   await teardown();
   selectedRobotId = null;
-  micMuted = false;
-  micBtn.classList.remove("muted");
-  // `teardown()` only runs `stopSession()` so the SDK is usually still
-  // `connected` to the daemon afterwards: skip straight to the robot
-  // picker (which will auto-select if there's a single one) instead of
-  // forcing the user through a redundant "Tap to start" screen.
+  applyMicMuted(false);
   if (!robot) {
     setState("signed-out");
   } else if (robot.state !== "disconnected") {
@@ -858,7 +726,7 @@ stopBtn.addEventListener("click", async () => {
   } else {
     setState("signed-out");
   }
-});
+}
 
 // ─── High-level flow steps ──────────────────────────────────────────────
 
@@ -903,8 +771,20 @@ async function doStart(): Promise<void> {
   if (!robot || !selectedRobotId) return;
 
   if (!settings.apiKey) {
-    setCaption("Add OpenAI key in settings", "error");
-    openSettings();
+    // The mobile host owns the settings surface; surface this through
+    // the same callback used for fatal errors so it can prompt the
+    // user to add an OpenAI key.
+    if (onErrorMessageChange) {
+      try {
+        onErrorMessageChange("Add OpenAI key in settings");
+      } catch (callbackErr) {
+        console.warn(
+          "[conversation-engine] onErrorMessageChange threw:",
+          callbackErr,
+        );
+      }
+    }
+    setState("error");
     return;
   }
 
@@ -1031,7 +911,7 @@ async function runConversationParts(): Promise<void> {
 
   startMicLevelMonitor(robotMicTrack);
   startAntennas();
-  if (robot._pc) startTransportMonitor(robot._pc);
+  if (robot._pc) startTransportMonitor(robot._pc, onTransportChange);
 
   // Keep the device awake for the whole conversation so timers and the
   // media stack don't get throttled on mobile / laptop-on-battery.
@@ -1169,7 +1049,6 @@ async function tryReconnectOpenai(
   openaiReconnectAttempts += 1;
   console.warn("[openai] connection lost, attempting silent reconnect…", cause);
   setState("starting");
-  setCaption("Reconnecting", "muted");
 
   // Pause motion agents while we rebuild the session — they feed off the
   // OpenAI track which is about to go away.
@@ -1325,26 +1204,20 @@ function stopAntennas(): void {
 // ─── Tool-call handler ─────────────────────────────────────────────────
 
 /**
- * Show a discreet pill under the orb when the model invokes a tool.
- * Not a log, not a chat: purely a "heads up, something just happened"
- * signal so the user can correlate the robot's physical action with a
- * spoken phrase. Auto-dismisses after a few seconds; rapid successive
- * calls just replace the current message.
+ * Surface a "model just invoked a tool" pulse to the host. The React
+ * layer renders the actual pill under the orb and owns the
+ * auto-dismiss timer; the engine only formats the label and forwards
+ * a duration hint. Rapid successive calls just queue another event;
+ * the host coalesces them by replacing the current pill with the
+ * latest one.
  */
-let toolToastTimer: number | null = null;
 function showToolToast(text: string, durationMs = 2800): void {
-  if (toolToastTimer !== null) {
-    clearTimeout(toolToastTimer);
-    toolToastTimer = null;
+  if (!onToolToast) return;
+  try {
+    onToolToast({ label: text, durationMs });
+  } catch (err) {
+    console.warn("[conversation-engine] onToolToast threw:", err);
   }
-  toolToastText.textContent = text;
-  toolToast.classList.add("visible");
-  toolToast.setAttribute("aria-hidden", "false");
-  toolToastTimer = window.setTimeout(() => {
-    toolToast.classList.remove("visible");
-    toolToast.setAttribute("aria-hidden", "true");
-    toolToastTimer = null;
-  }, durationMs);
 }
 
 /**
@@ -1516,7 +1389,15 @@ class MicLevelMonitor {
     this.timeBuf = new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
     this.freqBuf = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
 
-    const rootStyle = document.documentElement.style;
+    // Style target: scoped to the orb if the host gave us one, otherwise
+    // we drop the writes entirely. Writing to :root is intentionally NOT
+    // a fallback anymore - it leaks across HMR/StrictMode and made stale
+    // levels survive remounts. Hosts that want telemetry without
+    // touching the DOM can subscribe via `onLevels` instead.
+    const targetStyle = audioLevelsTarget ? audioLevelsTarget.style : null;
+    const bandsForCallback: [number, number, number, number, number] = [
+      0, 0, 0, 0, 0,
+    ];
 
     const tick = () => {
       const an = this.analyser;
@@ -1524,7 +1405,6 @@ class MicLevelMonitor {
       const fbuf = this.freqBuf;
       if (!an || !tbuf || !fbuf) return;
 
-      // Overall RMS → --audio-level (unchanged).
       an.getFloatTimeDomainData(tbuf);
       let sum = 0;
       for (let i = 0; i < tbuf.length; i++) sum += tbuf[i] * tbuf[i];
@@ -1532,9 +1412,8 @@ class MicLevelMonitor {
       const boosted = Math.min(1, Math.pow(rms * 6, 0.7));
       const levelAttack = boosted > this.level ? 0.55 : 0.12;
       this.level += (boosted - this.level) * levelAttack;
-      rootStyle.setProperty("--audio-level", this.level.toFixed(3));
+      targetStyle?.setProperty("--audio-level", this.level.toFixed(3));
 
-      // Per-band levels → --bar0..--bar4.
       an.getByteFrequencyData(fbuf);
       const edges = MicLevelMonitor.BAND_EDGES;
       for (let b = 0; b < 5; b++) {
@@ -1545,7 +1424,21 @@ class MicLevelMonitor {
         const raw = MicLevelMonitor.compress(bandSum / (hi - lo) / 255);
         const bandAttack = raw > this.bands[b] ? 0.35 : 0.12;
         this.bands[b] += (raw - this.bands[b]) * bandAttack;
-        rootStyle.setProperty(`--bar${b}`, Math.min(1, this.bands[b]).toFixed(3));
+        const clamped = Math.min(1, this.bands[b]);
+        bandsForCallback[b] = clamped;
+        targetStyle?.setProperty(`--bar${b}`, clamped.toFixed(3));
+      }
+
+      if (onLevels) {
+        try {
+          onLevels({
+            user: this.level,
+            ai: null,
+            bands: bandsForCallback,
+          });
+        } catch (err) {
+          console.warn("[mic-level] onLevels threw:", err);
+        }
       }
 
       this.raf = requestAnimationFrame(tick);
@@ -1570,9 +1463,18 @@ class MicLevelMonitor {
     this.freqBuf = null;
     this.level = 0;
     this.bands = [0, 0, 0, 0, 0];
-    const rootStyle = document.documentElement.style;
-    rootStyle.setProperty("--audio-level", "0");
-    for (let b = 0; b < 5; b++) rootStyle.setProperty(`--bar${b}`, "0");
+    if (audioLevelsTarget) {
+      const s = audioLevelsTarget.style;
+      s.setProperty("--audio-level", "0");
+      for (let b = 0; b < 5; b++) s.setProperty(`--bar${b}`, "0");
+    }
+    if (onLevels) {
+      try {
+        onLevels({ user: 0, ai: null, bands: [0, 0, 0, 0, 0] });
+      } catch {
+        // ignored
+      }
+    }
   }
 
   /**
@@ -1655,7 +1557,9 @@ class AiLevelMonitor {
     this.timeBuf = new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
     this.lastActiveTs = performance.now();
 
-    const rootStyle = document.documentElement.style;
+    // Style target: scoped to the orb when the host gave us one, never
+    // :root. See `MicLevelMonitor.start` for the rationale.
+    const targetStyle = audioLevelsTarget ? audioLevelsTarget.style : null;
 
     const tick = () => {
       const an = this.analyser;
@@ -1667,12 +1571,18 @@ class AiLevelMonitor {
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
 
-      // Same attack/release shape as MicLevelMonitor so the two halos
-      // feel like they belong to the same visual language.
       const boosted = Math.min(1, Math.pow(rms * 6, 0.7));
       const levelAttack = boosted > this.level ? 0.55 : 0.12;
       this.level += (boosted - this.level) * levelAttack;
-      rootStyle.setProperty("--ai-audio-level", this.level.toFixed(3));
+      targetStyle?.setProperty("--ai-audio-level", this.level.toFixed(3));
+
+      if (onLevels) {
+        try {
+          onLevels({ user: null, ai: this.level, bands: null });
+        } catch (err) {
+          console.warn("[ai-level] onLevels threw:", err);
+        }
+      }
 
       const now = performance.now();
       if (rms > AiLevelMonitor.SILENCE_THRESHOLD) {
@@ -1712,7 +1622,14 @@ class AiLevelMonitor {
     this.analyser = null;
     this.timeBuf = null;
     this.level = 0;
-    document.documentElement.style.setProperty("--ai-audio-level", "0");
+    audioLevelsTarget?.style.setProperty("--ai-audio-level", "0");
+    if (onLevels) {
+      try {
+        onLevels({ user: null, ai: 0, bands: null });
+      } catch {
+        // ignored
+      }
+    }
   }
 
   resumeAudio(): void {
@@ -1778,7 +1695,9 @@ function stopAiLevelMonitor(): void {
 //   prflx  → peer-reflexive (discovered via connectivity checks)
 //   relay  → TURN relay (worst case, traffic flows through a 3rd party)
 
-type TransportKind = "lan" | "direct" | "relay" | "checking";
+// Internal alias kept for grep-back-compat with older log lines; the
+// public surface is `ConversationTransportKind` (exported above).
+type TransportKind = ConversationTransportKind;
 
 let transportMonitor: TransportMonitor | null = null;
 
@@ -1786,15 +1705,23 @@ class TransportMonitor {
   private pc: RTCPeerConnection | null = null;
   private timer: number | null = null;
   private lastKind: TransportKind | null = null;
+  // External listener wired via `start(pc, listener)`. Captured per
+  // session and cleared on `stop()` so it can't leak to the next
+  // engine mount when the singleton is reused.
+  private listener: ((kind: TransportKind) => void) | null = null;
   // Last snapshot of cumulative byte counters so we can diff against the
   // next tick and compute a bitrate. -1 means "no prior sample yet".
   private prevBytesSent = -1;
   private prevBytesRecv = -1;
   private prevSampleTs = 0;
 
-  start(pc: RTCPeerConnection): void {
+  start(
+    pc: RTCPeerConnection,
+    listener: ((kind: TransportKind) => void) | null = null,
+  ): void {
     this.stop();
     this.pc = pc;
+    this.listener = listener;
     this.show("checking");
     // 1.5 s strikes a decent balance: responsive enough that the bitrate
     // feels live, but infrequent enough that `getStats()` doesn't show up
@@ -1809,14 +1736,11 @@ class TransportMonitor {
       this.timer = null;
     }
     this.pc = null;
+    this.listener = null;
     this.lastKind = null;
     this.prevBytesSent = -1;
     this.prevBytesRecv = -1;
     this.prevSampleTs = 0;
-    const pill = root.querySelector<HTMLElement>("#transport-pill");
-    if (pill) pill.classList.add("hidden");
-    const bitrate = root.querySelector<HTMLElement>("#transport-bitrate");
-    if (bitrate) bitrate.textContent = "";
   }
 
   private async tick(): Promise<void> {
@@ -1825,7 +1749,11 @@ class TransportMonitor {
     try {
       const stats = await pc.getStats();
       this.show(selectedTransportKind(stats));
-      this.updateBitrate(stats);
+      // Bitrate sampling is kept for the side-effect of advancing the
+      // running byte counters (they're useful if we ever re-introduce
+      // a transport pill in the host UI). The values themselves are
+      // only consumed for that future surface.
+      this.sampleBitrate(stats);
     } catch (err) {
       console.warn("[transport] getStats failed:", err);
     }
@@ -1834,43 +1762,28 @@ class TransportMonitor {
   private show(kind: TransportKind): void {
     if (kind === this.lastKind) return;
     this.lastKind = kind;
-
-    const pill = root.querySelector<HTMLElement>("#transport-pill");
-    const label = root.querySelector<HTMLElement>("#transport-label");
-    if (!pill || !label) return;
-
-    pill.classList.remove(
-      "hidden",
-      "transport-checking",
-      "transport-lan",
-      "transport-direct",
-      "transport-relay",
-    );
-    pill.classList.add(`transport-${kind}`);
-
-    const meta = TRANSPORT_LABELS[kind];
-    label.textContent = meta.label;
-    pill.title = meta.tooltip;
+    if (this.listener) {
+      try {
+        this.listener(kind);
+      } catch (err) {
+        // Listener errors must never tear down the engine.
+        console.warn("[transport] onTransportChange listener threw:", err);
+      }
+    }
   }
 
   /**
-   * Read cumulative `bytesSent` / `bytesReceived` from the currently
-   * selected ICE candidate pair (or summed outbound/inbound RTP if no
-   * pair exposes them) and convert the delta since the last tick into
-   * a human-readable kbps / Mbps readout rendered in the pill.
+   * Advance the byte counters used to compute a future bitrate readout.
+   * Stays a private helper because no host currently consumes it: when
+   * we add a transport pill in React we'll surface the deltas via a
+   * dedicated `onBitrate` callback rather than re-introducing DOM
+   * mutation here.
    */
-  private updateBitrate(stats: RTCStatsReport): void {
-    const bitrateEl = root.querySelector<HTMLElement>("#transport-bitrate");
-    if (!bitrateEl) return;
-
+  private sampleBitrate(stats: RTCStatsReport): void {
     let bytesSent = 0;
     let bytesRecv = 0;
     let nowTs = 0;
 
-    // Prefer the selected candidate pair - it sees ALL traffic on the
-    // robot pc (audio + data channel) without double-counting across
-    // RTCP / RTCP-mux streams. Fall back to summing RTP streams if the
-    // browser doesn't expose byte counts on the pair.
     let foundOnPair = false;
     stats.forEach((report) => {
       if (report.type !== "candidate-pair") return;
@@ -1884,7 +1797,10 @@ class TransportMonitor {
         pair.selected === true ||
         (pair.nominated === true && pair.state === "succeeded");
       if (!isSelected) return;
-      if (typeof pair.bytesSent === "number" && typeof pair.bytesReceived === "number") {
+      if (
+        typeof pair.bytesSent === "number" &&
+        typeof pair.bytesReceived === "number"
+      ) {
         bytesSent = pair.bytesSent;
         bytesRecv = pair.bytesReceived;
         nowTs = pair.timestamp ?? performance.now();
@@ -1903,7 +1819,10 @@ class TransportMonitor {
         if (r.type === "outbound-rtp" && typeof r.bytesSent === "number") {
           bytesSent += r.bytesSent;
           nowTs = r.timestamp ?? nowTs;
-        } else if (r.type === "inbound-rtp" && typeof r.bytesReceived === "number") {
+        } else if (
+          r.type === "inbound-rtp" &&
+          typeof r.bytesReceived === "number"
+        ) {
           bytesRecv += r.bytesReceived;
           nowTs = r.timestamp ?? nowTs;
         }
@@ -1911,55 +1830,11 @@ class TransportMonitor {
     }
 
     if (!nowTs) nowTs = performance.now();
-
-    const hasPrev = this.prevBytesSent >= 0 && this.prevBytesRecv >= 0;
-    const dtMs = nowTs - this.prevSampleTs;
-
-    if (hasPrev && dtMs > 100) {
-      const dBytes =
-        Math.max(0, bytesSent - this.prevBytesSent) +
-        Math.max(0, bytesRecv - this.prevBytesRecv);
-      const bps = (dBytes * 8_000) / dtMs; // bits / s
-      bitrateEl.textContent = formatBitrate(bps);
-    } else if (!hasPrev) {
-      bitrateEl.textContent = "";
-    }
-
     this.prevBytesSent = bytesSent;
     this.prevBytesRecv = bytesRecv;
     this.prevSampleTs = nowTs;
   }
 }
-
-/** Human-readable bps - picks the right unit and keeps one decimal. */
-function formatBitrate(bps: number): string {
-  if (!Number.isFinite(bps) || bps <= 0) return "";
-  if (bps >= 1_000_000) {
-    const mbps = bps / 1_000_000;
-    return `${mbps.toFixed(mbps >= 10 ? 0 : 1)} Mbps`;
-  }
-  const kbps = bps / 1_000;
-  return `${kbps.toFixed(kbps >= 100 ? 0 : 1)} kbps`;
-}
-
-const TRANSPORT_LABELS: Record<TransportKind, { label: string; tooltip: string }> = {
-  checking: {
-    label: "Connecting…",
-    tooltip: "Gathering ICE candidates for the robot peer connection.",
-  },
-  lan: {
-    label: "LAN",
-    tooltip: "Audio flows directly on the local network (host candidates).",
-  },
-  direct: {
-    label: "Direct",
-    tooltip: "Direct peer-to-peer through NAT (STUN-discovered candidates).",
-  },
-  relay: {
-    label: "Relayed",
-    tooltip: "Audio is going through a TURN relay — expect more latency.",
-  },
-};
 
 /**
  * Walk the RTCStatsReport and return a human-readable classification of
@@ -2021,9 +1896,12 @@ interface RTCStatsWithCandidates {
   remoteCandidateId?: string;
 }
 
-function startTransportMonitor(pc: RTCPeerConnection): void {
+function startTransportMonitor(
+  pc: RTCPeerConnection,
+  listener: ((kind: TransportKind) => void) | null = null,
+): void {
   transportMonitor ??= new TransportMonitor();
-  transportMonitor.start(pc);
+  transportMonitor.start(pc, listener);
 }
 
 function stopTransportMonitor(): void {
@@ -2229,9 +2107,20 @@ async function onFatalError(err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   console.error("[main] error:", err);
   setState("error");
-  // Prefer the short "Tap to retry" caption; stash the full message in a
-  // tooltip so the user can still get the details on hover.
-  circleCaption.title = message;
+  // The React caption shows a short "Tap to retry" copy; the full
+  // message goes through a dedicated callback so the host can show it
+  // as a tooltip / detail line under the orb without us reaching into
+  // the DOM.
+  if (onErrorMessageChange) {
+    try {
+      onErrorMessageChange(message);
+    } catch (callbackErr) {
+      console.warn(
+        "[conversation-engine] onErrorMessageChange threw:",
+        callbackErr,
+      );
+    }
+  }
   await teardown();
 }
 
@@ -2248,8 +2137,7 @@ function wireRobot(): void {
   robot.addEventListener("sessionStopped", async () => {
     await teardown();
     selectedRobotId = null;
-    micMuted = false;
-    micBtn.classList.remove("muted");
+    applyMicMuted(false);
     // Fall back to the pre-session screen rather than the picker; the
     // user can trigger a new run with a single tap.
     if (robot?.isAuthenticated) {
@@ -2260,7 +2148,6 @@ function wireRobot(): void {
   });
 
   robot.addEventListener("disconnected", () => {
-    showRobotPicker(false);
     if (robot?.isAuthenticated) {
       setState("authenticated");
     } else {
@@ -2344,20 +2231,19 @@ async function boot(): Promise<void> {
     // app, and surface a helpful hint.
     console.warn("[main] authenticate() failed:", err);
     const message = err instanceof Error ? err.message : String(err);
-    if (/clientId/i.test(message)) {
-      setCaption("Add HF client ID in settings", "muted");
+    if (/clientId/i.test(message) && onErrorMessageChange) {
+      try {
+        onErrorMessageChange("Add HF client ID in settings");
+      } catch (callbackErr) {
+        console.warn(
+          "[conversation-engine] onErrorMessageChange threw:",
+          callbackErr,
+        );
+      }
     }
   }
 
   if (authenticated) {
-    // The SDK's `robot.username` is derived from OIDC's `name` claim,
-    // which is the user's *full name* (e.g. "frere thibaud"), not the
-    // HF handle. It's good enough as a placeholder, but we fetch the
-    // real `preferred_username` + `picture` from `/oauth/userinfo`
-    // below to show the correct handle and avatar.
-    hfUserName.textContent = "@" + (robot.username ?? "");
-    hfUser.classList.remove("hidden");
-    void loadHfUserInfo();
     setState("authenticated");
 
     // Mobile fast path: if the ConversePanel pre-fetched the robot's
@@ -2373,83 +2259,14 @@ async function boot(): Promise<void> {
       void doConnect();
     }
   } else {
-    hfUser.classList.add("hidden");
-    clearHfUser();
     setState("signed-out");
   }
 }
 
-/**
- * Pull the logged-in user's handle + avatar from HF's OIDC userinfo
- * endpoint. We prefer this over `/api/users/{name}/overview` because
- * the SDK only exposes the user's *display name* via `robot.username`
- * (the `name` claim), and names often contain spaces / accents that
- * break the `/api/users/...` path.
- *
- * Cached in `sessionStorage` so we don't re-hit the endpoint on every
- * tab visit.
- */
-async function loadHfUserInfo(): Promise<void> {
-  const token = sessionStorage.getItem("hf_token");
-  if (!token) return;
-
-  const cacheKey = "reachy.minimal.hfUserInfo";
-  const cached = sessionStorage.getItem(cacheKey);
-  if (cached) {
-    try {
-      const info = JSON.parse(cached) as HfUserInfo;
-      applyHfUserInfo(info);
-      return;
-    } catch {
-      sessionStorage.removeItem(cacheKey);
-    }
-  }
-
-  try {
-    const res = await fetch("https://huggingface.co/oauth/userinfo", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as {
-      preferred_username?: string;
-      picture?: string;
-    };
-    const info: HfUserInfo = {
-      handle: data.preferred_username,
-      picture: data.picture,
-    };
-    sessionStorage.setItem(cacheKey, JSON.stringify(info));
-    applyHfUserInfo(info);
-  } catch (err) {
-    console.warn("[main] loadHfUserInfo failed:", err);
-  }
-}
-
-interface HfUserInfo {
-  handle?: string;
-  picture?: string;
-}
-
-function applyHfUserInfo(info: HfUserInfo): void {
-  if (info.handle) {
-    hfUserName.textContent = "@" + info.handle;
-  }
-  if (info.picture) {
-    setHfAvatar(info.picture);
-  }
-}
-
-function setHfAvatar(url: string): void {
-  hfAvatar.onload = () => hfAvatar.classList.add("loaded");
-  hfAvatar.onerror = () => hfAvatar.classList.remove("loaded");
-  hfAvatar.src = url;
-}
-
-function clearHfUser(): void {
-  hfAvatar.classList.remove("loaded");
-  hfAvatar.removeAttribute("src");
-  sessionStorage.removeItem("reachy.minimal.hfUserInfo");
-}
+// HF user pill, avatar fetcher and the OIDC userinfo cache used to
+// live here. The mobile app surfaces the signed-in identity in its
+// own settings screen (see `RemoteSignInScreen`), so the engine
+// stopped owning that surface.
 
 function whenReachyReady(): Promise<void> {
   if (window.ReachyMini) return Promise.resolve();
@@ -2475,16 +2292,11 @@ function whenReachyReady(): Promise<void> {
 // next.
 setState(currentState);
 
-// Strip the `booting` class once the browser has painted the initial
-// layout — otherwise the orb visibly fades + scales in on first load
-// because the `.ind` defaults (opacity 0, scale 0.85) differ from the
-// state-applied values (opacity 1, scale 1). Two rAFs guarantee the
-// first style commit has happened before we re-enable transitions.
-requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    root.classList.remove("booting");
-  });
-});
+// The legacy "booting" class strip was tied to the engine's old
+// inline markup (where the orb's `.ind` defaults clashed with the
+// state-applied values, causing a fade-in on first paint). The
+// React orb owns those transitions now, so the engine no longer
+// touches `root` after mount.
 
 let unmounted = false;
 void whenReachyReady()
@@ -2659,6 +2471,29 @@ return {
     // host can call `startConversation()` again later without the
     // engine's UI lying about its current capabilities.
     if (sessionEstablished) setState("connected");
+  },
+
+  setMicMuted: (muted: boolean) => {
+    if (unmounted) return;
+    applyMicMuted(muted);
+  },
+
+  requestStop: async () => {
+    if (unmounted) return;
+    try {
+      await handleHostStop();
+    } catch (err) {
+      console.warn("[conversation-engine] requestStop failed:", err);
+    }
+  },
+
+  triggerOrbAction: async () => {
+    if (unmounted) return;
+    try {
+      await handleOrbClick();
+    } catch (err) {
+      console.warn("[conversation-engine] triggerOrbAction failed:", err);
+    }
   },
 };
 } // end of mountConversation

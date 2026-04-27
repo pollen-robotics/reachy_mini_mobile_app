@@ -1,12 +1,18 @@
 /**
- * Slim React wrapper around the conversation engine.
+ * Slim React wrapper around the (now headless) conversation engine.
  *
- * The panel itself is intentionally dumb:
- *   - it renders the static markup ported from the original Space
- *     (`reachy_mini_minimal_conversation/index.html`),
- *   - it mounts / unmounts `mountConversation()` over that markup
- *     when the inputs it needs from the parent are ready,
- *   - and it surfaces overlays for SDK errors, parent-driven busy
+ * Layout owned by React
+ * ─────────────────────
+ * The orb, caption, side buttons and tool-toast are React components
+ * (see `./orb/`). The engine does NOT inject any DOM here anymore: it
+ * reports state via `onStateChange`, audio levels via
+ * `audioLevelsTarget` (CSS variables on the orb element) and tool
+ * calls via `onToolToast`. That keeps a single source of truth for
+ * the visual state - what React renders is what you see.
+ *
+ *   - it mounts / unmounts `mountConversation()` against an inert
+ *     placeholder when the inputs it needs from the parent are ready,
+ *   - it surfaces overlays for SDK errors, parent-driven busy
  *     states (e.g. "reconnecting after heal") and a watchdog-trip
  *     retry CTA.
  *
@@ -36,17 +42,23 @@
  * StrictMode double-invocations and remountKey bumps so we never
  * have two concurrent SSE sessions on HF central.
  */
-import { Box, Button, CircularProgress, Typography } from '@mui/material';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   mountConversation,
   type AppState,
   type ConversationEngineHandle,
+  type ConversationLevelEvent,
+  type ConversationToolToastEvent,
+  type ConversationTransportKind,
 } from './conversation-engine';
 import { useReachySdk } from './useReachySdk';
 import { createLogger } from '../logger';
-import './conversation.css';
+import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
+import { ConversationCaption } from './orb/ConversationCaption';
+import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
+import { ConversationToolToast } from './orb/ConversationToolToast';
 
 const engineLogger = createLogger('engine');
 
@@ -128,6 +140,13 @@ const LAZY_HEAL_MS = 5_000;
 const WATCHDOG_TIMEOUT_MS = 20_000;
 
 /**
+ * Tool-toast auto-dismiss budget. The engine emits the label + a
+ * `durationMs` hint; we still cap it client-side to avoid a stuck
+ * toast if a buggy engine fires durationMs=Infinity.
+ */
+const TOOL_TOAST_MAX_MS = 6_000;
+
+/**
  * States that are supposed to be *on the way to* a steady conversation.
  * Staying in any of them past the lazy heal threshold triggers the
  * parent heal callback; staying past the full watchdog budget surfaces
@@ -140,6 +159,48 @@ const TRANSIENT_STATES = new Set<AppState>([
   'auto-selecting',
   'starting',
 ]);
+
+/**
+ * Live conversation states - the user can mute / hang up here. Used
+ * to decide whether the side buttons should expand into view.
+ */
+const LIVE_STATES = new Set<AppState>([
+  'listening',
+  'user-speaking',
+  'processing',
+  'ai-speaking',
+]);
+
+/**
+ * Map the engine's full `AppState` union onto the smaller `OrbState`
+ * the React orb cares about. Several engine states share the same
+ * visual (idle ring, yellow spinner) on mobile, where auth + robot
+ * selection are decided upstream before the orb even mounts.
+ */
+function appStateToOrbState(state: AppState): OrbState {
+  switch (state) {
+    case 'signed-out':
+    case 'authenticated':
+      return 'idle';
+    case 'connecting':
+    case 'connected':
+    case 'auto-selecting':
+    case 'starting':
+      return 'connecting';
+    case 'listening':
+      return 'listening';
+    case 'user-speaking':
+      return 'user-speaking';
+    case 'processing':
+      return 'processing';
+    case 'ai-speaking':
+      return 'ai-speaking';
+    case 'error':
+      return 'error';
+    default:
+      return 'idle';
+  }
+}
 
 export interface ConversePanelProps {
   /**
@@ -186,7 +247,7 @@ export interface ConversePanelProps {
   onStuck?: () => void;
   /**
    * Optional one-line label rendered as a floating overlay on top of
-   * the engine. Non-blocking — the engine keeps running underneath.
+   * the engine. Non-blocking - the engine keeps running underneath.
    * Used by the parent to surface "Reconnecting robot to HuggingFace…"
    * during a heal cycle. Pass null/undefined to hide.
    */
@@ -218,6 +279,14 @@ export interface ConversePanelProps {
    * SDK session).
    */
   convoActive?: boolean;
+  /**
+   * Forwarded to the engine's `onTransportChange` option. Fires once
+   * per ICE classification change (`checking` → `lan`/`direct`/`relay`)
+   * after the conversation pipeline has started. Used by the parent
+   * to feed `connectionSummary`; falsy means "I don't care about the
+   * transport".
+   */
+  onTransportChange?: (kind: ConversationTransportKind) => void;
 }
 
 export function ConversePanel({
@@ -229,10 +298,24 @@ export function ConversePanel({
   busyLabel = null,
   errorMessage = null,
   convoActive = false,
+  onTransportChange,
 }: ConversePanelProps): React.ReactElement {
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  // The orb element doubles as the audio-levels target: the engine
+  // writes `--audio-level`, `--ai-audio-level`, `--bar0..--bar4`
+  // directly on it via `options.audioLevelsTarget`, so the 60 Hz
+  // audio loop never goes through React.
+  const orbRef = useRef<HTMLButtonElement | null>(null);
   const handleRef = useRef<ConversationEngineHandle | null>(null);
   const { isReady, error: sdkError } = useReachySdk();
+
+  // Engine-driven UI state. All four mirror the engine's internal
+  // truth via callbacks; we never mutate them imperatively from the
+  // host side (clicking the orb / mute / stop just calls into the
+  // engine which fans the resulting state change back to us).
+  const [appState, setAppState] = useState<AppState>('connecting');
+  const [micMuted, setMicMuted] = useState(false);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [toolLabel, setToolLabel] = useState<string | null>(null);
 
   // Watchdog / retry state. The lazy-heal trigger doesn't have a
   // visible component (it asks the parent to heal silently); the
@@ -251,6 +334,8 @@ export function ConversePanel({
   onAppStateChangeRef.current = onAppStateChange;
   const onStuckRef = useRef(onStuck);
   onStuckRef.current = onStuck;
+  const onTransportChangeRef = useRef(onTransportChange);
+  onTransportChangeRef.current = onTransportChange;
   // Mirror `convoActive` so the watchdog closure (captured per
   // engine mount) can read the live value. The watchdog is only
   // meaningful while the host actually wants a conversation: once
@@ -273,6 +358,37 @@ export function ConversePanel({
     onStuckRef.current?.();
   }, []);
 
+  // Tool toast: auto-dismiss after the engine-supplied duration,
+  // capped client-side. We keep the ID in a ref so back-to-back
+  // tool calls don't have the second one's clear racing the first
+  // one's display.
+  const toolDismissRef = useRef<number | null>(null);
+  const handleToolToast = useCallback(
+    (toast: ConversationToolToastEvent) => {
+      setToolLabel(toast.label);
+      if (toolDismissRef.current !== null) {
+        window.clearTimeout(toolDismissRef.current);
+      }
+      const ms = Math.min(
+        TOOL_TOAST_MAX_MS,
+        Math.max(800, toast.durationMs || 1800),
+      );
+      toolDismissRef.current = window.setTimeout(() => {
+        toolDismissRef.current = null;
+        setToolLabel(null);
+      }, ms);
+    },
+    [],
+  );
+  useEffect(() => {
+    return () => {
+      if (toolDismissRef.current !== null) {
+        window.clearTimeout(toolDismissRef.current);
+        toolDismissRef.current = null;
+      }
+    };
+  }, []);
+
   // Engine lifecycle. Reruns when:
   //   - SDK readiness flips (one-time per session)
   //   - peer id finishes resolving (also one-time per parent
@@ -289,8 +405,8 @@ export function ConversePanel({
     if (!isReady) return;
     if (!peerIdResolved) return;
     if (errorMessage) return;
-    const root = rootRef.current;
-    if (!root) return;
+    const orb = orbRef.current;
+    if (!orb) return;
 
     const token = ++engineMountCounter;
     let aborted = false;
@@ -345,15 +461,37 @@ export function ConversePanel({
       if (aborted) return;
       try {
         engineLogger.info('mount', { token, peer_id: peerId ?? null });
-        const handle = mountConversation(root, {
+        const handle = mountConversation(orb, {
           preselectedRobotId: peerId,
           // Mobile app gates the conversation pipeline behind the
           // `convoActive` prop (forwarded below in a dedicated effect).
           // The SDK / DataChannel still comes up immediately because
           // it doubles as the daemon proxy transport during wake-up.
           autoStartConversation: false,
+          // Audio reactivity goes straight on the orb element via CSS
+          // custom properties; no React reconciliation per audio
+          // frame.
+          audioLevelsTarget: orb,
+          onLevels: (_level: ConversationLevelEvent) => {
+            // No-op: we read the levels through CSS variables on
+            // `audioLevelsTarget` directly. The callback is wired
+            // for parity / future instrumentation.
+          },
+          onToolToast: (toast) => handleToolToast(toast),
+          onMicMutedChange: (muted) => setMicMuted(muted),
+          onErrorMessageChange: (message) => setErrorDetail(message),
+          onTransportChange: (kind) => {
+            const cb = onTransportChangeRef.current;
+            if (!cb) return;
+            try {
+              cb(kind);
+            } catch (err) {
+              console.warn('[ConversePanel] onTransportChange threw:', err);
+            }
+          },
           onStateChange: (state) => {
             engineLogger.info('state.transition', { to: state });
+            setAppState(state);
             if (TRANSIENT_STATES.has(state)) {
               armTimers();
             } else {
@@ -409,7 +547,15 @@ export function ConversePanel({
         }
       });
     };
-  }, [isReady, peerIdResolved, peerId, remountKey, localRetryKey, errorMessage]);
+  }, [
+    isReady,
+    peerIdResolved,
+    peerId,
+    remountKey,
+    localRetryKey,
+    errorMessage,
+    handleToolToast,
+  ]);
 
   // Forward `convoActive` to the engine. Decoupled from the mount
   // effect so flipping the gate doesn't tear the engine down: the
@@ -461,6 +607,25 @@ export function ConversePanel({
     }
   }, [convoActive, watchdogTripped]);
 
+  const orbState = useMemo(() => appStateToOrbState(appState), [appState]);
+  const live = LIVE_STATES.has(appState);
+
+  const handleOrbClick = useCallback(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    void handle.triggerOrbAction();
+  }, []);
+  const handleToggleMute = useCallback(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    handle.setMicMuted(!micMuted);
+  }, [micMuted]);
+  const handleStop = useCallback(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    void handle.requestStop();
+  }, []);
+
   // ─── Render ───────────────────────────────────────────────────────────
   //
   // Display priority:
@@ -469,12 +634,7 @@ export function ConversePanel({
   //   3. Watchdog tripped    - engine mounted but stuck > WATCHDOG_TIMEOUT
   //   4. Engine view         - default; busyLabel renders as a soft overlay
   const fatalMessage = sdkError?.message ?? errorMessage ?? null;
-
-  const engineVisible =
-    isReady &&
-    peerIdResolved &&
-    !fatalMessage &&
-    !watchdogTripped;
+  const engineVisible = isReady && peerIdResolved && !fatalMessage && !watchdogTripped;
 
   return (
     <Box sx={{ position: 'relative', flex: 1, minHeight: 0, width: '100%' }}>
@@ -525,17 +685,55 @@ export function ConversePanel({
         </Box>
       ) : null}
 
-      <div
-        ref={rootRef}
-        className="converse-root"
-        style={{
-          display: engineVisible ? 'grid' : 'none',
+      <Stack
+        alignItems="center"
+        justifyContent="center"
+        spacing={2}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          width: '100%',
+          height: '100%',
+          display: engineVisible ? 'flex' : 'none',
+          py: 4,
         }}
-        dangerouslySetInnerHTML={{ __html: CONVERSE_MARKUP }}
-      />
+      >
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="center"
+          spacing={2}
+        >
+          <MuteSideButton
+            live={live}
+            micMuted={micMuted}
+            onToggleMute={handleToggleMute}
+          />
+          <ConversationOrb
+            audioRef={orbRef}
+            state={orbState}
+            onClick={handleOrbClick}
+            disabled={live}
+            ariaLabel={ORB_ARIA_BY_STATE[orbState]}
+          />
+          <StopSideButton live={live} onStop={handleStop} />
+        </Stack>
+        <ConversationCaption state={orbState} message={errorDetail} />
+        <ConversationToolToast label={toolLabel} />
+      </Stack>
     </Box>
   );
 }
+
+const ORB_ARIA_BY_STATE: Record<OrbState, string> = {
+  idle: 'Start voice conversation',
+  connecting: 'Connecting',
+  listening: 'Listening',
+  'user-speaking': 'Listening',
+  processing: 'Processing',
+  'ai-speaking': 'Reachy is speaking',
+  error: 'Tap to retry',
+};
 
 // Fallback overlays sit ON TOP of the embedded conversation root, so
 // they need to fully mask whatever the engine has rendered behind
@@ -557,8 +755,7 @@ const centeredFallbackSx = {
 // Soft overlay: the engine is still visible underneath. We pin a
 // small status pill at the top of the panel so the user knows
 // something is happening (heal in flight) without losing the
-// orb / caption. Aligns with the transport pill on the right of
-// the engine's topbar.
+// orb / caption.
 const busyOverlaySx = {
   position: 'absolute',
   top: 12,
@@ -579,170 +776,3 @@ const retryBtnSx = {
   textTransform: 'none',
   px: 3,
 } as const;
-
-/**
- * Static markup ported verbatim from
- * `reachy_mini_minimal_conversation/index.html`. Kept as a single
- * string so the diff with the Space app stays greppable and we can
- * re-sync in one place if the reference ever changes.
- */
-const CONVERSE_MARKUP = /* html */ `
-<header class="topbar">
-  <div class="brand">
-    <img class="brand-logo" src="/images/reachy-head.svg" alt="" draggable="false" />
-    <span>Reachy Mini</span>
-  </div>
-  <div class="topbar-right">
-    <span id="transport-pill" class="transport-pill hidden" title="Robot transport path" aria-live="polite">
-      <span class="transport-dot" aria-hidden="true"></span>
-      <span id="transport-label" class="transport-label"></span>
-      <span id="transport-bitrate" class="transport-bitrate" aria-hidden="true"></span>
-    </span>
-    <span id="hf-user" class="hf-user hidden">
-      <img id="hf-avatar" class="hf-avatar" alt="" aria-hidden="true" />
-      <span id="hf-user-name" class="hf-user-name"></span>
-    </span>
-    <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .66.39 1.25 1 1.51H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    </button>
-  </div>
-</header>
-
-<main class="stage">
-  <div class="orb-wrap">
-    <button id="mic-btn" class="side-btn" type="button" aria-label="Mute" title="Mute" aria-hidden="true">
-      <svg class="mic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-      <svg class="mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M9 5a3 3 0 0 1 6 0v4"/><path d="M9 10v1a3 3 0 0 0 5.1 2.1"/><path d="M19 10a7 7 0 0 1-1.24 3.97"/><path d="M5 10a7 7 0 0 0 11 5.67"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-    </button>
-
-    <button id="main-circle" class="circle" type="button" aria-label="Start voice conversation">
-      <span class="circle-glow" aria-hidden="true"></span>
-      <span class="circle-ring" aria-hidden="true"></span>
-      <span class="circle-ring-outer" aria-hidden="true"></span>
-      <span class="circle-core">
-        <span class="circle-indicator" aria-hidden="true">
-          <svg class="ind ind-connect" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 1 0-7.07-7.07l-1.72 1.71"/>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 1 0 7.07 7.07l1.71-1.71"/>
-          </svg>
-          <svg class="ind ind-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor" stroke="none"/>
-            <path d="M5 10a7 7 0 0 0 14 0"/>
-            <line x1="12" y1="19" x2="12" y2="22"/>
-            <line x1="8" y1="22" x2="16" y2="22"/>
-          </svg>
-          <svg class="ind ind-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
-          <span class="ind ind-spinner"></span>
-          <span class="ind ind-thinking">
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span class="dot"></span>
-          </span>
-          <span class="ind ind-bars">
-            <span class="bar"></span>
-            <span class="bar"></span>
-            <span class="bar"></span>
-            <span class="bar"></span>
-            <span class="bar"></span>
-          </span>
-          <svg class="ind ind-voice" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 10v4a1 1 0 0 0 1 1h3l5 4V5L7 9H4a1 1 0 0 0-1 1z" fill="currentColor" stroke="none"/>
-            <path class="wave wave-1" d="M16 8a5 5 0 0 1 0 8"/>
-            <path class="wave wave-2" d="M19 5a9 9 0 0 1 0 14"/>
-          </svg>
-        </span>
-      </span>
-    </button>
-
-    <button id="stop-btn" class="side-btn" type="button" aria-label="End" title="End" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-    </button>
-  </div>
-
-  <p id="circle-caption" class="circle-caption empty" role="status"></p>
-
-  <div id="tool-toast" class="tool-toast" role="status" aria-live="polite" aria-hidden="true">
-    <svg class="tool-toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1l2.1-2.1M17 7l2.1-2.1"/>
-    </svg>
-    <span class="tool-toast-text"></span>
-  </div>
-
-</main>
-
-<footer class="footer">
-  <span>Reachy Mini · OpenAI Realtime</span>
-</footer>
-
-<dialog id="settings-modal" class="modal">
-  <form method="dialog" class="modal-content">
-    <header class="modal-header">
-      <h2>Settings</h2>
-      <button class="icon-btn" value="close" aria-label="Close">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </header>
-
-    <div class="tabs" role="tablist" aria-label="Settings sections">
-      <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="access">Access</button>
-      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="conversation">Conversation</button>
-    </div>
-
-    <div class="tab-panels">
-      <section class="tab-panel active" role="tabpanel" data-tab-panel="access">
-        <label class="field">
-          <span>OpenAI API key</span>
-          <input id="openai-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
-          <small>Stored locally on this device. Sent as Bearer token to OpenAI only.</small>
-        </label>
-        <label id="hf-client-id-field" class="field hidden">
-          <span>Hugging Face OAuth client ID</span>
-          <input id="hf-client-id" type="text" autocomplete="off" spellcheck="false" />
-          <small>Required only on <code>localhost</code>.</small>
-        </label>
-      </section>
-
-      <section class="tab-panel" role="tabpanel" data-tab-panel="conversation" hidden>
-        <label class="field">
-          <span>Instructions</span>
-          <textarea id="openai-instructions" rows="5" placeholder="You are Reachy Mini, a friendly robot assistant..."></textarea>
-          <small>System prompt sent to the model. Applied on next conversation start.</small>
-        </label>
-        <div class="field-row">
-          <label class="field">
-            <span>Voice</span>
-            <select id="openai-voice">
-              <option value="alloy">alloy</option>
-              <option value="ash">ash</option>
-              <option value="ballad">ballad</option>
-              <option value="cedar" selected>cedar</option>
-              <option value="coral">coral</option>
-              <option value="echo">echo</option>
-              <option value="marin">marin</option>
-              <option value="sage">sage</option>
-              <option value="shimmer">shimmer</option>
-              <option value="verse">verse</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Model</span>
-            <input id="openai-model" type="text" spellcheck="false" placeholder="gpt-realtime" />
-          </label>
-        </div>
-        <div class="field">
-          <button id="restart-conversation" type="button" class="btn primary wide" disabled>
-            Restart conversation with these settings
-          </button>
-          <small id="restart-hint">Connect first, then come back here to apply live changes.</small>
-        </div>
-      </section>
-    </div>
-
-    <footer class="modal-footer">
-      <button id="hf-logout" type="button" class="btn ghost">Sign out</button>
-      <button id="settings-save" type="submit" class="btn primary" value="save">Save</button>
-    </footer>
-  </form>
-</dialog>
-`;
