@@ -35,6 +35,7 @@ import type {
   ReachyMiniInstance,
   RobotInfo,
 } from "./globals";
+import { isTrajectoryPlaying } from "../daemon/trajectoryGate";
 
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
@@ -330,8 +331,36 @@ const $ = <T extends HTMLElement>(selector: string): T => {
   return el;
 };
 
-const circleBtn = $<HTMLButtonElement>("#main-circle");
-const circleCaption = $<HTMLParagraphElement>("#circle-caption");
+/**
+ * Re-resolve a DOM ref if the cached one fell out of the live tree.
+ *
+ * The conversation markup is rendered by React via
+ * `dangerouslySetInnerHTML`, so in steady state the inner nodes
+ * survive every parent re-render. But the dev workflow (Vite HMR
+ * + StrictMode) and a couple of edge cases on the React side
+ * (parent unmount/remount that still calls into the engine before
+ * its cleanup runs) can leave us holding a node that's been
+ * replaced. Writes to a detached node *succeed* silently - the
+ * `setState` log fires, but the user keeps seeing the stale
+ * "Connecting" caption from the original markup.
+ *
+ * `ensureRef` is the cheapest insurance against that: a single
+ * `isConnected` check on every UI-touching call, with a fallback
+ * `querySelector` only when the cache is stale. It's a noop in
+ * production builds (no HMR, no StrictMode unmount) and saves the
+ * caption from getting orphaned in dev.
+ */
+const ensureRef = <T extends HTMLElement>(
+  cached: T,
+  selector: string,
+): T => {
+  if (cached.isConnected) return cached;
+  const fresh = root.querySelector<T>(selector);
+  return fresh ?? cached;
+};
+
+let circleBtn = $<HTMLButtonElement>("#main-circle");
+let circleCaption = $<HTMLParagraphElement>("#circle-caption");
 const toolToast = $<HTMLElement>("#tool-toast");
 const toolToastText = toolToast.querySelector<HTMLSpanElement>(".tool-toast-text")!;
 const orbWrap = $<HTMLElement>(".orb-wrap");
@@ -374,14 +403,15 @@ type SettingsTab = "access" | "conversation";
 
 // ─── Runtime state ──────────────────────────────────────────────────────
 
-// Mobile app: HF auth is gated upstream by `HfLoginOverlay` in
-// `ConnectedScreen`, so by the time this engine boots the token is
-// already in `sessionStorage` and `robot.authenticate()` is just a
-// formality. Start in `connecting` (spinner, no caption flash) so the
-// user never sees the "Sign in" intro state - it's misleading here
-// since they signed in two screens ago. The first `setState` from
-// `boot()` (either to `authenticated` or, if the preselected robot id
-// is known, straight to `connecting`) takes over almost immediately.
+// Mobile app: HF auth is gated upstream by `RemoteSignInScreen`
+// (the app's entry gate in `App.tsx`), so by the time this engine
+// boots the token is already in `sessionStorage` and
+// `robot.authenticate()` is just a formality. Start in `connecting`
+// (spinner, no caption flash) so the user never sees the "Sign in"
+// intro state - it's misleading here since they signed in two
+// screens ago. The first `setState` from `boot()` (either to
+// `authenticated` or, if the preselected robot id is known,
+// straight to `connecting`) takes over almost immediately.
 let currentState: AppState = "connecting";
 let selectedRobotId: string | null = null;
 let settings: Settings = loadSettings();
@@ -468,6 +498,7 @@ function setState(next: AppState): void {
     }
   }
   const view = STATE_VIEWS[next];
+  circleBtn = ensureRef(circleBtn, "#main-circle");
   circleBtn.disabled = view.disabled;
   circleBtn.className = `circle ${STATE_CLASS[next]}`;
 
@@ -521,6 +552,7 @@ function updateRestartAvailability(): void {
  */
 function setCaption(text: string, kind: "" | "error" | "muted" = ""): void {
   const trimmed = text.trim();
+  circleCaption = ensureRef(circleCaption, "#circle-caption");
   circleCaption.textContent = trimmed;
   circleCaption.className = `circle-caption${kind ? ` ${kind}` : ""}${trimmed ? "" : " empty"}`;
 }
@@ -1105,6 +1137,10 @@ function startWobbler(assistantTrack: MediaStreamTrack): void {
       // those own the head while they run.
       if (toolPoseRestoreTimer !== null) return;
       if (movePlaying) return;
+      // Same idea for the daemon-side wake_up / goto_sleep trajectories:
+      // they own the head for ~2 s and a 30 Hz setHeadPose stream from
+      // here would freeze the animation mid-flight.
+      if (isTrajectoryPlaying()) return;
       // The SDK's setHeadPose expects degrees. Our offsets are already in
       // degrees; we push them as absolute target poses around the neutral
       // head position (no base pose is preserved, which keeps the motion
@@ -1133,6 +1169,10 @@ function startAntennas(): void {
       // Move frames own the antennas while a choreography is streaming -
       // don't clash by pushing our idle oscillation on top.
       if (movePlaying) return;
+      // Daemon-side trajectories (wake_up.json, goto_sleep.json) drive
+      // the antennas too; muting our oscillator for their duration keeps
+      // the animation crisp instead of beating against our 0.5 Hz sine.
+      if (isTrajectoryPlaying()) return;
       const ok = robot?.setAntennas(right, left) ?? false;
       recordSend(ok, "antennas");
     },
@@ -2270,6 +2310,23 @@ function whenReachyReady(): Promise<void> {
     window.addEventListener("reachymini:ready", () => resolve(), { once: true });
   });
 }
+
+// Paint the initial state onto the DOM before we hand control off to
+// the SDK / boot pipeline. The `currentState` variable up top is set
+// to "connecting" but until something calls `setState()` the orb
+// keeps the static markup's neutral `class="circle"` (no glow, no
+// indicator, no caption). On a slow first paint - SDK still loading,
+// `authenticate()` not yet resolved - the user would otherwise see
+// an inert violet circle for several seconds.
+//
+// Calling setState here is also what fans the initial transition
+// out to the parent's `onStateChange` observer so the watchdog
+// timers in ConversePanel arm right at mount, instead of waiting
+// until `boot()` has run far enough to set its first explicit
+// state. Match the variable's initial value so we don't burn a
+// transition for the same value the boot pipeline will land on
+// next.
+setState(currentState);
 
 // Strip the `booting` class once the browser has painted the initial
 // layout — otherwise the orb visibly fades + scales in on first load

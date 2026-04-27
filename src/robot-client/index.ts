@@ -1,32 +1,47 @@
 /**
  * Public surface of the `robot-client` module.
  *
- * Exports:
- *   - `RobotClient`, `RobotFetchOptions`, `RobotResponse`: the
- *     unified types call sites should use instead of importing from
+ * Single transport
+ * ────────────────
+ * Every daemon API call goes through WebRTC's `http_proxy` command on
+ * the SDK's DataChannel, regardless of whether the user got here over
+ * Bluetooth (BLE list, same Wi-Fi as the robot) or over Hugging Face
+ * central signaling (anywhere in the world). The "prefer LAN when
+ * available" intent is delegated to ICE: when both peers are on the
+ * same subnet, ICE picks the host candidate and the same WebRTC
+ * session is effectively a P2P LAN tunnel, with a TURN/relay fallback
+ * otherwise.
+ *
+ * Why one transport instead of two
+ * ────────────────────────────────
+ * The previous design forked between `localHttpClient` (LAN HTTP via
+ * Tauri's `daemon_fetch`) and `webrtcClient` based on a `remoteMode`
+ * flag the UI set on robot pickup. That meant:
+ *
+ *   - The same daemon endpoint had two code paths to reason about
+ *     (auth, timeouts, error shapes), with subtle drift between them.
+ *   - LAN-discovered robots that were reachable BOTH over BLE and
+ *     central could end up on either path depending on which list the
+ *     user tapped, with no fallback if the chosen path was unhealthy.
+ *   - Every screen had to thread `daemonHost` through `useMemo`s.
+ *
+ * Centralising on WebRTC removes all of that: the screen instantiates
+ * a single client at mount, ICE figures out the best route, and a
+ * stale relay path heals via the existing `useDaemonRelayHealing`
+ * code path instead of dual-path branching.
+ *
+ * Exports
+ * ───────
+ *   - `RobotClient`, `RobotFetchOptions`, `RobotResponse`: unified
+ *     types call sites should use instead of importing from
  *     `daemon/daemonFetch` directly.
- *   - `createRobotClient(...)`: factory that picks LAN HTTP or
- *     WebRTC `http_proxy` based on the connection mode.
+ *   - `createRobotClient()`: factory that returns a WebRTC-backed
+ *     client. Kept as a factory (instead of just exporting the
+ *     instance) so call sites remain explicit about lifecycle and so
+ *     we can reintroduce per-screen options later without churn.
  *   - `setActiveDataChannel`, `subscribeDataChannel`,
  *     `getActiveDataChannel`: registry hooks used by `useReachySdk`
  *     to plug the SDK's DataChannel into the WebRTC transport.
- *
- * Migration path
- * ──────────────
- * Existing code calls `daemonFetch(host, path, opts)` and assumes
- * the LAN HTTP transport. To migrate one call site at a time:
- *
- *   1. Build a client at the right scope: usually inside a hook
- *      that knows whether we're in LAN or remote mode.
- *      `const client = createRobotClient({daemonHost, remoteMode})`
- *   2. Replace `daemonFetch(host, path, opts)` with
- *      `client.fetch(path, opts)`. The response shape is identical.
- *   3. Forward `client` to children that need to make daemon calls,
- *      or stash it in a context so the whole subtree is transparent
- *      to LAN-vs-remote.
- *
- * `daemonFetch` itself stays where it is - the LAN client uses it
- * internally - so call sites that aren't migrated yet keep working.
  */
 export type {
   RobotClient,
@@ -39,48 +54,24 @@ export {
   subscribeDataChannel,
 } from './dataChannelRegistry';
 
-import { createLocalHttpClient } from './localHttpClient';
 import { createWebRtcClient } from './webrtcClient';
 import type { RobotClient } from './types';
 
-export interface RobotClientFactoryOptions {
-  /**
-   * Daemon host (IP or hostname, no scheme/port) when reachable on
-   * the LAN. Required in LAN mode, ignored in remote mode.
-   */
-  daemonHost: string | null;
-  /**
-   * `true` when the phone has no LAN line of sight to the daemon
-   * and uses central signaling. The factory then returns a WebRTC
-   * client that tunnels every call through the SDK's DataChannel.
-   */
-  remoteMode: boolean;
-}
-
 /**
- * Build a transport-appropriate `RobotClient`.
+ * Build a `RobotClient` that tunnels every daemon HTTP call through
+ * the WebRTC DataChannel hosted by the conversation engine.
  *
- * - LAN mode (`remoteMode=false`, `daemonHost` set): direct HTTP via
- *   Tauri's `daemon_fetch` shim. Lowest overhead, works offline of
- *   the internet.
- * - Remote mode (`remoteMode=true`): every call is wrapped in an
- *   `http_proxy` command and sent on the WebRTC DataChannel that the
- *   conversation engine (or anything else hosting a `ReachyMini`
- *   instance) has opened. If the DC is not yet open, calls return
- *   a synthetic `{status: 0, rawBody: 'no active webrtc data
- *   channel'}` so callers can render a "connecting…" state without
- *   special-casing the transport.
- *
- * Edge case: a missing `daemonHost` in LAN mode is a programmer bug
- * (the host should already have been resolved by discovery); we fail
- * predictably by returning a WebRTC client. The call will end up
- * with `no active …` until the SDK comes up, surfaced as a clean
- * error in the UI rather than a thrown exception in render code.
+ * Concurrency / lifecycle:
+ *   - The DC must be open for `client.fetch()` to succeed; calls made
+ *     before the SDK has negotiated it return a synthetic
+ *     `{status: 0, rawBody: 'no active webrtc data channel'}` so
+ *     callers can show a "connecting…" UI without special-casing the
+ *     transport.
+ *   - The factory is cheap (no I/O), so it's fine to call it inside
+ *     a `useMemo([])` at screen mount. The same instance can serve
+ *     the entire screen even if the DC underneath gets replaced - the
+ *     registry handles that transparently.
  */
-export function createRobotClient(
-  opts: RobotClientFactoryOptions,
-): RobotClient {
-  if (opts.remoteMode) return createWebRtcClient();
-  if (!opts.daemonHost) return createWebRtcClient();
-  return createLocalHttpClient(opts.daemonHost);
+export function createRobotClient(): RobotClient {
+  return createWebRtcClient();
 }

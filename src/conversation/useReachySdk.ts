@@ -631,80 +631,20 @@ function ensureLoaded(): void {
   document.head.appendChild(script);
 }
 
-export interface HfSessionSeed {
-  token: string;
-  /** HF handle, used by the SDK to populate `robot.username`. */
-  username: string;
-  /**
-   * ISO 8601 date at which the token expires. The SDK compares this
-   * against `new Date()` every `authenticate()` call.
-   */
-  expiresAt: string;
-}
-
-/**
- * Decode the `exp` claim out of an HF OAuth JWT without verifying the
- * signature. The SDK only needs `exp` to decide whether to accept the
- * cached token; the actual signature is re-verified server-side on
- * the first real API call.
- *
- * Returns `null` if the token isn't a well-formed JWT (e.g. on a
- * future change to opaque tokens).
- */
-export function decodeHfTokenExpiry(token: string): Date | null {
-  // HF prefixes the JWT with `hf_oauth_` on some endpoints; strip it if
-  // present so the standard 3-segment split works.
-  const raw = token.startsWith('hf_oauth_') ? token.slice('hf_oauth_'.length) : token;
-  const parts = raw.split('.');
-  if (parts.length !== 3) return null;
-  const payload = parts[1];
-  if (!payload) return null;
-  try {
-    // Base64-URL → Base64
-    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '==='.slice((b64.length + 3) % 4);
-    const json = atob(padded);
-    const decoded = JSON.parse(json) as { exp?: number };
-    if (typeof decoded.exp !== 'number') return null;
-    return new Date(decoded.exp * 1000);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Push the HF OAuth session into `sessionStorage` so the SDK picks it
- * up on `authenticate()`.
- *
- * The SDK checks **three** keys, not just the token:
- *   - `hf_token`
- *   - `hf_username`
- *   - `hf_token_expires`  (must parse with `new Date()` and be future)
- *
- * Seeding only the token silently fails: `authenticate()` returns
- * `false` and the UI stays stuck in "signed-out" even though we do
- * have a valid token on the daemon.
- *
- * Pass `null` to wipe the session (e.g. after logout).
- */
-export function seedHfToken(session: HfSessionSeed | null | undefined): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (!session) {
-      sessionStorage.removeItem('hf_token');
-      sessionStorage.removeItem('hf_username');
-      sessionStorage.removeItem('hf_token_expires');
-      return;
-    }
-    sessionStorage.setItem('hf_token', session.token);
-    sessionStorage.setItem('hf_username', session.username);
-    sessionStorage.setItem('hf_token_expires', session.expiresAt);
-  } catch {
-    // sessionStorage unavailable (private-mode Safari, etc.). The SDK
-    // will fall back to its OAuth redirect flow if the session is
-    // missing; nothing actionable here.
-  }
-}
+// ─── HF session seeding ───────────────────────────────────────────────
+//
+// The SDK reads three keys on `authenticate()`: `hf_token`,
+// `hf_username` and `hf_token_expires`. Seeding only the token
+// silently makes `authenticate()` return false and the engine stays
+// in "signed-out" even with a valid token. The mobile app handles
+// the seed in `useRemoteHfToken` (gate-side, sourced from the user's
+// own OAuth session); we used to mirror it here too via a
+// `seedHfToken` helper, but the parent now owns that flow as the
+// single source of truth and the helper had no remaining callers.
+// If a future surface needs to seed the SDK from a different path
+// (e.g. from the Apps tab when forwarding into a sandboxed iframe),
+// re-introduce the helper here rather than duplicating the
+// three-key write inline.
 
 export interface UseReachySdkResult {
   isReady: boolean;

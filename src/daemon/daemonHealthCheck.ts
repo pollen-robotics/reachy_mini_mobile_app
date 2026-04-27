@@ -1,8 +1,8 @@
 /**
  * Cross-check the daemon's view of itself (`/relay-status`) against what
  * HF central actually sees (`/central-robot-status`), and surface any
- * split-brain state before the conversation engine starts its own
- * WebRTC handshake.
+ * split-brain state so callers can decide whether to wait, heal, or
+ * abort.
  *
  * Why this lives at all
  * ─────────────────────
@@ -24,11 +24,11 @@
  *   - Daemon started before any HF token was stored, never retried
  *     registration after login.
  *
- * The mobile app is uniquely placed to detect this: it's the one
- * issuing `startSession` and therefore the one that pays the "waiting
- * forever" price. So we do a cheap pre-flight here, and - if the daemon
- * ships the new `/refresh-relay` endpoint - we auto-heal without ever
- * bothering the user.
+ * Transport-agnostic on purpose: every function takes a `RobotClient`
+ * so the same logic runs on LAN HTTP (when the phone has line of sight
+ * to the daemon) and through the WebRTC `http_proxy` tunnel (when
+ * we've already negotiated a session via central). Callers don't need
+ * to special-case the path.
  *
  * Intentional non-goals
  * ─────────────────────
@@ -40,7 +40,7 @@
  *     desync in one shot, something is wrong that needs a human.
  */
 import { createLogger } from '../logger';
-import { daemonFetch } from './daemonFetch';
+import type { RobotClient } from '../robot-client/types';
 
 const logger = createLogger('daemon.health');
 
@@ -102,22 +102,21 @@ interface RefreshRelayPayload {
  * Run both status checks in parallel and classify the result.
  *
  * Always resolves (never throws) - network errors degrade to
- * `unreachable` rather than propagating, because this function is
- * called on the happy path before every engine mount and we don't
- * want a single 5xx to block the UI entirely.
+ * `unreachable` rather than propagating, because callers run this on
+ * the happy path (peerId resolution, watchdog heal, …) and a single
+ * 5xx must not wedge the UI.
  */
-export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
+export async function checkDaemonHealth(
+  client: RobotClient,
+): Promise<DaemonHealth> {
   try {
-    // Parallel fetch: we want both readings synchronised, and neither
-    // depends on the other's result.
     const [relayResp, centralResp] = await Promise.all([
-      daemonFetch<RelayStatusPayload>(host, '/api/hf-auth/relay-status', {
+      client.fetch<RelayStatusPayload>('/api/hf-auth/relay-status', {
         timeoutMs: 5_000,
       }),
-      daemonFetch<CentralRobotStatusPayload>(
-        host,
+      client.fetch<CentralRobotStatusPayload>(
         '/api/hf-auth/central-robot-status',
-        { timeoutMs: 5_000 }
+        { timeoutMs: 5_000 },
       ),
     ]);
 
@@ -197,8 +196,8 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
 /**
  * Attempt to recover from a zombie-relay state by asking the daemon to
  * drop its current central SSE and re-register with the stored HF
- * token. Only meaningful when the previous `checkDaemonHealth` call
- * returned `'zombie-relay'`.
+ * token. Called by callers who already observed a non-healthy state
+ * (peerId fetch came back null, engine watchdog tripped, …).
  *
  * Returns the health state the daemon is in AFTER the heal attempt,
  * polled up to `maxWaitMs` so the caller knows whether to proceed or
@@ -212,58 +211,51 @@ export async function checkDaemonHealth(host: string): Promise<DaemonHealth> {
  *   - any other status      → something else changed in the meantime;
  *                             caller decides what to do (usually retry
  *                             the mount).
- *
- * We intentionally don't set the `refreshEndpointAvailable` flag on
- * success (it's redundant once we've healed); we DO set it to `false`
- * when the endpoint returns 404, so callers can distinguish "daemon
- * too old to self-heal, user must restart it manually" from "heal
- * failed for some other reason".
  */
 export async function autoHealRelay(
-  host: string,
+  client: RobotClient,
   // 15s covers the worst-case observed cycle on a freshly booted
   // daemon: SSE handshake to central (~1s), token validate (~2s),
   // setPeerStatus round-trip (~500ms), plus a safety margin for
   // flaky WiFi. Below 10s we regularly time out on a reconnect that
   // *would have* succeeded two seconds later.
-  maxWaitMs: number = 15_000
+  maxWaitMs: number = 15_000,
 ): Promise<DaemonHealth> {
   logger.info('autoheal.start', { max_wait_ms: maxWaitMs });
   try {
-    const resp = await daemonFetch<RefreshRelayPayload>(
-      host,
+    const resp = await client.fetch<RefreshRelayPayload>(
       '/api/hf-auth/refresh-relay',
-      { method: 'POST', timeoutMs: 5_000 }
+      { method: 'POST', timeoutMs: 5_000 },
     );
 
     if (resp.status === 404) {
       // Daemon is from before the refresh-relay endpoint shipped. We
       // cannot heal programmatically; tell the caller.
       console.warn(
-        '[daemonHealth] refresh-relay endpoint missing on daemon (HTTP 404)'
+        '[daemonHealth] refresh-relay endpoint missing on daemon (HTTP 404)',
       );
-      const latest = await checkDaemonHealth(host);
+      const latest = await checkDaemonHealth(client);
       return { ...latest, refreshEndpointAvailable: false };
     }
 
     if (!resp.ok) {
       console.warn(
-        `[daemonHealth] refresh-relay failed: HTTP ${resp.status} ${resp.rawBody}`
+        `[daemonHealth] refresh-relay failed: HTTP ${resp.status} ${resp.rawBody}`,
       );
-      return checkDaemonHealth(host);
+      return checkDaemonHealth(client);
     }
 
     // Endpoint accepted the request. The relay drops its SSE and
     // reconnects async; poll central-side every ~1s until it shows
     // the robot back, or we run out of budget.
     const deadline = Date.now() + maxWaitMs;
-    let latest = await checkDaemonHealth(host);
+    let latest = await checkDaemonHealth(client);
     while (Date.now() < deadline && latest.status !== 'healthy') {
       // 1s cadence: fast enough to feel responsive in the UI, slow
       // enough that we don't DoS the daemon during the reconnect
       // storm (central's SSE handshake itself takes ~500ms).
       await new Promise((r) => setTimeout(r, 1_000));
-      latest = await checkDaemonHealth(host);
+      latest = await checkDaemonHealth(client);
     }
     logger.info('autoheal.complete', { status: latest.status });
     return { ...latest, refreshEndpointAvailable: true };

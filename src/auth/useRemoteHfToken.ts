@@ -19,11 +19,12 @@
  * Sync seeding into `sessionStorage`
  * ──────────────────────────────────
  * The reachy-mini SDK reads its bearer from `sessionStorage.hf_token`
- * (set by `seedHfToken` in `useReachySdk`). When we hydrate from
- * localStorage on app start, we also push the value into
- * sessionStorage so the SDK picks it up without any further
- * plumbing — same trick the daemon-mediated flow uses, just
- * sourced from a different place.
+ * (plus `hf_username` and `hf_token_expires` - see `syncSessionStorage`
+ * below for why all three are required). When we hydrate from
+ * localStorage on app start, we mirror the values into
+ * sessionStorage so the SDK picks them up on first `authenticate()`
+ * without any further plumbing. This is the single source of truth
+ * for SDK seeding in the app; nothing else writes those keys.
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -86,11 +87,49 @@ function writeStored(next: StoredAuth): void {
   }
 }
 
-function syncSessionStorage(token: string | null): void {
+/**
+ * Mirror the OAuth session into `sessionStorage` so the reachy-mini
+ * SDK's `authenticate()` call succeeds without bouncing through the
+ * HF redirect flow.
+ *
+ * The SDK requires **all three** of:
+ *   - `hf_token`            (bearer)
+ *   - `hf_username`         (display name shown next to the orb)
+ *   - `hf_token_expires`    (must `new Date()`-parse and be in the future)
+ *
+ * Seeding only `hf_token` makes `authenticate()` silently return false
+ * and the engine state machine stays stuck in `"signed-out"` even
+ * though the daemon and central agree we're authenticated. This
+ * helper is the single canonical write path for those three
+ * sessionStorage keys, called both on hydration and on every token
+ * change so the SDK picks up the session on first `ConversePanel`
+ * mount.
+ *
+ * `expiresAt` is stored in localStorage as an epoch-ms number; the
+ * SDK however parses with `new Date(value)`, so we hand it back as
+ * an ISO 8601 string. When we don't have an expiry (legacy storage
+ * or HF didn't return `expires_in`), we fall back to "now + 1h":
+ * the SDK only checks the field is a future date, and the next
+ * `central-robot-status` round-trip will surface a 401 anyway if the
+ * token has actually expired, so a generous default is harmless.
+ */
+function syncSessionStorage(
+  token: string | null,
+  username: string | null,
+  expiresAt: number | null,
+): void {
   if (typeof sessionStorage === 'undefined') return;
   try {
-    if (token) sessionStorage.setItem('hf_token', token);
-    else sessionStorage.removeItem('hf_token');
+    if (token) {
+      sessionStorage.setItem('hf_token', token);
+      sessionStorage.setItem('hf_username', username ?? '');
+      const exp = expiresAt ?? Date.now() + 60 * 60 * 1000;
+      sessionStorage.setItem('hf_token_expires', new Date(exp).toISOString());
+    } else {
+      sessionStorage.removeItem('hf_token');
+      sessionStorage.removeItem('hf_username');
+      sessionStorage.removeItem('hf_token_expires');
+    }
   } catch {
     // mirror localStorage's silent failure, see above
   }
@@ -121,14 +160,14 @@ export function useRemoteHfToken(): RemoteHfTokenState {
   const [{ token, username, refreshToken, expiresAt }, setState] = useState(
     () => {
       const stored = readStored();
-      syncSessionStorage(stored.token);
+      syncSessionStorage(stored.token, stored.username, stored.expiresAt);
       return stored;
     },
   );
 
   useEffect(() => {
-    syncSessionStorage(token);
-  }, [token]);
+    syncSessionStorage(token, username, expiresAt);
+  }, [token, username, expiresAt]);
 
   const setToken = useCallback(
     (nextToken: string, opts: SetTokenOptions = {}) => {

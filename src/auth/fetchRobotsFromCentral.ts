@@ -2,31 +2,28 @@
  * Direct Hugging Face central signaling server access, no daemon
  * proxy needed.
  *
- * Why this exists alongside `fetchRobotPeerId`
- * ────────────────────────────────────────────
- * `fetchRobotPeerId` is the LAN happy path: the phone is on the
- * same Wi-Fi as the robot, BLE has just told us its IP, and we ask
- * THAT specific daemon "what id are you registered as on central?".
- * The daemon proxies to central and never lets the raw HF token
- * leave the device.
+ * Why this exists alongside `useRobotPeerId`
+ * ──────────────────────────────────────────
+ * `useRobotPeerId` is the per-robot lookup: once we've already
+ * picked a robot (BLE on LAN, or a card from this list when
+ * remote), the hook asks THAT robot's daemon - over LAN HTTP or
+ * over the WebRTC `http_proxy` data channel - what id it is
+ * registered as on central. It never talks to HF directly; the
+ * daemon proxies and the raw HF token stays on-device.
  *
- * Remote mode (this file) is the inverse: the phone has no LAN
- * line of sight to any robot. The user opens the app from another
- * city, on cellular, and we still need to:
- *   1. Know which robot to talk to.
- *   2. Get its central peerId so we can `startSession()`.
+ * This file is the *fleet-discovery* side: in remote mode the
+ * phone has no LAN line of sight to anyone. The user opens the
+ * app from another city, on cellular, and we still need to:
+ *   1. Know which robots they own (the card list).
+ *   2. Get each robot's central peerId so we can `startSession()`.
  *
- * Both pieces are answered by the same endpoint we already proxy
- * (`/api/robot-status`), only this time we hit central directly
- * with the user-provided HF token. The token is held in memory /
- * localStorage on the phone; central never sees a daemon proxy.
- *
- * Security note: this is no worse than what `daemon/fetchRobotPeerId`
- * already does — central enforces that a user can only see their
- * own robots, so we cannot accidentally enumerate someone else's
- * fleet. The HF token simply moves from the daemon's keyring to
- * the phone's localStorage; the trust boundary stays at "whoever
- * owns the token controls the robot".
+ * Both pieces come from the same endpoint that the daemon also
+ * proxies (`/api/robot-status`); here we just hit central
+ * directly with the user-provided HF token, since there's no
+ * daemon to relay through yet. The token is held on the phone
+ * (memory + localStorage); central enforces per-user scoping so
+ * we can only see our own fleet. The trust boundary stays at
+ * "whoever owns the token controls the robot".
  */
 
 const CENTRAL_ROBOT_STATUS_URL =

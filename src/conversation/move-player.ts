@@ -255,7 +255,7 @@ function quatToRot3(q: Quat): number[] {
 
 /** Spherical linear interpolation between two unit quaternions. */
 function quatSlerp(a: Quat, b: Quat, t: number): Quat {
-  let [ax, ay, az, aw] = a;
+  const [ax, ay, az, aw] = a;
   let [bx, by, bz, bw] = b;
   // Pick the shorter arc by flipping b if needed.
   let dot = ax * bx + ay * by + az * bz + aw * bw;

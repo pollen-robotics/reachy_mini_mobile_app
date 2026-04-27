@@ -1,29 +1,44 @@
 /**
  * Hugging Face OAuth sign-in screen.
  *
- * Routed to from the unified ScanScreen when the user taps "Sign in
- * with Hugging Face" on the remote section. Once the loopback OAuth
- * flow completes the parent persists the token (so the remote section
- * lights up with the user's robots) and pops back to the scan view.
+ * Single source of truth for the user-facing OAuth flow. Shown
+ * full-screen by `App.tsx` until a token is present in
+ * `useRemoteHfToken` state; nothing else in the app surfaces an HF
+ * sign-in UI. Earlier iterations had a second `HfLoginOverlay`
+ * component covering the conversation when the LAN daemon rejected
+ * the auto-seeded token, but having two parallel sign-in surfaces
+ * for the same user / same HF account was confusing and prone to
+ * loops - the recovery path now is: sign out at the gate (top-bar
+ * menu in `RobotSessionScreen`), sign back in, gate auto-seeds the
+ * fresh token to the daemon.
+ *
+ * Button variant
+ * ──────────────
+ * Uses `outlined` + `primary` here intentionally: at the gate
+ * there is no other content competing for the user's attention, so
+ * a softer outlined treatment reads as "calm, expected next step"
+ * rather than an urgent gradient CTA.
  */
 import { useCallback, useState } from 'react';
 import {
   Alert,
+  Box,
   Button,
   CircularProgress,
   IconButton,
+  Link,
   Stack,
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import LoginIcon from '@mui/icons-material/Login';
 
 import {
   cancelLoginFlow,
   loginWithHuggingFace,
   type HfLoginResult,
 } from '../auth/oauthLoopback';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import hfLogo from '../assets/hf-logo.svg';
+import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '../styles/tokens';
 
 interface RemoteSignInScreenProps {
   /**
@@ -111,24 +126,33 @@ export default function RemoteSignInScreen({
           maxWidth: LAYOUT.contentMaxWidth,
           mx: 'auto',
           width: '100%',
+          textAlign: 'center',
         }}
       >
+        <Box
+          component="img"
+          src={hfLogo}
+          alt="Hugging Face"
+          sx={{ width: 64, height: 64, mb: 0.5 }}
+        />
+
         <Typography
           sx={{
-            fontSize: TYPO.display,
-            fontWeight: FONT_WEIGHT.semibold,
-            textAlign: 'center',
-            letterSpacing: '-0.3px',
+            fontSize: TYPO.xl,
+            fontWeight: FONT_WEIGHT.bold,
+            color: 'text.primary',
+            letterSpacing: '-0.2px',
           }}
         >
           Welcome to Reachy Mini
         </Typography>
+
         <Typography
           sx={{
-            fontSize: TYPO.md,
+            fontSize: TYPO.sm,
             color: 'text.secondary',
-            textAlign: 'center',
-            maxWidth: 360,
+            lineHeight: 1.6,
+            maxWidth: 320,
           }}
         >
           Sign in with your Hugging Face account to discover your robots,
@@ -136,45 +160,64 @@ export default function RemoteSignInScreen({
         </Typography>
 
         {error ? (
-          <Alert severity="error" sx={{ width: '100%', maxWidth: 420 }}>
+          <Alert severity="error" sx={{ width: '100%', maxWidth: 360 }}>
             {error}
           </Alert>
         ) : null}
 
         {!busy ? (
           <Button
-            variant="contained"
-            startIcon={<LoginIcon />}
+            variant="outlined"
+            color="primary"
+            startIcon={
+              <Box
+                component="img"
+                src={hfLogo}
+                alt=""
+                sx={{ width: 18, height: 18 }}
+              />
+            }
             onClick={() => void startLogin()}
             sx={{
-              textTransform: 'none',
-              fontWeight: 600,
+              mt: 1,
+              py: 1.1,
+              px: 4,
               minWidth: 240,
+              fontSize: TYPO.body,
+              fontWeight: FONT_WEIGHT.semibold,
+              textTransform: 'none',
+              borderRadius: RADIUS.xl / 8,
+              borderWidth: 1.5,
+              '&:hover': { borderWidth: 1.5 },
             }}
           >
             Sign in with Hugging Face
           </Button>
         ) : (
-          <Stack alignItems="center" spacing={2}>
-            <CircularProgress size={28} />
+          <Stack alignItems="center" spacing={2} sx={{ mt: 1 }}>
+            <CircularProgress size={24} />
             <Typography
               sx={{
-                fontSize: TYPO.sm,
+                fontSize: TYPO.xs,
                 color: 'text.secondary',
-                textAlign: 'center',
                 maxWidth: 320,
               }}
             >
               Finish signing in your browser, then come back here.
             </Typography>
-            <Button
-              variant="text"
-              size="small"
+            <Link
+              component="button"
               onClick={() => void cancel()}
-              sx={{ textTransform: 'none' }}
+              underline="hover"
+              sx={{
+                fontSize: TYPO.xs,
+                color: 'text.disabled',
+                cursor: 'pointer',
+                '&:hover': { color: 'text.secondary' },
+              }}
             >
               Cancel
-            </Button>
+            </Link>
           </Stack>
         )}
       </Stack>

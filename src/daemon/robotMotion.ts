@@ -7,16 +7,13 @@
  * 'sleeping')`; the store decides, independently, when to actually
  * hit the daemon.
  *
- * Transport agnostic
- * ──────────────────
- * The store doesn't care whether the daemon is reached over a LAN
- * HTTP socket or through the WebRTC `http_proxy` tunnel. It speaks
- * the unified `RobotClient` interface, so the very same `setDesired
- * State` call wakes a robot up regardless of how the user got there
- * (BLE pairing on the same Wi-Fi vs central signaling from another
- * city). This is what lets the connection UI be identical for both
- * transports - both flows fire the same wake/sleep sequence on
- * mount/unmount through this store.
+ * Transport
+ * ─────────
+ * The store talks to the daemon through the unified `RobotClient`,
+ * which today is always WebRTC `http_proxy`. Same `setDesiredState`
+ * call wakes a robot up whether ICE picked a LAN host candidate or a
+ * TURN-relayed remote one, which is what lets the connection UI be
+ * identical for the BLE-pairing and central-signaling flows.
  *
  * Why a store and not `useEffect` calls directly
  * ────────────────────────────────────────────────
@@ -47,8 +44,29 @@
  *
  *   wake:
  *     POST /api/motors/set_mode/enabled       - torque on
- *     wait ~300 ms                             - let servos settle
+ *     wait WAKE_SETTLE_MS                     - absorb serial init
  *     POST /api/move/play/wake_up              - ~2 s trajectory
+ *
+ *   The settle is intentionally short. Two competing failure modes
+ *   shape the value:
+ *
+ *     (a) Without ANY pause, the daemon's motor controller often hits
+ *         a couple of `Serial I/O recovered after N retries` glitches
+ *         at the exact moment the wake_up trajectory starts pushing
+ *         goal-positions. The Dynamixels go silent during those
+ *         retries, so the user sees the trajectory begin, freeze for
+ *         ~100-200 ms, and resume from a slightly off pose - perceived
+ *         as "the robot snaps then stops then wakes up".
+ *
+ *     (b) Pausing too long (> ~300 ms) makes the snap-to-goal of the
+ *         enable step visible: the head, slumped under gravity while
+ *         torque was off, jerks back to the last commanded
+ *         (goto_sleep rest) position before the wake_up trajectory's
+ *         first interpolation step overrides it.
+ *
+ *   `WAKE_SETTLE_MS` is the small middle ground where the serial bus
+ *   has time to finish its internal retries but the snap stays
+ *   subliminal. Tune it if hardware behaviour drifts.
  *
  *   sleep:
  *     POST /api/move/play/goto_sleep           - ~2 s trajectory
@@ -65,6 +83,7 @@
 
 import type { RobotClient } from '../robot-client';
 import { createLogger } from '../logger';
+import { setTrajectoryPlaying } from './trajectoryGate';
 
 const logger = createLogger('motion');
 
@@ -93,8 +112,28 @@ interface RobotSession {
 // (unlikely but possible) we don't inherit the previous one's state.
 let session: RobotSession | null = null;
 
-const WAKE_UP_SETTLE_MS = 300;
 const GOTO_SLEEP_TRAJECTORY_MS = 2_000;
+
+/**
+ * Approximate runtime of `wake_up.json` on the daemon. The POST
+ * to `/api/move/play/wake_up` returns immediately (the daemon
+ * spawns the trajectory as a background task), so we have to
+ * mirror the trajectory length client-side to know when it's
+ * safe to release the trajectory gate.
+ *
+ * Slightly over-budget on purpose: better to keep the wobbler
+ * silent for an extra ~250 ms than to clip the tail of the
+ * animation with a setHeadPose command.
+ */
+const WAKE_UP_TRAJECTORY_MS = 2_250;
+
+/**
+ * Settle window between enabling motor torque and firing the wake_up
+ * trajectory. See the doc comment at the top of the file for the
+ * rationale - too short and we step on the daemon's serial-bus init,
+ * too long and the Dynamixel snap-to-goal becomes visible.
+ */
+const WAKE_SETTLE_MS = 150;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -103,23 +142,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Each `RobotClient` instance is recreated on every render of the
- * screen that owns it (LAN host change, remote DC swap, retry…).
- * To make the session sticky across renders we key by transport +
- * an opaque identity hint (LAN: the host string we pass in; remote:
- * the literal "remote" keyword) instead of by the client object
- * reference. The screen still calls `setDesiredState` on every
- * render with a fresh client, and the store quietly swaps the
- * pointer in place.
+ * Stable session key. The app talks to one robot at a time and the
+ * single transport (WebRTC proxy) is enough identity for our needs:
+ * a `setDesiredState` call from a fresh client instance pointing at
+ * the same robot reuses the same session and just swaps the client
+ * pointer in place (`pending` chain unaffected).
  */
-function clientKey(client: RobotClient): string {
-  if (client.transport === 'webrtc-proxy') return 'remote';
-  // LAN HTTP client: the only stable identity we have is whatever
-  // the screen baked into the client. We don't expose host on the
-  // RobotClient type to keep it transport-agnostic, so fall back to
-  // the transport label - good enough because the app only ever
-  // talks to one LAN robot at a time.
-  return 'local-http';
+function clientKey(_client: RobotClient): string {
+  return 'webrtc-proxy';
 }
 
 async function postNoBody(
@@ -145,36 +175,64 @@ async function doWakeUp(client: RobotClient): Promise<void> {
   console.info('[robotMotion] wake sequence → enable motors');
   logger.info('wake.start', { transport: client.transport });
   const t0 = performance.now();
-  const enabled = await postNoBody(
-    client,
-    '/api/motors/set_mode/enabled',
-    'enable motors',
-  );
-  if (!enabled) {
-    logger.warn('wake.enable_failed');
-    return;
+  // Raise the trajectory gate BEFORE re-enabling torque: the snap-to-goal
+  // that immediately follows the enable POST otherwise fights the wobbler
+  // (which keeps pushing setHeadPose at 30 Hz from the moment OpenAI's
+  // output track is wired). See trajectoryGate.ts for the full reasoning.
+  setTrajectoryPlaying(true);
+  try {
+    const enabled = await postNoBody(
+      client,
+      '/api/motors/set_mode/enabled',
+      'enable motors',
+    );
+    if (!enabled) {
+      logger.warn('wake.enable_failed');
+      return;
+    }
+    // Short settle so the daemon-side serial bus can absorb its init
+    // retries before the wake_up trajectory starts pushing goal-positions.
+    // See the doc comment at the top of the file for the trade-off.
+    await sleep(WAKE_SETTLE_MS);
+    console.info('[robotMotion] wake sequence → play wake_up');
+    await postNoBody(client, '/api/move/play/wake_up', 'play wake_up');
+    // Hold the gate up for the full trajectory window. The POST returned
+    // ~30 ms in but the daemon will keep streaming wake_up frames for
+    // ~2 s; if we drop the gate now the wobbler snaps the head back to
+    // identity mid-anim and the user sees the robot freeze.
+    await sleep(WAKE_UP_TRAJECTORY_MS);
+    logger.info('wake.complete', {
+      latency_ms: Math.round(performance.now() - t0),
+    });
+  } finally {
+    setTrajectoryPlaying(false);
   }
-  await sleep(WAKE_UP_SETTLE_MS);
-  console.info('[robotMotion] wake sequence → play wake_up');
-  await postNoBody(client, '/api/move/play/wake_up', 'play wake_up');
-  logger.info('wake.complete', { latency_ms: Math.round(performance.now() - t0) });
 }
 
 async function doGotoSleep(client: RobotClient): Promise<void> {
   console.info('[robotMotion] sleep sequence → play goto_sleep');
   logger.info('sleep.start', { transport: client.transport });
   const t0 = performance.now();
-  const played = await postNoBody(
-    client,
-    '/api/move/play/goto_sleep',
-    'play goto_sleep',
-  );
-  if (played) {
-    await sleep(GOTO_SLEEP_TRAJECTORY_MS);
+  // Same reasoning as doWakeUp: gate the engine's idle pushers so they
+  // don't stamp on the goto_sleep trajectory.
+  setTrajectoryPlaying(true);
+  try {
+    const played = await postNoBody(
+      client,
+      '/api/move/play/goto_sleep',
+      'play goto_sleep',
+    );
+    if (played) {
+      await sleep(GOTO_SLEEP_TRAJECTORY_MS);
+    }
+    console.info('[robotMotion] sleep sequence → disable motors');
+    await postNoBody(client, '/api/motors/set_mode/disabled', 'disable motors');
+    logger.info('sleep.complete', {
+      latency_ms: Math.round(performance.now() - t0),
+    });
+  } finally {
+    setTrajectoryPlaying(false);
   }
-  console.info('[robotMotion] sleep sequence → disable motors');
-  await postNoBody(client, '/api/motors/set_mode/disabled', 'disable motors');
-  logger.info('sleep.complete', { latency_ms: Math.round(performance.now() - t0) });
 }
 
 /**

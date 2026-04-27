@@ -1,41 +1,50 @@
 /**
- * React wrapper around the conversation engine.
+ * Slim React wrapper around the conversation engine.
  *
- * Renders the same static markup the original Space ships (index.html)
- * inside a scoped `.converse-root` container, then hands the root
- * element over to `mountConversation()` which wires up every DOM event,
- * WebRTC peer connection and audio analyser exactly like `main.ts` did.
+ * The panel itself is intentionally dumb:
+ *   - it renders the static markup ported from the original Space
+ *     (`reachy_mini_minimal_conversation/index.html`),
+ *   - it mounts / unmounts `mountConversation()` over that markup
+ *     when the inputs it needs from the parent are ready,
+ *   - and it surfaces overlays for SDK errors, parent-driven busy
+ *     states (e.g. "reconnecting after heal") and a watchdog-trip
+ *     retry CTA.
  *
- * React deliberately owns only:
- *   - Loading the ReachyMini SDK once
- *   - Seeding `sessionStorage.hf_token` from the daemon-mediated HF auth
- *   - A pre-flight cross-check of the daemon ↔ HF central handshake
- *     (and auto-heal if a "zombie relay" desync is detected)
- *   - Mounting / unmounting the engine when the panel is shown / hidden
- *   - A watchdog that surfaces a retryable error if the engine gets
- *     stuck in a transient state past a reasonable budget
+ * Everything else - HF token seeding, peer id resolution, daemon
+ * relay health checks, zombie-relay healing - lives in the parent
+ * (`RobotSessionScreen`). The panel never reaches into the daemon
+ * directly. This is the cleanup that buys us:
  *
- * Everything conversational (state machine, audio, motion agents) lives
- * in the engine so the port stays a mechanical copy of the Space app.
+ *   1. **No redundant probes** on the happy path. Previously every
+ *      panel mount fired three serial fetches (token + peerId +
+ *      health) before the engine could start, even when we'd just
+ *      done the same checks from the parent's handshake screen.
+ *      The parent now passes the resolved values down as props.
+ *   2. **Lazy zombie-relay healing**. The mount blocks on nothing,
+ *      and the parent decides when to heal based on the engine's
+ *      live `onAppStateChange` events (5 s in a transient state →
+ *      trigger heal in the background, force a remount via
+ *      `remountKey` when it lands).
+ *   3. **Single source of truth for transport state**. The peer id
+ *      comes from the same `RobotClient` (LAN HTTP or WebRTC proxy)
+ *      the rest of the screen uses, so remote and local flows take
+ *      the exact same code path here.
+ *
+ * The module-level engine lifecycle queue (kept from the old
+ * implementation) is the only piece of cross-instance state we need
+ * to retain: it serialises mount/unmount operations across React
+ * StrictMode double-invocations and remountKey bumps so we never
+ * have two concurrent SSE sessions on HF central.
  */
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-import { fetchHfSession } from '../auth/fetchHfToken';
-import {
-  autoHealRelay,
-  checkDaemonHealth,
-  type DaemonHealth,
-  isHealthyForMount,
-} from '../daemon/daemonHealthCheck';
-import { fetchRobotPeerId } from '../daemon/fetchRobotPeerId';
 
 import {
   mountConversation,
   type AppState,
   type ConversationEngineHandle,
 } from './conversation-engine';
-import { seedHfToken, useReachySdk } from './useReachySdk';
+import { useReachySdk } from './useReachySdk';
 import { createLogger } from '../logger';
 import './conversation.css';
 
@@ -94,30 +103,36 @@ export function flushEngineLifecycle(): Promise<void> {
 }
 
 /**
- * How long we let the engine spend in any transient "still making
- * progress" state before deciding it's stuck and surfacing a retry
- * button. Tuned by hand:
+ * Time the engine is allowed to spend in any transient "still making
+ * progress" state before we ask the parent to trigger a background
+ * heal. Tuned by hand:
  *
- *   - Good LAN path (preselected robot id): `signed-out` → `starting`
+ *   - Good LAN path (preselected peer id): `signed-out` → `starting`
  *     → `listening` takes 2-4 s including central's SSE handshake.
- *   - Pathological-but-recoverable (central busy, retry cycle): up
- *     to 12 s before either settling into `listening` or timing out
- *     via the engine's own 15 s startSession guard.
+ *   - First-mount zombie relay: the SDK never sees the robot in
+ *     `robotsChanged`, so the engine sits in `auto-selecting` until
+ *     either central recovers (rare) or someone heals the relay.
  *
- * 20 s gives us enough margin above the engine's internal timeout
- * (+5 s) that a healthy-but-slow path never trips the watchdog, while
- * still feeling snappy when the robot is actually wedged. Any state
- * in `TRANSIENT_STATES` that's held for longer means something is
- * broken in a way the engine can't recover from on its own.
+ * 5 s is high enough that the happy path never wakes the heal up,
+ * low enough that a zombie relay is healed within ~10 s end-to-end
+ * (5 s detection + ~5 s `/refresh-relay` round-trip).
+ */
+const LAZY_HEAL_MS = 5_000;
+
+/**
+ * Full watchdog timeout: if the engine is STILL transient past this
+ * budget, the lazy heal didn't fix the underlying issue and we
+ * surface a user-facing retry CTA. Kept above the engine's own 15 s
+ * `startSession` guard so a healthy-but-slow path never trips it.
  */
 const WATCHDOG_TIMEOUT_MS = 20_000;
 
 /**
  * States that are supposed to be *on the way to* a steady conversation.
- * Staying in any of them past WATCHDOG_TIMEOUT_MS is our signal to
- * surface a retry affordance. `error` is intentionally omitted - the
- * engine already shows its own message in that case and the user has
- * the orb's retry gesture.
+ * Staying in any of them past the lazy heal threshold triggers the
+ * parent heal callback; staying past the full watchdog budget surfaces
+ * the retry CTA. `error` is intentionally omitted because the engine
+ * already shows its own message in that case.
  */
 const TRANSIENT_STATES = new Set<AppState>([
   'connecting',
@@ -126,344 +141,188 @@ const TRANSIENT_STATES = new Set<AppState>([
   'starting',
 ]);
 
-interface ConversePanelProps {
-  /** Daemon host (IP) the Reachy SDK should reach for WebRTC signaling. */
-  daemonHost: string | null;
-  /** `true` when the HF daemon flow has completed. Gates engine mount. */
-  isAuthenticated: boolean;
+export interface ConversePanelProps {
   /**
-   * Remote mode: phone has no LAN line of sight to the daemon. We
-   * skip the daemon health check and the token/peer-id fetches; both
-   * the HF token (already in `sessionStorage.hf_token`) and the
-   * peerId (passed as `remotePeerId`) come from the parent screen.
-   *
-   * Defaults to false so the existing LAN call sites keep their
-   * behaviour without change. Toggled to `true` by
-   * `RobotSessionScreen` whenever the discovery view picked a
-   * remote (HF central) robot rather than a BLE one.
+   * Resolved peer id passed by the parent (`RobotSessionScreen`).
+   * Pass `null` to make the engine fall back to the public
+   * "wait for robotsChanged" flow; pass a non-empty string to
+   * fast-path `startSession(id)` and skip that wait. The mount
+   * effect blocks on `peerIdResolved`, not on the value itself,
+   * so a definitive null still releases the gate.
    */
-  remoteMode?: boolean;
+  peerId: string | null;
   /**
-   * Pre-resolved central peerId to call `startSession()` with when
-   * `remoteMode` is true. Required in remote mode; ignored otherwise
-   * because the LAN flow derives it from the daemon.
+   * True once the parent has finished resolving the peer id (success
+   * or definitive null). Gating the engine mount on this flag keeps
+   * us from briefly mounting with `null`, then re-mounting with the
+   * real id once the parent fetch lands.
    */
-  remotePeerId?: string | null;
+  peerIdResolved: boolean;
   /**
-   * Optional observer that fires on every engine state-machine
-   * transition. Used by the unified connection screen to drive its
-   * own progress stepper: it watches for the engine to leave the
-   * transient `connecting`/`auto-selecting`/`starting` set and flips
-   * the UI from "still connecting…" to "live conversation".
-   *
-   * Pure side-channel - the panel itself doesn't change behaviour
-   * based on whether anyone is listening. We forward the same
-   * `onStateChange` to `mountConversation`'s engine option so the
-   * watchdog the panel already runs internally and the parent see
-   * the exact same transitions, in order, no buffering.
+   * Observer for every engine state-machine transition. The parent
+   * uses this to (a) drive the unified screen's stepper UI and
+   * (b) decide when to trigger a heal: a transient state held past
+   * the parent's own threshold means central / relay are unhappy.
    */
   onAppStateChange?: (state: AppState) => void;
+  /**
+   * Bumped by the parent to force an engine remount. Used after the
+   * parent finishes a heal cycle, so the new engine starts clean
+   * instead of inheriting the previous run's stale SSE / data
+   * channel state.
+   */
+  remountKey?: number;
+  /**
+   * Fired when:
+   *   - the engine has been stuck in a transient state for
+   *     `LAZY_HEAL_MS` (parent should background-heal).
+   *   - the user clicks the watchdog retry CTA (parent decides
+   *     whether to re-probe + remount).
+   *
+   * The parent is responsible for deduping: a `useDaemonRelayHealing`
+   * hook coalesces concurrent triggers so multiple fires don't
+   * double-POST `/refresh-relay`.
+   */
+  onStuck?: () => void;
+  /**
+   * Optional one-line label rendered as a floating overlay on top of
+   * the engine. Non-blocking — the engine keeps running underneath.
+   * Used by the parent to surface "Reconnecting robot to HuggingFace…"
+   * during a heal cycle. Pass null/undefined to hide.
+   */
+  busyLabel?: string | null;
+  /**
+   * Optional fatal-style overlay message. When set, it covers the
+   * engine entirely and offers the same Retry CTA as the watchdog
+   * branch. Used by the parent to render the "restart needed on
+   * Reachy" hint when `refreshEndpointAvailable === false` after a
+   * heal attempt - a state the panel can't recover from on its own.
+   */
+  errorMessage?: string | null;
 }
 
 export function ConversePanel({
-  daemonHost,
-  isAuthenticated,
-  remoteMode = false,
-  remotePeerId = null,
+  peerId,
+  peerIdResolved,
   onAppStateChange,
+  remountKey = 0,
+  onStuck,
+  busyLabel = null,
+  errorMessage = null,
 }: ConversePanelProps): React.ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<ConversationEngineHandle | null>(null);
-  const { isReady, isLoading, error: sdkError } = useReachySdk();
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [tokenReady, setTokenReady] = useState(false);
-  // Peer id the daemon says this robot is registered as on HF central.
-  // We treat it as an optional fast-path hint: when present, the
-  // engine skips the "Waiting for Reachy" wait on robotsChanged and
-  // calls startSession(id) directly; when null (endpoint failed,
-  // relay not connected, …) the engine falls back to the classic
-  // tap-to-connect + auto-select flow. The mount effect waits until
-  // this fetch has resolved (either way) so the option isn't seen
-  // as `undefined` on the first render.
-  const [preselectedRobotId, setPreselectedRobotId] = useState<string | null>(null);
-  const [preselectionResolved, setPreselectionResolved] = useState(false);
+  const { isReady, error: sdkError } = useReachySdk();
 
-  // Daemon ↔ central health. While this is still probing we hold
-  // back the engine mount (we don't want to start a doomed session
-  // against a zombie relay). Once resolved it stays on the component
-  // until the user takes a retryable action; transitions are:
-  //
-  //   null (probing) → 'healthy' → engine mounts
-  //                  ↘ 'zombie-relay' without heal endpoint
-  //                     → surface "restart daemon on Reachy"
-  //                  ↘ any other error status → retryable error UI
-  const [healthStatus, setHealthStatus] = useState<DaemonHealth | null>(null);
-  const [healing, setHealing] = useState(false);
-
-  // Watchdog state. When the engine is mounted we observe every
-  // AppState transition; if the engine lingers in a TRANSIENT_STATE
-  // past WATCHDOG_TIMEOUT_MS we flip `watchdogTripped` and surface a
-  // retry UI. A successful transition out of the transient set
-  // (e.g. into `listening`) clears the watchdog.
+  // Watchdog / retry state. The lazy-heal trigger doesn't have a
+  // visible component (it asks the parent to heal silently); the
+  // full watchdog trip exposes a retry CTA via `watchdogTripped`.
   const [watchdogTripped, setWatchdogTripped] = useState(false);
 
-  // Bumped by the Retry button to force effects to re-run end-to-end
-  // (fresh health probe + fresh token + fresh engine).
-  const [retryKey, setRetryKey] = useState(0);
+  // Bumped by the local Retry CTA to force the engine to remount
+  // even when the parent's `remountKey` hasn't changed. Keeps a
+  // user-driven retry independent from the parent's heal logic.
+  const [localRetryKey, setLocalRetryKey] = useState(0);
+
+  // Ref-mirroring the parent callbacks so the long-lived engine
+  // closures always see the latest reference without forcing a
+  // remount when they change identity.
+  const onAppStateChangeRef = useRef(onAppStateChange);
+  onAppStateChangeRef.current = onAppStateChange;
+  const onStuckRef = useRef(onStuck);
+  onStuckRef.current = onStuck;
 
   const onRetry = useCallback(() => {
     setWatchdogTripped(false);
-    setTokenError(null);
-    setTokenReady(false);
-    setPreselectedRobotId(null);
-    setPreselectionResolved(false);
-    setHealthStatus(null);
-    setRetryKey((k) => k + 1);
+    setLocalRetryKey((k) => k + 1);
+    // Tell the parent we want a fresh state - typically that
+    // means: heal + bump its own remountKey + re-resolve peer id.
+    onStuckRef.current?.();
   }, []);
 
-  // Keep the parent's state observer in a ref so the engine's
-  // long-lived onStateChange closure always sees the latest callback
-  // identity. The mount effect captures `appStateRef` once; the
-  // parent is free to change `onAppStateChange` between renders
-  // without triggering a re-mount.
-  const appStateRef = useRef<((s: AppState) => void) | null>(null);
-  appStateRef.current = onAppStateChange ?? null;
-
-  // Step 0: daemon health pre-flight. Runs before token/peer-id so we
-  // can detect a zombie relay and ask the daemon to self-heal BEFORE
-  // we spend time fetching things that depend on central seeing us
-  // as a registered robot. A healthy check here is the single gating
-  // signal for everything downstream.
-  //
-  // Remote mode skips this entirely: the phone has no LAN line of
-  // sight to the daemon, so probing it would always say `unreachable`
-  // and lock the engine out. Instead we synthesise a `healthy`
-  // status so the downstream gates open, and we trust central to
-  // surface a real error (robot offline, peerId stale, etc.) once
-  // the SDK tries to reach it.
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!isAuthenticated) {
-      setHealthStatus(null);
-      return;
-    }
-    if (remoteMode) {
-      setHealthStatus({ status: 'healthy' });
-      return;
-    }
-    if (!daemonHost) {
-      setHealthStatus({ status: 'unreachable' });
-      return;
-    }
-
-    void (async () => {
-      const initial = await checkDaemonHealth(daemonHost);
-      if (cancelled) return;
-
-      // Any relay state that isn't fully healthy at the moment the
-      // user wants to talk is worth a force-reconnect attempt:
-      //
-      //   - `zombie-relay`        classic desync (relay thinks it's
-      //                           up, central lists robots: []).
-      //   - `relay-disconnected`  the case observed in the field
-      //                           where the daemon boots before
-      //                           central is reachable OR the
-      //                           `connecting` state never settles
-      //                           because setPeerStatus is stuck on
-      //                           an old SSE. A force reconnect
-      //                           drops and restarts the cycle.
-      //
-      // We deliberately skip heal for `no-token` / `unreachable` /
-      // `healthy` because nothing on the daemon's side would change.
-      const shouldHeal =
-        initial.status === 'zombie-relay' ||
-        initial.status === 'relay-disconnected';
-
-      if (shouldHeal) {
-        console.warn(
-          `[ConversePanel] ${initial.status} detected, attempting auto-heal`,
-        );
-        setHealing(true);
-        const healed = await autoHealRelay(daemonHost);
-        setHealing(false);
-        if (cancelled) return;
-        setHealthStatus(healed);
-        return;
-      }
-
-      setHealthStatus(initial);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, daemonHost, remoteMode, retryKey]);
-
-  // Step 1: once the daemon is healthy, pull the HF token + the
-  // robot's HF-central peer id from the daemon. We run the two
-  // fetches in parallel because they're both blocking for the mount
-  // (we won't mount the engine until the token is staged; we won't
-  // benefit from the fast-path until the id is resolved, either to a
-  // string or to a definitive null). Failures are handled
-  // independently: a missing peer id just degrades to the classic
-  // wait-on-robotsChanged flow, while a missing token is a hard-stop
-  // that surfaces a sign-in prompt.
-  //
-  // Remote mode short-circuits both fetches: the token is already in
-  // `sessionStorage.hf_token` (seeded by `useRemoteHfToken`), and
-  // the peerId comes from the user's earlier robot pick on
-  // `RemoteScreen`, passed in via `remotePeerId`.
-  useEffect(() => {
-    let cancelled = false;
-    setTokenError(null);
-    setTokenReady(false);
-    setPreselectedRobotId(null);
-    setPreselectionResolved(false);
-
-    if (!isAuthenticated) {
-      // Don't blow away the token in remote mode: it lives in
-      // localStorage independent of `isAuthenticated` (which mirrors
-      // the LAN/daemon flow only).
-      if (!remoteMode) seedHfToken(null);
-      return;
-    }
-    if (remoteMode) {
-      // The token was seeded into sessionStorage by the parent
-      // (useRemoteHfToken's mount effect). Verify it's there before
-      // claiming "ready" so the engine doesn't start without a
-      // bearer and then fall back to HF central's anonymous-not-
-      // allowed path.
-      const hasToken =
-        typeof sessionStorage !== 'undefined' &&
-        !!sessionStorage.getItem('hf_token');
-      if (!hasToken) {
-        setTokenError('Sign-in lost. Re-enter your Hugging Face token.');
-        return;
-      }
-      setTokenReady(true);
-      setPreselectedRobotId(remotePeerId);
-      setPreselectionResolved(true);
-      return;
-    }
-    if (!daemonHost) {
-      setTokenError('No daemon host available.');
-      return;
-    }
-    // Gate on the pre-flight: no point fetching token/id if the
-    // relay is sick - the engine would stall at "Waiting for Reachy".
-    if (!healthStatus || !isHealthyForMount(healthStatus)) return;
-
-    void (async () => {
-      try {
-        const session = await fetchHfSession(daemonHost);
-        if (cancelled) return;
-        if (!session) {
-          setTokenError('Sign-in lost. Please sign in again from the menu.');
-          return;
-        }
-        seedHfToken(session);
-        setTokenReady(true);
-      } catch (err) {
-        if (cancelled) return;
-        setTokenError(err instanceof Error ? err.message : 'Failed to fetch HF token');
-      }
-    })();
-
-    void (async () => {
-      const id = await fetchRobotPeerId(daemonHost);
-      if (cancelled) return;
-      setPreselectedRobotId(id);
-      setPreselectionResolved(true);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, daemonHost, healthStatus, remoteMode, remotePeerId, retryKey]);
-
-  // Step 2: mount the engine once SDK + token + peer-id probe are
-  // all ready. See the big "Module-level serialisation" comment at
-  // the top of this file for why we queue the mount/unmount pair on
-  // a module-global promise chain instead of running them directly.
+  // Engine lifecycle. Reruns when:
+  //   - SDK readiness flips (one-time per session)
+  //   - peer id finishes resolving (also one-time per parent
+  //     resolution cycle)
+  //   - peer id value changes (e.g. after a relay heal made it
+  //     resolvable for the first time)
+  //   - parent bumps remountKey (post-heal forced remount)
+  //   - user clicks retry (localRetryKey)
+  //   - errorMessage appears (we want to tear down the engine
+  //     under the overlay; mounting through `display: none` is
+  //     fine for the orb but we want it stopped if we're showing
+  //     a hard-stop fallback)
   useEffect(() => {
     if (!isReady) return;
-    if (!tokenReady) return;
-    if (!preselectionResolved) return;
-    if (!healthStatus || !isHealthyForMount(healthStatus)) return;
+    if (!peerIdResolved) return;
+    if (errorMessage) return;
     const root = rootRef.current;
     if (!root) return;
 
-    // Closure-local state: the token identifies this specific effect
-    // run and lets the cleanup reject its OWN scheduled mount if it
-    // fires before the mount actually happened. `localHandle` holds
-    // the engine handle for this effect run once mounted.
     const token = ++engineMountCounter;
     let aborted = false;
     let localHandle: ConversationEngineHandle | null = null;
 
-    // Per-effect watchdog handle. Re-armed on every TRANSIENT_STATE
-    // entry, cleared on entry to any non-transient state. We keep it
-    // scoped to the effect so an unmount (cleanup below) always
-    // drops the pending timeout without needing a ref-level flag.
+    // Per-effect timer pair. Both arm on entry to a transient state,
+    // both disarm on exit. The lazy timer fires once and asks the
+    // parent to heal; the watchdog timer fires once and surfaces the
+    // retry CTA. Re-arming while already armed is a no-op so a
+    // chain of transient transitions (connecting → connected →
+    // auto-selecting) doesn't reset either clock and hide a real
+    // stall.
+    let lazyHealTimer: number | null = null;
     let watchdogTimer: number | null = null;
-    const armWatchdog = (): void => {
-      if (watchdogTimer !== null) return;
-      watchdogTimer = window.setTimeout(() => {
-        watchdogTimer = null;
-        console.warn(
-          `[ConversePanel] watchdog trip (engine stuck > ${WATCHDOG_TIMEOUT_MS}ms)`,
-        );
-        setWatchdogTripped(true);
-      }, WATCHDOG_TIMEOUT_MS);
+    let lazyHealFired = false;
+    const armTimers = (): void => {
+      if (lazyHealTimer === null && !lazyHealFired) {
+        lazyHealTimer = window.setTimeout(() => {
+          lazyHealTimer = null;
+          lazyHealFired = true;
+          engineLogger.info('lazy_heal.trigger', { token });
+          onStuckRef.current?.();
+        }, LAZY_HEAL_MS);
+      }
+      if (watchdogTimer === null) {
+        watchdogTimer = window.setTimeout(() => {
+          watchdogTimer = null;
+          engineLogger.warn('watchdog.trip', { token });
+          setWatchdogTripped(true);
+        }, WATCHDOG_TIMEOUT_MS);
+      }
     };
-    const disarmWatchdog = (): void => {
+    const disarmTimers = (): void => {
+      if (lazyHealTimer !== null) {
+        window.clearTimeout(lazyHealTimer);
+        lazyHealTimer = null;
+      }
       if (watchdogTimer !== null) {
         window.clearTimeout(watchdogTimer);
         watchdogTimer = null;
       }
     };
 
-    // Chain BOTH the mount and the teardown behind any previous
-    // lifecycle op. This way if StrictMode fires mount₂ while
-    // mount₁'s unmount is still settling, mount₂ waits for it to
-    // fully resolve before building a new engine.
     engineLifecyclePromise = engineLifecyclePromise.then(async () => {
-      if (aborted) {
-        // Effect was already cleaned up before we got to run. Skip
-        // the mount entirely; no unmount to do either.
-        return;
-      }
+      if (aborted) return;
       try {
-        console.info(`[ConversePanel] mounting engine (token=${token})`);
-        engineLogger.info('mount', { token, preselected: preselectedRobotId ?? null });
+        engineLogger.info('mount', { token, peer_id: peerId ?? null });
         const handle = mountConversation(root, {
-          preselectedRobotId,
+          preselectedRobotId: peerId,
           onStateChange: (state) => {
             engineLogger.info('state.transition', { to: state });
-            // Watchdog transitions are a simple edge-detector: we
-            // arm on entry to a transient state, disarm otherwise.
-            // Re-arming while already armed is a no-op so
-            // back-to-back transients (connecting → connected →
-            // auto-selecting) don't reset the clock and hide a
-            // genuine stall.
             if (TRANSIENT_STATES.has(state)) {
-              armWatchdog();
+              armTimers();
             } else {
-              disarmWatchdog();
+              disarmTimers();
               // Entering a non-transient healthy state is implicit
               // recovery; clear any prior "stuck" flag so the UI
               // returns to the engine view without a retry click.
-              if (state !== 'error') {
-                setWatchdogTripped(false);
-              }
+              if (state !== 'error') setWatchdogTripped(false);
             }
-            // Fan out to the parent observer (unified screen's
-            // stepper) AFTER the watchdog so internal bookkeeping
-            // never blocks on a third-party callback. Errors thrown
-            // by the parent are swallowed here so a bad subscriber
-            // can't wedge the engine itself.
-            const cb = appStateRef.current;
+            // Fan out to the parent observer AFTER the watchdog so
+            // internal bookkeeping never blocks on a third-party
+            // callback. Errors thrown by the parent are swallowed
+            // here so a bad subscriber can't wedge the engine.
+            const cb = onAppStateChangeRef.current;
             if (cb) {
               try {
                 cb(state);
@@ -476,15 +335,16 @@ export function ConversePanel({
         localHandle = handle;
         handleRef.current = handle;
       } catch (err) {
-        console.error('[ConversePanel] mountConversation failed:', err);
+        engineLogger.error('mount.error', {
+          token,
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     });
 
     return () => {
       aborted = true;
-      disarmWatchdog();
-      // Queue the unmount AFTER the mount promise so we never try
-      // to tear down an engine that hasn't finished being built.
+      disarmTimers();
       engineLifecyclePromise = engineLifecyclePromise.then(async () => {
         const handle = localHandle;
         localHandle = null;
@@ -492,13 +352,11 @@ export function ConversePanel({
           handleRef.current = null;
         }
         if (!handle) return;
-        console.info(`[ConversePanel] unmounting engine (token=${token})`);
         engineLogger.info('unmount.start', { token });
         try {
           await handle.unmount();
           engineLogger.info('unmount.complete', { token });
         } catch (err) {
-          console.warn('[ConversePanel] unmount error:', err);
           engineLogger.warn('unmount.error', {
             token,
             message: err instanceof Error ? err.message : String(err),
@@ -506,66 +364,40 @@ export function ConversePanel({
         }
       });
     };
-  }, [isReady, tokenReady, preselectionResolved, preselectedRobotId, healthStatus]);
+  }, [isReady, peerIdResolved, peerId, remountKey, localRetryKey, errorMessage]);
 
-  // ─── Render gating ────────────────────────────────────────────────────
+  // ─── Render ───────────────────────────────────────────────────────────
   //
-  // The display priority from most to least specific:
-  //   1. Fatal SDK / token error (nothing we can do until sign-in)
-  //   2. Watchdog tripped (engine mounted but stuck)
-  //   3. Unrecoverable health status (zombie without heal, unreachable)
-  //   4. Healing / probing spinner
-  //   5. Engine view (normal path)
-  //
-  // We precompute each variant up-front rather than cramming ternaries
-  // into the JSX, because the branching tells the whole story and we
-  // want it to read linearly.
-
-  const fatalMessage = sdkError?.message ?? tokenError;
-
-  // "Zombie without heal" means the daemon doesn't ship the
-  // /refresh-relay endpoint AND is in the bad state. The user has to
-  // restart it manually; we surface the instruction verbatim.
-  const healthRequiresRestart =
-    healthStatus?.status === 'zombie-relay' &&
-    healthStatus.refreshEndpointAvailable === false;
-
-  // Any other non-healthy terminal state shows a generic retry CTA.
-  const healthError =
-    healthStatus != null &&
-    !isHealthyForMount(healthStatus) &&
-    !healthRequiresRestart;
-
-  const showHealingSpinner = healing;
-
-  const showLoadingSpinner =
-    !fatalMessage &&
-    !watchdogTripped &&
-    !healthRequiresRestart &&
-    !healthError &&
-    !showHealingSpinner &&
-    (isLoading ||
-      (isAuthenticated &&
-        (healthStatus === null || !tokenReady || !preselectionResolved)));
+  // Display priority:
+  //   1. SDK error           - nothing we can do without the SDK module
+  //   2. Parent error        - parent-supplied fatal (e.g. restart needed)
+  //   3. Watchdog tripped    - engine mounted but stuck > WATCHDOG_TIMEOUT
+  //   4. Engine view         - default; busyLabel renders as a soft overlay
+  const fatalMessage = sdkError?.message ?? errorMessage ?? null;
 
   const engineVisible =
     isReady &&
-    tokenReady &&
-    preselectionResolved &&
+    peerIdResolved &&
     !fatalMessage &&
-    !watchdogTripped &&
-    !healthRequiresRestart &&
-    !healthError &&
-    !!healthStatus &&
-    isHealthyForMount(healthStatus);
+    !watchdogTripped;
 
   return (
     <Box sx={{ position: 'relative', flex: 1, minHeight: 0, width: '100%' }}>
       {fatalMessage ? (
         <Box sx={centeredFallbackSx}>
-          <Typography variant="body2" color="error" sx={{ textAlign: 'center', px: 3 }}>
+          <Typography variant="subtitle1" sx={{ mb: 1 }}>
+            Cannot start conversation
+          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ textAlign: 'center', px: 3, mb: 3, maxWidth: 320 }}
+          >
             {fatalMessage}
           </Typography>
+          <Button variant="contained" onClick={onRetry} sx={retryBtnSx}>
+            Retry
+          </Button>
         </Box>
       ) : null}
 
@@ -589,59 +421,11 @@ export function ConversePanel({
         </Box>
       ) : null}
 
-      {!fatalMessage && !watchdogTripped && healthRequiresRestart ? (
-        <Box sx={centeredFallbackSx}>
-          <Typography variant="subtitle1" sx={{ mb: 1 }}>
-            Restart needed on Reachy
-          </Typography>
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ textAlign: 'center', px: 3, mb: 3, maxWidth: 320 }}
-          >
-            The robot's HuggingFace relay is out of sync and this version of
-            the daemon cannot self-heal. SSH into the robot and run
-            {' '}
-            <code>sudo systemctl restart reachy-mini-daemon</code>, then retry.
-          </Typography>
-          <Button variant="contained" onClick={onRetry} sx={retryBtnSx}>
-            I've restarted. Retry.
-          </Button>
-        </Box>
-      ) : null}
-
-      {!fatalMessage && !watchdogTripped && !healthRequiresRestart && healthError ? (
-        <Box sx={centeredFallbackSx}>
-          <Typography variant="subtitle1" sx={{ mb: 1 }}>
-            Cannot reach the robot
-          </Typography>
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ textAlign: 'center', px: 3, mb: 3, maxWidth: 320 }}
-          >
-            {healthStatusBlurb(healthStatus!)}
-          </Typography>
-          <Button variant="contained" onClick={onRetry} sx={retryBtnSx}>
-            Retry
-          </Button>
-        </Box>
-      ) : null}
-
-      {showHealingSpinner ? (
-        <Box sx={centeredFallbackSx}>
-          <CircularProgress size={28} />
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-            Reconnecting robot to HuggingFace…
-          </Typography>
-        </Box>
-      ) : null}
-
-      {showLoadingSpinner ? (
-        <Box sx={centeredFallbackSx}>
-          <CircularProgress size={28} />
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-            Loading Reachy SDK…
+      {!fatalMessage && !watchdogTripped && busyLabel ? (
+        <Box sx={busyOverlaySx}>
+          <CircularProgress size={20} />
+          <Typography variant="body2" color="text.secondary" sx={{ ml: 1.5 }}>
+            {busyLabel}
           </Typography>
         </Box>
       ) : null}
@@ -658,36 +442,11 @@ export function ConversePanel({
   );
 }
 
-/**
- * Short user-facing explanation of why we can't mount the engine.
- * Kept terse - the button next to it handles action; this is the
- * "why" one-liner.
- */
-function healthStatusBlurb(h: DaemonHealth): string {
-  switch (h.status) {
-    case 'relay-disconnected':
-      return 'The daemon has not reconnected to HuggingFace yet. Give it a few seconds and retry.';
-    case 'no-token':
-      return 'The robot is not signed in to HuggingFace. Sign in from the menu, then retry.';
-    case 'unreachable':
-      return 'Could not reach the robot daemon. Check it is powered on and on the same network.';
-    case 'zombie-relay':
-      // We only hit this branch when refreshEndpointAvailable !== false,
-      // which means auto-heal ran, failed to unstick the state within
-      // the budget, and we still want the user to try once more.
-      return 'Auto-healing the robot relay did not recover. Try again, or restart the daemon on the robot.';
-    default:
-      return 'The robot is not ready. Please retry.';
-  }
-}
-
 // Fallback overlays sit ON TOP of the embedded conversation root, so
 // they need to fully mask whatever the engine has rendered behind
 // them. Match the host MUI palette (paper + primary text) instead of
 // the engine's old hard-coded dark background, so the overlay reads
-// correctly in both light and dark themes (was previously a black
-// rectangle in light mode - the very "app inside an app" feel the
-// redesign is fixing).
+// correctly in both light and dark themes.
 const centeredFallbackSx = {
   position: 'absolute',
   inset: 0,
@@ -697,6 +456,26 @@ const centeredFallbackSx = {
   justifyContent: 'center',
   bgcolor: 'background.paper',
   color: 'text.primary',
+  zIndex: 2,
+} as const;
+
+// Soft overlay: the engine is still visible underneath. We pin a
+// small status pill at the top of the panel so the user knows
+// something is happening (heal in flight) without losing the
+// orb / caption. Aligns with the transport pill on the right of
+// the engine's topbar.
+const busyOverlaySx = {
+  position: 'absolute',
+  top: 12,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  display: 'flex',
+  alignItems: 'center',
+  px: 2,
+  py: 1,
+  borderRadius: 999,
+  bgcolor: 'background.paper',
+  boxShadow: 1,
   zIndex: 1,
 } as const;
 
@@ -741,7 +520,7 @@ const CONVERSE_MARKUP = /* html */ `
       <svg class="mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"/><path d="M9 5a3 3 0 0 1 6 0v4"/><path d="M9 10v1a3 3 0 0 0 5.1 2.1"/><path d="M19 10a7 7 0 0 1-1.24 3.97"/><path d="M5 10a7 7 0 0 0 11 5.67"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
     </button>
 
-    <button id="main-circle" class="circle state-connecting" type="button" aria-label="Start voice conversation">
+    <button id="main-circle" class="circle" type="button" aria-label="Start voice conversation">
       <span class="circle-glow" aria-hidden="true"></span>
       <span class="circle-ring" aria-hidden="true"></span>
       <span class="circle-ring-outer" aria-hidden="true"></span>
@@ -785,7 +564,7 @@ const CONVERSE_MARKUP = /* html */ `
     </button>
   </div>
 
-  <p id="circle-caption" class="circle-caption" role="status">Connecting</p>
+  <p id="circle-caption" class="circle-caption empty" role="status"></p>
 
   <div id="tool-toast" class="tool-toast" role="status" aria-live="polite" aria-hidden="true">
     <svg class="tool-toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

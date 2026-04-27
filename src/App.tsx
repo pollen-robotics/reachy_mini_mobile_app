@@ -139,6 +139,7 @@ export default function App() {
         <RobotSessionScreen
           target={target}
           username={username}
+          hfToken={token}
           onBack={() => void backToScan()}
           onNeedsWifi={() => setScreen('wifi-setup')}
         />
