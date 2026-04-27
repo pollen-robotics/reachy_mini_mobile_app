@@ -26,7 +26,7 @@
  *     clears the token and the App root drops back to the gate.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   Avatar,
   Box,
@@ -50,6 +50,7 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { SCAN_TIMEOUT_MS } from '../ble/constants';
 import { useBleSession, type ReachyBleDevice } from '../ble/useBleSession';
 import {
+  extractInstallId,
   extractRobotId,
   extractRobotName,
   type CentralRobotEntry,
@@ -118,11 +119,33 @@ export default function ScanScreen({
 
   const isScanning = status === 'scanning';
   const bleList = Object.values(devices);
+
+  // Cross-source deduplication. The same physical robot can appear in
+  // multiple sections at once: a desktop tray running on this Mac is
+  // both on `localhost` AND on HF central; a Wireless on the LAN
+  // shows up in BLE AND on central. We dedupe by `install_id`
+  // (stable, generated once per daemon install). Older daemons that
+  // don't expose an `install_id` simply never collide and are shown
+  // as-is - this is forward-compatible and avoids accidentally
+  // hiding rows on a partial rollout.
+  const dedupedRemote = useMemo<CentralSourceState>(() => {
+    if (remote.state.kind === 'no-token') return remote.state;
+    const localInstallId =
+      localDaemon.state.kind === 'ready' ? localDaemon.state.daemon.installId : null;
+    if (!localInstallId) return remote.state;
+    const filtered = remote.state.robots.filter((r) => {
+      const id = extractInstallId(r);
+      return id !== localInstallId;
+    });
+    if (filtered.length === remote.state.robots.length) return remote.state;
+    return { ...remote.state, robots: filtered };
+  }, [remote.state, localDaemon.state]);
+
   const hasAnyRobot =
     localDaemon.state.kind === 'ready' ||
     bleList.length > 0 ||
-    (remote.state.kind === 'ready' && remote.state.robots.length > 0) ||
-    (remote.state.kind === 'loading' && remote.state.robots.length > 0);
+    (dedupedRemote.kind === 'ready' && dedupedRemote.robots.length > 0) ||
+    (dedupedRemote.kind === 'loading' && dedupedRemote.robots.length > 0);
 
   return (
     <Stack
@@ -180,7 +203,7 @@ export default function ScanScreen({
 
         <RemoteSection
           username={username}
-          state={remote.state}
+          state={dedupedRemote}
           onPick={onRemotePicked}
           onSignOut={onSignOutRemote}
           onRefresh={() => void remote.refresh()}
@@ -239,9 +262,15 @@ function LocalDaemonCard({
   isDefaultName: boolean;
   onTap: () => void;
 }) {
+  // Short suffix from the install_id so that two unnamed
+  // ``reachy_mini`` rows are visually distinguishable in the listing.
+  // 6 hex chars give us ~16M of collision space, which is overkill for
+  // the "robots on the same desk" cardinality we actually face.
+  const idSuffix = daemon.installId ? daemon.installId.slice(0, 6) : null;
+  const captionId = idSuffix ? ` · #${idSuffix}` : '';
   const caption = isDefaultName
-    ? 'Needs a name · USB / loopback'
-    : `${daemon.robotName} · USB / loopback`;
+    ? `Needs a name · USB / loopback${captionId}`
+    : `${daemon.robotName} · USB / loopback${captionId}`;
   return (
     <ListItemButton
       onClick={onTap}
@@ -484,6 +513,21 @@ function RemoteRobotCard({
   onTap: () => void;
 }) {
   const id = extractRobotId(robot);
+  const installId = extractInstallId(robot);
+  // Same disambiguation suffix as the local daemon card. We prefer
+  // showing the install_id over the central peer_id since it's stable
+  // (peer_id rotates on every relay reconnect and would change the
+  // visual hash on every reboot).
+  const idSuffix = installId
+    ? installId.slice(0, 6)
+    : id
+      ? id.slice(0, 6)
+      : null;
+  const caption = idSuffix
+    ? `#${idSuffix} · Signaling`
+    : id
+      ? `${id.slice(0, 8)}… · Signaling`
+      : 'no peerId';
   return (
     <ListItemButton
       disabled={disabled}
@@ -508,7 +552,7 @@ function RemoteRobotCard({
             {extractRobotName(robot)}
           </Typography>
           <Typography variant="caption" color="text.secondary" fontFamily="monospace" noWrap>
-            {id ? `${id.slice(0, 8)}… · Signaling` : 'no peerId'}
+            {caption}
           </Typography>
         </Stack>
         <ChevronRightIcon color="action" />

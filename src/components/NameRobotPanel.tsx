@@ -66,6 +66,15 @@ interface NameRobotPanelProps {
    * Settings entry point passes a real callback.
    */
   onCancel?: () => void;
+  /**
+   * Optional skip hook. When provided, surfaces a "Skip for now" button
+   * that lets the user proceed without picking a name. Discovery still
+   * disambiguates them via the install_id suffix, so skipping is a
+   * supported, no-regret path: the user can pick a label later from
+   * Settings. Onboarding flows that pass `onSaved` only (no `onSkip`)
+   * keep the original "name now or back out" behaviour.
+   */
+  onSkip?: () => void;
   /** Title above the input. Defaults to "Name your Reachy". */
   title?: string;
   /** Subtitle / explanation. Override for the rename-later flow. */
@@ -82,6 +91,7 @@ export default function NameRobotPanel({
   existingNames = [],
   onSaved,
   onCancel,
+  onSkip,
   title = 'Name your Reachy',
   subtitle = 'Pick a short name (1-32 characters) so you can tell your robots apart in the list. You can rename later from Settings.',
   submitLabel = 'Continue',
@@ -195,6 +205,16 @@ export default function NameRobotPanel({
             disabled={submitting}
           >
             Cancel
+          </Button>
+        )}
+        {onSkip && (
+          <Button
+            type="button"
+            variant="text"
+            onClick={onSkip}
+            disabled={submitting}
+          >
+            Skip for now
           </Button>
         )}
         <Button

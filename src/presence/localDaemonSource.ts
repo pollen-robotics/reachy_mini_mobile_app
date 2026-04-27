@@ -76,6 +76,17 @@ export interface LocalDaemonInfo {
   /** Always equal to `LOCAL_DAEMON_HOST` for now; left as a field so a
    *  future "discover via mDNS on this machine" could reuse the type. */
   host: string;
+  /**
+   * Stable per-install reconciliation key (UUID4 hex) returned by
+   * `GET /api/daemon/identity`. Same value also surfaces on the same
+   * robot's mDNS TXT record, BLE GATT, and HF central listing meta -
+   * so the robot registry can dedupe a "loopback" sighting against
+   * the corresponding "central" / "BLE" rows. `null` only on legacy
+   * daemons that don't expose `/identity` (those are filtered out
+   * earlier by the `MIN_API_REVISION` guard so this is mostly
+   * informational).
+   */
+  installId: string | null;
   /** Daemon-reported name + source ("default", "persisted", "cli"). */
   robotName: string;
   robotNameSource: RobotNameInfo['source'];
@@ -102,16 +113,25 @@ interface DaemonVersionResponse {
   api_revision?: string;
 }
 
+interface DaemonIdentityResponse {
+  install_id?: string;
+  robot_name?: string;
+}
+
 /**
- * Minimum api_revision the local-daemon section requires. The naming
- * overlay (mandatory before bridging when the daemon still uses the
- * default `reachy_mini` label) needs `POST /api/daemon/robot-name`,
- * which only exists from rev 2 onwards. On older daemons we hide the
- * row entirely rather than surfacing a tap that can only fail with a
- * cryptic 404; the user reads the "tray is out of date, restart it"
- * banner that the desktop tray itself is supposed to show.
+ * Minimum api_revision the local-daemon section requires.
+ *
+ * Revision history:
+ *   - 2: GET / POST /api/daemon/robot-name (rename support)
+ *   - 3: GET /api/daemon/identity (install_id) + central relay no
+ *        longer gated on a custom robot name
+ *
+ * We require >= 3 here: the robot registry hard-depends on
+ * `install_id` to dedupe a loopback row with the same robot's central
+ * sighting, so a rev-2 daemon would surface as an undedupable ghost.
+ * Better hide it than show it twice.
  */
-const MIN_API_REVISION = 2;
+const MIN_API_REVISION = 3;
 
 interface SourceOpts {
   /** Override poll cadence in tests. 0 disables polling. */
@@ -155,8 +175,29 @@ async function probeLocalDaemon(): Promise<LocalDaemonInfo | null> {
     // rather than silently substituting a default label.
     if (!nameInfo) return null;
 
+    // Identity: install_id is the registry's reconciliation key, so
+    // we treat a missing one as a hard failure (revision check above
+    // should already have caught this). Done after the name fetch so
+    // the daemon only sees one extra round-trip per probe.
+    const identityResp = await daemonFetch<DaemonIdentityResponse>(
+      LOCAL_DAEMON_HOST,
+      '/api/daemon/identity',
+      { timeoutMs: PROBE_TIMEOUT_MS },
+    );
+    const installId =
+      identityResp.ok && identityResp.data?.install_id
+        ? identityResp.data.install_id
+        : null;
+    if (!installId) {
+      logger.warn('identity_missing_install_id', {
+        api_revision: apiRevision,
+      });
+      return null;
+    }
+
     return {
       host: LOCAL_DAEMON_HOST,
+      installId,
       robotName: nameInfo.name,
       robotNameSource: nameInfo.source,
       apiRevision,

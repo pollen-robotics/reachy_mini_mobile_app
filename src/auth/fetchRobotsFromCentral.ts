@@ -34,7 +34,15 @@ export interface CentralRobotEntry {
   id?: string;
   peerId?: string;
   peer_id?: string;
-  meta?: { name?: string };
+  /**
+   * Producer metadata forwarded verbatim by the daemon's
+   * `setPeerStatus`. `install_id` is the stable per-install
+   * reconciliation key (same value also appears on this robot's
+   * mDNS TXT record / loopback `/api/daemon/identity` / BLE GATT)
+   * and is what the mobile robot registry merges on. `name` is the
+   * human-readable label.
+   */
+  meta?: { name?: string; install_id?: string };
   name?: string;
 }
 
@@ -75,6 +83,20 @@ export function extractRobotId(entry: CentralRobotEntry | undefined): string | n
 export function extractRobotName(entry: CentralRobotEntry | undefined): string {
   if (!entry) return 'Unknown robot';
   return entry.meta?.name ?? entry.name ?? extractRobotId(entry) ?? 'Unknown robot';
+}
+
+/**
+ * Stable per-install reconciliation key. Returns `null` when the
+ * central record does not carry one (older daemons that pre-date
+ * api_revision 3, or third-party producers). Callers MUST treat
+ * `null` as "uniquely identified by central peerId only" and fall
+ * back to peerId-based dedupe.
+ */
+export function extractInstallId(
+  entry: CentralRobotEntry | undefined,
+): string | null {
+  const raw = entry?.meta?.install_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
 export async function fetchRobotsFromCentral(

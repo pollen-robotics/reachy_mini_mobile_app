@@ -350,8 +350,9 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
         <NameRobotPanel
           host={namingHost}
           initialName={namingInitial}
-          subtitle="Pick a short name (1-32 characters) so this Reachy is easy to recognise in your fleet. You can rename it later from Settings."
+          subtitle="Pick a short name (1-32 characters) so this Reachy is easy to recognise in your fleet. You can also skip and rename it later from Settings."
           onSaved={() => onConnected()}
+          onSkip={() => onConnected()}
         />
       </Stack>
     );

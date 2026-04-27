@@ -47,9 +47,7 @@ import { useState } from 'react';
 import { Box, Stack } from '@mui/material';
 
 import ForgetWifiDialog from '../components/ForgetWifiDialog';
-import NameRobotPanel from '../components/NameRobotPanel';
 import StepperHeader from '../components/StepperHeader';
-import { DEFAULT_ROBOT_NAME } from '../daemon/robotName';
 import {
   useSessionController,
   type SessionController,
@@ -62,6 +60,7 @@ import {
   HandshakeRunningView,
   LeavingView,
 } from './session/HandshakeViews';
+import { MemoryDialog } from './session/MemoryDialog';
 import { SessionTopBar } from './session/SessionTopBar';
 
 // Re-export so existing call sites (`App.tsx`) keep working.
@@ -85,55 +84,13 @@ export interface RobotSessionScreenProps {
 }
 
 export default function RobotSessionScreen(props: RobotSessionScreenProps) {
-  // Mandatory naming gate for the localhost variant: the discovery
-  // probe surfaces the daemon even when it's still using the default
-  // `reachy_mini` label, but a session with an unnamed daemon is
-  // ambiguous (peer-id resolution would match by name and pick the
-  // wrong one when several robots share the default). We block the
-  // session from mounting at all until the user has named the robot,
-  // then re-enter with the freshly-applied name as the new target.
-  //
-  // BLE (`local`) does not need this gate because `WifiSetupScreen`
-  // already enforces naming before navigating here. Remote
-  // (`remote`) by construction can't appear with a default name -
-  // the daemon-side relay is gated off until naming happens.
-  const [activeTarget, setActiveTarget] = useState<ConnectionTarget>(
-    props.target,
-  );
-  const requiresNaming =
-    activeTarget.kind === 'localhost' &&
-    activeTarget.robotName === DEFAULT_ROBOT_NAME;
-
-  if (requiresNaming && activeTarget.kind === 'localhost') {
-    return (
-      <Stack
-        sx={{
-          height: '100%',
-          width: '100%',
-          bgcolor: 'background.default',
-          alignItems: 'center',
-          justifyContent: 'center',
-          px: 3,
-        }}
-      >
-        <NameRobotPanel
-          host={activeTarget.host}
-          initialName=""
-          subtitle="This Reachy is running on your Mac and needs a name before you can start a session. You can rename it later from Settings."
-          onSaved={(info) => {
-            setActiveTarget({
-              kind: 'localhost',
-              host: activeTarget.host,
-              robotName: info.name,
-            });
-          }}
-          onCancel={props.onBack}
-        />
-      </Stack>
-    );
-  }
-
-  return <SessionContent {...props} target={activeTarget} />;
+  // Naming is no longer a hard gate. Reconciliation across BLE / mDNS
+  // / loopback / HF central is done by the stable `install_id`, so an
+  // unnamed `reachy_mini` is uniquely identifiable and a session can
+  // safely mount on it. The user can pick a friendly label later from
+  // Settings (or be prompted opportunistically by the discovery list,
+  // which already disambiguates via an install_id suffix).
+  return <SessionContent {...props} target={props.target} />;
 }
 
 function SessionContent({
@@ -156,6 +113,7 @@ function SessionContent({
   // it through the controller.
   const [showHandshakeDetails, setShowHandshakeDetails] = useState(false);
   const [forgetOpen, setForgetOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   const phase = controller.state.phase;
   const isAuthenticated = controller.isLocal
@@ -178,6 +136,7 @@ function SessionContent({
         isLocal={controller.isLocal}
         onForgetWifi={() => setForgetOpen(true)}
         onDisconnect={controller.back}
+        onOpenMemory={() => setMemoryOpen(true)}
         auth={controller.auth}
       />
 
@@ -252,6 +211,11 @@ function SessionContent({
           setForgetOpen(false);
           controller.back();
         }}
+      />
+
+      <MemoryDialog
+        open={memoryOpen}
+        onClose={() => setMemoryOpen(false)}
       />
     </Stack>
   );
