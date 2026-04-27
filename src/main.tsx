@@ -1,4 +1,3 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CssBaseline, ThemeProvider, useMediaQuery } from '@mui/material';
 
@@ -23,8 +22,11 @@ function Root() {
 const container = document.getElementById('root');
 if (!container) throw new Error('Missing #root container');
 
-createRoot(container).render(
-  <StrictMode>
-    <Root />
-  </StrictMode>
-);
+// NOTE: StrictMode disabled on purpose. We tested it on - the lifecycle
+// stores (engineLifecyclePromise, setDesiredState, trajectoryGate) absorb
+// the double-invokes correctly, but the duplicated effect runs make
+// production-like log traces noisy and waste daemon round-trips during
+// the BLE handshake (every BLE GATT read fires twice, every WebRTC ICE
+// trace prints twice). Re-enable locally if you want to stress-test
+// StrictMode-safety; keep it off by default for a calmer dev console.
+createRoot(container).render(<Root />);

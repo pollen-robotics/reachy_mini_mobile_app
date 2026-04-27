@@ -47,9 +47,17 @@ export type {
   RobotClient,
   RobotFetchOptions,
   RobotResponse,
+  RobotWebSocket,
+  RobotWebSocketCloseEvent,
+  RobotWebSocketErrorEvent,
+  RobotWebSocketEventMap,
+  RobotWebSocketMessageEvent,
+  RobotWebSocketOptions,
+  RobotWebSocketReadyState,
 } from './types';
 export {
   getActiveDataChannel,
+  getDataChannelId,
   setActiveDataChannel,
   subscribeDataChannel,
 } from './dataChannelRegistry';

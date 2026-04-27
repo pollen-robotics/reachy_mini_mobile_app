@@ -41,6 +41,26 @@ export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
    *  Safe to call multiple times. */
   unmount: () => Promise<void>;
+  /**
+   * Activate the conversation parts (antennas oscillator, OpenAI Realtime
+   * connection, head wobbler, transport monitor). No-op if the conversation
+   * is already active or if the engine hasn't reached the post-session
+   * "session-up but idle" state yet (in which case the request is queued
+   * and will run as soon as `startSession()` resolves).
+   *
+   * Used by the mobile app to defer conversation startup until the user
+   * is in the `live` view (i.e. has clicked "Start conversation"). The
+   * SDK / WebRTC tunnel itself is brought up earlier (during the `engine`
+   * phase) because it doubles as the daemon proxy transport.
+   */
+  startConversation: () => Promise<void>;
+  /**
+   * Stop the conversation parts but keep the SDK / WebRTC tunnel alive
+   * so the daemon proxy keeps working. No-op if the conversation
+   * isn't active. Currently unused by the mobile app (it goes through
+   * `unmount()` on back navigation), but exposed for symmetry.
+   */
+  stopConversation: () => Promise<void>;
 }
 
 /**
@@ -106,6 +126,26 @@ export interface ConversationEngineOptions {
    * `connected` → `auto-selecting`) that happen within a single tick.
    */
   onStateChange?: (state: AppState) => void;
+
+  /**
+   * When `true` (default), the engine auto-starts the full conversation
+   * pipeline as soon as a robot is selected: open WebRTC session, start
+   * the antennas oscillator, connect to OpenAI Realtime, wire the head
+   * wobbler. This matches the public Space's "tap once → talking"
+   * behaviour.
+   *
+   * When `false`, the engine still goes all the way through
+   * `robot.startSession()` (so the WebRTC DataChannel that doubles as
+   * the daemon proxy transport is up), but stops there. The conversation
+   * parts (antennas, OpenAI, wobbler) only fire when the host calls
+   * `handle.startConversation()`.
+   *
+   * Used by the mobile app to keep the daemon tunnel alive during the
+   * wake-up animation (the daemon proxy needs the DC) without animating
+   * the antennas or burning OpenAI quota until the user explicitly hits
+   * "Start conversation".
+   */
+  autoStartConversation?: boolean;
 }
 
 /**
@@ -139,6 +179,29 @@ const preselectedRobotId: string | null =
 // mount returns - the consumer disposes by unmounting the engine.
 const onStateChange: ((state: AppState) => void) | null =
   typeof options.onStateChange === "function" ? options.onStateChange : null;
+
+// ─── Conversation auto-start gate ───────────────────────────────────────
+//
+// The mobile app needs the WebRTC DC (opened by `robot.startSession`) up
+// during the wake-up animation - it doubles as the daemon proxy
+// transport. But the antennas / OpenAI / wobbler must NOT fire until the
+// user has explicitly clicked "Start conversation" and we're in the
+// `live` view, otherwise we get antenna jitter while the wake_up
+// trajectory is still playing.
+//
+// Set the gate's INITIAL value from `options.autoStartConversation`
+// (defaults to `true` to preserve the public Space's "tap once → start
+// talking" behaviour). The host can toggle it later via
+// `handle.startConversation()` / `handle.stopConversation()`.
+let convoActiveRequested: boolean = options.autoStartConversation !== false;
+// True once `robot.startSession()` has resolved successfully. We use
+// this to decide whether `startConversation()` can run the conversation
+// parts immediately or has to be queued for `doStart` to pick up.
+let sessionEstablished = false;
+// True once the conversation parts (antennas, OpenAI, wobbler) are
+// running. Prevents double-start if the host flips the gate twice or
+// `doStart` and `startConversation()` race.
+let conversationStarted = false;
 
 // ─── Settings & defaults ────────────────────────────────────────────────
 
@@ -907,9 +970,61 @@ async function doStart(): Promise<void> {
   // only open the Apps tab). Doing it here too would trigger the
   // animation a second time mid-conversation.
 
+  // Mark the SDK / DataChannel as ready BEFORE deciding whether to
+  // continue with the conversation parts. The mobile app gates the
+  // conversation pipeline behind a "user clicked Start" UI flag (see
+  // `handle.startConversation()`), so we may end up parking here with
+  // a live DC and no antennas/OpenAI - that's the desired state during
+  // the wake-up animation. `setSessionEstablished` flips so the host
+  // can pick up where we left off when it flips the gate.
+  setSessionEstablished(true);
+
+  if (!convoActiveRequested) {
+    // SDK + DC are up. Sit tight. Drop back to a non-transient
+    // observer state so the React watchdog disarms (`starting` is in
+    // its TRANSIENT_STATES set, and we'd trip the lazy heal +
+    // user-facing "Robot unresponsive" CTA after a few seconds
+    // otherwise). `connected` is the closest match: the SDK is
+    // connected to central, the DC is up for the daemon proxy,
+    // there's just no active conversation pipeline yet.
+    setState("connected");
+    // The host (ConversePanel) will call `handle.startConversation()`
+    // once the user lands in the `live` view; that path resumes from
+    // `runConversationParts()` below.
+    return;
+  }
+
+  await runConversationParts();
+}
+
+/**
+ * The conversation pipeline proper: antenna oscillator, head wobbler,
+ * OpenAI Realtime client, mic plumbing. Split out of `doStart` so the
+ * mobile app can defer it until the user is in the right view (the
+ * SDK / DataChannel is brought up earlier because it doubles as the
+ * daemon proxy transport during wake-up).
+ *
+ * Idempotent: repeated calls are safe. If the SDK isn't ready yet
+ * (e.g. host called `startConversation()` before `startSession()`
+ * resolved) the call is recorded via `convoActiveRequested` and
+ * `doStart` will pick up where we left off.
+ */
+async function runConversationParts(): Promise<void> {
+  if (!robot || conversationStarted) return;
+  conversationStarted = true;
+
+  // If we're being called from the deferred-start path (host flipped
+  // the `convoActive` gate after we parked in `connected`), the state
+  // machine is currently in `connected`. Re-arm the "starting" UI so
+  // the orb shows the spinner during the OpenAI handshake. If we got
+  // here from the auto-start path, we're already in `starting` and
+  // the call is a no-op.
+  if (currentState === "connected") setState("starting");
+
   // Grab the robot's incoming audio track (the robot's microphone).
   const robotMicTrack = getRobotMicTrack(robot);
   if (!robotMicTrack) {
+    conversationStarted = false;
     onFatalError(new Error("Could not find the robot's microphone track"));
     return;
   }
@@ -926,6 +1041,7 @@ async function doStart(): Promise<void> {
   try {
     await connectOpenai(robotMicTrack);
   } catch (err) {
+    conversationStarted = false;
     onFatalError(err);
     return;
   }
@@ -934,6 +1050,15 @@ async function doStart(): Promise<void> {
   // mic path. Our sender now carries the OpenAI audio track, not the local
   // microphone — the `mic` vocabulary in the SDK is legacy.
   robot.setMicMuted(false);
+}
+
+/**
+ * Hook into `sessionEstablished` so test code / future callers can
+ * observe the transition. Today it's just a setter, but kept as a
+ * function so the assignments are greppable.
+ */
+function setSessionEstablished(value: boolean): void {
+  sessionEstablished = value;
 }
 
 /**
@@ -1155,8 +1280,14 @@ function startWobbler(assistantTrack: MediaStreamTrack): void {
 function stopWobbler(): void {
   wobbler?.stop();
   wobbler = null;
-  // Ensure the head returns to neutral when the session ends.
-  robot?.setHeadPose(0, 0, 0);
+  // No direct setHeadPose(0,0,0) here on purpose: the wobbler's own
+  // stop() already pushes a neutral pose through its `onOffsets`
+  // callback, which honours the trajectory gate. A second un-gated
+  // reset would race with daemon-side wake_up / goto_sleep and snap
+  // the head from the trajectory's final pose to neutral the instant
+  // the gate flips back to false - that's the "antennas/head jumping
+  // at the end of sleep" artefact, and it can wedge the Dynamixel bus
+  // when it lands on the tail of a long trajectory.
 }
 
 // ─── Antennas oscillator ────────────────────────────────────────────────
@@ -1183,7 +1314,12 @@ function startAntennas(): void {
 function stopAntennas(): void {
   antennas?.stop();
   antennas = null;
-  robot?.setAntennas(0, 0);
+  // No direct setAntennas(0, 0) here for the same reason as in
+  // stopWobbler(): the oscillator's own stop() already emits a
+  // neutral frame through its `onAntennas` callback, and that path
+  // is gated by isTrajectoryPlaying(). A bare un-gated reset would
+  // win the race against goto_sleep's final frame and "lift" the
+  // antennas back up the moment the trajectory ends.
 }
 
 // ─── Tool-call handler ─────────────────────────────────────────────────
@@ -2036,6 +2172,13 @@ async function teardown(): Promise<void> {
     toolPoseRestoreTimer = null;
   }
 
+  // Same ordering rule as `stopConversation`: kill the 30 Hz pose
+  // streams BEFORE awaiting the long-running OpenAI close. See the
+  // comment in stopConversation for why a late wobbler/antennas tick
+  // is enough to wedge the Dynamixel bus on the way out.
+  stopWobbler();
+  stopAntennas();
+
   movePlayer?.stop();
   movePlaying = false;
 
@@ -2049,8 +2192,6 @@ async function teardown(): Promise<void> {
   }
   openai = null;
 
-  stopWobbler();
-  stopAntennas();
   stopMicLevelMonitor();
   stopAiLevelMonitor();
   stopTransportMonitor();
@@ -2061,6 +2202,12 @@ async function teardown(): Promise<void> {
     openaiSink.remove();
     openaiSink = null;
   }
+
+  // Reset the convo-gate bookkeeping so a subsequent
+  // `connect → startSession → startConversation` cycle behaves
+  // identically to the first one.
+  conversationStarted = false;
+  sessionEstablished = false;
 
   // NB: sleeping the robot is no longer this engine's job either.
   // ConnectedScreen's cleanup POSTs `/api/move/play/goto_sleep` over
@@ -2430,6 +2577,88 @@ return {
       // ignored
     }
     robot = null;
+  },
+
+  startConversation: async () => {
+    if (unmounted) return;
+    if (convoActiveRequested && conversationStarted) return;
+    convoActiveRequested = true;
+    // Two cases:
+    //   1. The SDK session is already up (we parked in `doStart` after
+    //      `setSessionEstablished(true)` because auto-start was off).
+    //      Resume by running the conversation parts now.
+    //   2. The SDK session isn't up yet (e.g. host called startConversation
+    //      before robotsChanged fired). The flag is now set, so when
+    //      `doStart` runs it'll fall through to `runConversationParts()`
+    //      directly instead of returning early.
+    if (sessionEstablished && !conversationStarted) {
+      try {
+        await runConversationParts();
+      } catch (err) {
+        console.warn(
+          "[conversation-engine] startConversation failed:",
+          err,
+        );
+      }
+    }
+  },
+
+  stopConversation: async () => {
+    if (unmounted) return;
+    convoActiveRequested = false;
+    if (!conversationStarted) return;
+    // "Lite" teardown: stop the conversation pipeline but leave the
+    // SDK / DataChannel alive so the daemon proxy keeps working.
+    // Mirrors the head of `teardown()` but skips `robot.stopSession()`.
+    if (toolPoseRestoreTimer !== null) {
+      clearTimeout(toolPoseRestoreTimer);
+      toolPoseRestoreTimer = null;
+    }
+    // Kill the 30 Hz pose streams FIRST, synchronously, before any
+    // await. The host (RobotSessionScreen) calls stopConversation()
+    // and setDesiredState('sleeping') in the same tick when the user
+    // taps Back; if we let the wobbler/antennas keep ticking through
+    // `await openai?.close()` (which can take a few hundred ms), they
+    // race the trajectory gate: as soon as goto_sleep finishes and
+    // `isTrajectoryPlaying()` flips back to false, the next 30 Hz
+    // tick fires a real setHeadPose / setAntennas and snaps the robot
+    // off the trajectory's final pose. That visible jolt is also a
+    // burst of writes on the Dynamixel bus right after a long move,
+    // and on the physical robot it's enough to wedge the bus for the
+    // next session.
+    stopWobbler();
+    stopAntennas();
+    movePlayer?.stop();
+    movePlaying = false;
+    openaiReconnecting = false;
+    openaiReconnectAttempts = 0;
+    try {
+      await openai?.close();
+    } catch {
+      // ignored
+    }
+    openai = null;
+    stopMicLevelMonitor();
+    stopAiLevelMonitor();
+    stopTransportMonitor();
+    void releaseWakeLock();
+    if (openaiSink) {
+      openaiSink.srcObject = null;
+      openaiSink.remove();
+      openaiSink = null;
+    }
+    // Mute the robot mic so any in-flight audio frames don't leak
+    // through to the speakers while the OpenAI client is gone.
+    try {
+      robot?.setMicMuted(true);
+    } catch {
+      // ignored
+    }
+    conversationStarted = false;
+    // Drop back to the "session up, no convo" parking state so the
+    // host can call `startConversation()` again later without the
+    // engine's UI lying about its current capabilities.
+    if (sessionEstablished) setState("connected");
   },
 };
 } // end of mountConversation

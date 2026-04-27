@@ -24,18 +24,10 @@ import type { DaemonProbeState } from '../daemon/useDaemonStatus';
 
 interface DaemonStatusPillProps {
   probe: DaemonProbeState;
-  /**
-   * Optional transport hint. When set, displayed as a tiny suffix
-   * (e.g. "via WebRTC") so the user knows whether the data is coming
-   * from the LAN or the central tunnel. Useful when debugging
-   * connectivity weirdness.
-   */
-  transportLabel?: string;
 }
 
 export default function DaemonStatusPill({
   probe,
-  transportLabel,
 }: DaemonStatusPillProps) {
   let icon: React.ReactNode;
   let label: string;
@@ -120,11 +112,6 @@ export default function DaemonStatusPill({
         }}
       >
         {label}
-        {transportLabel ? (
-          <Box component="span" sx={{ opacity: 0.6, ml: 0.5 }}>
-            ({transportLabel})
-          </Box>
-        ) : null}
       </Typography>
     </Stack>
   );

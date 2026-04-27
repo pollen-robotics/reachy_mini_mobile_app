@@ -130,6 +130,8 @@ import {
 } from '../daemon/daemonProbeVersion';
 import {
   flushPending as flushMotionPending,
+  getMotionState,
+  resetMotionSession,
   setDesiredState,
 } from '../daemon/robotMotion';
 import { useDaemonRelayHealing } from '../daemon/useDaemonRelayHealing';
@@ -178,18 +180,18 @@ const REMOTE_STEP_LABELS = [
 ] as const;
 
 /**
- * Watchdog ceiling for the leaving phase. Sized so the teardown can fit:
+ * Watchdog ceiling for the leaving phase. Sized to fit the worst-case
+ * teardown:
  *
- *   - up to ~2.5 s of an in-flight `wake_up.json` trajectory we'd
- *     coalesce-cancel by queueing `sleeping` (the worst case is the
- *     user hitting Disconnect mid wake-up),
+ *   - up to ~2.5 s of an in-flight `wake_up.json` trajectory the user
+ *     interrupts by tapping Disconnect mid wake-up (the motion store
+ *     coalesces-queues `sleeping` behind it),
  *   - the full ~2 s of `goto_sleep.json`,
- *   - the `set_mode/disabled` POST, plus engine endSession / DC close.
+ *   - engine `endSession` + DC close on top of that.
  *
- * Anything longer would feel like the back button is stuck; anything
- * shorter clips goto_sleep and leaves the robot frozen mid-trajectory
- * with motors disabled, so it slumps under gravity from a non-rest
- * pose.
+ * Anything longer feels like the back button is stuck; anything
+ * shorter clips `goto_sleep` and leaves the robot frozen mid-trajectory
+ * (now harmless thanks to motors-stay-enabled, but still ugly UX).
  */
 const TEARDOWN_TIMEOUT_MS = 5_500;
 
@@ -273,11 +275,21 @@ export default function RobotSessionScreen({
           ? target.device.address
           : extractRobotId(target.robot),
     });
+    // Reset the motion store on every screen entry. The store
+    // is module-singleton (it has to be: the wake/sleep state
+    // machine outlives any single React tree to coalesce mount/
+    // unmount bursts), so without this reset the next session
+    // would inherit `current === 'awake'` from the previous
+    // robot and skip the new wake_up entirely. We don't reset
+    // on cleanup because the leaving effect's `flushMotionPending`
+    // explicitly relies on the existing session.
+    resetMotionSession();
     return () => {
       logger.info('unmount');
       setTraceId(null);
     };
   }, [target]);
+
   const [activeStep, setActiveStep] = useState(0);
   const [handshakeError, setHandshakeError] = useState<HandshakeError | null>(
     null,
@@ -692,6 +704,30 @@ export default function RobotSessionScreen({
         // separate concern (handled by setDesiredState callers).
       }
       if (cancelled) return;
+      // Surface a wake failure as a handshake error: this is the
+      // only way the user can tell the difference between "robot
+      // is silently stuck" (bus_stuck bug, where the daemon
+      // reports `move_completed` but the robot never moved) and
+      // "robot is awake and waiting for me to start a convo".
+      // The retry CTA wired below will re-run the entire flow
+      // including a defensive bus recycle.
+      const outcome = getMotionState().lastOutcome;
+      if (outcome !== 'completed' && outcome !== 'idle') {
+        logger.warn('wake.surface_error', { outcome });
+        setHandshakeError({
+          failedAt: Date.now(),
+          title: 'Robot did not wake up',
+          body:
+            outcome === 'bus_stuck'
+              ? "The robot's motors didn't follow the wake-up trajectory. Tap retry to recycle the motor bus and try again."
+              : outcome === 'transport_down'
+                ? 'The connection to the robot dropped during wake-up. Tap retry to reconnect.'
+                : 'Wake-up did not complete cleanly. Tap retry to start over.',
+          detail: `lastOutcome=${outcome}`,
+          offerWifiSetup: false,
+        });
+        return;
+      }
       setActiveStep(stepLabels.length);
       setPhase('ready');
     })();
@@ -715,6 +751,23 @@ export default function RobotSessionScreen({
   const handleStartConversation = useCallback(() => {
     setPhase('live');
   }, [setPhase]);
+
+  // ── Conversation-pipeline gate ───────────────────────────────────────
+  //
+  // The engine's WebRTC DataChannel is brought up during the `engine`
+  // phase (it doubles as the daemon proxy transport for wake_up /
+  // goto_sleep). The conversation parts proper - antennas oscillator,
+  // OpenAI Realtime, head wobbler - must only fire once the user has
+  // explicitly tapped "Start conversation".
+  //
+  // No stabilisation delay is needed anymore: the `engine` → `ready`
+  // transition only happens after `flushMotionPending()` has resolved,
+  // which means the daemon has actually finished the `wake_up.json`
+  // trajectory (we wait on the move UUID leaving `/api/move/running`,
+  // not on a magic timer). By the time the user can even click the
+  // CTA, the trajectory queue is already empty, so the antennas can
+  // start immediately on `live` without colliding with the wake.
+  const convoActive = phase === 'live';
 
   // ── Back navigation with graceful teardown ───────────────────────────
   const handleBack = useCallback(() => {
@@ -913,7 +966,6 @@ export default function RobotSessionScreen({
             conversationBusyLabel={conversationBusyLabel}
             conversationErrorMessage={conversationErrorMessage}
             onEngineStuck={handleEngineStuck}
-            daemonProbeLabel="WebRTC"
             daemonProbe={daemonProbe}
             daemonVersion={daemonVersion}
             sessionHealth={sessionHealth}
@@ -921,6 +973,7 @@ export default function RobotSessionScreen({
             onStartConversation={handleStartConversation}
             onRetry={handleRetry}
             onDisconnect={handleBack}
+            convoActive={convoActive}
           />
         ) : null}
       </Box>
@@ -1405,7 +1458,6 @@ interface ConversationAreaProps {
   conversationErrorMessage: string | null;
   /** Lazy-heal trigger fired by the panel's watchdog. */
   onEngineStuck: () => void;
-  daemonProbeLabel: string;
   daemonProbe: ReturnType<typeof useDaemonStatus>;
   /** PR-D: surfaces the outdated-daemon banner when applicable. */
   daemonVersion: DaemonVersionInfo | null;
@@ -1416,6 +1468,16 @@ interface ConversationAreaProps {
   onStartConversation: () => void;
   onRetry: () => void;
   onDisconnect: () => void;
+  /**
+   * Gate forwarded to `ConversePanel`: when `true` the engine starts
+   * the conversation pipeline (antennas / OpenAI / wobbler); when
+   * `false` the engine keeps the SDK + DC up for the daemon proxy
+   * but stays dormant otherwise. Tracks `phase === 'live'` directly:
+   * by the time we reach `live` the wake_up trajectory has been
+   * confirmed complete by `flushMotionPending`, so the antennas
+   * can start without colliding with a still-running move.
+   */
+  convoActive: boolean;
 }
 
 function ConversationArea({
@@ -1429,7 +1491,6 @@ function ConversationArea({
   conversationBusyLabel,
   conversationErrorMessage,
   onEngineStuck,
-  daemonProbeLabel,
   daemonProbe,
   daemonVersion,
   sessionHealth,
@@ -1437,6 +1498,7 @@ function ConversationArea({
   onStartConversation,
   onRetry,
   onDisconnect,
+  convoActive,
 }: ConversationAreaProps) {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<'converse' | 'apps'>('converse');
@@ -1505,6 +1567,7 @@ function ConversationArea({
           onStuck={onEngineStuck}
           busyLabel={conversationBusyLabel}
           errorMessage={conversationErrorMessage}
+          convoActive={convoActive}
         />
         {phase === 'ready' ? (
           <Stack
@@ -1537,10 +1600,7 @@ function ConversationArea({
               pointerEvents: 'none',
             }}
           >
-            <DaemonStatusPill
-              probe={daemonProbe}
-              transportLabel={daemonProbeLabel}
-            />
+            <DaemonStatusPill probe={daemonProbe} />
           </Box>
         ) : null}
       </Box>

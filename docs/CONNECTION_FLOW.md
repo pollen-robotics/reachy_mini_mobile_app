@@ -551,17 +551,19 @@ useEffect(() => {
 
 The order is intentional:
 
-1. **`flushMotionPending()`** waits for the `goto_sleep` POST chain -
-   `play/goto_sleep` → 2s settle → `set_mode/disabled`. This rides
-   the WebRTC `http_proxy`, so we MUST run it before tearing the DC
-   down.
+1. **`flushMotionPending()`** waits for the `goto_sleep` trajectory
+   to actually finish on the daemon (we POST `play/goto_sleep`, then
+   poll `/api/move/running` until the move UUID disappears). This
+   rides the WebRTC `http_proxy`, so we MUST run it before tearing
+   the DC down. Motors stay torque-enabled afterwards on purpose -
+   see §10.
 2. **`flushEngineLifecycle()`** lands `endSession` on central; this
    also closes the DC by design.
 3. **`disconnectDevice()`** (LAN only) closes the GATT session - no
    longer load-bearing for transport, just hygiene so the next BLE
    pickup starts from a clean session.
 
-The `TEARDOWN_TIMEOUT_MS = 3_500` watchdog guarantees the user is
+The `TEARDOWN_TIMEOUT_MS = 5_500` watchdog guarantees the user is
 never trapped: if any step hangs, we drop to `onBack()` anyway.
 
 ### 7.9. Top bar and menu
@@ -832,41 +834,98 @@ first non-transient observation.
 **File:** `src/daemon/robotMotion.ts`. The single source of truth for
 "is this robot supposed to be awake or asleep right now?".
 
-### 10.1. API
+### 10.1. Contract (READ THIS BEFORE TOUCHING THE FILE)
+
+Three rules this module enforces and that everything else assumes:
+
+1. **Motors stay torque-enabled across sessions.** We never POST
+   `set_mode/disabled` on disconnect. The robot's "sleep" pose is
+   achieved by playing the `goto_sleep.json` trajectory and that's
+   it. Two reasons:
+     - The head holds its rest pose instead of slumping under gravity
+       when the user taps Disconnect.
+     - The next wake doesn't have to re-engage the Dynamixel bus.
+       The `disable → enable → wake_up` cycle is the exact window
+       where the bus randomly returns "Motor communication error"
+       (reproducible on the daemon over SSH). With steady-state
+       torque-on, that window doesn't exist.
+
+   True power-down (after N minutes of nobody talking to the robot)
+   is a daemon-side concern, not ours.
+
+2. **Wake/sleep completion is event-driven.** We POST
+   `/api/move/play/{wake_up,goto_sleep}` and get a move UUID back,
+   then poll `/api/move/running` until that UUID is no longer in the
+   list. The trajectory window is exactly as long as the daemon says
+   it is - no `WAKE_UP_TRAJECTORY_MS` / `GOTO_SLEEP_TRAJECTORY_MS`
+   magic numbers that drift the day someone trims the json.
+
+3. **`set_mode/enabled` is only POSTed when actually needed.** On a
+   cold-booted daemon, motors default to disabled, so the very first
+   wake has to flip them. We GET `/api/motors/status` first; if the
+   mode is already `enabled` we skip the POST entirely. When we do
+   POST, we pay a 600 ms bus-init settle (the Dynamixel chain takes
+   a moment to accept goal-positions cleanly right after torque-on).
+   Steady state - every wake after the first - hits neither the POST
+   nor the settle.
+
+4. **Antennas are released to a safe holding pose right after
+   `goto_sleep`.** The daemon's `goto_sleep` trajectory leaves the
+   antennas at `(-3.05, +3.05) rad ≈ ±175°`, i.e. essentially the
+   mechanical hard stop. Because the daemon's 50 Hz control loop keeps
+   asserting that target as long as motors are torque-on (rule 1),
+   the Dynamixel chain ends up driving the antennas into their hard
+   stop continuously. The bus voltage sags under sustained current,
+   and after a handful of wake/sleep cycles the daemon starts logging
+   `Motor communication error` on `left_antenna`/`right_antenna`,
+   after which the bus refuses further commands until the daemon is
+   restarted. That was the root cause of the
+   "motors-don't-move-anymore on second connect" regression.
+
+   Fix: as soon as the sleep trajectory leaves the running set, we
+   POST `/api/move/set_target` with `target_antennas:
+   [-0.1745, 0.1745]` (≈ ±10°, identical to the daemon's own
+   `INIT_ANTENNAS_JOINT_POSITIONS`, with the matching upstream
+   comment "~10° offset to reduce shaking at vertical"). The control
+   loop now holds the antennas at a reachable, low-load pose; the
+   bus stays clean across arbitrary wake/sleep cycles. Side effect:
+   the antennas visibly come up from the folded sleep position to
+   the ~10° rest position right at the end of `goto_sleep` - this is
+   intentional and expected, not a glitch.
+
+### 10.2. API
 
 ```typescript
 type RobotState = 'awake' | 'sleeping';
 
 setDesiredState(client: RobotClient, desired: RobotState): void;
 flushPending(): Promise<void>;
-resetRobotMotion(): void;
 ```
 
-### 10.2. Sequences
+### 10.3. Sequences
 
 ```
 wake:
-  POST /api/motors/set_mode/enabled       - torque on
-  wait 150 ms                              - absorb serial-bus init
-  POST /api/move/play/wake_up              - ~2 s trajectory
+  GET  /api/motors/status                   - read current mode
+  if mode !== 'enabled':
+    POST /api/motors/set_mode/enabled       - torque on
+    wait 600 ms                              - bus init settle
+  POST /api/move/play/wake_up                - daemon returns move UUID
+  poll /api/move/running                     - until UUID disappears
 
 sleep:
-  POST /api/move/play/goto_sleep           - ~2 s trajectory
-  wait 2000 ms                             - trajectory finish
-  POST /api/motors/set_mode/disabled       - torque off (floppy)
+  POST /api/move/play/goto_sleep             - daemon returns move UUID
+  poll /api/move/running                     - until UUID disappears
+  POST /api/move/set_target                  - target_antennas: [-0.1745, 0.1745]
+                                               (release antennas from ±175° hard stop;
+                                                see rule 4 in §10.1)
+  (motors stay enabled)
 ```
 
-The wake-up settle is short on purpose: too brief and the daemon's
-serial bus often hits a couple of "Serial I/O recovered" retries at
-the very moment the wake_up trajectory starts pushing goal-positions
-(perceived by the user as "robot snaps then freezes then resumes"),
-too long and the Dynamixel snap-to-goal of the `enable` step itself
-becomes visible. See the doc comment at the top of `robotMotion.ts`.
-
-All four POSTs go through `client.fetch`, i.e. the WebRTC
+All round-trips go through `client.fetch`, i.e. the WebRTC
 `http_proxy`.
 
-### 10.3. Coalescing
+### 10.4. Coalescing
 
 The store keeps `desiredState` and `currentState`. `setDesiredState`
 just mutates `desiredState` and chains `reconcile(s)` onto a
@@ -875,30 +934,32 @@ single-promise queue. Inside `reconcile`:
 ```typescript
 while (s.currentState !== s.desiredState) {
   if (s.desiredState === 'awake') { await doWakeUp(s.client); s.currentState = 'awake'; }
-  else                            { await doGotoSleep(s.client); s.currentState = 'sleeping'; }
+  else                            { await doSleep(s.client);  s.currentState = 'sleeping'; }
 }
 ```
 
 Five rapid `setDesiredState` toggles during a 2s sleep animation will
 finish the in-flight sequence, re-read `desiredState`, and execute at
 most one more sequence to land on the final target. This is what
-makes wake-on-mount + sleep-on-unmount safe under React.StrictMode's
-double-invoke.
+makes wake-on-mount + sleep-on-unmount safe under React effect
+cleanups (and StrictMode double-invoke if it ever comes back).
 
-### 10.4. Session stickiness
+### 10.5. Session stickiness
 
-`session.key` is a constant (`'webrtc-proxy'`) since we ship a
-single transport. A different `RobotClient` instance (e.g. re-render
+The store holds a single in-memory `Session` (transport is always the
+WebRTC proxy). A different `RobotClient` instance (e.g. re-render
 with a fresh `useMemo` output, watchdog remount) updates the active
-client pointer in place but keeps the existing session, so a stale
-`wake` already in-flight isn't dropped on the floor.
+client pointer in place but keeps the existing session, so a wake
+already in-flight isn't dropped on the floor.
 
-### 10.5. No cancellation
+### 10.6. No cancellation
 
 Once a wake or sleep sequence has issued its first POST, it runs to
-completion. Cancelling mid-sequence would leave the robot half-armed.
-Newly queued requests can be superseded though - that's what
-`desiredState` coalescing is for.
+completion (the daemon serialises moves with an internal RLock so
+queueing a sleep mid-wake just makes the sleep wait its turn).
+Cancelling mid-sequence would leave the robot half-armed. Newly
+queued requests can be superseded though - that's what `desiredState`
+coalescing is for.
 
 ---
 
@@ -954,7 +1015,7 @@ Sequence (all over the persistent BLE session):
 | Wrong Wi-Fi (BLE shows no IP) | `HandshakeError` at step 1 + "Set up Wi-Fi" CTA + Retry. The WebRTC tunnel can't come up at all without an IP, so we bail before mounting the engine. |
 | WebRTC DC takes >1s to open | Daemon pill shows "Connecting through WebRTC…", stepper stays on "Daemon" until first `http_proxy` round-trip succeeds. |
 | Engine stuck in transient state >20s | `ConversePanel` watchdog trips, "Robot unresponsive" + Retry. |
-| User backs out mid-wake | Sleep request queued; `flushMotionPending` waits up to 3.5s; engine teardown sends `endSession` first so the WebRTC tunnel survives long enough for the sleep POSTs. |
+| User backs out mid-wake | Sleep request coalesce-queued behind the running wake; the daemon serialises the moves so `goto_sleep` runs as soon as `wake_up` finishes. `flushMotionPending` blocks the teardown until both have completed (or the 5.5s watchdog trips). Motors stay enabled through the cycle. |
 | Daemon zombie-relay | LAN: auto-heal via `/api/hf-auth/refresh-relay`. If unavailable, surface a "SSH and restart the daemon" instruction with a verbatim command. |
 
 ---

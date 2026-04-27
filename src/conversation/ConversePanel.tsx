@@ -199,6 +199,25 @@ export interface ConversePanelProps {
    * heal attempt - a state the panel can't recover from on its own.
    */
   errorMessage?: string | null;
+  /**
+   * Gate for the conversation pipeline (antennas oscillator, OpenAI
+   * Realtime, head wobbler).
+   *
+   *   - `false` (default): the engine still mounts and brings up the
+   *     WebRTC DataChannel as soon as the peer id resolves - the
+   *     daemon proxy needs that DC to relay `wake_up` / `goto_sleep`
+   *     calls. The conversation parts stay dormant.
+   *   - `true`: the parent has decided the user is in the right view
+   *     to start talking (in practice: phase === 'live' has been
+   *     stable for a stabilisation delay). The panel forwards the
+   *     request to the engine which starts the antennas + connects
+   *     to OpenAI + wires the wobbler.
+   *
+   * Toggling false → true → false during a single mount is supported
+   * (the engine tears down only the conversation pipeline, not the
+   * SDK session).
+   */
+  convoActive?: boolean;
 }
 
 export function ConversePanel({
@@ -209,6 +228,7 @@ export function ConversePanel({
   onStuck,
   busyLabel = null,
   errorMessage = null,
+  convoActive = false,
 }: ConversePanelProps): React.ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<ConversationEngineHandle | null>(null);
@@ -231,6 +251,19 @@ export function ConversePanel({
   onAppStateChangeRef.current = onAppStateChange;
   const onStuckRef = useRef(onStuck);
   onStuckRef.current = onStuck;
+  // Mirror `convoActive` so the watchdog closure (captured per
+  // engine mount) can read the live value. The watchdog is only
+  // meaningful while the host actually wants a conversation: once
+  // `convoActive` flips false (typically the user tapped Back and
+  // the screen entered 'leaving'), the engine parks at "connected"
+  // - which is in TRANSIENT_STATES because it's also the in-flight
+  // state during a normal startup. Without this gate the watchdog
+  // would trip mid-teardown over WebRTC (sleep + motor disable
+  // round-tripping through the relay can chew through the 20 s
+  // budget) and surface a misleading "Robot unresponsive" CTA on
+  // top of a perfectly normal disconnect.
+  const convoActiveRef = useRef(convoActive);
+  convoActiveRef.current = convoActive;
 
   const onRetry = useCallback(() => {
     setWatchdogTripped(false);
@@ -274,9 +307,15 @@ export function ConversePanel({
     let watchdogTimer: number | null = null;
     let lazyHealFired = false;
     const armTimers = (): void => {
+      // Don't watchdog a teardown. When the host has explicitly
+      // dropped `convoActive` (Back was tapped, screen is in
+      // 'leaving') the engine's parking state is the desired
+      // terminal, not a stall to surface to the user.
+      if (!convoActiveRef.current) return;
       if (lazyHealTimer === null && !lazyHealFired) {
         lazyHealTimer = window.setTimeout(() => {
           lazyHealTimer = null;
+          if (!convoActiveRef.current) return;
           lazyHealFired = true;
           engineLogger.info('lazy_heal.trigger', { token });
           onStuckRef.current?.();
@@ -285,6 +324,7 @@ export function ConversePanel({
       if (watchdogTimer === null) {
         watchdogTimer = window.setTimeout(() => {
           watchdogTimer = null;
+          if (!convoActiveRef.current) return;
           engineLogger.warn('watchdog.trip', { token });
           setWatchdogTripped(true);
         }, WATCHDOG_TIMEOUT_MS);
@@ -307,6 +347,11 @@ export function ConversePanel({
         engineLogger.info('mount', { token, peer_id: peerId ?? null });
         const handle = mountConversation(root, {
           preselectedRobotId: peerId,
+          // Mobile app gates the conversation pipeline behind the
+          // `convoActive` prop (forwarded below in a dedicated effect).
+          // The SDK / DataChannel still comes up immediately because
+          // it doubles as the daemon proxy transport during wake-up.
+          autoStartConversation: false,
           onStateChange: (state) => {
             engineLogger.info('state.transition', { to: state });
             if (TRANSIENT_STATES.has(state)) {
@@ -365,6 +410,56 @@ export function ConversePanel({
       });
     };
   }, [isReady, peerIdResolved, peerId, remountKey, localRetryKey, errorMessage]);
+
+  // Forward `convoActive` to the engine. Decoupled from the mount
+  // effect so flipping the gate doesn't tear the engine down: the
+  // engine has dedicated `startConversation()` / `stopConversation()`
+  // entrypoints that only touch the conversation pipeline (antennas /
+  // OpenAI / wobbler), leaving the SDK session - and therefore the
+  // daemon proxy DataChannel - alive.
+  //
+  // We chain through `engineLifecyclePromise` so the toggle observes
+  // the same ordering as mount/unmount (no race where we'd call
+  // `startConversation` on a handle that's about to be torn down by
+  // a queued unmount task).
+  useEffect(() => {
+    if (!isReady || !peerIdResolved || errorMessage) return;
+    let cancelled = false;
+    engineLifecyclePromise = engineLifecyclePromise.then(async () => {
+      if (cancelled) return;
+      const handle = handleRef.current;
+      if (!handle) return;
+      try {
+        if (convoActive) {
+          engineLogger.info('convo.start', {});
+          await handle.startConversation();
+        } else {
+          engineLogger.info('convo.stop', {});
+          await handle.stopConversation();
+        }
+      } catch (err) {
+        engineLogger.warn('convo.toggle.error', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [convoActive, isReady, peerIdResolved, errorMessage, remountKey, localRetryKey]);
+
+  // When the host pulls the convo gate down (typically: Back was
+  // tapped → screen is in 'leaving'), make sure the watchdog UI
+  // doesn't surface during teardown. Two cases to cover:
+  //   - watchdog already tripped while we were live → clear the
+  //     overlay so the disconnect proceeds without a fake error.
+  //   - watchdog armed but not yet tripped → the in-flight timer
+  //     callback gates on `convoActiveRef`, so it'll just no-op.
+  useEffect(() => {
+    if (!convoActive && watchdogTripped) {
+      setWatchdogTripped(false);
+    }
+  }, [convoActive, watchdogTripped]);
 
   // ─── Render ───────────────────────────────────────────────────────────
   //

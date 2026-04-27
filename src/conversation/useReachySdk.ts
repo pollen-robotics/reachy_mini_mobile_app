@@ -14,7 +14,7 @@
  */
 import { useEffect, useState } from 'react';
 
-import { setActiveDataChannel } from '../robot-client';
+import { getDataChannelId, setActiveDataChannel } from '../robot-client';
 
 const SDK_SCRIPT_ID = 'reachy-mini-sdk';
 const SDK_URL =
@@ -525,9 +525,11 @@ function patchReachyMiniStaleSession(): void {
       });
       pc.addEventListener('datachannel', (ev) => {
         const dc = (ev as RTCDataChannelEvent).channel;
+        const dcId = getDataChannelId(dc);
         console.info('[ReachyMini trace] pc.ondatachannel', {
           label: dc.label,
           readyState: dc.readyState,
+          dc_id: dcId,
         });
         // Publish the DC into the robot-client registry so the
         // remote-mode HTTP transport (`http_proxy` over DataChannel)
@@ -544,15 +546,15 @@ function patchReachyMiniStaleSession(): void {
           setActiveDataChannel(dc);
         }
         dc.addEventListener('open', () => {
-          console.info('[ReachyMini trace] dc.open', { label: dc.label });
+          console.info('[ReachyMini trace] dc.open', { label: dc.label, dc_id: dcId });
           publish();
         });
         dc.addEventListener('close', () => {
-          console.info('[ReachyMini trace] dc.close', { label: dc.label });
+          console.info('[ReachyMini trace] dc.close', { label: dc.label, dc_id: dcId });
           setActiveDataChannel(null);
         });
         dc.addEventListener('error', (e) => {
-          console.warn('[ReachyMini trace] dc.error', { label: dc.label, e });
+          console.warn('[ReachyMini trace] dc.error', { label: dc.label, dc_id: dcId, e });
         });
       });
       pc.addEventListener('track', (ev) => {

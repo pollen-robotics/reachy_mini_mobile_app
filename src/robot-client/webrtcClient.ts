@@ -36,9 +36,17 @@
 import { createLogger, getTraceId } from '../logger';
 import {
   getActiveDataChannel,
+  getDataChannelId,
   subscribeDataChannel,
 } from './dataChannelRegistry';
-import type { RobotClient, RobotFetchOptions, RobotResponse } from './types';
+import type {
+  RobotClient,
+  RobotFetchOptions,
+  RobotResponse,
+  RobotWebSocket,
+  RobotWebSocketOptions,
+} from './types';
+import { openRobotWebSocket } from './wsProxyClient';
 
 const logger = createLogger('webrtc.proxy');
 
@@ -68,11 +76,29 @@ let attachedChannel: RTCDataChannel | null = null;
 let registrySubscribed = false;
 
 function attachToChannel(dc: RTCDataChannel | null): void {
-  if (dc === attachedChannel) return;
+  if (dc === attachedChannel) {
+    logger.debug('attach.noop', {
+      dc_id: getDataChannelId(dc),
+      pending_count: pending.size,
+    });
+    return;
+  }
+  const prev = attachedChannel;
   attachedChannel = dc;
+  logger.info('attach', {
+    prev_dc_id: getDataChannelId(prev),
+    new_dc_id: getDataChannelId(dc),
+    new_state: dc?.readyState ?? null,
+    pending_count: pending.size,
+  });
   if (!dc) return;
   dc.addEventListener('message', handleDataChannelMessage);
   dc.addEventListener('close', () => {
+    logger.info('dc.close', {
+      dc_id: getDataChannelId(dc),
+      was_active: attachedChannel === dc,
+      pending_count: pending.size,
+    });
     if (attachedChannel === dc) attachedChannel = null;
     failAllPending('webrtc data channel closed');
   });
@@ -81,6 +107,7 @@ function attachToChannel(dc: RTCDataChannel | null): void {
 function ensureRegistrySubscribed(): void {
   if (registrySubscribed) return;
   registrySubscribed = true;
+  logger.debug('registry.subscribe');
   subscribeDataChannel(dc => attachToChannel(dc));
 }
 
@@ -141,6 +168,13 @@ function handleDataChannelMessage(evt: Event): void {
 }
 
 function failAllPending(reason: string): void {
+  if (pending.size > 0) {
+    logger.warn('pending.fail_all', {
+      reason,
+      count: pending.size,
+      request_ids: Array.from(pending.keys()),
+    });
+  }
   for (const [, entry] of pending) {
     clearTimeout(entry.timer);
     entry.resolve({
@@ -180,18 +214,39 @@ export function createWebRtcClient(
 
   return {
     transport: 'webrtc-proxy',
+    openWs(
+      path: string,
+      wsOpts: RobotWebSocketOptions = {},
+    ): RobotWebSocket {
+      return openRobotWebSocket(path, wsOpts);
+    },
     async fetch<T = unknown>(
       path: string,
       fopts: RobotFetchOptions = {},
     ): Promise<RobotResponse<T>> {
       const dc = getActiveDataChannel();
       if (!dc || dc.readyState !== 'open') {
+        logger.warn('fetch.no_dc', {
+          method: fopts.method ?? 'GET',
+          path,
+          dc_id: getDataChannelId(dc),
+          dc_state: dc?.readyState ?? null,
+          attached_dc_id: getDataChannelId(attachedChannel),
+        });
         return {
           status: 0,
           ok: false,
           data: null,
           rawBody: 'no active webrtc data channel',
         };
+      }
+      if (dc !== attachedChannel) {
+        logger.warn('fetch.dc_mismatch', {
+          method: fopts.method ?? 'GET',
+          path,
+          active_dc_id: getDataChannelId(dc),
+          attached_dc_id: getDataChannelId(attachedChannel),
+        });
       }
 
       const requestId = nextRequestId();
