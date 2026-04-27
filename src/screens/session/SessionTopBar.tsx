@@ -34,6 +34,7 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import LoginIcon from '@mui/icons-material/Login';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 
 import type { useHfAuth } from '../../auth/useHfAuth';
 
@@ -57,6 +58,8 @@ export interface SessionTopBarProps {
   isLocal: boolean;
   onForgetWifi: () => void;
   onDisconnect: () => void;
+  /** Open the long-term memory inspection dialog. */
+  onOpenMemory: () => void;
   /** Used by the LAN-only HF auth menu row. Ignored when isLocal is false. */
   auth: ReturnType<typeof useHfAuth>;
 }
@@ -70,6 +73,7 @@ export function SessionTopBar({
   isLocal,
   onForgetWifi,
   onDisconnect,
+  onOpenMemory,
   auth,
 }: SessionTopBarProps) {
   const theme = useTheme();
@@ -144,6 +148,23 @@ export function SessionTopBar({
               />
             ) : null}
             {isLocal ? <Divider /> : null}
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                onOpenMemory();
+              }}
+            >
+              <ListItemIcon>
+                <PsychologyOutlinedIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText
+                primary="Memory"
+                secondary="Inspect what Reachy remembers"
+                primaryTypographyProps={{ fontWeight: 600 }}
+                secondaryTypographyProps={{ fontSize: '0.7rem' }}
+              />
+            </MenuItem>
+            <Divider />
             <MenuItem
               onClick={() => {
                 setMenuAnchor(null);

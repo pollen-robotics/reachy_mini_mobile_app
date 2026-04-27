@@ -36,6 +36,7 @@ import type {
   RobotInfo,
 } from "./globals";
 import { isTrajectoryPlaying } from "../daemon/trajectoryGate";
+import { memoryStore } from "./memory";
 
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
@@ -378,7 +379,8 @@ const DEFAULT_VOICE = "cedar";
 const DEFAULT_INSTRUCTIONS =
   "You are Reachy Mini, a small friendly robot companion. " +
   "Keep replies short, warm, and spoken. Avoid long monologues. " +
-  "You control a small robot body. Two tools are available:\n" +
+  "You control a small robot body and can manage a small long-term " +
+  "memory. Tools available:\n" +
   "  - `move_head`: point the head in a named direction (up, down, left, " +
   "right, tilt_left, tilt_right, center). Instant, use for subtle gestures " +
   "that accompany a sentence.\n" +
@@ -387,7 +389,17 @@ const DEFAULT_INSTRUCTIONS =
   "(reactive body language). Pick a dance when the moment calls for " +
   "theatricality (hi, joke, groove) and an emotion when reacting to " +
   "something the user just said (surprise, curiosity, praise, bad news).\n" +
-  "Use tools sparingly, never more than once per reply.";
+  "  - `remember`: save ONE short fact about the user that will help in " +
+  "future conversations (their name, preferences, recurring projects, " +
+  "people they care about, plans). Only save things that are stable and " +
+  "the user explicitly shared. Never save sensitive data (passwords, " +
+  "addresses, payment info). Each call stores ONE atomic fact - split " +
+  "compound statements into multiple calls.\n" +
+  "  - `forget`: remove a previously saved fact when the user asks you " +
+  "to or when the information becomes obsolete.\n" +
+  "Use motion tools sparingly (never more than once per reply). Use " +
+  "memory tools silently in the background - do not narrate the act of " +
+  "remembering, just acknowledge naturally (\"got it\", \"noted\").";
 
 // ─── Robot tools exposed to the OpenAI model ────────────────────────────
 
@@ -448,6 +460,56 @@ const ROBOT_TOOLS: RealtimeTool[] = [
         },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "remember",
+    description:
+      "Save ONE short fact about the user to your long-term memory so " +
+      "you remember it in future sessions. Use this for stable user " +
+      "information they explicitly shared: name, preferences, hobbies, " +
+      "recurring projects, important people, plans. Keep each fact under " +
+      "one sentence and atomic - if the user shares two things, call " +
+      "`remember` twice. Do NOT save sensitive data (passwords, addresses, " +
+      "payment info, health diagnoses) or fleeting details (current mood, " +
+      "today's weather). Acknowledge naturally without reading the fact " +
+      "back; never announce \"I will remember that\".",
+    parameters: {
+      type: "object",
+      properties: {
+        fact: {
+          type: "string",
+          description:
+            "A short, third-person statement about the user (e.g. " +
+            "\"Has a dog named Mochi\", \"Works as a UX designer\", " +
+            "\"Prefers replies in French\"). One fact per call.",
+        },
+      },
+      required: ["fact"],
+    },
+  },
+  {
+    name: "forget",
+    description:
+      "Remove a previously saved fact from your long-term memory. Call " +
+      "this when the user asks you to forget something, or when the " +
+      "information becomes obsolete (e.g. they got a new job, the dog " +
+      "they had passed away). Match by free-text query: pick the most " +
+      "specific phrase that uniquely identifies the fact to remove.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "A short search phrase that should be present in the fact " +
+            "to remove. Case-insensitive substring match. If multiple " +
+            "facts contain it, the oldest one is removed and you are " +
+            "told about the others so you can re-call `forget` with a " +
+            "more specific query.",
+        },
+      },
+      required: ["query"],
     },
   },
 ];
@@ -947,11 +1009,22 @@ function setSessionEstablished(value: boolean): void {
  * transparent reconnect when ICE fails.
  */
 async function connectOpenai(robotMicTrack: MediaStreamTrack): Promise<void> {
+  // Snapshot the user's long-term memory ONCE per connection. We
+  // intentionally don't push live updates to the OpenAI session: a
+  // `remember` call mid-conversation already carries its fact in the
+  // tool-call transcript, so the model knows it's saved without
+  // needing the prompt to be re-pushed. The next session start (or
+  // an explicit reconnect) is when stale memories get refreshed.
+  const memoryFragment = memoryStore.formatForPrompt();
+  const composedInstructions = memoryFragment
+    ? `${settings.instructions}\n\n${memoryFragment}`
+    : settings.instructions;
+
   const client = new OpenaiRealtimeClient({
     apiKey: settings.apiKey,
     model: settings.model,
     voice: settings.voice,
-    instructions: settings.instructions,
+    instructions: composedInstructions,
     inputTrack: robotMicTrack,
     tools: ROBOT_TOOLS,
   });
@@ -1243,6 +1316,20 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
       const move = String(args.name ?? "");
       return move ? `Playing ${move}` : "Playing move";
     }
+    case "remember": {
+      // Truncated preview so the toast pill stays compact even when
+      // the model writes a long fact.
+      const fact = String(args.fact ?? "").trim();
+      if (!fact) return "Remembering";
+      const preview = fact.length > 36 ? `${fact.slice(0, 33)}...` : fact;
+      return `Remembering: ${preview}`;
+    }
+    case "forget": {
+      const query = String(args.query ?? "").trim();
+      if (!query) return "Forgetting";
+      const preview = query.length > 36 ? `${query.slice(0, 33)}...` : query;
+      return `Forgetting: ${preview}`;
+    }
     default:
       return `Tool: ${name}`;
   }
@@ -1296,6 +1383,53 @@ async function handleToolCall({
           ok: false,
           message: `unknown move '${moveName}'. Valid: ${MOVE_IDS.join(", ")}`,
         };
+      }
+      break;
+    }
+    case "remember": {
+      const fact = String(args.fact ?? "");
+      const stored = memoryStore.add(fact);
+      if (!stored) {
+        result = {
+          ok: false,
+          message:
+            "fact was empty or invalid; nothing was saved. Try again " +
+            "with a single short sentence about the user.",
+        };
+      } else {
+        // Echo the stored text back so the model can see exactly what
+        // ended up in the memory (helps catch its own hallucinated
+        // truncations and dedupe matches).
+        result = {
+          ok: true,
+          message: `saved: "${stored.text}"`,
+        };
+      }
+      break;
+    }
+    case "forget": {
+      const query = String(args.query ?? "");
+      const { removed, candidates } = memoryStore.forget({ query });
+      if (!removed) {
+        result = {
+          ok: false,
+          message: `no memory matched "${query}"; nothing was removed.`,
+        };
+      } else if (candidates.length > 1) {
+        // Tell the model about the other near-matches so it can ask
+        // the user "did you mean X or Y?" instead of silently picking.
+        const others = candidates
+          .slice(1)
+          .map((f) => `"${f.text}"`)
+          .join(", ");
+        result = {
+          ok: true,
+          message:
+            `removed: "${removed.text}". Other facts also matched ` +
+            `"${query}": ${others}. Ask the user before forgetting more.`,
+        };
+      } else {
+        result = { ok: true, message: `removed: "${removed.text}"` };
       }
       break;
     }
