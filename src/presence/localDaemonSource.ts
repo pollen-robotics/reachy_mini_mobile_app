@@ -87,6 +87,15 @@ export interface LocalDaemonInfo {
    * informational).
    */
   installId: string | null;
+  /**
+   * Producer peer id central just assigned this daemon on the latest
+   * ``welcome`` frame, when the relay is connected. Used by the scan
+   * screen to dedupe a "this Mac" loopback row against the same
+   * physical robot's central listing while the HF central server does
+   * not propagate ``meta.install_id``. Volatile - re-read on every
+   * probe; do NOT persist anywhere.
+   */
+  centralPeerId: string | null;
   /** Daemon-reported name + source ("default", "persisted", "cli"). */
   robotName: string;
   robotNameSource: RobotNameInfo['source'];
@@ -116,6 +125,15 @@ interface DaemonVersionResponse {
 interface DaemonIdentityResponse {
   install_id?: string;
   robot_name?: string;
+  /**
+   * Producer peer id assigned to the daemon by the HF central
+   * signaling server on the latest ``welcome`` frame. Volatile
+   * (rotates per reconnect) but useful as a fallback dedup key
+   * against the central listing while the central server does not
+   * yet propagate ``meta.install_id``. Null when the relay is
+   * offline (no token, no network, ...).
+   */
+  central_peer_id?: string | null;
 }
 
 /**
@@ -194,10 +212,20 @@ async function probeLocalDaemon(): Promise<LocalDaemonInfo | null> {
       });
       return null;
     }
+    // ``central_peer_id`` is best-effort: it lives on the same response
+    // as ``install_id`` so we get it for free, but the relay may not be
+    // up yet (no HF token, no network) in which case the daemon returns
+    // null. Treat any falsy value as "unknown" rather than failing the
+    // probe - the loopback row is still useful without it.
+    const centralPeerId =
+      identityResp.ok && identityResp.data?.central_peer_id
+        ? identityResp.data.central_peer_id
+        : null;
 
     return {
       host: LOCAL_DAEMON_HOST,
       installId,
+      centralPeerId,
       robotName: nameInfo.name,
       robotNameSource: nameInfo.source,
       apiRevision,
@@ -244,7 +272,8 @@ export function useLocalDaemonSource(
           prev.daemon.robotName === info.robotName &&
           prev.daemon.robotNameSource === info.robotNameSource &&
           prev.daemon.daemonVersion === info.daemonVersion &&
-          prev.daemon.apiRevision === info.apiRevision
+          prev.daemon.apiRevision === info.apiRevision &&
+          prev.daemon.centralPeerId === info.centralPeerId
         ) {
           // Update only the heartbeat timestamp without re-rendering
           // consumers (we do via a new ref but keep state stable).

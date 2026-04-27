@@ -41,9 +41,19 @@ export interface CentralRobotEntry {
    * mDNS TXT record / loopback `/api/daemon/identity` / BLE GATT)
    * and is what the mobile robot registry merges on. `name` is the
    * human-readable label.
+   *
+   * NOTE (2026-04): the current `cduss/reachy-mini-central` server
+   * extracts `meta.name` into the top-level `robotName` field below
+   * but does NOT propagate `meta.install_id`. Until the server is
+   * updated to forward the full meta blob, central listings cannot
+   * be dedupe-merged with the loopback daemon - we still keep the
+   * field defined so the client is forward-compatible with the
+   * upcoming central change.
    */
   meta?: { name?: string; install_id?: string };
   name?: string;
+  /** Top-level field actually returned by the current central API. */
+  robotName?: string;
 }
 
 export interface RemoteRobotsResult {
@@ -76,13 +86,26 @@ export function extractRobotId(entry: CentralRobotEntry | undefined): string | n
 }
 
 /**
- * Best-effort name for the UI: `meta.name` (set by the daemon when
- * the relay registers as a producer) → top-level `name` → falls
- * back to the id so we always have something printable.
+ * Best-effort name for the UI. Read order matches the precedence we
+ * want to honour as the central server schema evolves:
+ *   1. `meta.name` - what the daemon emits on `setPeerStatus`. Will
+ *      be the source of truth once the central server propagates the
+ *      full `meta` blob (see CentralRobotEntry comment).
+ *   2. `robotName` - what the current central server returns at the
+ *      top level (extracted server-side from `meta.name`).
+ *   3. `name` - older central versions used this top-level shape.
+ *   4. peer id slice - last resort so we still render something
+ *      printable instead of `undefined`.
  */
 export function extractRobotName(entry: CentralRobotEntry | undefined): string {
   if (!entry) return 'Unknown robot';
-  return entry.meta?.name ?? entry.name ?? extractRobotId(entry) ?? 'Unknown robot';
+  return (
+    entry.meta?.name ??
+    entry.robotName ??
+    entry.name ??
+    extractRobotId(entry) ??
+    'Unknown robot'
+  );
 }
 
 /**

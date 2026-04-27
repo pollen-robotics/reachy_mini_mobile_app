@@ -123,19 +123,40 @@ export default function ScanScreen({
   // Cross-source deduplication. The same physical robot can appear in
   // multiple sections at once: a desktop tray running on this Mac is
   // both on `localhost` AND on HF central; a Wireless on the LAN
-  // shows up in BLE AND on central. We dedupe by `install_id`
-  // (stable, generated once per daemon install). Older daemons that
-  // don't expose an `install_id` simply never collide and are shown
-  // as-is - this is forward-compatible and avoids accidentally
+  // shows up in BLE AND on central. We dedupe in two passes:
+  //
+  //   1. By ``install_id`` - the stable, per-install reconciliation
+  //      key. Works the moment the central server propagates
+  //      ``meta.install_id`` from the daemon's ``setPeerStatus``.
+  //   2. Fallback by central ``peerId`` - the relay-assigned id we
+  //      get back over the welcome frame, surfaced via
+  //      ``/api/daemon/identity`` as ``central_peer_id``. This
+  //      handles the current state of the world where the central
+  //      server still strips ``meta.install_id``: we may not see the
+  //      install_id on the central row, but we *do* know the peerId
+  //      central just gave to our own loopback daemon, so we can
+  //      filter it out.
+  //
+  // Older daemons that don't expose either field simply never collide
+  // and are shown as-is - forward-compatible and avoids accidentally
   // hiding rows on a partial rollout.
   const dedupedRemote = useMemo<CentralSourceState>(() => {
     if (remote.state.kind === 'no-token') return remote.state;
-    const localInstallId =
-      localDaemon.state.kind === 'ready' ? localDaemon.state.daemon.installId : null;
-    if (!localInstallId) return remote.state;
+    const localDaemonReady =
+      localDaemon.state.kind === 'ready' ? localDaemon.state.daemon : null;
+    const localInstallId = localDaemonReady?.installId ?? null;
+    const localCentralPeerId = localDaemonReady?.centralPeerId ?? null;
+    if (!localInstallId && !localCentralPeerId) return remote.state;
     const filtered = remote.state.robots.filter((r) => {
-      const id = extractInstallId(r);
-      return id !== localInstallId;
+      if (localInstallId) {
+        const id = extractInstallId(r);
+        if (id === localInstallId) return false;
+      }
+      if (localCentralPeerId) {
+        const peerId = extractRobotId(r);
+        if (peerId === localCentralPeerId) return false;
+      }
+      return true;
     });
     if (filtered.length === remote.state.robots.length) return remote.state;
     return { ...remote.state, robots: filtered };
@@ -213,6 +234,40 @@ export default function ScanScreen({
   );
 }
 
+/* --- Shared card styles --------------------------------------------- */
+
+// Shared visual sx for the three "tap a robot" cards. Hoisted because the
+// LocalDaemonCard / BleRobotCard / RemoteRobotCard variants only differ by
+// avatar + body content; the chrome (border, hover, padding) must stay in
+// sync across the three.
+const CARD_BUTTON_SX = {
+  p: 2,
+  borderRadius: 2,
+  bgcolor: 'background.paper',
+  border: (theme: import('@mui/material/styles').Theme) =>
+    `1px solid ${theme.palette.divider}`,
+  '&:hover': {
+    bgcolor: 'action.hover',
+    borderColor: 'primary.main',
+  },
+} as const;
+
+// `userSelect: 'text'` overrides MUI ButtonBase's default of `none` so the
+// caption (notably the `#xxxxxx` install_id suffix) can be drag-selected
+// for copy/paste into a debugging chat. The browser swallows the click
+// when the gesture ended in a selection, so the row's onTap stays safe.
+const SELECTABLE_TEXT_SX = {
+  userSelect: 'text',
+  WebkitUserSelect: 'text',
+  cursor: 'text',
+} as const;
+
+const CARD_TEXT_STACK_SX = {
+  flex: 1,
+  minWidth: 0,
+  ...SELECTABLE_TEXT_SX,
+} as const;
+
 /* --- Local daemon section (loopback / tray app) --------------------- */
 
 const DEFAULT_ROBOT_NAME = 'reachy_mini';
@@ -274,16 +329,7 @@ function LocalDaemonCard({
   return (
     <ListItemButton
       onClick={onTap}
-      sx={{
-        p: 2,
-        borderRadius: 2,
-        bgcolor: 'background.paper',
-        border: theme => `1px solid ${theme.palette.divider}`,
-        '&:hover': {
-          bgcolor: 'action.hover',
-          borderColor: 'primary.main',
-        },
-      }}
+      sx={CARD_BUTTON_SX}
     >
       <Stack direction="row" alignItems="center" spacing={2} sx={{ width: '100%' }}>
         <Avatar
@@ -296,8 +342,8 @@ function LocalDaemonCard({
         >
           <LaptopMacIcon fontSize="small" />
         </Avatar>
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" fontWeight={600} noWrap>
+        <Stack sx={CARD_TEXT_STACK_SX}>
+          <Typography variant="body1" fontWeight={600} noWrap sx={SELECTABLE_TEXT_SX}>
             {isDefaultName ? 'Unnamed Reachy' : daemon.robotName}
           </Typography>
           <Typography
@@ -305,6 +351,7 @@ function LocalDaemonCard({
             color="text.secondary"
             fontFamily="monospace"
             noWrap
+            sx={SELECTABLE_TEXT_SX}
           >
             {caption}
           </Typography>
@@ -368,19 +415,7 @@ function BleRobotCard({
   onTap: () => void;
 }) {
   return (
-    <ListItemButton
-      onClick={onTap}
-      sx={{
-        p: 2,
-        borderRadius: 2,
-        bgcolor: 'background.paper',
-        border: theme => `1px solid ${theme.palette.divider}`,
-        '&:hover': {
-          bgcolor: 'action.hover',
-          borderColor: 'primary.main',
-        },
-      }}
-    >
+    <ListItemButton onClick={onTap} sx={CARD_BUTTON_SX}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ width: '100%' }}>
         <Avatar
           sx={{
@@ -392,11 +427,16 @@ function BleRobotCard({
         >
           <BluetoothIcon fontSize="small" />
         </Avatar>
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" fontWeight={600} noWrap>
+        <Stack sx={CARD_TEXT_STACK_SX}>
+          <Typography variant="body1" fontWeight={600} noWrap sx={SELECTABLE_TEXT_SX}>
             {device.name}
           </Typography>
-          <Typography variant="caption" color="text.secondary" fontFamily="monospace">
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            fontFamily="monospace"
+            sx={SELECTABLE_TEXT_SX}
+          >
             {device.rssi ? `${device.rssi} dBm · BLE` : 'BLE'}
           </Typography>
         </Stack>
@@ -529,29 +569,22 @@ function RemoteRobotCard({
       ? `${id.slice(0, 8)}… · Signaling`
       : 'no peerId';
   return (
-    <ListItemButton
-      disabled={disabled}
-      onClick={onTap}
-      sx={{
-        p: 2,
-        borderRadius: 2,
-        bgcolor: 'background.paper',
-        border: theme => `1px solid ${theme.palette.divider}`,
-        '&:hover': {
-          bgcolor: 'action.hover',
-          borderColor: 'primary.main',
-        },
-      }}
-    >
+    <ListItemButton disabled={disabled} onClick={onTap} sx={CARD_BUTTON_SX}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ width: '100%' }}>
         <Avatar sx={{ bgcolor: 'secondary.main', width: 40, height: 40 }}>
           <SmartToyIcon fontSize="small" />
         </Avatar>
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" fontWeight={600} noWrap>
+        <Stack sx={CARD_TEXT_STACK_SX}>
+          <Typography variant="body1" fontWeight={600} noWrap sx={SELECTABLE_TEXT_SX}>
             {extractRobotName(robot)}
           </Typography>
-          <Typography variant="caption" color="text.secondary" fontFamily="monospace" noWrap>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            fontFamily="monospace"
+            noWrap
+            sx={SELECTABLE_TEXT_SX}
+          >
             {caption}
           </Typography>
         </Stack>
