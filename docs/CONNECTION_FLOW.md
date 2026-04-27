@@ -14,9 +14,73 @@ graceful teardown path.
 - `src/auth/*` (`oauthLoopback`, `useRemoteHfToken`, `useRemoteRobots`, `useHfAuth`)
 - `src/ble/useBleSession.ts`
 - `src/wifi/useWifiSetup.ts`
-- `src/daemon/*` (`daemonFetch`, `robotMotion`, `useDaemonStatus`)
+- `src/daemon/*` (`robotMotion`, `useDaemonStatus`, `trajectoryGate`)
 - `src/robot-client/*`
 - `src/conversation/ConversePanel.tsx`
+
+---
+
+> # ⚠️ THE GOLDEN RULE - read this before everything else
+>
+> **There is exactly ONE way for the app to talk to the daemon: through
+> `RobotClient.fetch(...)`, which rides the WebRTC `http_proxy`
+> DataChannel.**
+>
+> Read carefully: this is NOT "WebRTC instead of LAN". WebRTC IS our
+> LAN path when LAN is available. ICE negotiates a `host` candidate
+> pair when both peers are on the same subnet, which means the
+> DataChannel runs as straight UDP P2P between the phone and the
+> robot - no TURN relay, no cloud round-trip. Same `RobotClient.fetch`
+> call, ICE just picked a faster route. That is exactly what we want
+> and exactly what makes the second-transport temptation pointless.
+>
+> What is forbidden is a **second, parallel LAN path that is HTTP**:
+>
+> - No `daemonFetch(192.168.x.y:8000, ...)` shim, ever.
+> - No "tiny direct fetch" to the daemon's HTTP port, even for one
+>   bootstrap call, even just for HF auth seeding, even just for the
+>   peer-id probe.
+> - No second transport class hidden behind a feature flag.
+>
+> **Why we are aggressive about this**
+>
+> 1. ICE already gives us LAN P2P inside the existing WebRTC tunnel.
+>    A separate LAN HTTP path is therefore strictly redundant on the
+>    happy path; all it adds is a second way to be wrong on the sad
+>    paths.
+> 2. Two transports = two failure modes, two timeout policies, two
+>    auth surfaces, two retry stories. We've already burned days on
+>    bugs caused by "but in this branch we use the other one". Never
+>    again.
+> 3. The remote (central HF) flow is the strict subset where only
+>    WebRTC works. If every code path also works in the remote case,
+>    the LAN case automatically works too via ICE. The reverse is
+>    not true.
+>
+> **What this means in practice**
+>
+> - The only network primitives the app may use to reach the daemon
+>   are `RobotClient.fetch` (WebRTC `http_proxy`) and the SDK's own
+>   DataChannel commands (`setHeadPose`, `setAntennas`, `wakeUp`, …).
+>   When the user is on the same subnet as the robot, these
+>   transparently run over a LAN P2P ICE pair.
+> - BLE is NOT a daemon transport. It's a hardware-presence
+>   side-channel used for **discovery**, **Wi-Fi provisioning** (the
+>   `WIFI_*` GATT dance), and **`NETWORK_STATUS`** read-out so the UI
+>   can render a connected/offline state. BLE never carries
+>   `/api/...` payloads.
+> - Anything that historically lived on `daemonFetch(host, ...)` (HF
+>   auth seed, peer-id probe, daemon version probe) MUST be rerouted
+>   through `RobotClient.fetch`. Bootstrap chicken-and-egg problems
+>   (e.g. peer-id needed to open WebRTC) are solved by exposing the
+>   datum through BLE or central signaling, not by re-introducing
+>   LAN HTTP.
+> - There is no `src/daemon/daemonFetch.ts` anymore. If you find
+>   yourself wanting to recreate it, stop and re-read this box.
+>
+> The same rule lives in `.cursor/rules/webrtc-only-transport.mdc`
+> so AI agents working on this codebase get the message before they
+> propose a "small" LAN HTTP fallback.
 
 ---
 
@@ -34,10 +98,12 @@ non-negotiable invariants are:
 3. **One session screen.** Whatever the user picks, they enter the
    same `RobotSessionScreen` with the same stepper, the same
    post-connect chrome, and the same wake/sleep lifecycle.
-4. **Transport-agnostic daemon API.** Every daemon HTTP call goes
-   through `RobotClient.fetch(path, opts)`. LAN HTTP and WebRTC
-   `http_proxy` are interchangeable from the call site's point of
-   view.
+4. **Single transport for daemon API.** Every daemon HTTP call goes
+   through `RobotClient.fetch(path, opts)`, which today is always a
+   WebRTC `http_proxy` command on the SDK's DataChannel. ICE picks a
+   LAN host candidate when both peers are on the same subnet and a
+   TURN-relayed remote one otherwise, so "prefer LAN when reachable"
+   is automatic without dual code paths.
 5. **Wake on arrival, sleep on departure.** The robot wakes up the
    moment a session goes "live" and goes back to sleep when the user
    leaves, regardless of how the bytes flowed.
@@ -87,13 +153,14 @@ itself.
                       │  └ useReachySdk      - load SDK + seed token   │
                       │                                                │
                       │ Stores / modules:                              │
-                      │  ├ robot-client      - transport abstraction   │
+                      │  ├ robot-client      - WebRTC daemon client    │
                       │  ├ robotMotion       - wake/sleep state        │
                       │  └ dataChannelRegistry - SDK ↔ http_proxy DC   │
                       └────┬────────────┬──────────────────┬───────────┘
                            │ BLE        │ LAN HTTP         │ WebRTC (offer/answer
-                           │            │ (Tauri reqwest)  │  via central SSE,
-                           ▼            ▼                  │  data + audio over PC)
+                           │            │ (HF auth boot-   │  via central SSE,
+                           │            │  strap only)     │  data + audio + http_proxy)
+                           ▼            ▼                  │
                   ┌──────────────────────────────────────┐ │
                   │         Reachy Mini daemon           │ │
                   │  BLE: status/cmd/response chars      │ │
@@ -118,11 +185,16 @@ Three communication channels, used by purpose:
 
 - **BLE** for pre-connection discovery, first-time provisioning, and
   privileged-with-physical-access operations (Forget Wi-Fi).
-- **LAN HTTP** for daemon API calls when the phone is on the same
-  network as the robot (cheap, low-latency).
+- **LAN HTTP** is a narrow side-channel used only for the daemon-
+  mediated HF auth bootstraps (`useHfAuth` and the auto-seed of
+  `/api/hf-auth/save-token`). Those have to fire *before* the daemon
+  has the HF token it needs to register on central, so they can't
+  ride the WebRTC tunnel (which doesn't exist yet at that point).
 - **WebRTC** for everything else: media (audio in/out), the SDK's
-  control DataChannel, and the new `http_proxy` tunnel that carries
-  daemon API calls when the phone has no LAN line of sight.
+  control DataChannel, and the `http_proxy` tunnel that carries every
+  daemon API call - LAN-discovered or remote alike. ICE picks a host
+  candidate when both peers are on the same subnet (effectively a
+  P2P LAN tunnel) and a TURN-relayed candidate otherwise.
 
 ---
 
@@ -354,15 +426,22 @@ Inside `useEffect` keyed on `[phase, retryToken, target]`:
 2. **Step 1 - Network.** `readNetworkStatus()` reads the BLE
    `NETWORK_STATUS` characteristic and parses
    `parseNetworkStatus()`. Failure → step 1 error. `ip == null`
-   (mode `OFFLINE` / `HOTSPOT`) → step 2 error with `offerWifiSetup:
-   true` so the failure view shows "Set up Wi-Fi".
-3. **Step 2 - Daemon.** `daemonFetch(ns.ip,
-   '/api/daemon/status', { timeoutMs: 4_000 })`. Non-OK or thrown →
-   step 2 error with `offerWifiSetup: true` (most common cause: wrong
-   Wi-Fi).
+   (mode `OFFLINE` / `HOTSPOT`) → step 1 error with `offerWifiSetup:
+   true` so the failure view shows "Set up Wi-Fi". Without an IP the
+   robot can't reach HF central, which means our WebRTC tunnel could
+   never come up regardless of how long we waited - the BLE check
+   short-circuits that.
+3. **Step 2 - Daemon.** Hand off to the engine: there's no direct
+   HTTP probe anymore. The conversation engine mounts (DC opens) and
+   `useDaemonStatus(robotClient)` lands a `/api/daemon/status` probe
+   over the WebRTC `http_proxy`. Step 2 ticks "done" when that probe
+   is ok, exactly like the remote flow.
 
-On success, `setResolvedDaemonHost(ns.ip)` stores the IP and the
-phase flips to `engine`.
+On success, `setBleNetworkIp(ns.ip)` retains the LAN address as a
+narrow side-channel for the daemon-mediated HF OAuth bootstraps
+(`useHfAuth` and the auto-seed of `/api/hf-auth/save-token`), then
+the phase flips to `engine`. The IP is **not** used for the main
+daemon transport.
 
 ### 7.4. Handshake (remote)
 
@@ -376,57 +455,43 @@ the robot from central in `ScanScreen`. The handshake effect:
 ### 7.5. RobotClient construction
 
 ```typescript
-const robotClient = useMemo(() => {
-  if (isLocal) {
-    if (!resolvedDaemonHost) return null;          // pre-handshake
-    return createRobotClient({ daemonHost: resolvedDaemonHost, remoteMode: false });
-  }
-  return createRobotClient({ daemonHost: null, remoteMode: true });
-}, [isLocal, resolvedDaemonHost]);
+const robotClient = useMemo(() => createRobotClient(), []);
 ```
 
-The factory in `src/robot-client/index.ts`:
-- LAN mode + host present → `createLocalHttpClient(host)` (uses
-  `daemonFetch` under the hood).
-- Remote mode → `createWebRtcClient()` (sends `http_proxy` on the
-  active DC).
-- LAN mode without host → falls back to a WebRTC client; calls will
-  return `{ status: 0, rawBody: 'no active webrtc data channel' }`
-  until something opens a DC, which is the safer "still booting"
-  affordance.
+The factory in `src/robot-client/index.ts` returns a
+`createWebRtcClient()` regardless of how the user got here. The
+client is non-null from mount and stable across renders. Until the
+SDK opens its DataChannel (`useReachySdk` + `ConversePanel`),
+`client.fetch()` returns `{ status: 0, rawBody: 'no active webrtc
+data channel' }`; consumers (`useDaemonStatus`, `setDesiredState`,
+`probeDaemonVersion`) already render that as "still connecting…",
+no special-casing required.
 
 ### 7.6. Engine mount via `ConversePanel`
 
-`ConversePanel` is rendered as soon as `phase ∈ { engine, live,
-leaving }`. It is **always mounted in the same parent slot**;
-visibility is toggled with CSS so the SDK / engine state survive the
-phase transition.
+`ConversePanel` is rendered as soon as `phase ∈ { engine, ready,
+live, leaving }` for both LAN and remote (the WebRTC DC IS the
+daemon transport, so we need it open from `engine` onward). It is
+**always mounted in the same parent slot**; visibility is toggled
+with CSS so the SDK / engine state survive the phase transition.
 
-Props passed by `RobotSessionScreen`:
-
-| Prop | LAN | Remote |
-|------|-----|--------|
-| `daemonHost` | `resolvedDaemonHost` (the IP) | `null` |
-| `isAuthenticated` | from daemon-mediated `useHfAuth` | always `true` (token in sessionStorage) |
-| `remoteMode` | `false` | `true` |
-| `remotePeerId` | `null` | `extractRobotId(target.robot)` |
-| `onAppStateChange` | `setEngineState` | `setEngineState` |
+`RobotSessionScreen` passes the screen-owned `peerId` (resolved
+through `useRobotPeerId(robotClient, hint?)`) and forwards engine
+state changes through `setEngineState`. The panel itself doesn't
+need to know whether the user got here over BLE or central.
 
 `ConversePanel` itself is described in section 9.
 
-### 7.7. Wake-up (entering `live`)
+### 7.7. Wake-up (gates the stepper's last step)
 
-```typescript
-useEffect(() => {
-  if (phase !== 'live') return;
-  if (!robotClient) return;
-  setDesiredState(robotClient, 'awake');
-}, [phase, robotClient]);
-```
-
-The wake-up sequence runs in the **background**: the conversation
-panel is already visible. By the time the user reads the AI's first
-greeting (~2s in), `wake_up.json` has already played.
+Triggered when both `daemonProbe.kind === 'ok'` and the engine has
+left its transient set (DC open + at least one daemon-status probe
+landed). Same gate for LAN and remote since both ride the same
+`http_proxy`. The wake-up sequence runs in the **background** while
+the stepper is still up; when `flushPending` resolves we flip the
+phase from `engine` to `ready` and surface the "Start conversation"
+CTA. Tapping the CTA flips to `live` and unhides the conversation
+UI.
 
 ### 7.8. Teardown (entering `leaving`)
 
@@ -439,11 +504,11 @@ useEffect(() => {
   const finish = () => { if (settled) return; settled = true; clearTimeout(t); onBack(); };
   const t = setTimeout(finish, 3_500);
 
-  if (robotClient) setDesiredState(robotClient, 'sleeping');
+  setDesiredState(robotClient, 'sleeping');
 
   void (async () => {
-    try { await flushEngineLifecycle();  } catch {}
     try { await flushMotionPending();    } catch {}
+    try { await flushEngineLifecycle();  } catch {}
     if (isLocal && connectedAddress) {
       try { await disconnectDevice();    } catch {}
     }
@@ -454,15 +519,15 @@ useEffect(() => {
 
 The order is intentional:
 
-1. **`flushEngineLifecycle()`** lets the engine land its `endSession`
-   on central (or the LAN `/end_session`) while the WebRTC tunnel
-   is still alive.
-2. **`flushMotionPending()`** waits for the `goto_sleep` POST
-   chain - `play/goto_sleep` → 2s settle → `set_mode/disabled` -
-   to finish. This call goes through the **same `RobotClient`** as
-   the engine, so on remote it travels over the same DC the engine
-   just used.
-3. **`disconnectDevice()`** (LAN only) closes the GATT session.
+1. **`flushMotionPending()`** waits for the `goto_sleep` POST chain -
+   `play/goto_sleep` → 2s settle → `set_mode/disabled`. This rides
+   the WebRTC `http_proxy`, so we MUST run it before tearing the DC
+   down.
+2. **`flushEngineLifecycle()`** lands `endSession` on central; this
+   also closes the DC by design.
+3. **`disconnectDevice()`** (LAN only) closes the GATT session - no
+   longer load-bearing for transport, just hygiene so the next BLE
+   pickup starts from a clean session.
 
 The `TEARDOWN_TIMEOUT_MS = 3_500` watchdog guarantees the user is
 never trapped: if any step hangs, we drop to `onBack()` anyway.
@@ -487,31 +552,40 @@ the Scan screen's section header.
 
 ### 7.10. Conversation area (`ConversationArea`)
 
-Shown only in `live`. Contains:
+Shown from `ready` onward (CTA covers the engine until the user taps
+"Start conversation", then the orb / caption are uncovered in
+`live`). Contains:
 
 - The `ConversePanel` with the orb / mic / settings UI.
 - A floating `DaemonStatusPill` (top-right) with `transportLabel:
-  'LAN'` or `'WebRTC'`, fed by `useDaemonStatus(robotClient)`.
+  'WebRTC'`, fed by `useDaemonStatus(robotClient)`. The pill shows
+  the transport health, not the discovery path.
 - Optional `BottomNavigation` with two tabs: `Converse` and `Apps`
-  (LAN-only and signed-in-only). The `AppsPanel` lists installed
-  daemon apps and lets the user start/stop them.
+  (signed-in-only - works in both LAN and remote modes through the
+  WebRTC `http_proxy`). The `AppsPanel` lists installed daemon apps
+  and lets the user start/stop them.
 
-When `isLocal && !isAuthenticated`, an `HfLoginOverlay` (daemon
-sign-in CTA) sits on top of the panel until the daemon-side OAuth
-completes.
+There is **no second OAuth surface here**. Earlier iterations
+covered the panel with an `HfLoginOverlay` whenever the LAN daemon
+reported `!isAuthenticated`, but the user has already authenticated
+once at the app entry gate (`RemoteSignInScreen`, see §1). The
+`isAuthenticated` flag on the daemon is now used exclusively to
+gate the `Apps` tab (which needs the daemon-held token to start
+embedded apps). The auto-seed flow in `RobotSessionScreen` pushes
+the gate token to the daemon on entry; failures are surfaced via
+the top-bar HF menu, not as a fullscreen overlay.
 
 ---
 
-## 8. Transport-agnostic daemon API (`RobotClient`)
+## 8. Daemon API client (`RobotClient`)
 
-**Files:** `src/robot-client/{types,index,localHttpClient,
-webrtcClient,dataChannelRegistry}.ts`.
+**Files:** `src/robot-client/{types,index,webrtcClient,
+dataChannelRegistry}.ts`.
 
 ### 8.1. Why an abstraction
 
-Every screen post-discovery wants to call daemon endpoints. Without
-the abstraction, each call site would have to branch on transport,
-multiplying complexity. With it:
+Every screen post-discovery wants to call daemon endpoints. The
+client gives them a single shape with no transport branching:
 
 ```typescript
 const resp = await client.fetch<DaemonStatus>('/api/daemon/status', {
@@ -523,13 +597,25 @@ if (resp.ok) {
 }
 ```
 
-Works identically over LAN HTTP and WebRTC `http_proxy`.
+Under the hood every call ends up as an `http_proxy` command on the
+WebRTC DataChannel. The "prefer LAN when reachable" intent is
+delegated to ICE: it picks a host candidate when both peers are on
+the same subnet and a TURN-relayed remote one otherwise. We don't
+ship a separate LAN HTTP client anymore - the duplication wasn't
+paying for itself.
+
+A handful of bootstrap calls keep using `daemonFetch` directly with
+a LAN IP captured during the BLE handshake (`useHfAuth` and the
+auto-seed of `/api/hf-auth/save-token`). They legitimately need a
+direct socket because they happen *before* the daemon has the HF
+token it would need to be visible on central, i.e. before the
+WebRTC tunnel can be brought up at all.
 
 ### 8.2. Interface
 
 ```typescript
 interface RobotClient {
-  readonly transport: 'local-http' | 'webrtc-proxy';
+  readonly transport: 'webrtc-proxy';
   fetch<T>(path: string, opts?: RobotFetchOptions): Promise<RobotResponse<T>>;
 }
 
@@ -548,15 +634,10 @@ interface RobotResponse<T> {
 }
 ```
 
-### 8.3. LAN transport
+The `transport` discriminator stays as a union form for forward
+compatibility, but only `'webrtc-proxy'` is implemented today.
 
-`createLocalHttpClient(host)` wraps Tauri's `daemon_fetch` Rust
-command. Uses `reqwest`, sets `timeoutMs` per call, returns the
-normalised `RobotResponse`. No CORS / mixed-content / ATS issues
-because the HTTP request is fired from native code, not from the
-WebView.
-
-### 8.4. WebRTC `http_proxy` transport
+### 8.3. WebRTC `http_proxy` transport
 
 The remote transport sends a JSON payload on the SDK's existing
 DataChannel:
@@ -591,7 +672,7 @@ request to its own loopback HTTP server and replies with:
 `request_id` matching is FIFO-free: each pending request lives in a
 `Map` until either the response or a timeout cancels it.
 
-### 8.5. DataChannel registry
+### 8.4. DataChannel registry
 
 The SDK is the one that opens the DataChannel (the GStreamer producer
 on the robot only negotiates the application channel via SDP at
@@ -609,19 +690,19 @@ whenever the SDK opens or closes a session. The WebRTC client
 subscribes once and re-attaches its `message` listener on every DC
 swap.
 
-### 8.6. Failure semantics
+### 8.5. Failure semantics
 
-| Cause | LAN | Remote |
-|-------|-----|--------|
-| Daemon offline / wrong network | Throws or returns non-OK | DC open but daemon's loopback errors → status 502 |
-| No DC yet | n/a | `{ status: 0, rawBody: 'no active webrtc data channel' }` |
-| Per-call timeout | aborts the underlying fetch, returns thrown error | cancels the pending entry, returns `{ status: 0, rawBody: 'webrtc proxy timeout after Xms' }` |
-| DC closed | n/a | `failAllPending('webrtc data channel closed')` resolves all pending with `{ status: 0, ... }` |
+| Cause | Outcome |
+|-------|---------|
+| No DC yet | `{ status: 0, rawBody: 'no active webrtc data channel' }` |
+| Daemon's loopback errors | DC open, response carries the daemon's actual `status` (e.g. 502) |
+| Per-call timeout | cancels the pending entry, returns `{ status: 0, rawBody: 'webrtc proxy timeout after Xms' }` |
+| DC closed | `failAllPending('webrtc data channel closed')` resolves all pending with `{ status: 0, ... }` |
 
-`useDaemonStatus` translates the WebRTC `status: 0 / no active …`
-case into a soft "Connecting through WebRTC…" message instead of a
-hard error, which keeps the daemon pill calm during the brief window
-between handshake completion and DC opening.
+`useDaemonStatus` translates the `status: 0 / no active …` case into
+a soft "Connecting through WebRTC…" message instead of a hard error,
+which keeps the daemon pill calm during the brief window between
+handshake completion and DC opening.
 
 ---
 
@@ -634,20 +715,18 @@ between handshake completion and DC opening.
 
 ### 9.1. Mount gating
 
-Three gates must clear before the engine is mounted:
+Two gates must clear before the engine is mounted:
 
 1. **SDK ready.** `useReachySdk()` loads
    `https://reachy.dev/sdk/v1/reachy-mini.js` once and resolves
    `isReady`.
-2. **Token ready.** Either `sessionStorage.hf_token` is set
-   (remote mode), or `fetchHfSession(daemonHost)` returned a
-   session + the value was seeded into sessionStorage (LAN mode).
-3. **Pre-selection resolved.** `remotePeerId` (remote) or
-   `fetchRobotPeerId(daemonHost)` (LAN, optional fast-path) has
-   resolved to a string-or-null.
-
-Plus, **only on LAN**: the daemon health pre-flight (see 9.3) must
-be `healthy`.
+2. **Token ready.** `sessionStorage.hf_token` is populated by the
+   app-level OAuth gate (see §5); both LAN and remote rely on the
+   same value.
+3. **Peer id resolved.** `useRobotPeerId(robotClient, hint?)` has
+   resolved to a string-or-null. In remote mode the hint comes from
+   central; in LAN mode the hook probes the daemon over the WebRTC
+   `http_proxy` once the DC opens.
 
 ### 9.2. Module-level lifecycle serialisation
 
@@ -668,22 +747,19 @@ The lock guarantees a strict mount-N → unmount-N → mount-N+1 order.
 `flushEngineLifecycle()` waits on the chain and is called by
 `RobotSessionScreen` during teardown.
 
-### 9.3. Daemon health pre-flight (LAN only)
+### 9.3. Lazy daemon-relay heal
 
-Before mount, `checkDaemonHealth(daemonHost)` probes the daemon and
-returns one of:
+`useDaemonRelayHealing(robotClient)` is the on-demand recovery path
+for both modes. It probes the daemon's relay status through the
+existing `RobotClient` (no second transport) and POSTs
+`/api/hf-auth/refresh-relay` only if the engine reports itself
+stuck past the lazy heal budget. Possible outcomes:
 
-| status | Meaning | Action |
-|--------|---------|--------|
-| `healthy` | Daemon up + relay registered | Mount engine. |
-| `zombie-relay` | Daemon thinks it's connected, central sees nothing | Auto-heal via `POST /api/hf-auth/refresh-relay`. |
-| `relay-disconnected` | Daemon explicitly disconnected | Same auto-heal. |
-| `no-token` | Daemon has no HF token | Show daemon sign-in CTA. |
-| `unreachable` | HTTP probe failed | Surface error + Retry. |
-
-Remote mode skips this entirely: the LAN probe would always say
-`unreachable`. We synthesise `{ status: 'healthy' }` and trust
-central / the SDK to surface real errors at session-start time.
+| outcome | Meaning | Action in `RobotSessionScreen` |
+|---------|---------|---------------------------------|
+| `noop` | Daemon was healthy when polled | Don't remount the engine - it's just a slow happy path. |
+| `healed` | Daemon ↔ central handshake refreshed | Refresh peer id and bump `conversationRemountKey`. |
+| `failed` / `unreachable` | Heal didn't recover the relay | Surface the watchdog CTA when its timer fires. |
 
 ### 9.4. Watchdog
 
@@ -738,7 +814,7 @@ resetRobotMotion(): void;
 ```
 wake:
   POST /api/motors/set_mode/enabled       - torque on
-  wait 300 ms                              - servo settle
+  wait 150 ms                              - absorb serial-bus init
   POST /api/move/play/wake_up              - ~2 s trajectory
 
 sleep:
@@ -747,8 +823,15 @@ sleep:
   POST /api/motors/set_mode/disabled       - torque off (floppy)
 ```
 
-All four POSTs go through `client.fetch` so the same call works on
-LAN HTTP and WebRTC `http_proxy`.
+The wake-up settle is short on purpose: too brief and the daemon's
+serial bus often hits a couple of "Serial I/O recovered" retries at
+the very moment the wake_up trajectory starts pushing goal-positions
+(perceived by the user as "robot snaps then freezes then resumes"),
+too long and the Dynamixel snap-to-goal of the `enable` step itself
+becomes visible. See the doc comment at the top of `robotMotion.ts`.
+
+All four POSTs go through `client.fetch`, i.e. the WebRTC
+`http_proxy`.
 
 ### 10.3. Coalescing
 
@@ -769,16 +852,13 @@ most one more sequence to land on the final target. This is what
 makes wake-on-mount + sleep-on-unmount safe under React.StrictMode's
 double-invoke.
 
-### 10.4. Transport stickiness
+### 10.4. Session stickiness
 
-`session.key` is derived from `client.transport`:
-- `webrtc-proxy` → `'remote'`
-- `local-http` → `'local-http'`
-
-A different `RobotClient` instance with the same transport (e.g.
-re-render with a fresh `useMemo` output) updates the active client
-pointer in place but keeps the existing session, so a stale `wake`
-already in-flight isn't dropped on the floor.
+`session.key` is a constant (`'webrtc-proxy'`) since we ship a
+single transport. A different `RobotClient` instance (e.g. re-render
+with a fresh `useMemo` output, watchdog remount) updates the active
+client pointer in place but keeps the existing session, so a stale
+`wake` already in-flight isn't dropped on the floor.
 
 ### 10.5. No cancellation
 
@@ -838,7 +918,7 @@ Sequence (all over the persistent BLE session):
 | HF central temporarily unavailable | Remote section shows "Couldn't reach Hugging Face" + last cached list (no flash of empty). |
 | Token rejected (401/403) | Remote section error + Retry; user usually needs to sign out and back in. |
 | BLE connect timeout | `HandshakeError` at step 0; Back + Retry visible. |
-| Wrong Wi-Fi (ip resolves but daemon HTTP fails) | `HandshakeError` at step 2 + "Set up Wi-Fi" CTA + Retry. |
+| Wrong Wi-Fi (BLE shows no IP) | `HandshakeError` at step 1 + "Set up Wi-Fi" CTA + Retry. The WebRTC tunnel can't come up at all without an IP, so we bail before mounting the engine. |
 | WebRTC DC takes >1s to open | Daemon pill shows "Connecting through WebRTC…", stepper stays on "Daemon" until first `http_proxy` round-trip succeeds. |
 | Engine stuck in transient state >20s | `ConversePanel` watchdog trips, "Robot unresponsive" + Retry. |
 | User backs out mid-wake | Sleep request queued; `flushMotionPending` waits up to 3.5s; engine teardown sends `endSession` first so the WebRTC tunnel survives long enough for the sleep POSTs. |
@@ -849,14 +929,10 @@ Sequence (all over the persistent BLE session):
 ## 14. Coding conventions specific to this flow
 
 1. **Prefer `RobotClient.fetch` over `daemonFetch` for new code.** The
-   abstraction is what makes a call site work over both LAN and WebRTC
-   without a transport branch. Direct `daemonFetch` callers exist
-   today and are deliberately kept LAN-only because they need to fire
-   *before* a `RobotClient` can be built or because they only make
-   sense on LAN:
-     - `RobotSessionScreen`'s step-2 handshake probe (we need to
-       confirm the LAN HTTP path before we let `RobotClient` rely on
-       it).
+   client is what makes a call site work without owning a transport.
+   Direct `daemonFetch` callers exist today and are deliberately kept
+   as narrow LAN side-channels because they fire *before* a
+   `RobotClient` can do useful work, or only make sense on LAN:
      - `localHttpClient` (it is the LAN transport).
      - `WifiSetupScreen` (auto-probe after `WIFI_CONNECT`: BLE has
        just told us the new IP, and the whole point is to verify HTTP

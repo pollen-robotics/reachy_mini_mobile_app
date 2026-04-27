@@ -1,0 +1,71 @@
+---
+description: Hard architectural invariant - the daemon is reachable only through the WebRTC http_proxy DataChannel, never through a parallel LAN HTTP path
+alwaysApply: true
+---
+
+# WebRTC-only daemon transport
+
+## The rule
+
+**There is exactly ONE way for this app to talk to the Reachy Mini
+daemon: through `RobotClient.fetch(...)`, which rides the WebRTC
+`http_proxy` DataChannel.**
+
+This is the strongest invariant in the mobile app. Other rules can be
+discussed; this one is closed for negotiation.
+
+## What this means
+
+- **WebRTC is the LAN path too.** ICE negotiates a `host` candidate
+  pair when the phone and the robot are on the same subnet, so the
+  DataChannel runs as direct UDP P2P over the LAN. No TURN, no cloud
+  hop. Same `RobotClient.fetch` call, faster route. That is the
+  intended LAN behaviour and it is already handled automatically.
+- **No parallel LAN HTTP.** Forbidden patterns include:
+  - `daemonFetch(host, ...)` or any equivalent shim that hits
+    `http://192.168.x.y:8000/api/...` directly.
+  - Tauri `invoke('daemon_fetch', ...)` / `reqwest` / `fetch` calls
+    against the daemon's HTTP port.
+  - "Just one bootstrap call" exceptions for HF auth seeding,
+    peer-id probes, daemon version probes, etc.
+- **BLE is not a daemon transport.** It carries discovery,
+  `NETWORK_STATUS` reads, and the `WIFI_*` provisioning dance. It
+  must never be used to ferry `/api/...` payloads.
+- **Bootstrap chicken-and-egg problems** (e.g. "I need the peer-id
+  to open WebRTC") are solved by exposing the datum through BLE
+  GATT or central HF signaling, not by re-introducing LAN HTTP.
+
+## Why we are aggressive about this
+
+1. ICE already gives us LAN P2P inside the WebRTC tunnel. A separate
+   LAN HTTP path is therefore strictly redundant on the happy path
+   and only adds extra failure modes on the sad paths.
+2. Two transports = two timeout policies, two auth surfaces, two
+   retry stories, two "but in this branch we use the other one"
+   bugs. We have already paid this cost. Never again.
+3. The remote (central HF) flow is the strict subset where only
+   WebRTC works. If everything works in the remote case, the LAN
+   case automatically works too via ICE. The reverse is not true.
+
+## Concrete checks for AI agents
+
+Before merging code that touches this app:
+
+1. `rg "daemonFetch|daemon_fetch|192\\.168" src` must return zero hits.
+2. There must be no file named `src/daemon/daemonFetch.ts` (or
+   similar) in the tree.
+3. Every `/api/...` access in the app must route through
+   `RobotClient.fetch` (or the SDK's DataChannel commands).
+4. If a hook or screen wants the daemon's IP from BLE
+   `NETWORK_STATUS`, ask why - it should only need it for display
+   or for confirming that BLE-discovery actually pointed at a
+   reachable Wi-Fi mode, NOT to issue HTTP calls against it.
+
+If you find yourself drafting a "small" exception, stop. Open a
+discussion with the human first. The default answer is no.
+
+## Reference
+
+The full rationale, the rules, and the bootstrap-without-LAN-HTTP
+strategy live in `docs/CONNECTION_FLOW.md` (top of file -
+"THE GOLDEN RULE" callout).
