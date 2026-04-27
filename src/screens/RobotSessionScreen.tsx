@@ -103,6 +103,7 @@ import {
   type CentralRobotEntry,
 } from '../auth/fetchRobotsFromCentral';
 import { useHfAuth } from '../auth/useHfAuth';
+import { useResolvedPeerId } from '../auth/useResolvedPeerId';
 import {
   useBleSession,
   type NetworkStatus,
@@ -122,7 +123,6 @@ import {
 } from '../conversation/ConversePanel';
 import type { AppState } from '../conversation/conversation-engine';
 import { useReachySdk } from '../conversation/useReachySdk';
-import { useRobotPeerId } from '../conversation/useRobotPeerId';
 import { daemonFetch } from '../daemon/daemonFetch';
 import {
   probeDaemonVersion,
@@ -295,8 +295,6 @@ export default function RobotSessionScreen({
   // token` for daemons that don't yet hold an HF token. REMOTE robots
   // can't surface their LAN IP to us so those bootstraps are skipped.
   const [bleNetworkIp, setBleNetworkIp] = useState<string | null>(null);
-  const remotePeerId =
-    target.kind === 'remote' ? extractRobotId(target.robot) : null;
 
   // ── Engine state observed via ConversePanel ──────────────────────────
   const [engineState, setEngineState] = useState<AppState | null>(null);
@@ -325,17 +323,34 @@ export default function RobotSessionScreen({
   useReachySdk();
 
   // ── Peer id resolution (transport-agnostic) ──────────────────────────
-  // Lift the peer-id fetch into the parent so `ConversePanel` stays a
-  // pure renderer. LOCAL probes the daemon over LAN HTTP; REMOTE
-  // short-circuits with the id central already gave us on the
-  // discovery screen. The hook never throws: a network failure or a
-  // zombie relay both resolve to `peerId: null, resolved: true`, and
-  // the lazy heal trigger below recovers from that.
+  // Both modes ultimately need the central `peer_id` to fast-path
+  // `startSession(id)` in the engine. We pull it from the same source
+  // in both cases - Hugging Face central directly, no daemon proxy:
+  //   - REMOTE: the user already saw the central card list on the
+  //     discovery screen, so the id is on `target.robot` and the hook
+  //     short-circuits.
+  //   - LAN/BLE: the BLE scan does not carry a central id, so the
+  //     hook calls central with the user's HF token and matches the
+  //     fleet entry by BLE device name. Crucially it does NOT route
+  //     through the daemon, which would create a chicken-and-egg
+  //     (WebRTC needs the peer id to open, the proxy probe needs
+  //     WebRTC to be open).
+  // Failures in LAN mode (no token, central unreachable, empty fleet,
+  // …) fall back to `peerId: null, resolved: true` and the engine
+  // takes the slower SSE-discovery path. The lazy relay heal below
+  // can also kick in if the engine reports itself stuck.
+  const peerIdTarget = useMemo(
+    () =>
+      target.kind === 'local'
+        ? ({ kind: 'local' as const, deviceName: target.device.name })
+        : ({ kind: 'remote' as const, robot: target.robot }),
+    [target],
+  );
   const {
     peerId: resolvedPeerId,
     resolved: peerIdResolved,
     refresh: refreshPeerId,
-  } = useRobotPeerId(robotClient, isLocal ? undefined : remotePeerId);
+  } = useResolvedPeerId(peerIdTarget, hfToken);
 
   // ── Lazy daemon-relay heal ───────────────────────────────────────────
   // Triggered by `handleEngineStuck` below when ConversePanel reports

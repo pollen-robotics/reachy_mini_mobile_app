@@ -72,9 +72,11 @@ graceful teardown path.
 > - Anything that historically lived on `daemonFetch(host, ...)` (HF
 >   auth seed, peer-id probe, daemon version probe) MUST be rerouted
 >   through `RobotClient.fetch`. Bootstrap chicken-and-egg problems
->   (e.g. peer-id needed to open WebRTC) are solved by exposing the
->   datum through BLE or central signaling, not by re-introducing
->   LAN HTTP.
+>   (e.g. peer-id needed to open WebRTC) are solved by going to the
+>   source of truth (`https://cduss-reachy-mini-central.hf.space`,
+>   queried with the user's HF token via
+>   `useResolvedPeerId` / `fetchRobotsFromCentral`), not by
+>   re-introducing LAN HTTP.
 > - There is no `src/daemon/daemonFetch.ts` anymore. If you find
 >   yourself wanting to recreate it, stop and re-read this box.
 >
@@ -452,6 +454,35 @@ the robot from central in `ScanScreen`. The handshake effect:
 - If null, surfaces a "No peer id for this robot" error.
 - Otherwise, advances to step 1 and immediately flips to `engine`.
 
+### 7.4.5. Peer id resolution (`useResolvedPeerId`)
+
+The conversation engine fast-paths `startSession(id)` when it
+already has a central `peer_id`, otherwise it has to wait for an
+SSE `robotsChanged` event from central, which is slower and
+race-prone. So both modes resolve a `peer_id` up-front:
+
+- **Remote.** The id is on `target.robot` (the user picked it from
+  central's listing on the discovery screen). The hook
+  short-circuits, no network call.
+- **LAN/BLE.** The BLE advertisement does not carry a central id,
+  and the daemon proxy cannot answer for it (proxy needs an open
+  WebRTC, WebRTC needs the peer id - chicken-and-egg). The hook
+  calls `fetchRobotsFromCentral(hfToken)` directly with the
+  app-level HF token (see section 5) and matches the user's fleet
+  entry by BLE device name. Strategy:
+    1. fleet has 1 robot → use it (no name check needed).
+    2. fleet has N robots, BLE name matches central
+       `meta.name` / `name` (case-insensitive, after stripping
+       non-alphanumerics) → use the matched entry.
+    3. fleet has N robots, no name match → fall back to
+       `robots[0]` and warn.
+
+In LAN mode the hook never throws. Every failure path
+(no token, central unreachable, empty fleet, no id field, …)
+collapses to `peerId: null, resolved: true` and the engine takes
+the slower SSE path. The lazy relay heal in `RobotSessionScreen`
+also calls `refresh()` after a `healed` outcome.
+
 ### 7.5. RobotClient construction
 
 ```typescript
@@ -476,9 +507,10 @@ daemon transport, so we need it open from `engine` onward). It is
 with CSS so the SDK / engine state survive the phase transition.
 
 `RobotSessionScreen` passes the screen-owned `peerId` (resolved
-through `useRobotPeerId(robotClient, hint?)`) and forwards engine
-state changes through `setEngineState`. The panel itself doesn't
-need to know whether the user got here over BLE or central.
+through `useResolvedPeerId(target, hfToken)`, see 7.4.5) and
+forwards engine state changes through `setEngineState`. The panel
+itself doesn't need to know whether the user got here over BLE or
+central.
 
 `ConversePanel` itself is described in section 9.
 
@@ -723,10 +755,11 @@ Two gates must clear before the engine is mounted:
 2. **Token ready.** `sessionStorage.hf_token` is populated by the
    app-level OAuth gate (see §5); both LAN and remote rely on the
    same value.
-3. **Peer id resolved.** `useRobotPeerId(robotClient, hint?)` has
-   resolved to a string-or-null. In remote mode the hint comes from
-   central; in LAN mode the hook probes the daemon over the WebRTC
-   `http_proxy` once the DC opens.
+3. **Peer id resolved.** `useResolvedPeerId(target, hfToken)` has
+   resolved to a string-or-null. In remote mode the value comes
+   directly from `target.robot`; in LAN mode the hook hits Hugging
+   Face central directly with the user's HF token and matches the
+   fleet entry by BLE device name (see §7.4.5).
 
 ### 9.2. Module-level lifecycle serialisation
 

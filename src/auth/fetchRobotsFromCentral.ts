@@ -2,28 +2,24 @@
  * Direct Hugging Face central signaling server access, no daemon
  * proxy needed.
  *
- * Why this exists alongside `useRobotPeerId`
- * ──────────────────────────────────────────
- * `useRobotPeerId` is the per-robot lookup: once we've already
- * picked a robot (BLE on LAN, or a card from this list when
- * remote), the hook asks THAT robot's daemon - over LAN HTTP or
- * over the WebRTC `http_proxy` data channel - what id it is
- * registered as on central. It never talks to HF directly; the
- * daemon proxies and the raw HF token stays on-device.
- *
- * This file is the *fleet-discovery* side: in remote mode the
- * phone has no LAN line of sight to anyone. The user opens the
- * app from another city, on cellular, and we still need to:
+ * Used for both fleet discovery and per-robot peer-id lookup
+ * ──────────────────────────────────────────────────────────
+ * In remote mode the phone has no LAN line of sight to anyone. The
+ * user opens the app from another city, on cellular, and we still
+ * need to:
  *   1. Know which robots they own (the card list).
  *   2. Get each robot's central peerId so we can `startSession()`.
  *
- * Both pieces come from the same endpoint that the daemon also
- * proxies (`/api/robot-status`); here we just hit central
- * directly with the user-provided HF token, since there's no
- * daemon to relay through yet. The token is held on the phone
- * (memory + localStorage); central enforces per-user scoping so
- * we can only see our own fleet. The trust boundary stays at
- * "whoever owns the token controls the robot".
+ * In LAN mode the same call is reused (via `useResolvedPeerId`) to
+ * resolve the peer id of the BLE-discovered robot, since the BLE
+ * advertisement does not carry the central id and the daemon proxy
+ * cannot answer it (the proxy needs an open WebRTC, which itself
+ * needs the peer id - chicken-and-egg).
+ *
+ * The token is held on the phone (memory + localStorage); central
+ * enforces per-user scoping so we can only see our own fleet. The
+ * trust boundary stays at "whoever owns the token controls the
+ * robot".
  */
 
 const CENTRAL_ROBOT_STATUS_URL =
