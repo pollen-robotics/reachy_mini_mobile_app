@@ -212,18 +212,10 @@ jobs:
           echo "--- frameworks after patch ---"
           grep -n "sdk:" src-tauri/gen/apple/project.yml
 
-      - name: Install xcodegen
-        run: brew install xcodegen
-
-      - name: Regenerate Xcode project from project.yml
-        run: xcodegen generate
-        working-directory: src-tauri/gen/apple
-
-      # `Podfile.lock`, `Pods/` and `.xcworkspace/` are gitignored, so we
-      # must run `pod install` in CI to generate the workspace tauri uses.
-      - name: Install CocoaPods deps
-        run: pod install
-        working-directory: src-tauri/gen/apple
+      # tauri-cli runs xcodegen + pod install internally as part of the
+      # `tauri ios build` invocation below, so we don't need to do that
+      # ourselves. We just patched project.yml above so xcodegen will pick
+      # up the CoreBluetooth dependency when tauri regenerates the project.
 
       # The committed `tauri.conf.json` hardcodes a `developmentTeam`. That's
       # fine for local Xcode builds but breaks unsigned CI builds because
