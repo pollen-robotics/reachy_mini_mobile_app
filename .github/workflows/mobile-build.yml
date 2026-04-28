@@ -116,6 +116,19 @@ jobs:
       - name: Initialize Tauri Android project
         run: yarn tauri android init --ci
 
+      # tauri-plugin-blec requires minSdk >= 26, but `tauri android init`
+      # generates `minSdk = 24` by default. Bump it before building.
+      - name: Patch minSdk to 26 (required by tauri-plugin-blec)
+        run: |
+          GRADLE_FILE=src-tauri/gen/android/app/build.gradle.kts
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "::error::$GRADLE_FILE not found after `tauri android init`"
+            exit 1
+          fi
+          sed -i 's/minSdk = 24/minSdk = 26/' "$GRADLE_FILE"
+          echo "--- minSdk lines after patch ---"
+          grep -n "minSdk" "$GRADLE_FILE" || true
+
       - name: Build debug APK
         run: yarn tauri android build --debug --apk
 
@@ -170,10 +183,31 @@ jobs:
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
+      # The committed project.yml lacks `CoreBluetooth.framework` in the
+      # iOS target dependencies, which btleplug (used via tauri-plugin-blec
+      # on iOS / macOS / Linux / Windows) needs at link time. Without it the
+      # link fails with `Undefined symbols ... _CBAdvertisementDataLocalNameKey`.
+      # We patch project.yml in-place, regenerate the .xcodeproj with
+      # xcodegen (preinstalled on macos-latest runners), then proceed.
+      - name: Patch project.yml to link CoreBluetooth.framework
+        run: |
+          PROJECT_YML=src-tauri/gen/apple/project.yml
+          if grep -q "CoreBluetooth.framework" "$PROJECT_YML"; then
+            echo "CoreBluetooth.framework already present in $PROJECT_YML"
+          else
+            sed -i '' '/- sdk: CoreGraphics.framework/i\
+      - sdk: CoreBluetooth.framework
+' "$PROJECT_YML"
+            echo "--- frameworks after patch ---"
+            grep -n "sdk:" "$PROJECT_YML"
+          fi
+
+      - name: Regenerate Xcode project from project.yml
+        run: xcodegen generate
+        working-directory: src-tauri/gen/apple
+
       # `Podfile.lock`, `Pods/` and `.xcworkspace/` are gitignored, so we
-      # must run `pod install` in CI before invoking xcodebuild. Without it,
-      # the .xcodeproj has no `CoreBluetooth` framework linked and the
-      # btleplug link step fails with "Undefined symbols ... _CBAdvertisementDataLocalNameKey".
+      # must run `pod install` in CI to generate the workspace tauri uses.
       - name: Install CocoaPods deps
         run: pod install
         working-directory: src-tauri/gen/apple
