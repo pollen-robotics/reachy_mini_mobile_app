@@ -212,6 +212,9 @@ jobs:
           echo "--- frameworks after patch ---"
           grep -n "sdk:" src-tauri/gen/apple/project.yml
 
+      - name: Install xcodegen
+        run: brew install xcodegen
+
       - name: Regenerate Xcode project from project.yml
         run: xcodegen generate
         working-directory: src-tauri/gen/apple
