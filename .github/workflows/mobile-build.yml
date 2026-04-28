@@ -191,16 +191,26 @@ jobs:
       # xcodegen (preinstalled on macos-latest runners), then proceed.
       - name: Patch project.yml to link CoreBluetooth.framework
         run: |
-          PROJECT_YML=src-tauri/gen/apple/project.yml
-          if grep -q "CoreBluetooth.framework" "$PROJECT_YML"; then
-            echo "CoreBluetooth.framework already present in $PROJECT_YML"
-          else
-            sed -i '' '/- sdk: CoreGraphics.framework/i\
-      - sdk: CoreBluetooth.framework
-' "$PROJECT_YML"
-            echo "--- frameworks after patch ---"
-            grep -n "sdk:" "$PROJECT_YML"
-          fi
+          python3 <<'PY'
+          import pathlib
+          p = pathlib.Path("src-tauri/gen/apple/project.yml")
+          text = p.read_text()
+          if "CoreBluetooth.framework" in text:
+              print(f"CoreBluetooth.framework already present in {p}")
+          else:
+              needle = "      - sdk: CoreGraphics.framework"
+              if needle not in text:
+                  raise SystemExit(f"could not find anchor line in {p}: {needle!r}")
+              text = text.replace(
+                  needle,
+                  "      - sdk: CoreBluetooth.framework\n" + needle,
+                  1,
+              )
+              p.write_text(text)
+              print(f"Patched {p}")
+          PY
+          echo "--- frameworks after patch ---"
+          grep -n "sdk:" src-tauri/gen/apple/project.yml
 
       - name: Regenerate Xcode project from project.yml
         run: xcodegen generate
