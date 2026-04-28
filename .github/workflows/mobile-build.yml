@@ -212,10 +212,25 @@ jobs:
           echo "--- frameworks after patch ---"
           grep -n "sdk:" src-tauri/gen/apple/project.yml
 
-      # tauri-cli runs xcodegen + pod install internally as part of the
-      # `tauri ios build` invocation below, so we don't need to do that
-      # ourselves. We just patched project.yml above so xcodegen will pick
-      # up the CoreBluetooth dependency when tauri regenerates the project.
+      # tauri-cli does NOT regenerate the .xcodeproj from project.yml, it
+      # reuses the committed pbxproj as-is. We have to run xcodegen
+      # ourselves so the CoreBluetooth.framework dependency we just added
+      # actually makes it into the linker invocation.
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # xcodegen validates source paths exist before generating. Tauri
+      # populates `Externals/` (Rust static libs) and `assets/` (frontend
+      # bundle) later during the actual build, so we create empty stubs
+      # just to satisfy xcodegen's spec validation.
+      - name: Create source directory stubs for xcodegen
+        run: |
+          mkdir -p src-tauri/gen/apple/Externals
+          mkdir -p src-tauri/gen/apple/assets
+
+      - name: Regenerate Xcode project from project.yml
+        run: xcodegen generate
+        working-directory: src-tauri/gen/apple
 
       # The committed `tauri.conf.json` hardcodes a `developmentTeam`. That's
       # fine for local Xcode builds but breaks unsigned CI builds because
