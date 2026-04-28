@@ -1,0 +1,218 @@
+# Mobile build CI - validation only (no signing, no store distribution).
+#
+# Two parallel jobs:
+#   - android: builds a debug APK on ubuntu-latest, uploaded as artifact.
+#   - ios:     builds the app for the iOS Simulator on macos-latest.
+#
+# Neither job requires repository secrets. When you eventually want signed
+# release artifacts, add a separate `mobile-release.yml` workflow gated on
+# tag pushes with the appropriate Apple / Android secrets.
+#
+# Note on `src-tauri/gen/android`:
+#   This folder is currently NOT committed (only `gen/apple` is). We run
+#   `tauri android init` on every CI run to regenerate it from
+#   `tauri.conf.json` + `Cargo.toml`. The day you need custom Android
+#   manifest changes (extra permissions, package name override, etc.),
+#   commit `gen/android/` to the repo just like `gen/apple/` is, and drop
+#   the `tauri android init` step below.
+
+name: Mobile build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "yarn.lock"
+      - "vite.config.ts"
+      - "tsconfig.json"
+      - ".github/workflows/mobile-build.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "yarn.lock"
+      - "vite.config.ts"
+      - "tsconfig.json"
+      - ".github/workflows/mobile-build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android (debug APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      NDK_VERSION: "27.0.12077973"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Setup Java (Temurin 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "" # we install what we need below to control versions
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;${NDK_VERSION}"
+
+      - name: Export NDK env
+        run: |
+          NDK_PATH="$ANDROID_HOME/ndk/${NDK_VERSION}"
+          echo "NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
+
+      - name: Setup Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: android
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Install JS deps
+        run: yarn install --frozen-lockfile
+
+      - name: Initialize Tauri Android project
+        run: yarn tauri android init --ci
+
+      - name: Build debug APK
+        run: yarn tauri android build --debug --apk
+
+      - name: Locate APK
+        id: locate_apk
+        run: |
+          APK=$(find src-tauri/gen/android -name "*-debug.apk" -print -quit)
+          if [ -z "$APK" ]; then
+            echo "::error::No debug APK produced"
+            exit 1
+          fi
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Found APK: $APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachy-mini-android-debug-${{ github.sha }}
+          path: ${{ steps.locate_apk.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS (Simulator build)
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Setup Rust + iOS Simulator targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ios-sim
+
+      - name: Install JS deps
+        run: yarn install --frozen-lockfile
+
+      # The committed `tauri.conf.json` hardcodes a `developmentTeam`. That's
+      # fine for local Xcode builds but breaks unsigned CI builds because
+      # codesign will then fail. We strip the field for the CI run only and
+      # disable code signing on the xcodebuild step.
+      - name: Strip developmentTeam for unsigned simulator build
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            if (c.bundle && c.bundle.iOS) {
+              delete c.bundle.iOS.developmentTeam;
+            }
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+          "
+
+      - name: Build for iOS Simulator (unsigned)
+        env:
+          # Skip codesign for simulator builds (no Apple cert in CI).
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+          CODE_SIGN_IDENTITY: ""
+        # `--target aarch64-sim` selects the Apple Silicon iOS Simulator
+        # slice (matching macos-latest runners which are arm64).
+        run: yarn tauri ios build --debug --target aarch64-sim
+
+      - name: Locate .app bundle
+        id: locate_app
+        run: |
+          APP=$(find src-tauri/gen/apple/build -type d -name "*.app" -print -quit)
+          if [ -z "$APP" ]; then
+            echo "::error::No .app bundle produced"
+            exit 1
+          fi
+          # Tar it so the artifact preserves the directory structure.
+          TARBALL="reachy-mini-ios-sim.tar.gz"
+          tar -czf "$TARBALL" -C "$(dirname "$APP")" "$(basename "$APP")"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Simulator .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachy-mini-ios-sim-${{ github.sha }}
+          path: ${{ steps.locate_app.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 14
