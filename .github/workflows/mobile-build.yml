@@ -170,6 +170,14 @@ jobs:
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
+      # `Podfile.lock`, `Pods/` and `.xcworkspace/` are gitignored, so we
+      # must run `pod install` in CI before invoking xcodebuild. Without it,
+      # the .xcodeproj has no `CoreBluetooth` framework linked and the
+      # btleplug link step fails with "Undefined symbols ... _CBAdvertisementDataLocalNameKey".
+      - name: Install CocoaPods deps
+        run: pod install
+        working-directory: src-tauri/gen/apple
+
       # The committed `tauri.conf.json` hardcodes a `developmentTeam`. That's
       # fine for local Xcode builds but breaks unsigned CI builds because
       # codesign will then fail. We strip the field for the CI run only and
