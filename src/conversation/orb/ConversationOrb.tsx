@@ -38,6 +38,7 @@ import './orb.css';
 export type OrbState =
   | 'idle'
   | 'connecting'
+  | 'ready'
   | 'listening'
   | 'user-speaking'
   | 'processing'
@@ -96,6 +97,7 @@ export function ConversationOrb({
 const GLOW_BY_STATE: Record<OrbState, string> = {
   idle: '#34d399',
   connecting: '#facc15',
+  ready: '#34d399',
   listening: '#22d3ee',
   'user-speaking': '#22d3ee',
   processing: '#f59e0b',
@@ -107,6 +109,8 @@ function renderIndicator(state: OrbState): React.ReactNode {
   switch (state) {
     case 'connecting':
       return <span className="convo-orb__spinner" />;
+    case 'ready':
+      return <PlayIcon />;
     case 'listening':
     case 'user-speaking':
       return <Bars />;
@@ -183,6 +187,21 @@ function MicIcon() {
       <path d="M5 10a7 7 0 0 0 14 0" />
       <line x1="12" y1="19" x2="12" y2="22" />
       <line x1="8" y1="22" x2="16" y2="22" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg
+      className="convo-orb__play-icon"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+      aria-hidden="true"
+    >
+      {/* Triangle nudged 1px right so the visual mass is centered. */}
+      <path d="M9 6.5v11a1 1 0 0 0 1.55.83l8-5.5a1 1 0 0 0 0-1.66l-8-5.5A1 1 0 0 0 9 6.5z" />
     </svg>
   );
 }

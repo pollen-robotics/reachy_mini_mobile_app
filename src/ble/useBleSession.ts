@@ -29,6 +29,7 @@
 
 import { create } from 'zustand';
 import {
+  checkPermissions as blecCheckPermissions,
   connect as blecConnect,
   disconnect as blecDisconnect,
   startScan,
@@ -50,6 +51,7 @@ import {
   SCAN_TIMEOUT_MS,
   STATUS_SERVICE_UUID,
 } from './constants';
+import { parseAdvertManufacturerData } from './parseAdvertManufacturerData';
 import { createLogger } from '../logger';
 
 const logger = createLogger('ble');
@@ -81,6 +83,45 @@ export interface ReachyBleDevice {
   /** Unix ms of the last advertisement seen. Advertisements come in
    * bursts, so this lets us age-out entries if needed. */
   lastSeenMs: number;
+  /**
+   * First 16 hex chars of the daemon's install_id, decoded from the
+   * advertisement's ManufacturerData TLV (Pollen company id 0xFFFF,
+   * tag 0x01). ``null`` when the device is running an older daemon
+   * (no install_id TLV in the advert) or when the parser rejects a
+   * malformed payload. The mobile registry uses this prefix to
+   * dedupe a BLE row against the same physical robot's localhost
+   * loopback row + (eventually) its central listing without having
+   * to GATT-connect first.
+   */
+  installIdPrefix: string | null;
+  /**
+   * First 16 hex chars of the relay-assigned central peerId,
+   * decoded from the advertisement's ManufacturerData TLV (tag
+   * 0x02). ``null`` when the central relay is offline on the
+   * daemon side, or when the device is running an older daemon
+   * that doesn't publish this TLV. Used as a dedup key against
+   * the central listing's ``peerId`` while the central server
+   * still strips ``meta.install_id``.
+   */
+  centralPeerIdPrefix: string | null;
+  /**
+   * Daemon-reported local network mode, decoded from BLE TLV 0x03.
+   *
+   *   - ``'connected'`` - daemon has a real LAN/WAN IP (Wi-Fi
+   *     joined OR USB-tether interface up). Setup is done.
+   *   - ``'hotspot'``   - daemon is broadcasting its own AP
+   *     (10.42.0.1 fallback). Setup is NOT done.
+   *   - ``'offline'``   - daemon has no IPv4 anywhere. Setup is
+   *     incomplete or the network just dropped.
+   *   - ``null``        - the BLE advert didn't carry the TLV
+   *     (legacy daemon).
+   *
+   * Authoritative for "is Wi-Fi setup done?" because the daemon
+   * derives it locally from ``ip -4 addr``, no central / Internet
+   * dependency. Prefer this over inferring from
+   * ``centralPeerIdPrefix`` presence.
+   */
+  networkMode: 'connected' | 'hotspot' | 'offline' | null;
 }
 
 // ===========================================================================
@@ -221,6 +262,32 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
       set({ error: null, devices: {}, status: 'scanning' });
     }
     await get().initListeners();
+    // Android 12+ requires runtime grants for BLUETOOTH_SCAN and
+    // BLUETOOTH_CONNECT. The plugin's own `startScan` does check
+    // permissions but with `askIfDenied=false`, which means a fresh
+    // install fails silently before the user ever sees the system
+    // prompt. We force the prompt cascade up-front. iOS and desktop
+    // builds resolve `true` synchronously without any user-visible
+    // side effect (CoreBluetooth on iOS prompts on first scan; desktop
+    // platforms have no runtime permission system here).
+    try {
+      const granted = await blecCheckPermissions(true);
+      if (!granted) {
+        logger.warn('scan.permissions_denied');
+        set({
+          status: 'error',
+          error: 'Bluetooth permission denied. Enable it in system settings.',
+        });
+        return;
+      }
+    } catch (err) {
+      // The Android plugin returns a meaningful error when the adapter
+      // is unavailable (no BLE hardware in an emulator, for instance).
+      // On other platforms this should never throw.
+      logger.warn('scan.permissions_check_failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
     logger.info('scan.start', { preserve: options?.preserve === true });
     try {
       const handle = startScan((found: BleDevice[]) => {
@@ -231,20 +298,43 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
           if (!name) continue;
           const normalized = name.toLowerCase().replace(/-/g, '');
           if (!normalized.includes(REACHY_NAME_SUBSTRING)) continue;
+          const advert = parseAdvertManufacturerData(raw.manufacturerData);
           if (!(raw.address in next)) {
             logger.info('scan.discovered', {
               name,
               address: raw.address,
               rssi: raw.rssi ?? 0,
+              installIdPrefix: advert.installIdPrefix,
+              centralPeerIdPrefix: advert.centralPeerIdPrefix,
+              networkMode: advert.networkMode,
             });
           }
-          next[raw.address] = {
+          // Re-emit the row only when something visible to the UI
+          // (rssi, name) or to the dedup logic (install_id prefix,
+          // central peerId prefix, network mode) actually changed,
+          // otherwise we churn the Zustand store on every advert
+          // burst.
+          const prev = next[raw.address];
+          const nextRow: ReachyBleDevice = {
             address: raw.address,
             name,
             rssi: raw.rssi ?? 0,
             lastSeenMs: Date.now(),
+            installIdPrefix: advert.installIdPrefix,
+            centralPeerIdPrefix: advert.centralPeerIdPrefix,
+            networkMode: advert.networkMode,
           };
-          changed = true;
+          next[raw.address] = nextRow;
+          if (
+            !prev ||
+            prev.rssi !== nextRow.rssi ||
+            prev.name !== nextRow.name ||
+            prev.installIdPrefix !== nextRow.installIdPrefix ||
+            prev.centralPeerIdPrefix !== nextRow.centralPeerIdPrefix ||
+            prev.networkMode !== nextRow.networkMode
+          ) {
+            changed = true;
+          }
         }
         if (changed) set({ devices: next });
       }, SCAN_TIMEOUT_MS);
@@ -276,7 +366,20 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
   },
 
   connectToDevice: async (device: ReachyBleDevice) => {
-    set({ error: null, selectedDevice: device, networkStatus: null });
+    // Flip both `selectedDevice` and `status: 'connecting'`
+    // synchronously before any await so consumers that observe the
+    // store right after `connectToDevice()` returns control (routing
+    // pre-warm: `App.tsx` fires this then immediately navigates) see
+    // a coherent "we're opening the link" state. If we set status
+    // *after* the stopScan await, a screen that mounts in-between
+    // would briefly see `status: 'idle'` and (in WifiSetupScreen)
+    // bail out via its presence guard.
+    set({
+      error: null,
+      selectedDevice: device,
+      networkStatus: null,
+      status: 'connecting',
+    });
     // CoreBluetooth / btleplug require the scan to be stopped before a
     // connect. Do it unconditionally: the plugin treats `stopScan()`
     // as a no-op if nothing is running.
@@ -285,7 +388,6 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
     } catch {
       // Ignore.
     }
-    set({ status: 'connecting' });
     try {
       console.info('[ble] connecting to', device.name, device.address);
       logger.info('connect.start', { name: device.name, address: device.address });

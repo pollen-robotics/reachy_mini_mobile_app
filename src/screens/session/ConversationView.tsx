@@ -2,37 +2,34 @@
  * ConversationView - the post-handshake surface.
  *
  * Mounted from the 'engine' phase onward (the ConversePanel's
- * DataChannel IS the daemon proxy transport, so wake-up + daemon
- * status pill need it before the user sees anything). The component
- * itself only renders meaningful chrome from 'ready' on.
+ * DataChannel IS the daemon proxy transport, so wake-up needs it
+ * before the user sees anything). The component itself only renders
+ * meaningful chrome from 'ready' on.
  *
  * Phase mapping:
  *   'engine'  - panel mounted but covered by the parent's bring-up
- *               overlay; chrome (banner, tabs, daemon pill) hidden.
- *   'ready'   - panel still hidden behind a CTA overlay. Bottom-nav
- *               + tabs become visible so the user can preview the
+ *               overlay; chrome (banner, tabs) hidden.
+ *   'ready'   - the orb itself takes the role of the "Start
+ *               conversation" CTA (state='ready' on the orb). Bottom-
+ *               nav + tabs become visible so the user can preview the
  *               apps tab even before opting in to the conversation.
- *   'live'    - full UI: SessionBanner if degraded, daemon pill in
- *               the corner, conversation engine front and center.
+ *   'live'    - full UI: SessionBanner if degraded, conversation
+ *               engine front and center.
  *
  * The split between 'ready' and 'live' is deliberate. We don't auto-
  * start the conversation pipeline on wake: starting audio is a
  * deliberate user action, and the gating gives the daemon a moment to
  * settle.
  */
-import { Box, BottomNavigation, BottomNavigationAction, Stack, useTheme } from '@mui/material';
+import { Box, BottomNavigation, BottomNavigationAction, Chip, Stack, Typography, useTheme } from '@mui/material';
 import AppsIcon from '@mui/icons-material/Apps';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import { useState } from 'react';
 
-import DaemonStatusPill from '../../components/DaemonStatusPill';
 import OutdatedDaemonBanner from '../../components/OutdatedDaemonBanner';
 import SessionBanner from '../../components/SessionBanner';
-import { AppsPanel } from '../../conversation/AppsPanel';
 import { ConversePanel } from '../../conversation/ConversePanel';
 import type { SessionController } from '../../session/useSessionController';
-
-import { HandshakeReadyView } from './HandshakeViews';
 
 export interface ConversationViewProps {
   controller: SessionController;
@@ -41,7 +38,7 @@ export interface ConversationViewProps {
 
 export function ConversationView({
   controller,
-  isAuthenticated,
+  isAuthenticated: _isAuthenticated,
 }: ConversationViewProps) {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState<'converse' | 'apps'>('converse');
@@ -50,12 +47,13 @@ export function ConversationView({
   const live = phase === 'live';
   const chromeVisible = phase === 'ready' || phase === 'live';
 
-  // Apps tab now lives behind RobotClient (the same WebRTC channel),
-  // so it's available remotely too. The remaining gate is "user is
-  // signed in", which holds in both modes (LAN: daemon-side HF
-  // token; remote: mobile-side HF token forwarded into the iframe by
-  // AppsPanel).
-  const showAppsTab = isAuthenticated && controller.robotClient !== null;
+  // Apps tab is currently a placeholder while we redesign the
+  // catalog: we show the bottom-nav entry so users know it's coming
+  // back, but the body just surfaces a "Coming soon" stub. Once the
+  // new app catalog ships we'll replace the stub with `<AppsPanel>`
+  // again (and bring back the auth + RobotClient gating that was
+  // attached to it in api_revision 3).
+  const showAppsTab = true;
 
   return (
     <Box
@@ -92,54 +90,27 @@ export function ConversationView({
         }}
       >
         {/* The engine is mounted from 'engine' phase onward in both
-            modes (the DC IS the daemon transport). 'ready' covers it
-            with the CTA below so the user always lands in the same
-            post-connect chrome regardless of how they got here. */}
+            modes (the DC IS the daemon transport). During 'ready' we
+            don't cover it with an overlay anymore: the orb itself
+            takes the role of the "Start conversation" CTA, courtesy
+            of the `startInvitation` prop below. That keeps a single
+            visual anchor on the screen across phases - same orb,
+            different state. */}
         <ConversePanel
           peerId={controller.peerId}
           peerIdResolved={controller.peerIdResolved}
           remountKey={controller.state.remountEpoch}
           onAppStateChange={controller.onEngineStateChange}
+          onEngineErrorMessage={controller.onEngineErrorMessage}
           onStuck={controller.onEngineStuck}
           busyLabel={controller.conversationBusyLabel}
           errorMessage={controller.conversationErrorMessage}
           convoActive={controller.convoActive}
           onTransportChange={controller.onEngineTransport}
+          startInvitation={
+            phase === 'ready' ? controller.startConversation : undefined
+          }
         />
-        {phase === 'ready' ? (
-          <Stack
-            alignItems="center"
-            justifyContent="center"
-            spacing={1.5}
-            sx={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 3,
-              bgcolor: theme.palette.background.paper,
-              px: 3,
-              textAlign: 'center',
-            }}
-          >
-            <HandshakeReadyView
-              robotName={controller.displayName}
-              onStart={controller.startConversation}
-            />
-          </Stack>
-        ) : null}
-        {live ? (
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              zIndex: 2,
-              maxWidth: 'calc(100% - 16px)',
-              pointerEvents: 'none',
-            }}
-          >
-            <DaemonStatusPill probe={controller.daemonProbe} />
-          </Box>
-        ) : null}
       </Box>
 
       {showAppsTab ? (
@@ -151,10 +122,7 @@ export function ConversationView({
             flexDirection: 'column',
           }}
         >
-          <AppsPanel
-            client={controller.robotClient}
-            isAuthenticated={isAuthenticated}
-          />
+          <AppsComingSoon />
         </Box>
       ) : null}
 
@@ -175,11 +143,66 @@ export function ConversationView({
           />
           <BottomNavigationAction
             value="apps"
-            label="Apps"
+            label={
+              <Stack direction="row" alignItems="center" spacing={0.5}>
+                <span>Apps</span>
+                <Chip
+                  label="Soon"
+                  size="small"
+                  sx={{
+                    height: 14,
+                    fontSize: '0.55rem',
+                    fontWeight: 600,
+                    '& .MuiChip-label': { px: 0.5 },
+                  }}
+                />
+              </Stack>
+            }
             icon={<AppsIcon />}
           />
         </BottomNavigation>
       ) : null}
     </Box>
+  );
+}
+
+/**
+ * Placeholder content for the Apps tab while the new catalog is being
+ * redesigned. Kept as a tiny in-file component to avoid spinning up
+ * a whole module for a stub. Once the redesign lands we'll swap this
+ * out for `<AppsPanel>` and re-introduce the `client` /
+ * `isAuthenticated` gating in the parent.
+ */
+function AppsComingSoon() {
+  const theme = useTheme();
+  return (
+    <Stack
+      alignItems="center"
+      justifyContent="center"
+      spacing={1.5}
+      sx={{ flex: 1, minHeight: 0, px: 4, textAlign: 'center' }}
+    >
+      <Box
+        sx={{
+          width: 56,
+          height: 56,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: theme.palette.action.hover,
+          color: theme.palette.text.secondary,
+        }}
+      >
+        <AppsIcon fontSize="medium" />
+      </Box>
+      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+        Apps
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 280 }}>
+        Coming soon. We're building a new way to bring extra
+        experiences to your Reachy. Check back in a future update.
+      </Typography>
+    </Stack>
   );
 }

@@ -155,25 +155,24 @@ yarn tauri:dev
 
 ### iOS dev
 
-First-time setup (once per workspace):
+Full step-by-step runbook (Xcode install, signing, first install on a
+physical iPhone, Wi-Fi debugging, troubleshooting):
+[`docs/IOS_SETUP.md`](docs/IOS_SETUP.md).
+
+TL;DR for a machine that already has Xcode, a paired iPhone, and signing
+configured:
 
 ```bash
-yarn tauri ios init
+yarn ios:dev      # tauri ios dev --open
 ```
 
-Then:
+For a fresh machine, after installing Xcode from the App Store:
 
 ```bash
+./scripts/bootstrap-ios.sh   # xcode-select, license, runFirstLaunch, pod install
+# then follow the manual signing steps in docs/IOS_SETUP.md
 yarn ios:dev
 ```
-
-The first `--open` run launches Xcode. You will need to:
-
-1. Add `NSBluetoothAlwaysUsageDescription` to `src-tauri/gen/apple/<app>_iOS/Info.plist`
-   (the Bluetooth plugin relies on this).
-2. Add the **CoreBluetooth.framework** under *Project → General → Frameworks,
-   Libraries, and Embedded Content*.
-3. Select a signing team (personal or organization).
 
 ### Android dev
 

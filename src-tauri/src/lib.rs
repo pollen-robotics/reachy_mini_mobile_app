@@ -27,10 +27,12 @@ use tracing::info;
 /// mobile static lib target.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Install a tracing subscriber so our `info!/warn!/debug!` events
-    // actually end up on stderr. `RUST_LOG` overrides the default filter
-    // for targeted investigation. Safe to call multiple times during
-    // dev HMR: we swallow the error if a subscriber is already registered.
+    // Desktop only: install a tracing subscriber so our `info!/warn!/debug!`
+    // events end up on stderr. On mobile this fights with `tauri-plugin-log`
+    // (both try to install the global `log::` logger), so we leave logging
+    // entirely to the plugin there. Safe to call multiple times during dev
+    // HMR: we swallow the error if a subscriber is already registered.
+    #[cfg(not(mobile))]
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -40,7 +42,40 @@ pub fn run() {
         .with_line_number(false)
         .try_init();
 
-    let builder = tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    // Mobile only: forward JS `console.*` to Rust `tracing` via
+    // `tauri-plugin-log`. iOS bit-buckets app stdout and Safari Web
+    // Inspector is unreliable on Tauri (tauri-apps/tauri#13346), so we
+    // also write to `{appHome}/Library/Logs/{bundleId}/`. We pull the
+    // file off the iPhone with
+    //   `xcrun devicectl device copy from --domain-type appDataContainer
+    //    --domain-identifier com.tfrere.reachymini.app
+    //    --source Library/Logs/com.tfrere.reachymini.app/<file>`.
+    //
+    // On desktop the plugin would fight `tracing_subscriber::fmt()`
+    // above (both call `log::set_logger`, second one panics) and we
+    // don't need it anyway: the host terminal already shows stderr.
+    // The JS side calls (`logInfo`, `logError`, ...) gracefully fall
+    // back to plain `console.*` thanks to the `.catch()` in
+    // `src/main.tsx`.
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(
+            tauri_plugin_log::Builder::default()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("reachy_mini".to_string()),
+                    }),
+                ])
+                .level(tauri_plugin_log::log::LevelFilter::Info)
+                .build(),
+        );
+    }
+
+    let builder = builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())

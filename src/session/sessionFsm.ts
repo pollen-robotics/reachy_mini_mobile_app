@@ -64,10 +64,15 @@ import type { ReachyBleDevice } from '../ble/useBleSession';
  *                   Address is the BLE plugin handle; the LAN IP is
  *                   discovered on the fly during the handshake.
  *   - `localhost` : tapped a row produced by `useLocalDaemonSource`
- *                   (a daemon answering on `127.0.0.1:8000` - typically
- *                   the tray app on the same Mac as the Tauri build).
- *                   The host is known up front so we skip BLE pairing
- *                   AND Wi-Fi onboarding entirely.
+ *                   (a daemon answering on `127.0.0.1:8000` - by
+ *                   construction the tray app on the same Mac as the
+ *                   Tauri build, **always USB / wired**, never a
+ *                   Wi-Fi-paired robot - those live on the LAN at
+ *                   their own IP, not on this host's loopback).
+ *                   See `LOCAL_DAEMON_KIND` / `LOCAL_DAEMON_WIRELESS`
+ *                   in `presence/localDaemonSource.ts`. The host is
+ *                   known up front so we skip BLE pairing AND Wi-Fi
+ *                   onboarding entirely.
  *   - `remote`    : tapped a robot listed by the HF central source.
  *                   Reached purely through the WebRTC `http_proxy`.
  */
@@ -81,6 +86,24 @@ export type ConnectionTarget =
        *  default `reachy_mini`; the session screen prompts for naming
        *  before going further when that's the case. */
       robotName: string;
+      /**
+       * Strong identifier returned by `GET /api/daemon/identity`. Lets
+       * the session controller skip name-based resolution on central
+       * (which is ambiguous when several robots in the user's fleet
+       * share the same name). `null` only on legacy daemons - those
+       * are filtered out earlier so this is mostly informational.
+       */
+      installId: string | null;
+      /**
+       * Producer peer id central assigned this very daemon on the
+       * latest ``welcome`` frame. We pass it through so the session
+       * controller can call WebRTC ``startSession(peerId)`` directly
+       * without going through the central listing (which could pick
+       * a homonym and route us to the wrong robot). `null` when the
+       * relay is offline (no token / no network); we then fall back
+       * to the name-based resolver.
+       */
+      centralPeerId: string | null;
     }
   | { kind: 'remote'; robot: CentralRobotEntry };
 

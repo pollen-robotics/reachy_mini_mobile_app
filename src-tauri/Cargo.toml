@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-os = "2"
 tauri-plugin-http = "2"
 
@@ -40,6 +40,12 @@ tauri-plugin-opener = "2"
 # directly). The bulk of the BLE logic now lives on the TS side, mirroring
 # `reachy_mini_desktop_app/src/hooks/bluetooth/useBluetooth.ts`.
 tauri-plugin-blec = "0.8"
+
+# Bridges JS `console.*` (and the structured `createLogger` calls) to
+# Rust `tracing` so logs flow out via the Tauri CLI's stdout — and
+# therefore into `idevicesyslog` / the host terminal — when Safari Web
+# Inspector is unreachable (a recurring iOS Tauri bug).
+tauri-plugin-log = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

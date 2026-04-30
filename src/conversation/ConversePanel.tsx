@@ -287,6 +287,28 @@ export interface ConversePanelProps {
    * transport".
    */
   onTransportChange?: (kind: ConversationTransportKind) => void;
+  /**
+   * Bubbles the engine's last fatal-error message up to the parent so
+   * the FSM can fail the wake-up phase instead of the user being stuck
+   * on "Waking up…" forever when WebRTC bringup errored under the
+   * overlay. `null` means the engine cleared its error.
+   */
+  onEngineErrorMessage?: (message: string | null) => void;
+  /**
+   * When defined, the orb itself becomes the "Start conversation" CTA:
+   * its visual is forced to the `'ready'` state (calm green ring +
+   * play icon, attention pulse) and tapping it invokes this callback
+   * instead of the engine's `triggerOrbAction`. Used by the parent
+   * during the post-handshake `'ready'` phase to keep a single visual
+   * anchor on the screen (the orb) instead of stacking a button
+   * overlay on top of it.
+   *
+   * The engine's `appState` is ignored while this is set: even if it
+   * reports `connected` (yellow spinner) under the hood, we mask it
+   * with the start invitation. Pass `undefined` to fall back to
+   * normal engine-driven behavior.
+   */
+  startInvitation?: () => void;
 }
 
 export function ConversePanel({
@@ -299,6 +321,8 @@ export function ConversePanel({
   errorMessage = null,
   convoActive = false,
   onTransportChange,
+  onEngineErrorMessage,
+  startInvitation,
 }: ConversePanelProps): React.ReactElement {
   // The orb element doubles as the audio-levels target: the engine
   // writes `--audio-level`, `--ai-audio-level`, `--bar0..--bar4`
@@ -336,6 +360,8 @@ export function ConversePanel({
   onStuckRef.current = onStuck;
   const onTransportChangeRef = useRef(onTransportChange);
   onTransportChangeRef.current = onTransportChange;
+  const onEngineErrorMessageRef = useRef(onEngineErrorMessage);
+  onEngineErrorMessageRef.current = onEngineErrorMessage;
   // Mirror `convoActive` so the watchdog closure (captured per
   // engine mount) can read the live value. The watchdog is only
   // meaningful while the host actually wants a conversation: once
@@ -479,7 +505,20 @@ export function ConversePanel({
           },
           onToolToast: (toast) => handleToolToast(toast),
           onMicMutedChange: (muted) => setMicMuted(muted),
-          onErrorMessageChange: (message) => setErrorDetail(message),
+          onErrorMessageChange: (message) => {
+            setErrorDetail(message);
+            // Bubble up so the FSM can surface a wake-up failure
+            // instead of leaving the user on "Waking up…" forever
+            // when bringup errors under the overlay.
+            const cb = onEngineErrorMessageRef.current;
+            if (cb) {
+              try {
+                cb(message);
+              } catch (err) {
+                console.warn('[ConversePanel] onEngineErrorMessage threw:', err);
+              }
+            }
+          },
           onTransportChange: (kind) => {
             const cb = onTransportChangeRef.current;
             if (!cb) return;
@@ -607,14 +646,26 @@ export function ConversePanel({
     }
   }, [convoActive, watchdogTripped]);
 
-  const orbState = useMemo(() => appStateToOrbState(appState), [appState]);
+  const engineOrbState = useMemo(() => appStateToOrbState(appState), [appState]);
   const live = LIVE_STATES.has(appState);
 
+  // When the parent passes `startInvitation`, the orb stops mirroring
+  // the engine and acts as the "Start conversation" CTA. We mask the
+  // engine's transient post-handshake state ('connected' → yellow
+  // spinner) so the user sees a single calm green orb prompting them
+  // to tap; `live` is already false in that phase, so the side
+  // buttons (mute / stop) collapse automatically.
+  const orbState: OrbState = startInvitation ? 'ready' : engineOrbState;
+
   const handleOrbClick = useCallback(() => {
+    if (startInvitation) {
+      startInvitation();
+      return;
+    }
     const handle = handleRef.current;
     if (!handle) return;
     void handle.triggerOrbAction();
-  }, []);
+  }, [startInvitation]);
   const handleToggleMute = useCallback(() => {
     const handle = handleRef.current;
     if (!handle) return;
@@ -713,7 +764,7 @@ export function ConversePanel({
             audioRef={orbRef}
             state={orbState}
             onClick={handleOrbClick}
-            disabled={live}
+            disabled={startInvitation ? false : live}
             ariaLabel={ORB_ARIA_BY_STATE[orbState]}
           />
           <StopSideButton live={live} onStop={handleStop} />
@@ -728,6 +779,7 @@ export function ConversePanel({
 const ORB_ARIA_BY_STATE: Record<OrbState, string> = {
   idle: 'Start voice conversation',
   connecting: 'Connecting',
+  ready: 'Tap to start conversation',
   listening: 'Listening',
   'user-speaking': 'Listening',
   processing: 'Processing',

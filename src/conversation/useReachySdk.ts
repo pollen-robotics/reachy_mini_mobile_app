@@ -1,24 +1,31 @@
 /**
- * Dynamic loader for the ReachyMini JS SDK.
+ * Loader for the ReachyMini JS SDK.
  *
- * The SDK is shipped as an ES module on the pollen-robotics jsdelivr CDN.
- * It exposes the `ReachyMini` constructor on `window` once loaded. We
- * inject a `<script type="module">` tag at runtime so the rest of the
- * React app can `new window.ReachyMini({...})` once `isReady === true`.
+ * The SDK lives at `pollen-robotics/reachy-mini@feat/ehance-js-lib`
+ * and ships as an ES module. We previously injected a
+ * `<script type="module">` tag pointing at jsdelivr's CDN copy; that
+ * worked fine in desktop browsers but on iOS WKWebView under
+ * `tauri://localhost` the module fetch was silently dropped under
+ * some CSP/network conditions (no `error` event, no `load` event,
+ * SDK stuck in `loading` forever, DataChannel never created — see
+ * `[uxxxx] webrtc.proxy fetch.no_dc` in the device logs).
  *
- * Token bridge: before the SDK calls `authenticate()`, it looks for an
- * existing HF access token in `sessionStorage.hf_token`. The mobile app
- * already obtained one via the daemon's OAuth flow (`useHfAuth`); we
- * push it into sessionStorage so the SDK picks it up without having to
- * redirect the webview to `huggingface.co/login`.
+ * Now we ship the SDK source in `src/vendor/reachy-mini.js` and let
+ * Vite bundle it (and its `@huggingface/hub` dep) into the app. The
+ * loader keeps the same async/imperative shape so the rest of the
+ * codebase (engine, ConversePanel, patch hook) doesn't have to know
+ * the bytes are coming from the bundle rather than the network.
+ *
+ * Token bridge: before the SDK calls `authenticate()`, it looks for
+ * an existing HF access token in `sessionStorage.hf_token`. The
+ * mobile app already obtained one via the daemon's OAuth flow
+ * (`useHfAuth`); we push it into sessionStorage so the SDK picks it
+ * up without having to redirect the webview to
+ * `huggingface.co/login`.
  */
 import { useEffect, useState } from 'react';
 
 import { getDataChannelId, setActiveDataChannel } from '../robot-client';
-
-const SDK_SCRIPT_ID = 'reachy-mini-sdk';
-const SDK_URL =
-  'https://cdn.jsdelivr.net/gh/pollen-robotics/reachy_mini@feat/ehance-js-lib/js/reachy-mini.js';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -579,58 +586,58 @@ function patchReachyMiniStaleSession(): void {
 /**
  * Kicks off the SDK load exactly once per page. Safe to call from any
  * number of mounts: later callers piggy-back on the first load.
+ *
+ * The dynamic `import()` is resolved at build time by Vite — no
+ * network round-trip, no CSP surprises. We still expose
+ * `window.ReachyMini` for parity with the previous CDN flow and so
+ * the patch hook can grab the constructor through its prototype.
  */
 function ensureLoaded(): void {
   if (globalLoadState !== 'idle') return;
-  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (typeof window === 'undefined') return;
 
   if (window.ReachyMini) {
     patchReachyMiniStaleSession();
     globalLoadState = 'ready';
+    console.info('[ReachyMini sdk] reusing already-loaded constructor');
     notify();
     return;
   }
 
   globalLoadState = 'loading';
   notify();
+  console.info('[ReachyMini sdk] loading vendored bundle');
 
-  const existing = document.getElementById(SDK_SCRIPT_ID) as HTMLScriptElement | null;
-  if (existing) return;
-
-  const script = document.createElement('script');
-  script.id = SDK_SCRIPT_ID;
-  script.type = 'module';
-  // `reachymini:ready` is dispatched by the SDK module itself on load.
-  // We also listen to onerror as a belt-and-braces for CORS / CSP
-  // failures, which don't always reach the `error` event of the script
-  // but do abort the ES module fetch.
-  script.textContent = `
-    import { ReachyMini } from "${SDK_URL}";
-    window.ReachyMini = ReachyMini;
-    window.dispatchEvent(new Event("reachymini:ready"));
-  `;
-
-  window.addEventListener(
-    'reachymini:ready',
-    () => {
+  void (async () => {
+    try {
+      // The vendored SDK ships as plain JS with no .d.ts; we don't
+      // enable `allowJs` so TS can't resolve the import. The runtime
+      // shape is verified below by checking for a callable export.
+      // @ts-expect-error - vendored JS bundle (see reachy-mini.d.ts)
+      const mod = await import('../vendor/reachy-mini.js');
+      const Ctor =
+        (mod as { ReachyMini?: unknown; default?: unknown }).ReachyMini ??
+        (mod as { default?: unknown }).default;
+      if (typeof Ctor !== 'function') {
+        throw new Error(
+          'reachy-mini bundle did not export a ReachyMini constructor',
+        );
+      }
+      (window as unknown as { ReachyMini: unknown }).ReachyMini = Ctor;
       patchReachyMiniStaleSession();
       globalLoadState = 'ready';
+      console.info('[ReachyMini sdk] ready');
       notify();
-    },
-    { once: true }
-  );
-
-  script.onerror = (ev) => {
-    globalLoadState = 'error';
-    globalError = new Error(
-      `Failed to load ReachyMini SDK from ${SDK_URL}. ${
-        ev instanceof ErrorEvent ? ev.message : ''
-      }`.trim()
-    );
-    notify();
-  };
-
-  document.head.appendChild(script);
+    } catch (err) {
+      globalLoadState = 'error';
+      globalError =
+        err instanceof Error
+          ? err
+          : new Error(`Failed to load reachy-mini bundle: ${String(err)}`);
+      console.error('[ReachyMini sdk] load.failed', globalError);
+      notify();
+    }
+  })();
 }
 
 // ─── HF session seeding ───────────────────────────────────────────────

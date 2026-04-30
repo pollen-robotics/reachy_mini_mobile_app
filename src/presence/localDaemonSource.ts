@@ -31,6 +31,22 @@
  * separate also means the polling pace can be more aggressive (we want
  * the row to appear within ~5s of the user launching the tray) without
  * affecting in-session daemon status reads.
+ *
+ * Invariants for the discovery aggregator
+ * ───────────────────────────────────────
+ * A daemon answering on `127.0.0.1:8000` is, by construction:
+ *   - a **tray** daemon (the Mac-side desktop app's sidecar). A real
+ *     Reachy Mini robot is on the network at its own IP, never on
+ *     the loopback of the phone / Mac running this app.
+ *   - a **USB / wired** transport from the daemon's point of view. The
+ *     daemon talks to the robot over USB on the same machine; "Wi-Fi"
+ *     as a `wireless_version` only describes how the robot reaches the
+ *     world, which is irrelevant for a tray. We surface this in the
+ *     UI as `wireless_version=false` (kept as a concrete bool so the
+ *     "USB" / "WiFi" chip code path stays uniform with central rows).
+ * The exported `LOCAL_DAEMON_KIND` and `LOCAL_DAEMON_WIRELESS`
+ * constants below are the canonical place those defaults live, so the
+ * future aggregator can reuse them instead of re-deriving them.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -50,6 +66,27 @@ const logger = createLogger('local-daemon.source');
  * this source use the exact same string the probe used.
  */
 export const LOCAL_DAEMON_HOST = '127.0.0.1';
+
+/**
+ * Kind to surface for any local-daemon entry. See the file header
+ * "Invariants" section: a daemon on `127.0.0.1` is always the
+ * desktop tray. The aggregator can rely on this without probing
+ * anything else.
+ */
+export const LOCAL_DAEMON_KIND = 'tray' as const;
+
+/**
+ * Wireless flag to surface for any local-daemon entry. Always
+ * `false` because:
+ *   - the tray talks to its robot over USB (wired);
+ *   - a Wi-Fi-paired robot would be on the LAN at its own IP, never
+ *     on the loopback of this app's host;
+ * so a "Wi-Fi" chip on a localhost row would be a lie. We expose
+ * this as a concrete `false` (rather than `null`) so the chip-rendering
+ * pipeline that branches on `wireless_version === true / false` can
+ * stay uniform with central rows.
+ */
+export const LOCAL_DAEMON_WIRELESS = false as const;
 
 /**
  * Polling cadence while the section is empty (no daemon detected) - we

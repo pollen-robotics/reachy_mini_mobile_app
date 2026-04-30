@@ -63,5 +63,18 @@ export const LAYOUT = {
   contentMaxWidth: 420,
   heroSize: 160,
   heroSizeSmall: 120,
-  safeAreaTop: 5.5, // MUI spacing units, accounts for iOS status bar
+  /**
+   * Top padding that accounts for the device's status bar / notch.
+   *
+   * Resolves to the actual safe-area inset on platforms that support
+   * `env()` (iOS WKWebView with `viewport-fit=cover`, modern Android
+   * Chrome, etc.) and falls back to 0 elsewhere — Tauri desktop in
+   * particular renders the WebView under the host window chrome, so a
+   * fixed 44 px top padding there leaves a band of dead space.
+   *
+   * Pass directly to MUI's sx (`sx={{ pt: LAYOUT.safeAreaTop }}`); MUI
+   * sees the string value and emits it as raw CSS instead of
+   * multiplying by `theme.spacing(1)`.
+   */
+  safeAreaTop: 'env(safe-area-inset-top, 0px)',
 } as const;

@@ -3,8 +3,7 @@
  *
  * Same shape regardless of phase, so the user never sees a layout
  * reflow during bring-up. The right-hand cluster (menu dot vs
- * nothing) toggles inside the component, and the menu itself
- * factors out the LAN-only HF auth row.
+ * nothing) toggles inside the component.
  *
  * The top bar deliberately doesn't know about FSM events: the screen
  * passes plain callbacks (`onBack`, `onForgetWifi`, `onDisconnect`)
@@ -14,9 +13,7 @@
  */
 import { useState } from 'react';
 import {
-  Avatar,
-  Box,
-  CircularProgress,
+  Chip,
   Divider,
   IconButton,
   ListItemIcon,
@@ -25,69 +22,201 @@ import {
   MenuItem,
   Stack,
   Typography,
-  keyframes,
   useTheme,
 } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
-import LoginIcon from '@mui/icons-material/Login';
-import LogoutIcon from '@mui/icons-material/Logout';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 
-import type { useHfAuth } from '../../auth/useHfAuth';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '../../styles/tokens';
 
-// Pulsing green dot used to advertise "robot is awake and connected".
-// Kept here (rather than in tokens) because no other surface uses it.
-const glowKf = keyframes`
-  0%, 100% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.55); }
-  50% { box-shadow: 0 0 0 4px rgba(46, 204, 113, 0); }
-`;
+/**
+ * Chip taxonomy used by the top bar.
+ *
+ * Mirrors `ChipDescriptor` in `ScanScreen.tsx` so the two surfaces
+ * read consistently, but kept independent (different shape: status
+ * chips on the discovery cards never include motor state). We do
+ * NOT import from the scan screen to avoid a circular dependency
+ * between the discovery list and the session UI.
+ */
+type SessionChipKind =
+  | 'bluetooth'
+  | 'usb'
+  | 'central'
+  | 'awake'
+  | 'sleeping'
+  | 'pending';
+
+interface SessionChipDescriptor {
+  kind: SessionChipKind;
+  label: string;
+}
+
+function describeTransport(
+  transport: 'BLE' | 'USB' | 'HF',
+): SessionChipDescriptor {
+  switch (transport) {
+    case 'BLE':
+      return { kind: 'bluetooth', label: 'Bluetooth' };
+    case 'USB':
+      return { kind: 'usb', label: 'USB' };
+    case 'HF':
+      return { kind: 'central', label: 'Central' };
+  }
+}
+
+function describeStatus(
+  motorState: 'awake' | 'sleeping' | 'unknown' | null,
+  statusText: string,
+): SessionChipDescriptor {
+  // Pre-engine: surface the current step label as a neutral pending
+  // chip. Once the robot is up the chip flips to a coloured motor
+  // state (awake/sleeping) with `statusText` as the label.
+  if (motorState === null) {
+    return { kind: 'pending', label: statusText };
+  }
+  if (motorState === 'awake') return { kind: 'awake', label: statusText };
+  if (motorState === 'sleeping') return { kind: 'sleeping', label: statusText };
+  return { kind: 'pending', label: statusText };
+}
+
+interface SessionChipPalette {
+  bg: string;
+  fg: string;
+  border: string;
+}
+
+function sessionChipPalette(
+  theme: Theme,
+  kind: SessionChipKind,
+): SessionChipPalette {
+  const isDark = theme.palette.mode === 'dark';
+  switch (kind) {
+    case 'central':
+    case 'awake':
+      return {
+        bg: isDark ? 'rgba(34,197,94,0.18)' : 'rgba(34,197,94,0.12)',
+        fg: theme.palette.success.dark,
+        border: 'rgba(34,197,94,0.35)',
+      };
+    case 'sleeping':
+      return {
+        bg: isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)',
+        fg: theme.palette.info.dark,
+        border: 'rgba(59,130,246,0.35)',
+      };
+    case 'pending':
+    case 'bluetooth':
+    case 'usb':
+    default:
+      return {
+        bg: theme.palette.action.hover,
+        fg: theme.palette.text.primary,
+        border: theme.palette.divider,
+      };
+  }
+}
+
+function SessionChip({ chip }: { chip: SessionChipDescriptor }) {
+  const theme = useTheme();
+  const palette = sessionChipPalette(theme, chip.kind);
+  return (
+    <Chip
+      label={chip.label}
+      size="small"
+      sx={{
+        height: 22,
+        fontSize: TYPO.tiny,
+        fontWeight: FONT_WEIGHT.semibold,
+        backgroundColor: palette.bg,
+        color: palette.fg,
+        border: `1px solid ${palette.border}`,
+        '& .MuiChip-label': { px: 0.875 },
+        maxWidth: 220,
+      }}
+    />
+  );
+}
 
 export interface SessionTopBarProps {
   robotName: string;
-  /** Plain text shown under the robot name. The screen builds it from
-   * `bleNetworkIp || deviceName || username`. */
-  subtitle: string;
+  /** First 6 hex chars of the install_id. Currently unused in the
+   * rendered header (the simplified design only carries name + chips
+   * to match the discovery list). Kept on the prop list for the
+   * menu / future debug surfaces and so we don't churn the
+   * controller's return type. */
+  installIdSuffix: string | null;
+  /** Transport badge: BLE (local LAN, surfaced as "Wi-Fi"), USB
+   * (loopback / Mac tray), or HF (over-the-internet via central).
+   * Constant for the screen. */
+  transport: 'BLE' | 'USB' | 'HF';
+  /** Endpoint after the badge (LAN IP, loopback host, peer id).
+   * Currently unused; the simplified header collapses transport into
+   * a single chip with no endpoint sub-line. Kept on the prop list
+   * for the same reason as `installIdSuffix`. */
+  endpoint: string;
+  /** Phase-aware status word: a step label during handshake/engine,
+   * the motor state once the robot is up. Always set. Surfaced as
+   * the second chip with a tone derived from `motorState`. */
+  statusText: string;
+  /** Live motor state. `null` during handshake/engine, non-null once
+   * the robot is up. Drives the second chip's tone (and the pulse
+   * on the `awake` variant). */
+  motorState: 'awake' | 'sleeping' | 'unknown' | null;
+  /** Daemon software version (e.g. "1.7.0"). Currently unused in the
+   * header (diagnostic info, not user-facing). Kept on the prop
+   * list for parity with the controller's return shape. */
+  daemonVersion: string | null;
   onBack: () => void;
   /** True only during the 'leaving' phase to prevent double-tap. */
   backDisabled: boolean;
   /** Show the right-hand menu dot. False during handshake/engine. */
   showMenu: boolean;
-  isLocal: boolean;
+  /**
+   * Show the "Forget Wi-Fi" entry. Should be true only when the
+   * connected daemon actually owns a Wi-Fi config (the wireless
+   * Reachy variant). Hidden for the USB / Mac-tray case where there
+   * is no Wi-Fi to forget.
+   */
+  showForgetWifi: boolean;
   onForgetWifi: () => void;
   onDisconnect: () => void;
-  /** Open the long-term memory inspection dialog. */
-  onOpenMemory: () => void;
-  /** Used by the LAN-only HF auth menu row. Ignored when isLocal is false. */
-  auth: ReturnType<typeof useHfAuth>;
 }
 
 export function SessionTopBar({
   robotName,
-  subtitle,
+  transport,
+  statusText,
+  motorState,
   onBack,
   backDisabled,
   showMenu,
-  isLocal,
+  showForgetWifi,
   onForgetWifi,
   onDisconnect,
-  onOpenMemory,
-  auth,
 }: SessionTopBarProps) {
   const theme = useTheme();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+
+  // Project the transport prop ('BLE' | 'USB' | 'HF') onto a
+  // user-facing chip. We surface BLE as "Wi-Fi" because the actual
+  // session transport is WebRTC-over-LAN once the BLE handshake is
+  // done; calling it "BLE" in the header was confusing (suggesting
+  // audio went over Bluetooth, which it never did).
+  const transportChip = describeTransport(transport);
+  const statusChip = describeStatus(motorState, statusText);
 
   return (
     <Stack
       direction="row"
       alignItems="center"
-      spacing={1.25}
+      spacing={1}
       sx={{
         px: 2,
         py: 1,
-        pt: 5.5,
+        pt: LAYOUT.safeAreaTop,
         borderBottom: `1px solid ${theme.palette.divider}`,
         flexShrink: 0,
         bgcolor: 'background.default',
@@ -101,28 +230,24 @@ export function SessionTopBar({
       >
         <ArrowBackIcon fontSize="small" />
       </IconButton>
-      <Box
-        sx={{
-          width: 9,
-          height: 9,
-          borderRadius: '50%',
-          bgcolor: showMenu ? 'success.main' : 'text.disabled',
-          animation: showMenu ? `${glowKf} 2s infinite` : 'none',
-          flexShrink: 0,
-        }}
-      />
-      <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
+      <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.5}>
+        {/* Row 1 — bare robot name. Same scale as the discovery
+            list's card title for visual continuity. */}
+        <Typography variant="body2" sx={{ fontWeight: FONT_WEIGHT.semibold }} noWrap>
           {robotName}
         </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          fontFamily="monospace"
-          noWrap
+        {/* Row 2 — transport + status chips. Same shape and palette
+            as the chips on the discovery cards (`ChannelChip` in
+            ScanScreen) so the user reads "this is the same kind of
+            metadata". */}
+        <Stack
+          direction="row"
+          spacing={0.5}
+          sx={{ flexWrap: 'wrap', rowGap: 0.5, minWidth: 0 }}
         >
-          {subtitle}
-        </Typography>
+          <SessionChip chip={transportChip} />
+          <SessionChip chip={statusChip} />
+        </Stack>
       </Stack>
       {showMenu ? (
         <>
@@ -141,47 +266,25 @@ export function SessionTopBar({
             transformOrigin={{ vertical: 'top', horizontal: 'right' }}
             slotProps={{ paper: { sx: { minWidth: 240 } } }}
           >
-            {isLocal ? (
-              <HfAuthMenuItem
-                auth={auth}
-                onDone={() => setMenuAnchor(null)}
-              />
+            {showForgetWifi ? (
+              <MenuItem
+                onClick={() => {
+                  setMenuAnchor(null);
+                  onForgetWifi();
+                }}
+              >
+                <ListItemIcon>
+                  <DeleteOutlineIcon fontSize="small" color="warning" />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Forget Wi-Fi"
+                  secondary="Reachy will return to setup mode"
+                  primaryTypographyProps={{ fontWeight: 600 }}
+                  secondaryTypographyProps={{ fontSize: '0.7rem' }}
+                />
+              </MenuItem>
             ) : null}
-            {isLocal ? <Divider /> : null}
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                onOpenMemory();
-              }}
-            >
-              <ListItemIcon>
-                <PsychologyOutlinedIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Memory"
-                secondary="Inspect what Reachy remembers"
-                primaryTypographyProps={{ fontWeight: 600 }}
-                secondaryTypographyProps={{ fontSize: '0.7rem' }}
-              />
-            </MenuItem>
-            <Divider />
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                onForgetWifi();
-              }}
-            >
-              <ListItemIcon>
-                <DeleteOutlineIcon fontSize="small" color="warning" />
-              </ListItemIcon>
-              <ListItemText
-                primary="Forget Wi-Fi"
-                secondary="Robot will reopen its hotspot"
-                primaryTypographyProps={{ fontWeight: 600 }}
-                secondaryTypographyProps={{ fontSize: '0.7rem' }}
-              />
-            </MenuItem>
-            <Divider />
+            {showForgetWifi ? <Divider /> : null}
             <MenuItem
               onClick={() => {
                 setMenuAnchor(null);
@@ -206,74 +309,3 @@ export function SessionTopBar({
   );
 }
 
-/**
- * LAN-only menu row: Sign in / out of HF on the daemon side.
- *
- * Why this lives only in LAN mode
- * ───────────────────────────────
- * Remote sessions already pass through `RemoteSignInScreen` at the
- * app gate, so the daemon transparently uses that same token. In
- * LAN we still surface the menu because the daemon has its own HF
- * token store that can drift from the gate token (revoked, scope
- * change, factory reset…) and the user needs a one-tap recovery
- * path that isn't a full screen takeover.
- */
-function HfAuthMenuItem({
-  auth,
-  onDone,
-}: {
-  auth: ReturnType<typeof useHfAuth>;
-  onDone: () => void;
-}) {
-  const { isAuthenticated, username, avatarUrl, isWaitingForAuth, isLoading } =
-    auth;
-
-  if (isAuthenticated) {
-    return (
-      <MenuItem
-        onClick={() => {
-          void auth.logout();
-          onDone();
-        }}
-      >
-        <ListItemIcon>
-          <Avatar
-            src={avatarUrl ?? undefined}
-            sx={{ width: 26, height: 26, fontSize: 12 }}
-          >
-            {username?.[0]?.toUpperCase() ?? '?'}
-          </Avatar>
-        </ListItemIcon>
-        <ListItemText
-          primary={username ?? 'Hugging Face'}
-          secondary="Sign out"
-          primaryTypographyProps={{ fontWeight: 600 }}
-          secondaryTypographyProps={{ fontSize: '0.7rem' }}
-        />
-        <LogoutIcon fontSize="small" color="action" sx={{ ml: 1 }} />
-      </MenuItem>
-    );
-  }
-
-  const busy = isLoading || isWaitingForAuth;
-
-  return (
-    <MenuItem
-      disabled={busy}
-      onClick={() => {
-        void auth.login();
-        onDone();
-      }}
-    >
-      <ListItemIcon>
-        {busy ? <CircularProgress size={16} /> : <LoginIcon fontSize="small" />}
-      </ListItemIcon>
-      <ListItemText
-        primary={busy ? 'Waiting for login…' : 'Sign in with Hugging Face'}
-        secondary={busy ? 'Finish in your browser' : 'Needed to start a conversation'}
-        primaryTypographyProps={{ fontWeight: 600 }}
-        secondaryTypographyProps={{ fontSize: '0.7rem' }}
-      />
-    </MenuItem>
-  );
-}

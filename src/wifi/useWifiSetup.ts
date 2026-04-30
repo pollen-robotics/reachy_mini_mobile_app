@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { BleWifiStatus } from '../types/robot';
+import type { BleWifiProbe, BleWifiStatus } from '../types/robot';
 import { formatBlecError, useBleSession } from '../ble/useBleSession';
 
 const STATUS_POLL_MS = 3_000;
@@ -34,6 +34,18 @@ const FAST_POLL_DURATION_MS = 30_000;
 
 /** WIFI_SCAN blocks the daemon BT loop for up to ~10 s (nmcli rescan). */
 const WIFI_SCAN_READ_DELAY_MS = 1_000;
+/**
+ * `WIFI_PROBE` runs four parallel checks server-side bounded by ~2.5 s.
+ * Add a small buffer for BLE round-trip; falling back to legacy HTTP
+ * probes is preferable to a hung BLE write.
+ */
+const WIFI_PROBE_READ_DELAY_MS = 250;
+/**
+ * If the first probe sees `wlan=ok` but `gateway=fail`, DHCP is likely
+ * still in flight. Wait this long, then re-probe ONCE - never loop, the
+ * caller decides what to do with the second verdict.
+ */
+const WIFI_PROBE_RETRY_DELAY_MS = 1_500;
 
 type IntervalHandle = ReturnType<typeof setInterval>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
@@ -53,6 +65,18 @@ export interface UseWifiSetupResult {
    * a clean find-robot + connect cycle. */
   forget: (ssid: string, options?: { disconnectAfter?: boolean }) => Promise<boolean>;
   refresh: () => Promise<void>;
+  /**
+   * Ask the robot to diagnose its own connectivity end-to-end.
+   *
+   * Returns:
+   *   - a parsed `BleWifiProbe` (the modern path, daemon supports
+   *     `WIFI_PROBE`),
+   *   - `'unsupported'` when the daemon is too old (replied `ECHO:` to
+   *     the unknown command), so the caller can fall back to the legacy
+   *     HTTP probe loop, or
+   *   - `null` on transient BLE error - the caller can retry.
+   */
+  probe: () => Promise<BleWifiProbe | 'unsupported' | null>;
   clearError: () => void;
 }
 
@@ -286,6 +310,35 @@ export function useWifiSetup(): UseWifiSetupResult {
     [sendCommand, disconnectDevice, startFastPoll]
   );
 
+  /**
+   * Issue a single `WIFI_PROBE`. Does NOT touch `isBusy` / `error` -
+   * this is meant to be called from the connecting takeover where we
+   * already drive a richer state machine.
+   *
+   * Idempotent: a transient BLE failure returns `null` so the caller
+   * can retry without state pollution.
+   */
+  const probe = useCallback(async (): Promise<
+    BleWifiProbe | 'unsupported' | null
+  > => {
+    if (!connectedAddress) return null;
+    try {
+      const raw = await sendCommand('WIFI_PROBE', {
+        delayMs: WIFI_PROBE_READ_DELAY_MS,
+      });
+      // Daemon-too-old fallback: bluetooth_service.py routes any
+      // unknown command through `ECHO: <command>`. Surface this as a
+      // distinct outcome so the caller can fall back to legacy HTTP
+      // probes instead of treating an old daemon as "no internet".
+      if (raw.startsWith('ECHO:')) return 'unsupported';
+      if (raw.startsWith('ERROR:')) return null;
+      return parseWifiProbe(raw);
+    } catch (err) {
+      console.warn('[useWifiSetup] probe failed', err);
+      return null;
+    }
+  }, [connectedAddress, sendCommand]);
+
   return {
     status,
     isAuthenticated,
@@ -297,6 +350,7 @@ export function useWifiSetup(): UseWifiSetupResult {
     connect,
     forget,
     refresh,
+    probe,
     clearError,
   };
 }
@@ -315,8 +369,13 @@ function safeJsonParse<T>(raw: string): T | null {
 
 /** Parse the JSON payload returned by `WIFI_STATUS`. Returns `null` if
  * the daemon sent something unparseable - callers keep showing the
- * last good status instead of bouncing between "connected" and "reading". */
-function parseWifiStatus(raw: string): BleWifiStatus | null {
+ * last good status instead of bouncing between "connected" and "reading".
+ *
+ * Exported for reuse by the session controller, which fires a one-shot
+ * `WIFI_STATUS` read at the end of the BLE handshake to surface the
+ * connected SSID alongside the LAN IP on the connection stepper.
+ */
+export function parseWifiStatus(raw: string): BleWifiStatus | null {
   const parsed = safeJsonParse<Partial<BleWifiStatus>>(raw);
   if (!parsed || typeof parsed !== 'object') return null;
   return {
@@ -327,4 +386,58 @@ function parseWifiStatus(raw: string): BleWifiStatus | null {
       : [],
     error: typeof parsed.error === 'string' ? parsed.error : null,
   };
+}
+
+/** Parse the JSON payload returned by `WIFI_PROBE`. Returns `null` on
+ * any malformed payload - the caller treats that as a transient BLE
+ * error and retries.
+ *
+ * Field-by-field validation: an unknown daemon could ship a 6th key in
+ * the future and we don't want one rogue value to invalidate the whole
+ * verdict, so we coerce each known key independently. */
+function parseWifiProbe(raw: string): BleWifiProbe | null {
+  const parsed = safeJsonParse<Record<string, unknown>>(raw);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const wlan =
+    parsed.wlan === 'ok' || parsed.wlan === 'hotspot' || parsed.wlan === 'fail'
+      ? parsed.wlan
+      : null;
+  const gateway = parsed.gateway === 'ok' || parsed.gateway === 'fail' ? parsed.gateway : null;
+  const dns = parsed.dns === 'ok' || parsed.dns === 'fail' ? parsed.dns : null;
+  const internet =
+    parsed.internet === 'ok' || parsed.internet === 'fail' ? parsed.internet : null;
+  const daemon =
+    parsed.daemon === 'ok' || parsed.daemon === 'loading' || parsed.daemon === 'fail'
+      ? parsed.daemon
+      : null;
+
+  if (!wlan || !gateway || !dns || !internet || !daemon) return null;
+  return { wlan, gateway, dns, internet, daemon };
+}
+
+/**
+ * Probe with a single retry when DHCP is still in flight. Exposed as a
+ * helper so the WiFi setup screen can keep its own state machine simple
+ * (single call, single verdict).
+ *
+ * Retry policy: if the first probe sees `wlan=ok` but the gateway/dns
+ * pair is failing, the robot most likely just acquired its IP and is
+ * waiting on DHCP / DNS warm-up. One retry after
+ * `WIFI_PROBE_RETRY_DELAY_MS` is enough; we never loop, so the UI never
+ * stalls.
+ */
+export async function probeWithRetry(
+  setup: UseWifiSetupResult
+): Promise<BleWifiProbe | 'unsupported' | null> {
+  const first = await setup.probe();
+  if (first === null || first === 'unsupported') return first;
+
+  const dhcpInFlight =
+    first.wlan === 'ok' && (first.gateway === 'fail' || first.dns === 'fail');
+  if (!dhcpInFlight) return first;
+
+  await new Promise<void>(r => setTimeout(r, WIFI_PROBE_RETRY_DELAY_MS));
+  const second = await setup.probe();
+  return second ?? first;
 }

@@ -70,3 +70,28 @@ export interface BleWifiStatus {
   known: string[];
   error: string | null;
 }
+
+/**
+ * End-to-end reachability snapshot returned by the daemon's `WIFI_PROBE`
+ * BLE command (see `_wifi_probe` in `bluetooth_service.py`). All checks
+ * are run by the *robot* over plain TCP / plain DNS - no TLS - so the
+ * verdict survives a Pi that boots without a real-time clock.
+ *
+ * Field semantics:
+ *   - `wlan`     : 'ok' when the robot is on a real WiFi (not its own
+ *                  hotspot). 'hotspot' when the daemon is broadcasting
+ *                  its own AP. 'fail' when offline.
+ *   - `gateway`  : 'ok' when the default gateway answers a TCP SYN.
+ *   - `dns`      : 'ok' when a public hostname resolves.
+ *   - `internet` : 'ok' when a TCP SYN reaches a public anycast endpoint.
+ *   - `daemon`   : 'ok' (running), 'loading' (daemon HTTP up but backend
+ *                  still warming) or 'fail' (daemon unreachable). Lets
+ *                  the UI wait gracefully right after a fresh boot.
+ */
+export interface BleWifiProbe {
+  wlan: 'ok' | 'hotspot' | 'fail';
+  gateway: 'ok' | 'fail';
+  dns: 'ok' | 'fail';
+  internet: 'ok' | 'fail';
+  daemon: 'ok' | 'loading' | 'fail';
+}

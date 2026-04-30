@@ -25,14 +25,16 @@ import {
   Button,
   CircularProgress,
   IconButton,
+  InputAdornment,
   Link,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import ReplayIcon from '@mui/icons-material/Replay';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WifiIcon from '@mui/icons-material/Wifi';
 
 import HeroIllustration from '../components/HeroIllustration';
@@ -43,10 +45,10 @@ import { useBleSession } from '../ble/useBleSession';
 import { daemonFetch } from '../daemon/daemonFetch';
 import { getRobotNameOverLan } from '../daemon/daemonRobotName';
 import { shouldPromptRobotName } from '../daemon/robotName';
-import { useWifiSetup } from '../wifi/useWifiSetup';
-import blueprintSvg from '../assets/blueprint.svg';
+import type { BleWifiProbe } from '../types/robot';
+import { describeProbeRefinement } from '../wifi/describeProbe';
+import { probeWithRetry, useWifiSetup } from '../wifi/useWifiSetup';
 import connectionLostSvg from '../assets/connection-lost.svg';
-import lockedReachySvg from '../assets/locked-reachy.svg';
 import rocketSvg from '../assets/rocket.svg';
 import { FONT_WEIGHT, LAYOUT, STATUS, TYPO } from '../styles/tokens';
 
@@ -59,6 +61,15 @@ const STEP_LABELS: readonly string[] = ['Authenticate', 'Network', 'Connect'];
 
 /** Poll HTTP daemon at this interval once the robot reports it joined the WiFi. */
 const POST_CONNECT_PROBE_MS = 2_000;
+/**
+ * Hard ceiling for a single probe attempt (BLE read + HTTP fetch). The
+ * BLE link can briefly freeze while iOS hands the phone over from the
+ * dying robot hotspot to the user's home WiFi; without this guard the
+ * probe could pend long enough to delay `probeFailedAt` past
+ * `SWITCH_PHONE_HINT_MS`, leaving the UI stuck on "Checking
+ * reachability..." even after the hotspot is gone.
+ */
+const PROBE_ATTEMPT_TIMEOUT_MS = 5_500;
 /**
  * Grace period during which we silently wait for HTTP reachability once
  * the robot reports `mode=wlan`. After that, we assume the phone is not
@@ -114,8 +125,14 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
   const [probeFailedAt, setProbeFailedAt] = useState<number | null>(null);
   /** Tick every 500ms during connect so the takeover re-renders and
    *  transitions through sub-states even when `setup.status` stays
-   *  identical. Only active during `connectTarget !== null`. */
-  const [, setNowTick] = useState(0);
+   *  identical. Only active during `connectTarget !== null`.
+   *
+   *  We KEEP the value (not just the setter) and feed it into
+   *  `connectingSub`'s dependency array - otherwise React's `useMemo`
+   *  caches the previous result and `Date.now() - probeFailedAt` never
+   *  gets re-evaluated, leaving the UI stuck on `joined-probing`
+   *  forever. */
+  const [nowTick, setNowTick] = useState(0);
   /**
    * IP the HTTP probe successfully reached. When non-null, we are past
    * the WiFi-join phase: the daemon is alive on this address and the
@@ -124,6 +141,20 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
   const [namingHost, setNamingHost] = useState<string | null>(null);
   /** Initial value for the naming input, sourced from `GET robot-name`. */
   const [namingInitial, setNamingInitial] = useState<string>('');
+  /**
+   * Latest `WIFI_PROBE` verdict from the robot itself.
+   *
+   *   - `null`           : not asked yet (robot still in `joining`).
+   *   - `'unsupported'`  : daemon too old for `WIFI_PROBE`; we keep the
+   *                        legacy HTTP probe as our only signal and the
+   *                        UI falls back to the generic
+   *                        "switch-phone-wifi" hint.
+   *   - `BleWifiProbe`   : actionable diagnostic the UI can use to swap
+   *                        a vague nudge for a precise message.
+   */
+  const [probeVerdict, setProbeVerdict] = useState<BleWifiProbe | 'unsupported' | null>(
+    null
+  );
 
   // Fallback to scan screen if BLE session dropped.
   useEffect(() => {
@@ -156,26 +187,74 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
   // after SWITCH_PHONE_HINT_MS, but we never bail out on our own - the
   // user decides when to go back.
   const doneRef = useRef(false);
+  /**
+   * Sticky cache of the robot's WLAN IP. The first successful BLE
+   * `NETWORK_STATUS` read after the robot joined wins; subsequent ticks
+   * reuse this IP rather than hammering BLE again, because the link
+   * routinely freezes for a few seconds while iOS hands the phone from
+   * the dying robot hotspot to the user's home WiFi.
+   */
+  const probeIpRef = useRef<string | null>(null);
   useEffect(() => {
     if (!wlanConnectedToTarget) return;
     if (doneRef.current) return;
     let cancelled = false;
 
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> => {
+      return new Promise(resolve => {
+        let settled = false;
+        const timer = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(null);
+        }, ms);
+        p.then(
+          v => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(v);
+          },
+          () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(null);
+          }
+        );
+      });
+    };
+
+    const resolveIp = async (): Promise<string | null> => {
+      if (probeIpRef.current) return probeIpRef.current;
+      const ns = await withTimeout(readNetworkStatus(), 2_500);
+      if (cancelled || !ns || !ns.ip) return null;
+      probeIpRef.current = ns.ip;
+      return ns.ip;
+    };
+
     const probe = async (): Promise<string | null> => {
-      try {
-        const ns = await readNetworkStatus();
-        if (cancelled || !ns.ip) return null;
-        const resp = await daemonFetch(ns.ip, '/api/daemon/status', { timeoutMs: 4_000 });
-        return resp.ok ? ns.ip : null;
-      } catch {
-        return null;
-      }
+      const ip = await resolveIp();
+      if (cancelled || !ip) return null;
+      const resp = await withTimeout(
+        daemonFetch(ip, '/api/daemon/status', { timeoutMs: 3_000 }),
+        3_500
+      );
+      if (cancelled) return null;
+      return resp && resp.ok ? ip : null;
     };
 
     const tick = async (): Promise<void> => {
       if (cancelled || doneRef.current) return;
-      const reachableIp = await probe();
+
+      // Watchdog: if the whole probe attempt (BLE read + HTTP fetch)
+      // takes longer than `PROBE_ATTEMPT_TIMEOUT_MS`, mark the attempt
+      // as failed so the UI can transition to `joined-switch-phone`
+      // after `SWITCH_PHONE_HINT_MS`, even if the underlying I/O is
+      // still pending in the background.
+      const reachableIp = await withTimeout(probe(), PROBE_ATTEMPT_TIMEOUT_MS);
       if (cancelled) return;
+
       if (reachableIp !== null) {
         doneRef.current = true;
         // The daemon is up. Read its current name and either route the
@@ -216,8 +295,42 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
     setConnectError(null);
     setConnectStartedAt(null);
     setProbeFailedAt(null);
+    setProbeVerdict(null);
     doneRef.current = false;
+    probeIpRef.current = null;
   };
+
+  // ============================================================
+  // Robot-side reachability probe
+  // ============================================================
+  //
+  // Fired ONCE per connect attempt as soon as the robot reports it
+  // joined the target SSID. The verdict (gateway / dns / internet /
+  // daemon) is purely informative: it lets the UI swap the generic
+  // "your phone is probably on the wrong WiFi" nudge for a precise
+  // message ("captive portal probable", "router not handing out IPs",
+  // "daemon still booting, hold on").
+  //
+  // We do NOT loop the probe. The real liveness signal stays the HTTP
+  // probe loop above (it tells us when the *phone* can reach the daemon
+  // - a WIFI_PROBE only knows about the *robot* side). One probe-with-
+  // retry is enough to seed the diagnostic; if the robot's situation
+  // changes later, the user will retry from the picker.
+  //
+  // Old daemons (pre-WIFI_PROBE) reply `ECHO: WIFI_PROBE`; we map that
+  // to `'unsupported'` and the UI keeps its legacy behaviour.
+  useEffect(() => {
+    if (!wlanConnectedToTarget) return;
+    if (probeVerdict !== null) return;
+    let cancelled = false;
+    void probeWithRetry(setup).then(verdict => {
+      if (cancelled) return;
+      if (verdict !== null) setProbeVerdict(verdict);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wlanConnectedToTarget, probeVerdict, setup]);
 
   const handleBack = async (): Promise<void> => {
     resetConnectState();
@@ -239,6 +352,7 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
     setConnectStartedAt(Date.now());
     setProbeFailedAt(null);
     doneRef.current = false;
+    probeIpRef.current = null;
 
     const ok = await setup.connect(ssid, psk);
     if (!ok) {
@@ -319,6 +433,12 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
     connectStartedAt,
     wlanConnectedToTarget,
     probeFailedAt,
+    // Re-evaluate every 500ms while a connect attempt is in-flight so
+    // the time-based branches (`joined-switch-phone` after 15s,
+    // `fallback-hotspot` after 45s) actually fire. Without this dep the
+    // memo's deps never change after `probeFailedAt` is first set and
+    // the UI stays stuck on `joined-probing` forever.
+    nowTick,
   ]);
 
   if (phase === 'connecting' && connectingSub !== null) {
@@ -327,6 +447,7 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
         ssid={connectTarget ?? 'your network'}
         substate={connectingSub}
         wifiError={setup.status?.error ?? null}
+        probeVerdict={probeVerdict}
         onRetryProbe={() => setProbeFailedAt(Date.now() - SWITCH_PHONE_HINT_MS - 1_000)}
         onTryAnotherNetwork={handleTryAnotherNetwork}
         onBackToScan={() => void handleBack()}
@@ -361,7 +482,6 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
   const showBack = phase !== 'pin-running';
   const stepperIdx = stepperIndexFor(phase);
   const stepperError = phase === 'pin-failed' || phase === 'connect-failed';
-  const heroSrc = heroForPhase(phase);
 
   return (
     <Stack
@@ -401,14 +521,6 @@ export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreen
             error={stepperError}
           />
         </Box>
-
-        <HeroIllustration
-          src={heroSrc}
-          alt={titleFor(phase)}
-          animation="float"
-          size={LAYOUT.heroSizeSmall}
-          mb={0.5}
-        />
 
         <Stack spacing={0.5} alignItems="center" sx={{ width: '100%', px: 1 }}>
           <Typography
@@ -477,23 +589,6 @@ function stepperIndexFor(phase: Phase): number {
     case 'connect-failed':
     case 'naming':
       return 2;
-  }
-}
-
-function heroForPhase(phase: Phase): string {
-  switch (phase) {
-    case 'pin-idle':
-    case 'pin-running':
-      return lockedReachySvg;
-    case 'pin-failed':
-      return connectionLostSvg;
-    case 'picker-idle':
-      return blueprintSvg;
-    case 'connecting':
-    case 'naming':
-      return rocketSvg;
-    case 'connect-failed':
-      return connectionLostSvg;
   }
 }
 
@@ -628,6 +723,7 @@ function PickerStep({
   const [manualSsid, setManualSsid] = useState('');
   const [psk, setPsk] = useState('');
   const [showHidden, setShowHidden] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const scannedRef = useRef(false);
 
   useEffect(() => {
@@ -642,44 +738,49 @@ function PickerStep({
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Box sx={{ flex: 1 }}>
-          <NetworkSelect
-            value={selectedSsid}
-            onChange={ssid => {
-              setSelectedSsid(ssid);
-              setManualSsid('');
-            }}
-            networks={scanResults}
-            isLoading={busy}
-            connectedNetwork={connectedSsid}
-            disabled={busy && scanResults.length === 0}
-          />
-        </Box>
-        <IconButton
-          onClick={() => void onScan()}
-          disabled={busy}
-          size="small"
-          aria-label="Rescan"
-          sx={{
-            border: theme => `1px solid ${theme.palette.divider}`,
-            borderRadius: 1.5,
-            height: 40,
-            width: 40,
-          }}
-        >
-          {busy ? <CircularProgress size={14} thickness={5} /> : <ReplayIcon fontSize="small" />}
-        </IconButton>
-      </Stack>
+      <NetworkSelect
+        value={selectedSsid}
+        onChange={ssid => {
+          setSelectedSsid(ssid);
+          setManualSsid('');
+        }}
+        networks={scanResults}
+        isLoading={busy}
+        connectedNetwork={connectedSsid}
+        disabled={busy && scanResults.length === 0}
+        onRefresh={() => void onScan()}
+        isRefreshing={busy}
+      />
 
       <TextField
         label="Password"
         value={psk}
         onChange={e => setPsk(e.target.value)}
-        type="password"
+        type={showPassword ? 'text' : 'password'}
         autoComplete="new-password"
         fullWidth
         disabled={busy}
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end">
+              <IconButton
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                onClick={() => setShowPassword(v => !v)}
+                onMouseDown={e => e.preventDefault()}
+                edge="end"
+                size="small"
+                disabled={busy}
+                sx={{ color: 'text.secondary' }}
+              >
+                {showPassword ? (
+                  <VisibilityOffIcon fontSize="small" />
+                ) : (
+                  <VisibilityIcon fontSize="small" />
+                )}
+              </IconButton>
+            </InputAdornment>
+          ),
+        }}
       />
 
       {!showHidden ? (
@@ -700,7 +801,6 @@ function PickerStep({
             setSelectedSsid('');
             setManualSsid(e.target.value);
           }}
-          size="small"
           fullWidth
           disabled={busy}
         />
@@ -771,6 +871,9 @@ interface ConnectingTakeoverProps {
   substate: ConnectingSubstate;
   /** `setup.status.error` as reported by the daemon, when available. */
   wifiError: string | null;
+  /** Robot-side reachability snapshot. `null` while the probe hasn't
+   *  fired yet, `'unsupported'` for daemons too old for `WIFI_PROBE`. */
+  probeVerdict: BleWifiProbe | 'unsupported' | null;
   /** Force an immediate HTTP probe (used by the "switch phone" hint). */
   onRetryProbe: () => void;
   /** User acknowledges the robot fell back to hotspot; go back to the
@@ -795,6 +898,7 @@ function ConnectingTakeover({
   ssid,
   substate,
   wifiError,
+  probeVerdict,
   onRetryProbe,
   onTryAnotherNetwork,
   onBackToScan,
@@ -847,7 +951,11 @@ function ConnectingTakeover({
         </Typography>
       </Stack>
 
-      <ConnectingSubstatusBlock substate={substate} wifiError={wifiError} />
+      <ConnectingSubstatusBlock
+        substate={substate}
+        wifiError={wifiError}
+        probeVerdict={probeVerdict}
+      />
 
       <ConnectingActions
         substate={substate}
@@ -877,9 +985,11 @@ function headerLabelFor(substate: ConnectingSubstate): string {
 function ConnectingSubstatusBlock({
   substate,
   wifiError,
+  probeVerdict,
 }: {
   substate: ConnectingSubstate;
   wifiError: string | null;
+  probeVerdict: BleWifiProbe | 'unsupported' | null;
 }) {
   if (substate === 'sending' || substate === 'joining') {
     return (
@@ -895,28 +1005,59 @@ function ConnectingSubstatusBlock({
   }
 
   if (substate === 'joined-probing') {
+    // Refine the secondary line if the robot itself reports the daemon
+    // is still loading: that's the actual reason for the wait, not the
+    // phone's WiFi handover. Skip the refinement on `'unsupported'`
+    // (legacy daemon) - we don't have new information to surface.
+    const daemonLoading =
+      probeVerdict !== null &&
+      probeVerdict !== 'unsupported' &&
+      probeVerdict.daemon === 'loading';
+
     return (
       <Stack
-        direction="row"
-        spacing={1.5}
+        spacing={1.25}
         alignItems="center"
-        sx={{
-          minHeight: 40,
-          px: 2,
-          py: 1,
-          borderRadius: 2,
-          bgcolor: 'action.hover',
-        }}
+        sx={{ maxWidth: 340, textAlign: 'center' }}
       >
-        <CheckRoundedIcon sx={{ fontSize: 18, color: STATUS.success }} />
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-          Robot joined the network. Checking reachability…
+        <Stack
+          direction="row"
+          spacing={1.5}
+          alignItems="center"
+          sx={{
+            minHeight: 40,
+            px: 2,
+            py: 1,
+            borderRadius: 2,
+            bgcolor: 'action.hover',
+          }}
+        >
+          <CircularProgress size={16} thickness={4} />
+          <Typography
+            sx={{
+              fontSize: TYPO.sm,
+              color: 'text.primary',
+              fontWeight: FONT_WEIGHT.semibold,
+            }}
+          >
+            {daemonLoading ? 'Robot is finishing boot' : 'Robot joined the network'}
+          </Typography>
+        </Stack>
+        <Typography
+          sx={{ fontSize: TYPO.xs, color: 'text.secondary', lineHeight: 1.5 }}
+        >
+          {daemonLoading
+            ? 'The daemon is still loading. We\u2019ll continue automatically as soon as it\u2019s ready.'
+            : 'Waiting for your phone to rejoin its WiFi. This usually takes 30-60\u00a0seconds. We\u2019ll continue automatically as soon as we can reach the robot.'}
         </Typography>
       </Stack>
     );
   }
 
   if (substate === 'joined-switch-phone') {
+    // Use the robot's own diagnostic (when available) to swap a vague
+    // "same WiFi?" nudge for a precise, actionable message.
+    const refinement = describeProbeRefinement(probeVerdict);
     return (
       <Stack
         spacing={1.25}
@@ -924,11 +1065,10 @@ function ConnectingSubstatusBlock({
         sx={{ maxWidth: 340, textAlign: 'center' }}
       >
         <Typography sx={{ fontSize: TYPO.md, color: 'text.primary', fontWeight: FONT_WEIGHT.semibold }}>
-          Almost there
+          {refinement.title}
         </Typography>
         <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.5 }}>
-          The robot is online but this phone can&apos;t reach it yet. Make sure your
-          phone is on the same WiFi network, then tap <strong>Retry</strong>.
+          {refinement.body}
         </Typography>
       </Stack>
     );
@@ -1029,3 +1169,4 @@ function ConnectingActions({
 
   return null;
 }
+

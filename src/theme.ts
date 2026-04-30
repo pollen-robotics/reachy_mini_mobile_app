@@ -16,6 +16,18 @@ const FONT_FAMILY =
 function buildTheme(mode: 'light' | 'dark'): Theme {
   const isDark = mode === 'dark';
   return createTheme({
+    // MUI v7 wraps every `sx` rule and most `styled()` declarations in
+    // `@layer sx { ... }` / `@layer global { ... }` by default. We
+    // mirror Emotion's `<style data-emotion>` text into Constructable
+    // Stylesheets to get around the iOS 18.7 / `tauri://localhost`
+    // bug (see `main.tsx` for the full explanation), and the mirror
+    // pipes text through `CSSStyleSheet.replaceSync(...)`. That call
+    // accepts plain rules but is unreliable around dynamically
+    // wrapped `@layer` blocks in WebKit. Since we don't ship alongside
+    // other CSS frameworks, layer isolation gives us no real benefit;
+    // disabling it makes every MUI rule plain CSS, which the mirror
+    // forwards cleanly.
+    modularCssLayers: false,
     palette: {
       mode,
       primary: { main: ACCENT },

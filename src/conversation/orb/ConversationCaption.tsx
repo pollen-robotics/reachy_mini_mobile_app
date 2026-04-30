@@ -46,6 +46,7 @@ export function ConversationCaption({ state, message }: ConversationCaptionProps
 const CAPTION_BY_STATE: Record<OrbState, string> = {
   idle: '',
   connecting: 'Connecting',
+  ready: 'Tap to start',
   listening: '',
   'user-speaking': '',
   processing: '',

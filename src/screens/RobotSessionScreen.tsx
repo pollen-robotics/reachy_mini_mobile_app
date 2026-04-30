@@ -43,25 +43,38 @@
  * See the FSM module header for the full transition table and what
  * each event represents.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Box, Stack } from '@mui/material';
 
+import { useBleSession } from '../ble/useBleSession';
 import ForgetWifiDialog from '../components/ForgetWifiDialog';
-import StepperHeader from '../components/StepperHeader';
 import {
   useSessionController,
   type SessionController,
 } from '../session/useSessionController';
 import type { ConnectionTarget } from '../session/sessionFsm';
+import type { BleWifiProbe } from '../types/robot';
+import { probeWithRetry, useWifiSetup } from '../wifi/useWifiSetup';
 
 import { ConversationView } from './session/ConversationView';
 import {
+  buildHandshakeSteps,
   HandshakeFailureView,
   HandshakeRunningView,
-  LeavingView,
+  type StepRow,
 } from './session/HandshakeViews';
-import { MemoryDialog } from './session/MemoryDialog';
+import { LeavingView } from './session/LeavingView';
 import { SessionTopBar } from './session/SessionTopBar';
+
+/**
+ * Auto-retry delay when the BLE-side probe tells us the daemon is
+ * just finishing boot. 3 s gives the daemon's `state` field a beat
+ * to flip from `loading` to `running` before we re-issue the
+ * handshake - long enough that we don't spin uselessly, short
+ * enough that the user perceives it as continuous progress (no
+ * failure UI in between).
+ */
+const PROBE_AUTO_RETRY_DELAY_MS = 3_000;
 
 // Re-export so existing call sites (`App.tsx`) keep working.
 export type { ConnectionTarget };
@@ -113,12 +126,45 @@ function SessionContent({
   // it through the controller.
   const [showHandshakeDetails, setShowHandshakeDetails] = useState(false);
   const [forgetOpen, setForgetOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
+
+  // BLE-driven failure diagnostic. When the handshake fails AND we
+  // happen to have an open BLE link to this robot, ask the daemon to
+  // probe its own connectivity - the verdict drives a richer failure
+  // message and, on `daemon=loading`, a one-shot auto-retry that
+  // bypasses the failure UI entirely. See `useFailureProbe` for the
+  // full lifecycle.
+  const ble = useBleSession();
+  const wifiSetup = useWifiSetup();
+  const handshakeError = controller.state.error;
+  const { probeVerdict } = useFailureProbe({
+    error: handshakeError,
+    bleConnectedAddress: ble.connectedAddress,
+    wifiSetup,
+    retry: controller.retry,
+  });
 
   const phase = controller.state.phase;
   const isAuthenticated = controller.isLocal
     ? controller.auth.isAuthenticated
     : true;
+
+  // The "Forget Wi-Fi" affordance only makes sense for the wireless
+  // Reachy variant: the USB / Mac-tray case has no Wi-Fi config to
+  // wipe, so showing the entry would be misleading. We trust three
+  // signals in order:
+  //   - BLE target → always wireless (BLE chip is exclusive to the
+  //     wireless variant);
+  //   - HF target with `meta.wireless_version === true` → wireless;
+  //   - HF target with `meta.wireless_version === false` → USB-via-tray;
+  //   - localhost (USB) target → never wireless.
+  // Legacy daemons that don't publish `wireless_version` over central
+  // collapse to "hidden" so the menu is conservative rather than
+  // over-promising.
+  const showForgetWifi = (() => {
+    if (target.kind === 'local') return true;
+    if (target.kind === 'localhost') return false;
+    return target.robot.meta?.wireless_version === true;
+  })();
   // The ConversePanel must be mounted as soon as we leave 'handshake':
   // its DataChannel IS the daemon proxy transport, so wake-up,
   // setMotorMode, and the daemon-status pill all need it. The panel's
@@ -129,31 +175,26 @@ function SessionContent({
     <Stack sx={{ height: '100%', bgcolor: 'background.default' }}>
       <SessionTopBar
         robotName={controller.displayName}
-        subtitle={controller.subtitle}
+        installIdSuffix={controller.installIdSuffix}
+        transport={controller.transport}
+        endpoint={controller.endpoint}
+        statusText={controller.statusText}
+        motorState={controller.motorState}
+        daemonVersion={controller.daemonVersion?.version ?? null}
         onBack={controller.back}
         backDisabled={phase === 'leaving'}
         showMenu={phase === 'ready' || phase === 'live'}
-        isLocal={controller.isLocal}
+        showForgetWifi={showForgetWifi}
         onForgetWifi={() => setForgetOpen(true)}
         onDisconnect={controller.back}
-        onOpenMemory={() => setMemoryOpen(true)}
-        auth={controller.auth}
       />
 
-      {/* Stepper visible during handshake + engine only. Once the
-          robot is awake we drop it entirely and surface the final
-          chrome (top-bar menu + bottom-nav tabs). The "Start
-          conversation" CTA then lives inside the converse tab so the
-          user is already in the post-connect surface. */}
-      {(phase === 'handshake' || phase === 'engine') && (
-        <Box sx={{ px: 3, pt: 2, pb: 1, bgcolor: 'background.default' }}>
-          <StepperHeader
-            steps={controller.stepLabels as unknown as readonly string[]}
-            activeStep={controller.state.activeStep}
-            error={controller.state.error !== null}
-          />
-        </Box>
-      )}
+      {/* The horizontal stepper that used to live up here was
+          removed when the bring-up cell got reworked: the new
+          `HandshakeRunningView` already renders a centred vertical
+          step list as part of its own composition, and pinning a
+          duplicate stepper at the top created two competing visual
+          centres on a 4-inch screen. */}
 
       {/* Body: handshake hero / failure / leaving spinner are
           rendered as an overlay on top of the (eventually mounted)
@@ -190,6 +231,11 @@ function SessionContent({
               controller,
               showHandshakeDetails,
               setShowHandshakeDetails,
+              probeVerdict,
+              transportLabel: describeTransport(
+                controller.transport,
+                controller.endpoint,
+              ),
             })}
           </Stack>
         )}
@@ -212,11 +258,6 @@ function SessionContent({
           controller.back();
         }}
       />
-
-      <MemoryDialog
-        open={memoryOpen}
-        onClose={() => setMemoryOpen(false)}
-      />
     </Stack>
   );
 }
@@ -231,37 +272,156 @@ function renderBringUpCell({
   controller,
   showHandshakeDetails,
   setShowHandshakeDetails,
+  probeVerdict,
+  transportLabel,
 }: {
   controller: SessionController;
   showHandshakeDetails: boolean;
   setShowHandshakeDetails: (next: boolean | ((prev: boolean) => boolean)) => void;
+  /** Latest BLE WIFI_PROBE verdict captured on failure - lets the
+   *  failure view swap its generic copy for an actionable one. */
+  probeVerdict: BleWifiProbe | 'unsupported' | null;
+  /** "USB", "Wi-Fi · 192.168.1.42", "Hugging Face Central" — used as
+   *  a sub-line in the running view so the user keeps awareness of
+   *  which channel the app is dialing through. */
+  transportLabel: string;
 }) {
   const { state } = controller;
   if (state.phase === 'leaving') {
-    return <LeavingView />;
+    return (
+      <LeavingView
+        robotName={controller.displayName}
+        step={controller.leavingStep}
+        isLocal={controller.isLocal}
+      />
+    );
   }
+  // Both the running and failure views render the same vertical
+  // step list. We build the rows once here and pass them down: the
+  // failure variant only needs to know that the active row should
+  // render in error red, which `buildHandshakeSteps` encodes by
+  // flipping that row's status when `errored: true`.
+  // We pass `displayedActiveStep` (not `state.activeStep`) so the
+  // REMOTE flow's collapsed "Hugging Face" step doesn't shift the
+  // visible row math.
+  const steps: readonly StepRow[] = buildHandshakeSteps({
+    labels: controller.stepLabels,
+    details: controller.stepDetails,
+    activeStep: controller.displayedActiveStep,
+    errored: state.error !== null,
+  });
   if (state.error) {
     return (
       <HandshakeFailureView
         error={state.error}
+        steps={steps}
+        robotName={controller.displayName}
+        transportLabel={transportLabel}
         showDetails={showHandshakeDetails}
         onToggleDetails={() => setShowHandshakeDetails((v) => !v)}
         onRetry={controller.retry}
         onWifiSetup={
           state.error.offerWifiSetup ? controller.needsWifi : undefined
         }
+        probeVerdict={probeVerdict}
       />
     );
   }
   return (
     <HandshakeRunningView
-      stepLabel={
-        controller.stepLabels[
-          Math.min(state.activeStep, controller.stepLabels.length - 1)
-        ]
-      }
       robotName={controller.displayName}
+      transportLabel={transportLabel}
+      steps={steps}
       phase={state.phase}
     />
   );
+}
+
+/**
+ * Map the controller's compact transport tag to a label we can show
+ * mid-handshake. Two formats:
+ *
+ *   - LAN (BLE / USB): include the live endpoint when available so
+ *     the user can sanity-check it ("Wi-Fi · 192.168.1.42",
+ *     "USB · 127.0.0.1").
+ *   - Remote (HF): just the friendly product name. The endpoint here
+ *     is a peer ID, of zero use to a human.
+ *
+ * Empty endpoint (BLE pre-network step, remote target) collapses to
+ * the bare channel name, never an awkward "Wi-Fi · ".
+ */
+function describeTransport(
+  transport: 'BLE' | 'USB' | 'HF',
+  endpoint: string,
+): string {
+  if (transport === 'HF') return 'Hugging Face Central';
+  const channel = transport === 'BLE' ? 'Wi-Fi' : 'USB';
+  if (endpoint && endpoint.length > 0) return `${channel} · ${endpoint}`;
+  return channel;
+}
+
+// ─── Probe-on-failure orchestration ──────────────────────────────────
+
+/**
+ * Fires a single `WIFI_PROBE` over the still-open BLE link as soon as
+ * the handshake reports an error, and auto-retries the handshake when
+ * the probe says the daemon is just finishing boot.
+ *
+ * Lifecycle
+ * ─────────
+ *   1. `error` flips from null → set, BLE is connected ⇒ fire
+ *      `probeWithRetry()` once. The result lives in `probeVerdict`
+ *      until the next retry resets it.
+ *   2. If `verdict.daemon === 'loading'`, schedule one retry of the
+ *      handshake after `PROBE_AUTO_RETRY_DELAY_MS`. The user never
+ *      sees a failure card in this case - just a brief spinner that
+ *      morphs back into "Waking up…".
+ *   3. On `error` reset (the user tapped Retry, or the next attempt
+ *      succeeded), `probeVerdict` is cleared so the next failure
+ *      starts from a clean slate.
+ *
+ * Skips entirely when no BLE link is available (central-only target,
+ * BLE was already torn down, etc.) - the rest of the failure UI works
+ * exactly as before.
+ */
+function useFailureProbe(args: {
+  error: ReturnType<typeof useSessionController>['state']['error'];
+  bleConnectedAddress: string | null;
+  wifiSetup: ReturnType<typeof useWifiSetup>;
+  retry: () => void;
+}): { probeVerdict: BleWifiProbe | 'unsupported' | null } {
+  const { error, bleConnectedAddress, wifiSetup, retry } = args;
+  const [probeVerdict, setProbeVerdict] = useState<
+    BleWifiProbe | 'unsupported' | null
+  >(null);
+
+  // Step 1 + 3: fetch on new error, clear on error reset.
+  useEffect(() => {
+    if (!error) {
+      setProbeVerdict(null);
+      return;
+    }
+    if (!bleConnectedAddress) return;
+    let cancelled = false;
+    void probeWithRetry(wifiSetup).then((verdict) => {
+      if (cancelled) return;
+      if (verdict !== null) setProbeVerdict(verdict);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [error, bleConnectedAddress, wifiSetup]);
+
+  // Step 2: auto-retry when the daemon is just booting.
+  useEffect(() => {
+    if (probeVerdict === null || probeVerdict === 'unsupported') return;
+    if (probeVerdict.daemon !== 'loading') return;
+    const handle = window.setTimeout(() => {
+      setProbeVerdict(null);
+      retry();
+    }, PROBE_AUTO_RETRY_DELAY_MS);
+    return () => window.clearTimeout(handle);
+  }, [probeVerdict, retry]);
+
+  return { probeVerdict };
 }

@@ -37,6 +37,8 @@ import type {
 } from "./globals";
 import { isTrajectoryPlaying } from "../daemon/trajectoryGate";
 import { memoryStore } from "./memory";
+import { CONFIG } from "../config";
+import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
@@ -530,10 +532,22 @@ interface Settings {
   instructions: string;
 }
 
+// Build-time OpenAI key, populated by Vite from `.env.local` at
+// build time (`VITE_OPENAI_API_KEY=…`). The mobile shell currently
+// has no settings screen for the key, so we let developers bake
+// theirs into the bundle for debug builds. `.env.local` is in
+// `.gitignore`, so the secret never reaches the repo.
+//
+// Production releases will need a proper user-facing flow (server-
+// side ephemeral keys, per-user OAuth, …); this is debug-only.
+const BUILD_TIME_OPENAI_KEY: string =
+  (import.meta.env?.VITE_OPENAI_API_KEY as string | undefined) ?? "";
+
 function loadSettings(): Settings {
   return {
     hfClientId: localStorage.getItem(STORAGE_KEYS.hfClientId) ?? "",
-    apiKey: localStorage.getItem(STORAGE_KEYS.apiKey) ?? "",
+    apiKey:
+      localStorage.getItem(STORAGE_KEYS.apiKey) ?? BUILD_TIME_OPENAI_KEY,
     model: localStorage.getItem(STORAGE_KEYS.model) ?? DEFAULT_MODEL,
     voice: localStorage.getItem(STORAGE_KEYS.voice) ?? DEFAULT_VOICE,
     instructions: localStorage.getItem(STORAGE_KEYS.instructions) ?? DEFAULT_INSTRUCTIONS,
@@ -796,6 +810,15 @@ async function doConnect(): Promise<void> {
   if (!robot) return;
   setState("connecting");
   try {
+    // iOS-only WebKit privacy quirk: get the LAN host candidates flowing
+    // *before* we kick off the SDK's `connect()` (which immediately
+    // starts ICE gathering). Normally the up-front PermissionsScreen
+    // has already run this in a clean user-gesture frame; this call
+    // is the defensive fallback for users who skipped the onboarding,
+    // denied the prompt earlier, or downgraded from a build that
+    // didn't have the screen yet. Idempotent and a no-op on desktop.
+    await unlockIosMicForWebRtc().catch(() => undefined);
+
     // The SDK refuses a second `connect()` when already in `connected` /
     // `streaming`. Our stop button only tears the *session* down
     // (`stopSession`), so the daemon WebRTC is still up afterwards and
@@ -832,23 +855,17 @@ async function doConnect(): Promise<void> {
 async function doStart(): Promise<void> {
   if (!robot || !selectedRobotId) return;
 
-  if (!settings.apiKey) {
-    // The mobile host owns the settings surface; surface this through
-    // the same callback used for fatal errors so it can prompt the
-    // user to add an OpenAI key.
-    if (onErrorMessageChange) {
-      try {
-        onErrorMessageChange("Add OpenAI key in settings");
-      } catch (callbackErr) {
-        console.warn(
-          "[conversation-engine] onErrorMessageChange threw:",
-          callbackErr,
-        );
-      }
-    }
-    setState("error");
-    return;
-  }
+  // The OpenAI key gate used to live here, gating `robot.startSession()`
+  // entirely. That was the wrong layer: `startSession()` is what opens
+  // the WebRTC DataChannel that the daemon proxy (`http_proxy` over
+  // DC) rides on, and the daemon proxy is needed for the daemon-status
+  // pill, the wake/sleep choreography, and the `engine.bringup`
+  // watchdog regardless of whether a conversation will run. The mobile
+  // shell wants the robot connected first (so the user lands in a
+  // working session screen), and only asks for the OpenAI key when
+  // they explicitly hit "Start conversation". The gate now lives in
+  // `runConversationParts()` so the WebRTC negotiation is unblocked
+  // for users without an OpenAI key.
 
   setState("starting");
 
@@ -953,6 +970,31 @@ async function doStart(): Promise<void> {
  */
 async function runConversationParts(): Promise<void> {
   if (!robot || conversationStarted) return;
+
+  // OpenAI key gate. We get here when the host explicitly requested a
+  // conversation (`convoActiveRequested = true`); the WebRTC robot
+  // connection is already up and the DataChannel is carrying daemon
+  // proxy traffic, so all we'd lose by bailing is the Realtime
+  // pipeline. Surface a clear "Add OpenAI key" message via the host's
+  // settings callback and stay in `connected` so the user can still
+  // drive the robot via the daemon (wake/sleep, motors, …) while
+  // they go fix the configuration.
+  if (!settings.apiKey) {
+    if (onErrorMessageChange) {
+      try {
+        onErrorMessageChange("Add OpenAI key in settings");
+      } catch (callbackErr) {
+        console.warn(
+          "[conversation-engine] onErrorMessageChange threw:",
+          callbackErr,
+        );
+      }
+    }
+    convoActiveRequested = false;
+    if (currentState === "starting") setState("connected");
+    return;
+  }
+
   conversationStarted = true;
 
   // If we're being called from the deferred-start path (host flipped
@@ -2353,6 +2395,7 @@ async function boot(): Promise<void> {
   robot = new window.ReachyMini({
     appName: "Reachy Mini Minimal Voice",
     clientId: settings.hfClientId || undefined,
+    signalingUrl: CONFIG.CENTRAL_URL,
   });
   wireRobot();
 
@@ -2382,14 +2425,23 @@ async function boot(): Promise<void> {
 
     // Mobile fast path: if the ConversePanel pre-fetched the robot's
     // central peer id for us (via /api/hf-auth/central-robot-status
-    // on the daemon), drive the flow all the way through to an open
-    // voice session without a single tap. The user signed in upstream
-    // already; the "Tap to start" state is just noise for an app
-    // that already knows its robot.
+    // on the daemon), drive the flow forward without a single tap.
     //
-    // We gate on the OpenAI key so new users still hit the settings
-    // nudge instead of silently failing at the Realtime handshake.
-    if (preselectedRobotId && settings.apiKey) {
+    // We used to also gate this on `settings.apiKey` so new users
+    // would land on the "Add OpenAI key" nudge before any WebRTC
+    // negotiation, but that's wrong for the mobile shell:
+    //   * `doConnect()` only opens the SSE signaling channel and the
+    //     RTCPeerConnection / DataChannel; it does NOT touch OpenAI.
+    //   * Without that DataChannel the daemon proxy (`http_proxy`
+    //     over DC) is unreachable, so the daemon-status pill, the
+    //     wake/sleep choreography, the engine.bringup watchdog in
+    //     `useSessionController`, all stay stuck pending forever.
+    //   * The OpenAI key only matters for `doStart()` (Realtime API
+    //     handshake), and that branch already returns with an
+    //     "Add OpenAI key in settings" message at line ~846.
+    // → drive `doConnect()` whenever we have a preselected robot,
+    // regardless of OpenAI configuration.
+    if (preselectedRobotId) {
       void doConnect();
     }
   } else {
@@ -2466,7 +2518,7 @@ void whenReachyReady()
 // already accepts (`{type:'endSession', sessionId}`), authenticated
 // via the `?token=` query string accepted by `/send`. We can't put
 // the bearer in a header from sendBeacon.
-const CENTRAL_SEND_URL = "https://cduss-reachy-mini-central.hf.space/send";
+const CENTRAL_SEND_URL = `${CONFIG.CENTRAL_URL}/send`;
 const onPageHide = (): void => {
   // 1) Beacon-based endSession — survives the page being killed.
   try {

@@ -22,10 +22,55 @@
  * robot".
  */
 
-const CENTRAL_ROBOT_STATUS_URL =
-  'https://cduss-reachy-mini-central.hf.space/api/robot-status';
+import { CONFIG } from '../config';
+
+const CENTRAL_ROBOT_STATUS_URL = `${CONFIG.CENTRAL_URL}/api/robot-status`;
 
 const CENTRAL_REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * Health verdict published by the daemon in `meta.health`.
+ *
+ * - `ok`        backend ready, normal operation, auto-connect allowed
+ * - `degraded`  reachable but a non-critical subsystem is down (no
+ *               camera, no audio, transient motor blip): list with
+ *               a yellow badge and let the user decide
+ * - `error`     unsafe to auto-connect: surface a red badge so the
+ *               user can act (replug, retry)
+ * - `unknown`   the central row predates schema_version=1 and didn't
+ *               include `health`; UI falls back to "treat as ok" so
+ *               legacy daemons keep working
+ *
+ * Any other string value coming off the wire is normalised to
+ * `unknown` to avoid letting an unforeseen taxonomy value silently
+ * break the auto-connect gate.
+ */
+export type RobotHealth = 'ok' | 'degraded' | 'error' | 'unknown';
+
+/**
+ * Producer kind (`meta.kind`). Used to hide tray-without-hardware
+ * rows once they're tagged `error` rather than confusing the user
+ * with an unselectable "Reachy Mini tray (this Mac)" entry.
+ */
+export type RobotKind = 'robot' | 'tray' | 'unknown';
+
+export interface CentralRobotMeta {
+  /** Bumped only on breaking field semantics. Read for forward compat. */
+  schema_version?: number;
+  name?: string;
+  install_id?: string;
+  kind?: RobotKind | string;
+  health?: RobotHealth | string;
+  /**
+   * Stable taxonomy attached when `health !== 'ok'`. See
+   * `reachy_mini/daemon/peer_health.py` for the canonical list.
+   * Treat unknown codes as informational only.
+   */
+  error_code?: string;
+  capabilities?: string[];
+  wireless_version?: boolean;
+  version?: string;
+}
 
 export interface CentralRobotEntry {
   // Central's wire format is loose: id / peerId / peer_id have all
@@ -42,18 +87,16 @@ export interface CentralRobotEntry {
    * and is what the mobile robot registry merges on. `name` is the
    * human-readable label.
    *
-   * NOTE (2026-04): the current `cduss/reachy-mini-central` server
-   * extracts `meta.name` into the top-level `robotName` field below
-   * but does NOT propagate `meta.install_id`. Until the server is
-   * updated to forward the full meta blob, central listings cannot
-   * be dedupe-merged with the loopback daemon - we still keep the
-   * field defined so the client is forward-compatible with the
-   * upcoming central change.
+   * Older central deployments may still drop the full meta blob and
+   * only echo `robotName`/`name` at the top level — `extractInstallId`
+   * returns `null` in that case and dedupe falls back to peer-id.
    */
-  meta?: { name?: string; install_id?: string };
+  meta?: CentralRobotMeta;
   name?: string;
   /** Top-level field actually returned by the current central API. */
   robotName?: string;
+  /** Top-level passthrough field central exposes for UI badges. */
+  busy?: boolean;
 }
 
 export interface RemoteRobotsResult {
@@ -119,6 +162,76 @@ export function extractInstallId(
   entry: CentralRobotEntry | undefined,
 ): string | null {
   const raw = entry?.meta?.install_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Health verdict for a central row. Defaults to `'unknown'` when
+ * the field is absent (old daemons that don't publish it yet) so
+ * the UI stays backward compatible.
+ *
+ * Any unrecognised string also collapses to `'unknown'` rather than
+ * leaking through into UI logic that assumes the canonical taxonomy.
+ * That makes adding a new value safe: legacy clients downgrade
+ * gracefully, current clients branch correctly.
+ */
+export function extractHealth(
+  entry: CentralRobotEntry | undefined,
+): RobotHealth {
+  const raw = entry?.meta?.health;
+  if (raw === 'ok' || raw === 'degraded' || raw === 'error') return raw;
+  return 'unknown';
+}
+
+/**
+ * Producer kind (`'robot'` for a Pi daemon, `'tray'` for the desktop
+ * helper). Defaults to `'unknown'` so legacy listings without `kind`
+ * don't get filtered out by accident.
+ */
+export function extractKind(entry: CentralRobotEntry | undefined): RobotKind {
+  const raw = entry?.meta?.kind;
+  if (raw === 'robot' || raw === 'tray') return raw;
+  return 'unknown';
+}
+
+/**
+ * Short, human-readable label for the underlying form factor of a
+ * central row, suitable for use as a chip / caption segment in the
+ * picker. Returns `null` for legacy daemons that don't ship enough
+ * meta to disambiguate, so the UI stays untouched on old fleets.
+ *
+ * Decision tree (matches `docs/SIGNALING.md`):
+ *
+ *   kind === 'tray'                               → "Tray"
+ *   kind === 'robot' && wireless_version === true → "WiFi"
+ *   kind === 'robot' && wireless_version === false→ "USB"
+ *   kind === 'unknown' && wireless_version known  → "WiFi" / "USB"
+ *   anything else (no signal at all)              → null
+ *
+ * Note we surface `Tray` even though the policy layer should already
+ * have hidden tray-no-hardware rows: this is a defence-in-depth
+ * label for the rare case where a tray with healthy hardware (or a
+ * tray during its 30 s no-backend grace window) leaks through.
+ */
+export function extractKindLabel(
+  entry: CentralRobotEntry | undefined,
+): string | null {
+  if (!entry) return null;
+  if (extractKind(entry) === 'tray') return 'Tray';
+  const wireless = entry.meta?.wireless_version;
+  if (wireless === true) return 'WiFi';
+  if (wireless === false) return 'USB';
+  return null;
+}
+
+/**
+ * Short stable error code attached when health is not `'ok'`.
+ * Returns `null` for healthy rows or when the daemon didn't ship one.
+ */
+export function extractErrorCode(
+  entry: CentralRobotEntry | undefined,
+): string | null {
+  const raw = entry?.meta?.error_code;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 

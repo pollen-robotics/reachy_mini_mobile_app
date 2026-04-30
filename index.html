@@ -3,7 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#000000" />
+    <!-- Match the MUI theme.background.default (src/theme.ts) so the
+         WebView never flashes white between the iOS LaunchScreen and
+         React's first paint. Two theme-color metas let iOS pick the
+         correct status-bar tint per appearance. -->
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+    <style>
+      html, body { margin: 0; background: #f5f5f7; }
+      @media (prefers-color-scheme: dark) {
+        html, body { background: #0a0a0a; }
+      }
+    </style>
     <title>Reachy Mini</title>
   </head>
   <body>

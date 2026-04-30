@@ -64,6 +64,28 @@ const TRANSIENT_ENGINE_STATES: ReadonlySet<AppState> = new Set([
  */
 const DEFAULT_GRACE_MS = 6_000;
 
+/**
+ * Structural equality on the small ``ConnectionDiagnostic`` shape so
+ * we can short-circuit ``setDiagnostic`` calls when the next value is
+ * content-equal to the previous one. Avoids the infinite render loop
+ * that happens when we compare freshly-built object literals by
+ * reference on every effect run.
+ */
+function sameDiagnostic(
+  a: ConnectionDiagnostic | null,
+  b: ConnectionDiagnostic | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.message !== b.message) return false;
+  // ``status`` only exists on the http_4xx / http_5xx variants; the
+  // other shapes don't carry extra fields beyond kind+message.
+  const aStatus = 'status' in a ? a.status : undefined;
+  const bStatus = 'status' in b ? b.status : undefined;
+  return aStatus === bStatus;
+}
+
 export interface UseSessionHealthOptions {
   /**
    * Override the lost-after-degraded grace. 0 disables grace and
@@ -265,7 +287,12 @@ export function useSessionHealth(
       prevStatusRef.current = nextStatus;
       setStatus(nextStatus);
     }
-    if (nextDiagnostic !== diagnostic) {
+    // Structural equality on diagnostic: ``classify(probe)`` and the
+    // ``engineDead`` branch both return fresh object literals on
+    // every render, so a reference compare would re-fire setState
+    // forever (infinite render loop, observed on a 429 from central
+    // and any time the engine reports ``error``).
+    if (!sameDiagnostic(nextDiagnostic, diagnostic)) {
       setDiagnostic(nextDiagnostic);
     }
   }, [probe, engineState, graceMs, status, diagnostic]);

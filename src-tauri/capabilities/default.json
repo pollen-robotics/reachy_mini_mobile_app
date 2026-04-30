@@ -10,6 +10,8 @@
     "os:allow-version",
     "os:allow-os-type",
     "blec:default",
+    "blec:allow-check-permissions",
+    "log:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

@@ -36,3 +36,45 @@ export const SCAN_TIMEOUT_MS = 15_000;
  * synchronously but CoreBluetooth batches characteristic-changed
  * notifications in 20-100 ms windows. */
 export const RESPONSE_READ_DELAY_MS = 500;
+
+/**
+ * Pollen / Reachy Mini "manufacturer id" used in the BLE advertisement
+ * ManufacturerData section. ``0xFFFF`` is the Bluetooth SIG-reserved id
+ * for development/testing; the daemon publishes its install_id under
+ * this key (see ``bluetooth_service.encode_advert_manufacturer_data``).
+ */
+export const POLLEN_MANUFACTURER_ID = 0xffff;
+
+/** Versioned ManufacturerData layout we parse from the advertisement. */
+export const ADVERT_FORMAT_VERSION = 0x02;
+/** TLV tag for the install_id prefix (8 bytes). */
+export const ADVERT_TLV_INSTALL_ID = 0x01;
+/** Number of raw bytes the daemon publishes for the install_id prefix. */
+export const ADVERT_INSTALL_ID_PREFIX_BYTES = 8;
+/**
+ * TLV tag for the central peerId prefix (8 bytes). Optional - only
+ * present when the daemon's central relay is online. Used to dedupe a
+ * BLE row against the same physical robot's central listing while the
+ * central server does not yet propagate ``meta.install_id``.
+ */
+export const ADVERT_TLV_CENTRAL_PEER_ID = 0x02;
+/** Number of raw bytes the daemon publishes for the central peerId prefix. */
+export const ADVERT_CENTRAL_PEER_ID_PREFIX_BYTES = 8;
+
+/**
+ * TLV tag for the daemon's local network mode (1-byte enum).
+ *
+ * Authoritative signal for "is Wi-Fi setup done?". Computed by the
+ * daemon directly off ``ip -4 addr show`` (no central / Internet /
+ * token dependency), so it doesn't flicker when the relay loses its
+ * registration to HF central. Values defined as
+ * ``ADVERT_NETWORK_MODE_*`` below. Absent on legacy daemons.
+ */
+export const ADVERT_TLV_NETWORK_MODE = 0x03;
+export const ADVERT_NETWORK_MODE_BYTES = 1;
+/** No usable IP on any interface. */
+export const ADVERT_NETWORK_MODE_OFFLINE = 0x00;
+/** wlan0 holds the daemon's hotspot fallback (10.42.0.1). */
+export const ADVERT_NETWORK_MODE_HOTSPOT = 0x01;
+/** A real LAN/WAN IP is present on at least one interface. */
+export const ADVERT_NETWORK_MODE_CONNECTED = 0x02;

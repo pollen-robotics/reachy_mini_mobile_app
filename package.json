@@ -11,21 +11,26 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "ios:dev": "tauri ios dev --open",
+    "ios:dev": "bash scripts/dev-ios.sh",
+    "ios:logs": "tail -f /tmp/tauri-ios-dev.log",
     "ios:build": "tauri ios build",
     "android:dev": "tauri android dev --open",
     "android:build": "tauri android build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@huggingface/hub": "0.15.2",
     "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^7.3.5",
     "@mui/material": "^7.3.5",
     "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-os": "^2.3.2",
     "react": "^19.2.0",
@@ -43,6 +48,7 @@
     "prettier": "^3.7.4",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0",
-    "vite": "^7.2.1"
+    "vite": "^7.2.1",
+    "vitest": "^3"
   }
 }
