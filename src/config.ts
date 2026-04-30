@@ -24,6 +24,21 @@ export const CONFIG = {
   CONVERSATION_URL: 'https://tfrere-reachy-mini-minimal-js-conversation-app.hf.space',
 
   /**
+   * Hugging Face central signaling server. Used for the remote robot
+   * listing (`/api/robot-status`), the WebRTC signaling envelope POSTs
+   * (`/send`) and the SDK's WebRTC handshake (passed as `signalingUrl`).
+   *
+   * Override via `VITE_REACHY_CENTRAL_URL` at build time to point at a
+   * fork (test Space, staging, etc.). The default points at the
+   * `tfrere` instance, which must match the daemon's
+   * `REACHY_CENTRAL_URL` env or both sides query different stores and
+   * the app will not see any robot the daemon registered.
+   */
+  CENTRAL_URL:
+    (import.meta.env.VITE_REACHY_CENTRAL_URL as string | undefined) ||
+    'https://tfrere-reachy-mini-central.hf.space',
+
+  /**
    * mDNS service advertised by the daemon
    * (`reachy_mini/utils/discovery.py::SERVICE_TYPE`).
    * Kept here for cross-reference; the browse call itself lives in

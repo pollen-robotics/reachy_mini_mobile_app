@@ -73,7 +73,7 @@ graceful teardown path.
 >   auth seed, peer-id probe, daemon version probe) MUST be rerouted
 >   through `RobotClient.fetch`. Bootstrap chicken-and-egg problems
 >   (e.g. peer-id needed to open WebRTC) are solved by going to the
->   source of truth (`https://cduss-reachy-mini-central.hf.space`,
+>   source of truth (`https://tfrere-reachy-mini-central.hf.space`,
 >   queried with the user's HF token via
 >   `useResolvedPeerId` / `fetchRobotsFromCentral`), not by
 >   re-introducing LAN HTTP.
@@ -128,7 +128,7 @@ non-negotiable invariants are:
 | **Reachy SDK** | `https://reachy.dev/sdk/v1/reachy-mini.js` | Loaded once into the WebView; opens the WebRTC peer connection and DataChannel. |
 | **Conversation engine** | `src/conversation/conversation-engine.ts` | Native (no iframe) port of the Hugging Face Space app. Owns the orb, audio, and motion agents. |
 | **Hugging Face OAuth** | `huggingface.co/oauth/*` | Issues the user's access token via PKCE. |
-| **Hugging Face central** | `cduss-reachy-mini-central.hf.space` | Signaling rendezvous: lists the user's online robots and brokers WebRTC offers/answers. |
+| **Hugging Face central** | `tfrere-reachy-mini-central.hf.space` | Signaling rendezvous: lists the user's online robots and brokers WebRTC offers/answers. |
 
 The legacy iframe-based conversation app is **gone**. The conversation
 engine runs natively in the Tauri WebView and dispatches WebRTC
@@ -340,7 +340,7 @@ reuse the existing HF OAuth client without registering a new one.
 
 | Aspect | Behaviour |
 |--------|-----------|
-| Source | `useRemoteRobots(token, { pollMs: 30_000 })` calls `https://cduss-reachy-mini-central.hf.space/api/robot-status` with `Authorization: Bearer <hf_token>`. |
+| Source | `useRemoteRobots(token, { pollMs: 30_000 })` calls `https://tfrere-reachy-mini-central.hf.space/api/robot-status` with `Authorization: Bearer <hf_token>`. |
 | Refresh | Auto-poll every 30s, manual via the refresh icon, or on token change. |
 | Cache | Last known list is preserved across re-fetches and across leaving/coming back to the screen (no flash of empty). |
 | Empty state | "No robots online" hint. |
