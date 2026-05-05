@@ -42,3 +42,14 @@ export const CONFIG = {
 
 /** Supported daemon versions (informational for now, enforced later). */
 export const SUPPORTED_DAEMON_VERSION = '1.7.0';
+
+/**
+ * Central HF signaling Space used by the WebRTC SDK.
+ *
+ * Override at build time via `VITE_REACHY_CENTRAL_URL` (e.g. on a staging
+ * environment). Falls back to the production tfrere instance which the
+ * fleet currently registers against.
+ */
+export const CENTRAL_SIGNALING_URL: string =
+  (import.meta.env.VITE_REACHY_CENTRAL_URL as string | undefined) ??
+  'https://tfrere-reachy-mini-central.hf.space';

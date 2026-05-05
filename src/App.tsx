@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Box } from '@mui/material';
 
 import ScanScreen from './screens/ScanScreen';
+import SplashScreen from './screens/SplashScreen';
 import WifiSetupScreen from './screens/WifiSetupScreen';
 import RemoteSignInScreen from './screens/RemoteSignInScreen';
 import RobotSessionScreen, {
@@ -20,36 +21,31 @@ type Screen = 'scan' | 'session' | 'wifi-setup';
  *
  * Auth gate
  * ─────────
- * Hugging Face sign-in is the entry point of the app: while no
- * token is present we render `RemoteSignInScreen` full-screen,
- * with no back button. Once signed in the rest of the app boots,
- * starting on the unified discovery view. Sign-out clears the
- * token, which immediately collapses everything back to the gate.
+ * Hugging Face sign-in is the entry point of the app: while no token
+ * is present we render `RemoteSignInScreen` full-screen. Once signed
+ * in the rest of the app boots, starting on the unified discovery
+ * view. Sign-out clears the token, which immediately collapses
+ * everything back to the gate.
  *
- * After the gate
- * ──────────────
- * One discovery view (`ScanScreen`) lists both Bluetooth and over-
- * the-internet robots. Tapping either one routes to a single
- * `RobotSessionScreen` that owns the entire connection lifecycle:
- *
- *   - The same 4-step stepper for both transports (mode-specific
- *     labels: `Bluetooth → Network → Daemon → Conversation` for LAN,
- *     `Hugging Face → WebRTC → Daemon → Conversation` for remote).
- *   - The same wake/sleep choreography on both ends of the visit
- *     (the robot wakes when the user lands, goes to sleep when
- *     they back out, regardless of how the bytes flowed).
- *   - The same post-connect chrome (top bar with menu, daemon
- *     status pill).
- *
- * The legacy split (separate TransitionScreen / ConnectedScreen for
- * LAN, RemoteConverseScreen for remote) is gone: those three screens
- * collapsed into `RobotSessionScreen`, which branches internally on
- * `target.kind`.
+ * Three discovery sources, one connection path
+ * ────────────────────────────────────────────
+ * `ScanScreen` exposes three sections (Local USB / Wi-Fi BLE /
+ * Distant Central). For the minimal app, only the Distant section
+ * is connectable: the SDK signals through the central HF Space and
+ * negotiates a single WebRTC + DataChannel session. Wi-Fi BLE rows
+ * route into `WifiSetupScreen` for first-time provisioning. Local
+ * USB is a placeholder until the daemon ships a loopback signaling
+ * endpoint.
  */
 export default function App() {
+  // Brand splash shown for ~1.2 s on every cold start, fading out
+  // before the auth gate. Sits in front of the OS's native launch
+  // screen (iOS LaunchScreen, Android launcher theme) so the brand
+  // moment is consistent regardless of WebView warm-up time.
+  const [splashDone, setSplashDone] = useState(false);
   const [screen, setScreen] = useState<Screen>('scan');
   const [target, setTarget] = useState<ConnectionTarget | null>(null);
-  const { disconnectDevice, connectedAddress } = useBleSession();
+  const { disconnectDevice, connectedAddress, selectDevice } = useBleSession();
   const { token, username, setToken, clear } = useRemoteHfToken();
 
   useInitBleListeners();
@@ -63,8 +59,6 @@ export default function App() {
   };
 
   const handleSignOut = async (): Promise<void> => {
-    // Tear down any in-flight robot connection before dropping the
-    // token so the SDK / BLE layer don't keep stale auth in memory.
     if (connectedAddress) {
       await disconnectDevice();
     }
@@ -73,7 +67,15 @@ export default function App() {
     clear();
   };
 
-  // Auth gate: no token => sign-in is the whole UI.
+  // Brand splash gate: shown once on cold start, before anything
+  // else can render. The auth gate / scan screen are mounted only
+  // AFTER `onDone` fires so the user always sees the brand moment
+  // first, never a flash of the sign-in form before the splash.
+  if (!splashDone) {
+    return <SplashScreen onDone={() => setSplashDone(true)} />;
+  }
+
+  // Auth gate: no token → sign-in is the whole UI.
   if (!token) {
     return (
       <Box
@@ -110,8 +112,14 @@ export default function App() {
           token={token}
           username={username}
           onRobotPicked={(device) => {
-            setTarget({ kind: 'local', device });
-            setScreen('session');
+            // Stash the picked BLE device in the store BEFORE we
+            // navigate so `WifiSetupScreen` reads a non-null
+            // `selectedDevice` on first render. Without this, the
+            // setup screen lands on its `failed` phase with a
+            // misleading "No robot selected" message - the user has
+            // to tap "Try again" to actually reach the PIN flow.
+            selectDevice(device);
+            setScreen('wifi-setup');
           }}
           onRemotePicked={(robot) => {
             setTarget({ kind: 'remote', robot });
@@ -123,16 +131,13 @@ export default function App() {
       {screen === 'session' && target && (
         <RobotSessionScreen
           target={target}
+          token={token}
           username={username}
           onBack={() => void backToScan()}
-          onNeedsWifi={() => setScreen('wifi-setup')}
         />
       )}
       {screen === 'wifi-setup' && (
-        <WifiSetupScreen
-          onBack={() => void backToScan()}
-          onConnected={() => setScreen('session')}
-        />
+        <WifiSetupScreen onBack={() => void backToScan()} token={token} />
       )}
     </Box>
   );

@@ -6,9 +6,10 @@
  * flow completes the parent persists the token (so the remote section
  * lights up with the user's robots) and pops back to the scan view.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import {
   Alert,
+  Box,
   Button,
   CircularProgress,
   IconButton,
@@ -16,12 +17,12 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import LoginIcon from '@mui/icons-material/Login';
 
 import {
   cancelLoginFlow,
   loginWithHuggingFace,
 } from '../auth/oauthLoopback';
+import hfLogoUrl from '../assets/hf-logo.svg';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
 interface RemoteSignInScreenProps {
@@ -77,7 +78,7 @@ export default function RemoteSignInScreen({
           sx={{
             px: 2,
             py: 1,
-            pt: 5.5,
+            pt: LAYOUT.safeAreaTop,
             borderBottom: theme => `1px solid ${theme.palette.divider}`,
             flexShrink: 0,
           }}
@@ -96,7 +97,7 @@ export default function RemoteSignInScreen({
       ) : null}
 
       <Stack
-        spacing={2}
+        spacing={3}
         sx={{
           p: 3,
           flex: 1,
@@ -107,26 +108,49 @@ export default function RemoteSignInScreen({
           width: '100%',
         }}
       >
+        {/* Hero title.
+         *
+         * Manually sized (1.875rem) to break out of the type scale used
+         * elsewhere in the app: this screen is the gate to everything
+         * and deserves a stronger headline than the inline section
+         * titles. Weight 700 + tight letter-spacing matches the visual
+         * register of native iOS / macOS hero copy.
+         */}
         <Typography
+          component="h1"
           sx={{
-            fontSize: TYPO.display,
-            fontWeight: FONT_WEIGHT.semibold,
+            fontSize: '1.875rem',
+            fontWeight: FONT_WEIGHT.bold,
+            lineHeight: 1.15,
             textAlign: 'center',
-            letterSpacing: '-0.3px',
+            letterSpacing: '-0.5px',
+            color: 'text.primary',
+            m: 0,
           }}
         >
           Welcome to Reachy Mini
         </Typography>
+
+        {/* Subtitle with semantic emphasis on the three concrete things
+         * the user gets out of signing in (their robots, Bluetooth,
+         * remote). The bolded fragments are rendered as inline `Box`
+         * spans so the rest of the line keeps the secondary-text
+         * colour while the highlights use the primary text colour for
+         * extra contrast.
+         */}
         <Typography
           sx={{
             fontSize: TYPO.md,
             color: 'text.secondary',
             textAlign: 'center',
-            maxWidth: 360,
+            maxWidth: 340,
+            lineHeight: 1.5,
           }}
         >
-          Sign in with your Hugging Face account to discover your robots,
-          locally over Bluetooth or remotely from anywhere.
+          Sign in with Hugging Face to discover{' '}
+          <EmphasizedSpan>your robots</EmphasizedSpan>, locally over{' '}
+          <EmphasizedSpan>Bluetooth</EmphasizedSpan> or remotely from{' '}
+          <EmphasizedSpan>anywhere</EmphasizedSpan>.
         </Typography>
 
         {error ? (
@@ -137,16 +161,45 @@ export default function RemoteSignInScreen({
 
         {!busy ? (
           <Button
-            variant="contained"
-            startIcon={<LoginIcon />}
+            variant="outlined"
+            color="primary"
+            size="large"
+            startIcon={
+              <Box
+                component="img"
+                src={hfLogoUrl}
+                alt=""
+                aria-hidden
+                sx={{
+                  width: 20,
+                  height: 20,
+                  display: 'block',
+                  // The crop of the SVG leaves a small bottom whitespace,
+                  // pulling it up by a hair re-centres it next to the
+                  // button label without touching the source asset.
+                  transform: 'translateY(-1px)',
+                }}
+              />
+            }
             onClick={() => void startLogin()}
             sx={{
               textTransform: 'none',
-              fontWeight: 600,
-              minWidth: 240,
+              fontSize: TYPO.md,
+              fontWeight: FONT_WEIGHT.semibold,
+              borderWidth: 1.5,
+              borderRadius: 2,
+              px: 2.5,
+              py: 1,
+              minWidth: 260,
+              '&:hover': {
+                borderWidth: 1.5,
+              },
+              '& .MuiButton-startIcon': {
+                mr: 1.25,
+              },
             }}
           >
-            Sign in with Hugging Face
+            Continue with Hugging Face
           </Button>
         ) : (
           <Stack alignItems="center" spacing={2}>
@@ -173,6 +226,23 @@ export default function RemoteSignInScreen({
         )}
       </Stack>
     </Stack>
+  );
+}
+
+/**
+ * Inline emphasis used inside the subtitle paragraph. Bumps the
+ * weight to semibold and switches back to the primary text colour so
+ * the highlighted fragments visually pop out of the surrounding
+ * `text.secondary` body copy.
+ */
+function EmphasizedSpan({ children }: { children: ReactNode }) {
+  return (
+    <Box
+      component="span"
+      sx={{ fontWeight: FONT_WEIGHT.semibold, color: 'text.primary' }}
+    >
+      {children}
+    </Box>
   );
 }
 

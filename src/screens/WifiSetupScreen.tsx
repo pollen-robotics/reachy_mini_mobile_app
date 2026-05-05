@@ -1,956 +1,636 @@
 /**
- * Screen 3 - first-time WiFi provisioning over BLE.
+ * Minimal BLE-driven Wi-Fi setup.
  *
- * Visible phases:
- *   - PIN idle          - user enters the 5-digit pin, Back visible.
- *   - PIN auth running  - input disabled, Back hidden, spinner.
- *   - PIN rejected      - inline error + "Try again".
- *   - Picker idle       - NetworkSelect + password + Connect.
- *   - Connecting        - FULL-SCREEN rocket takeover, no Back, no controls.
- *   - Connect failed    - inline error + "Try again".
+ * 100% BLE. No HTTP daemon calls anywhere - status is read from the
+ * GATT NETWORK_STATUS characteristic (no PIN) and from the public
+ * `WIFI_STATUS` BLE command (also no PIN). Provisioning is the same
+ * five-step BLE choreography as the desktop app:
  *
- * Visual structure (mirrors desktop `FirstTimeWifiSetupView`):
- *   Stepper (Authenticate · Network · Connect)
- *   Hero illustration per phase
- *   Title + subtitle, centred
- *   Form / feedback block (max-width 420px, centred)
+ *   1. PIN_xxxxx           → authenticate the privileged commands.
+ *   2. WIFI_SCAN           → enumerate SSIDs.
+ *   3. user picks SSID + types PSK
+ *   4. WIFI_CONNECT ssid:psk
+ *   5. drop the BLE link, bounce to scan; the robot reappears in
+ *      the Distant section once it lands on the network.
  *
- * Auto-advance: once the robot reports `mode=wlan` AND the phone can
- * HTTP-reach the daemon at its new IP, we call `onConnected()`.
+ * Routing on entry
+ * ────────────────
+ * We cross-check two daemon endpoints to decide whether the user
+ * landed here on a robot that's already connected:
+ *
+ *   - `NETWORK_STATUS` (GATT, plain text): coarse-grained, returns
+ *     `CONNECTED` for *any* non-loopback IP. A robot wired on
+ *     Ethernet alone would still report `CONNECTED` and route a
+ *     naive client straight to "Already on Wi-Fi".
+ *   - `WIFI_STATUS` (BLE command, JSON, no auth required): granular
+ *     mode (`wlan` / `hotspot` / `disconnected` / `busy`) and the
+ *     active SSID when in `wlan`.
+ *
+ * The combination tells us exactly whether to land on `already-online`
+ * (Wi-Fi mode is `wlan`) vs the PIN flow (any other state, including
+ * "wired-only").
+ *
+ * Sub-views live next to this file under `./wifi-setup/`. This module
+ * stays focused on the state machine + handlers.
  */
-
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
+import { useEffect, useState } from 'react';
+import { IconButton, Stack, Typography } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
-import ReplayIcon from '@mui/icons-material/Replay';
-import WifiIcon from '@mui/icons-material/Wifi';
 
-import HeroIllustration from '../components/HeroIllustration';
-import NetworkSelect from '../components/NetworkSelect';
-import StepperHeader from '../components/StepperHeader';
+import {
+  extractRobotHardwareId,
+  fetchRobotsFromCentral,
+} from '../auth/fetchRobotsFromCentral';
+import { PIN_INPUT_LENGTH } from '../components/PinInput';
 import { useBleSession } from '../ble/useBleSession';
-import { daemonFetch } from '../daemon/daemonFetch';
 import { useWifiSetup } from '../wifi/useWifiSetup';
-import blueprintSvg from '../assets/blueprint.svg';
-import connectionLostSvg from '../assets/connection-lost.svg';
-import lockedReachySvg from '../assets/locked-reachy.svg';
-import rocketSvg from '../assets/rocket.svg';
-import { FONT_WEIGHT, LAYOUT, STATUS, TYPO } from '../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+
+import { AlreadyOnlineView } from './wifi-setup/AlreadyOnlineView';
+import {
+  ConnectingView,
+  ForgettingView,
+  VerifyingView,
+} from './wifi-setup/InFlightView';
+import { FailedView } from './wifi-setup/FailedView';
+import { PinView } from './wifi-setup/PinView';
+import { PreparingView } from './wifi-setup/PreparingView';
+import { PskView } from './wifi-setup/PskView';
+import { ScanView } from './wifi-setup/ScanView';
 
 interface WifiSetupScreenProps {
+  /**
+   * Bounce back to the discovery screen. Called for every terminal
+   * exit from this screen: user-cancelled, verification complete,
+   * forget complete, or error dismiss. App.tsx routes this back to
+   * the scan list.
+   */
   onBack: () => void;
-  onConnected: () => void;
+  /**
+   * HF token used to poll `/api/robot-status` during the `verifying`
+   * phase. Verification waits for the freshly-joined robot to send a
+   * heartbeat to central that **post-dates** the moment we triggered
+   * WIFI_CONNECT - that is the only signal that proves the robot is
+   * not just locally on its target SSID, but also actually reachable
+   * through HF central (the connection path the mobile app uses).
+   * Without a token we cannot verify and fall back to a fast bounce
+   * after the BLE round-trip ACK.
+   */
+  token: string | null;
 }
 
-const STEP_LABELS: readonly string[] = ['Authenticate', 'Network', 'Connect'];
-
-/** Poll HTTP daemon at this interval once the robot reports it joined the WiFi. */
-const POST_CONNECT_PROBE_MS = 2_000;
+/** Cadence for `/api/robot-status` polls during the `verifying` phase. */
+const VERIFYING_POLL_INTERVAL_MS = 2_000;
 /**
- * Grace period during which we silently wait for HTTP reachability once
- * the robot reports `mode=wlan`. After that, we assume the phone is not
- * on the same network and start nudging the user to switch.
+ * Total wall-clock for the verifying phase before declaring failure.
+ * Sized for the worst-case warm reconnect: nmcli connect (5-15 s) +
+ * DHCP (~3 s) + DNS to central (~1 s) + TLS handshake (~2 s) + heartbeat
+ * negotiation (~5 s) + central refresh (~2 s) plus margin for slow
+ * mobile networks. Real-world successes typically land in 10-30 s; we
+ * keep the watchdog generous so we never give up on a working
+ * connection that's simply slow.
  */
-const SWITCH_PHONE_HINT_MS = 15_000;
-/**
- * How long we wait for the robot to either join (`mode=wlan`) or fall
- * back to hotspot after `WIFI_CONNECT`. After that we label the attempt
- * as failed and send the user back to the picker.
- */
-const JOIN_WATCHDOG_MS = 45_000;
+const VERIFYING_TIMEOUT_MS = 120_000;
+/** Slack added to the freshness check to absorb clock skew between
+ * the mobile device and the HF central server. */
+const VERIFYING_FRESHNESS_BUFFER_S = 2;
 
 type Phase =
-  | 'pin-idle'
-  | 'pin-running'
-  | 'pin-failed'
-  | 'picker-idle'
-  | 'connecting'
-  | 'connect-failed';
+  | 'preparing'        // BLE link + routing reads in flight (default landing)
+  | 'pin'              // user enters the 5-digit PIN to start a setup flow
+  | 'pin-forget'       // user enters the PIN to authorise a forget flow
+  | 'already-online'   // mode=wlan, only entry to the forget flow
+  | 'scan'             // pick an SSID
+  | 'psk'              // enter password for selected SSID
+  | 'connecting'       // WIFI_CONNECT in flight (BLE round-trip, ~1-2 s)
+  | 'verifying'        // BLE done, polling central for the robot to reappear
+  | 'forgetting'       // PIN ok, WIFI_FORGET in flight (BLE disconnects on return)
+  | 'failed';          // any terminal error
+//
+// On mount we always start in `preparing` and only commit to a
+// destination phase (`pin` or `already-online`) once both the BLE
+// connect AND the parallel NETWORK_STATUS + WIFI_STATUS reads have
+// landed. Without this gate the user briefly sees the PIN view
+// before being yanked over to "Already on Wi-Fi" (or vice versa),
+// which reads as a flicker.
+//
+// The connect path goes through TWO in-flight phases:
+//
+//   1. `connecting` — BLE WIFI_CONNECT round-trip. The daemon ACKs
+//      almost instantly; the actual nmcli connect runs async on its
+//      side. We keep the BLE link alive after the ACK so we can
+//      observe progress on it (fast-fail on wrong PSK).
+//   2. `verifying` — three concurrent watchers:
+//        a. BLE fast-fail: ``setup.status`` shows hotspot fallback
+//           with an error string  -> `failed` immediately.
+//        b. Central freshness poll: query
+//           `/api/robot-status` every 2 s and accept the FIRST
+//           entry whose `meta.hardware_id` matches AND whose
+//           `last_seen_age_seconds` is younger than the time
+//           since we triggered WIFI_CONNECT. The freshness window
+//           is what distinguishes a post-reconnect heartbeat from
+//           the pre-forget stale registration that the central TTL
+//           sweeper takes up to 30 s to evict.
+//        c. 60 s watchdog as the last-resort fail.
+//      Local-only Wi-Fi commit (BLE WIFI_STATUS = wlan) is NOT
+//      treated as success: a daemon can be on Wi-Fi yet not
+//      reachable through HF central, and central is the mobile
+//      app's actual connection path.
+//
+// The forget flow is single-phase (`forgetting`): we just send
+// WIFI_FORGET and bounce, since there is nothing to verify - the
+// robot is supposed to drop off everywhere, including central.
 
-type ConnectingSubstate =
-  | 'sending' // waiting for BLE WIFI_CONNECT ack
-  | 'joining' // ack received, robot is trying to join
-  | 'joined-probing' // robot says wlan+ssid, probing HTTP
-  | 'joined-switch-phone' // robot says wlan+ssid, probe failing for >15s
-  | 'fallback-hotspot'; // robot gave up and reopened its hotspot = wrong password
-
-export default function WifiSetupScreen({ onBack, onConnected }: WifiSetupScreenProps) {
+export default function WifiSetupScreen({ onBack, token }: WifiSetupScreenProps) {
   const {
     selectedDevice,
     connectedAddress,
+    networkStatus,
+    connectToDevice,
     disconnectDevice,
     readNetworkStatus,
-    status: sessionStatus,
+    status: bleStatus,
   } = useBleSession();
   const setup = useWifiSetup();
 
-  const robotName = selectedDevice?.name ?? 'Reachy Mini';
-
+  const [phase, setPhase] = useState<Phase>('preparing');
+  const [pin, setPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
-  const [connectTarget, setConnectTarget] = useState<string | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
-  /** Timestamp (ms) when the current connect attempt started. Used to
-   *  drive grace-period / watchdog logic in the takeover. */
-  const [connectStartedAt, setConnectStartedAt] = useState<number | null>(null);
-  /** HTTP probe outcome while we wait for the phone to be on the same LAN. */
-  const [probeFailedAt, setProbeFailedAt] = useState<number | null>(null);
-  /** Tick every 500ms during connect so the takeover re-renders and
-   *  transitions through sub-states even when `setup.status` stays
-   *  identical. Only active during `connectTarget !== null`. */
-  const [, setNowTick] = useState(0);
+  const [selectedSsid, setSelectedSsid] = useState<string | null>(null);
+  const [psk, setPsk] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  /** SSID the robot reports it's currently connected to (only set when
+   * we landed on `already-online`). `null` means we haven't observed
+   * one yet - the forget flow falls back to a fresh `WIFI_STATUS` read
+   * before sending `WIFI_FORGET <ssid>`. */
+  const [currentSsid, setCurrentSsid] = useState<string | null>(null);
+  /**
+   * Wall-clock (Unix ms) of the moment we triggered WIFI_CONNECT.
+   * Drives the freshness check on central's `last_seen_age_seconds`
+   * during verification: a heartbeat older than `(now - this) / 1000`
+   * is necessarily a stale registration that hasn't been swept yet,
+   * not the post-reconnect heartbeat we are waiting for.
+   */
+  const [verificationStartedAt, setVerificationStartedAt] = useState<
+    number | null
+  >(null);
 
-  // Fallback to scan screen if BLE session dropped.
+  // ─── BLE connect + routing on mount ───────────────────────────────
+  //
+  // The screen stays in `preparing` for the entire duration of this
+  // effect. We only commit to `pin` or `already-online` once we have
+  // a definitive answer from the daemon, so the user never sees the
+  // PIN boxes flash before being yanked over to "Already on Wi-Fi"
+  // (or the reverse). Failure paths route to `failed` directly.
   useEffect(() => {
-    if (!connectedAddress && sessionStatus !== 'connecting') {
-      onBack();
+    if (!selectedDevice) {
+      setErrorMsg('No robot selected.');
+      setPhase('failed');
+      return;
     }
-  }, [connectedAddress, sessionStatus, onBack]);
-
-  const wlanConnectedToTarget =
-    connectTarget !== null &&
-    setup.status?.mode === 'wlan' &&
-    typeof setup.status.connected === 'string' &&
-    setup.status.connected.trim().length > 0 &&
-    setup.status.connected.toLowerCase() !== 'hotspot' &&
-    (connectTarget === null ||
-      setup.status.connected.toLowerCase() === connectTarget.toLowerCase());
-
-  // Tick while a connect attempt is in-flight so sub-state transitions
-  // (sending -> joining -> joined-probing -> joined-switch-phone) fire
-  // even when the underlying BLE status hasn't changed yet.
-  useEffect(() => {
-    if (connectTarget === null) return;
-    const id = window.setInterval(() => setNowTick(v => v + 1), 500);
-    return () => window.clearInterval(id);
-  }, [connectTarget]);
-
-  // HTTP probe loop: runs once the robot reports `mode=wlan` on the
-  // target SSID. If it succeeds we auto-advance. If it keeps failing the
-  // takeover will switch to the "please switch your phone's WiFi" hint
-  // after SWITCH_PHONE_HINT_MS, but we never bail out on our own - the
-  // user decides when to go back.
-  const doneRef = useRef(false);
-  useEffect(() => {
-    if (!wlanConnectedToTarget) return;
-    if (doneRef.current) return;
     let cancelled = false;
-
-    const probe = async (): Promise<boolean> => {
-      try {
-        const ns = await readNetworkStatus();
-        if (cancelled || !ns.ip) return false;
-        const resp = await daemonFetch(ns.ip, '/api/daemon/status', { timeoutMs: 4_000 });
-        return resp.ok;
-      } catch {
-        return false;
+    void (async () => {
+      // Reuse the existing BLE session when the user came back from
+      // the scan list without dropping it.
+      if (
+        connectedAddress !== selectedDevice.address ||
+        connectedAddress === null
+      ) {
+        const ok = await connectToDevice(selectedDevice);
+        if (cancelled) return;
+        if (!ok) {
+          setErrorMsg('Could not connect over Bluetooth.');
+          setPhase('failed');
+          return;
+        }
       }
-    };
 
-    const tick = async (): Promise<void> => {
-      if (cancelled || doneRef.current) return;
-      const ok = await probe();
+      // Fire NETWORK_STATUS (GATT, plain text) and WIFI_STATUS
+      // (BLE command, JSON) in parallel. WIFI_STATUS is the
+      // granular signal we use for routing; NETWORK_STATUS is
+      // here mostly for the IPv4 we surface in `already-online`.
+      //
+      // `Promise.allSettled` so a transient failure on one read
+      // doesn't bubble up: the daemon occasionally returns an
+      // empty payload right after the BLE characteristic is
+      // discovered. Falling through with `ws=null` means the
+      // routing defaults to `pin`, which is the safe option.
+      const [nsResult, wsResult] = await Promise.allSettled([
+        readNetworkStatus(),
+        setup.getStatus(),
+      ]);
       if (cancelled) return;
-      if (ok) {
-        doneRef.current = true;
-        onConnected();
+
+      const ns = nsResult.status === 'fulfilled' ? nsResult.value : null;
+      const ws = wsResult.status === 'fulfilled' ? wsResult.value : null;
+
+      // Routing rules:
+      //
+      //   1. WIFI_STATUS.mode === 'wlan'  → already on Wi-Fi.
+      //      The daemon's WLAN mode means an nmcli connection is
+      //      active on wlan0 with a non-hotspot SSID, which is the
+      //      only state that justifies the "already online" page.
+      //   2. Anything else → PIN flow. NETWORK_STATUS=connected
+      //      with WIFI_STATUS missing OR not-wlan = probably
+      //      eth0-only, which is exactly the case we used to
+      //      false-positive on with the GATT-only routing.
+      if (ws?.mode === 'wlan') {
+        setCurrentSsid(ws.connected ?? null);
+        setPhase('already-online');
         return;
       }
-      setProbeFailedAt(prev => prev ?? Date.now());
-    };
-
-    void tick();
-    const handle = window.setInterval(() => void tick(), POST_CONNECT_PROBE_MS);
+      if (ws === null && ns === null) {
+        console.warn(
+          '[wifi-setup] both WIFI_STATUS and NETWORK_STATUS reads failed - falling through to PIN',
+        );
+      }
+      setPhase('pin');
+    })();
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
     };
-  }, [wlanConnectedToTarget, readNetworkStatus, onConnected]);
+    // selectedDevice.address is the stable identity; the function refs
+    // are stable thanks to zustand selectors and useCallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDevice?.address]);
 
-  const resetConnectState = (): void => {
-    setConnectTarget(null);
-    setConnectError(null);
-    setConnectStartedAt(null);
-    setProbeFailedAt(null);
-    doneRef.current = false;
-  };
-
-  const handleBack = async (): Promise<void> => {
-    resetConnectState();
-    await disconnectDevice();
-    onBack();
-  };
-
-  const handlePinSubmit = async (pin: string): Promise<void> => {
-    setPinError(null);
-    const ok = await setup.authenticate(pin);
-    if (!ok) {
-      setPinError(setup.error ?? 'Wrong PIN. Check your robot and try again.');
+  // ─── Verification: BLE fast-fail watcher ───────────────────────────
+  //
+  // ``setup.status`` (BLE WIFI_STATUS, fast-polled at 1.5 s by
+  // ``useWifiSetup`` after a connect) is the cheap signal we use to
+  // bail out early on a definitive failure - typically a wrong PSK
+  // that bounces the daemon back to hotspot mode with a clear-text
+  // ``error`` string. We do NOT use ``mode === 'wlan'`` as a success
+  // signal: a daemon can be locally on Wi-Fi yet still unreachable
+  // from the mobile app (no internet, captive portal, central hiccup,
+  // ...). The authoritative success signal lives on central, see the
+  // next effect.
+  useEffect(() => {
+    if (phase !== 'verifying') return;
+    const m = setup.status?.mode;
+    const err = setup.status?.error;
+    if ((m === 'hotspot' || m === 'disconnected') && err) {
+      setErrorMsg(err);
+      setPhase('failed');
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, setup.status?.mode, setup.status?.error]);
 
-  const handleConnectSubmit = async (ssid: string, psk: string): Promise<void> => {
-    setConnectError(null);
-    setConnectTarget(ssid);
-    setConnectStartedAt(Date.now());
-    setProbeFailedAt(null);
-    doneRef.current = false;
+  // ─── Verification: central freshness poll ─────────────────────────
+  //
+  // The user's ground truth for "the robot is usable from the mobile
+  // app" is **a fresh entry on central**, since central is the
+  // mobile app's connection path (WebRTC signaling). Local Wi-Fi
+  // commit is a necessary but not sufficient condition.
+  //
+  // Stale-registration trap. Central can show the robot's previous
+  // registration (the one from before WIFI_FORGET) for up to
+  // ``LEASE_SECONDS`` (~30 s) until the TTL sweeper evicts it. A
+  // naive "is the hwid in the listing?" check would false-positive
+  // on that ghost. We solve it with a timestamp comparison:
+  //
+  //     last_seen_age_seconds < (now - verificationStartedAt) / 1000 + buffer
+  //
+  // i.e. the heartbeat must have been received AFTER we triggered
+  // WIFI_CONNECT. A stale entry's age increases monotonically until
+  // eviction, so it can never satisfy this inequality.
+  useEffect(() => {
+    if (phase !== 'verifying') return;
+    if (verificationStartedAt === null) return;
+    const targetHwid = selectedDevice?.hardwareId ?? null;
+    if (!targetHwid || !token) {
+      // Without an identity to match OR a token to query central,
+      // we cannot verify. Bounce immediately - the user lands on
+      // ScanScreen and visually confirms when the robot shows up
+      // in the Distant section. No regression vs the legacy
+      // fire-and-forget UX.
+      onBack();
+      return;
+    }
 
-    const ok = await setup.connect(ssid, psk);
-    if (!ok) {
-      setConnectError(
-        setup.error ??
-          "The robot rejected the credentials. Check the password and try again."
+    let cancelled = false;
+    let pollHandle: number | null = null;
+
+    const poll = async (): Promise<void> => {
+      if (cancelled) return;
+      try {
+        const result = await fetchRobotsFromCentral(token);
+        if (cancelled) return;
+        if (result.ok) {
+          const found = result.robots.find(
+            (r) => extractRobotHardwareId(r) === targetHwid,
+          );
+          if (found) {
+            const age = found.last_seen_age_seconds;
+            const tSinceStartS =
+              (Date.now() - verificationStartedAt) / 1000 +
+              VERIFYING_FRESHNESS_BUFFER_S;
+            // Reject ghosts: undefined age (very old central) and any
+            // age older than our submit window can only be the
+            // pre-forget registration.
+            if (age !== undefined && age <= tSinceStartS) {
+              cancelled = true;
+              if (pollHandle) window.clearTimeout(pollHandle);
+              void (async () => {
+                try {
+                  await disconnectDevice();
+                } catch {
+                  /* best-effort */
+                }
+                onBack();
+              })();
+              return;
+            }
+          }
+        }
+      } catch {
+        /* network hiccup, retry on the next tick */
+      }
+      pollHandle = window.setTimeout(
+        () => void poll(),
+        VERIFYING_POLL_INTERVAL_MS,
       );
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (pollHandle) window.clearTimeout(pollHandle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, verificationStartedAt, selectedDevice?.hardwareId, token]);
+
+  // ─── Verifying watchdog ──────────────────────────────────────────
+  //
+  // 2 min upper bound. Real-world reconnects land in 10-30 s; the
+  // watchdog only fires on a genuinely stuck stack (nmcli, captive
+  // portal, central down, slow mobile network, ...).
+  useEffect(() => {
+    if (phase !== 'verifying') return;
+    const id = window.setTimeout(() => {
+      setErrorMsg(
+        setup.status?.error ??
+          "We didn't see your Reachy come online with HF central " +
+            'within 2 minutes. It may still be joining; check the ' +
+            '"Distant" section of the home screen in a minute.',
+      );
+      setPhase('failed');
+    }, VERIFYING_TIMEOUT_MS);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // ─── Handlers ─────────────────────────────────────────────────────
+  //
+  // The PIN view (``PinView``) is shared between two flows: the
+  // first-time setup (PIN → scan → PSK → connect) and the
+  // re-provisioning forget flow (PIN → WIFI_FORGET → BLE drop). Each
+  // flow has its own submit handler; the view itself is identical
+  // visually so the user never sees a "different PIN screen" for the
+  // two cases.
+  const handleSubmitPin = async (pinValue: string): Promise<void> => {
+    setPinError(null);
+    if (pinValue.length !== PIN_INPUT_LENGTH) {
+      // Shouldn't happen because PinInput auto-submits at exactly
+      // PIN_INPUT_LENGTH, but keep the guard for parent-driven calls.
+      setPinError(`PIN must be ${PIN_INPUT_LENGTH} digits.`);
+      return;
     }
-    // If ok, the BLE status polling and HTTP probe loops above take over.
-  };
-
-  const handleConnectRetry = (): void => {
-    resetConnectState();
-  };
-
-  const handleTryAnotherNetwork = (): void => {
-    // User acknowledged the hotspot-fallback: go back to picker with a
-    // fresh scan.
-    resetConnectState();
+    const ok = await setup.authenticate(pinValue);
+    if (!ok) {
+      // Wrong-PIN: clear so the user starts over with the next
+      // attempt. Auth errors are nearly always typos; we surface the
+      // daemon's message verbatim only when it's NOT the standard
+      // "incorrect PIN" - that one we phrase ourselves for clarity.
+      setPin('');
+      setPinError(setup.error ?? 'Wrong PIN, try again.');
+      return;
+    }
+    setPin('');
+    setPhase('scan');
     void setup.scan();
   };
 
-  const phase: Phase = useMemo(() => {
-    if (!setup.isAuthenticated) {
-      if (setup.isBusy) return 'pin-running';
-      if (pinError) return 'pin-failed';
-      return 'pin-idle';
+  const handleSubmitPinForget = async (pinValue: string): Promise<void> => {
+    setPinError(null);
+    if (pinValue.length !== PIN_INPUT_LENGTH) {
+      setPinError(`PIN must be ${PIN_INPUT_LENGTH} digits.`);
+      return;
     }
-    if (connectTarget && connectError) return 'connect-failed';
-    if (connectTarget) return 'connecting';
-    return 'picker-idle';
-  }, [setup.isAuthenticated, setup.isBusy, pinError, connectTarget, connectError]);
-
-  // Derive the sub-state of the "connecting" takeover from live BLE data.
-  const connectingSub: ConnectingSubstate | null = useMemo(() => {
-    if (phase !== 'connecting') return null;
-    if (setup.isBusy && connectStartedAt !== null) return 'sending';
-
-    // Robot reports it joined our target SSID.
-    if (wlanConnectedToTarget) {
-      if (probeFailedAt !== null && Date.now() - probeFailedAt > SWITCH_PHONE_HINT_MS) {
-        return 'joined-switch-phone';
+    const authOk = await setup.authenticate(pinValue);
+    if (!authOk) {
+      setPin('');
+      setPinError(setup.error ?? 'Wrong PIN, try again.');
+      return;
+    }
+    setPin('');
+    setPhase('forgetting');
+    // Re-read WIFI_STATUS at this point: the cached `currentSsid` we
+    // captured during routing might be a few seconds old, and the
+    // daemon may have churned (e.g. signal drop + auto-reconnect to a
+    // different known SSID). Going through `getStatus()` once more
+    // gives us the authoritative SSID right before we tell the daemon
+    // to drop it.
+    let ssid = currentSsid;
+    if (!ssid) {
+      try {
+        const fresh = await setup.getStatus();
+        ssid = fresh?.connected ?? null;
+      } catch {
+        /* fall through to the null-ssid branch below */
       }
-      return 'joined-probing';
     }
-
-    // Robot went back to hotspot after we sent the creds = probable
-    // wrong password / unreachable SSID. Only trust this verdict if the
-    // status reports `mode=hotspot` AND we've given the daemon time to
-    // try joining.
-    const elapsed = connectStartedAt !== null ? Date.now() - connectStartedAt : 0;
-    if (
-      setup.status?.mode === 'hotspot' &&
-      elapsed > 8_000 &&
-      !setup.isBusy
-    ) {
-      return 'fallback-hotspot';
+    if (!ssid) {
+      setErrorMsg('The robot does not appear to be on a Wi-Fi network.');
+      setPhase('failed');
+      return;
     }
-
-    // Watchdog: nothing interesting happened for 45s.
-    if (elapsed > JOIN_WATCHDOG_MS) {
-      return 'fallback-hotspot';
+    const forgotten = await setup.forget(ssid, { disconnectAfter: true });
+    if (!forgotten) {
+      setErrorMsg(setup.error ?? 'Could not forget the Wi-Fi network.');
+      setPhase('failed');
+      return;
     }
+    // ``setup.forget(..., disconnectAfter: true)`` already closed the
+    // BLE link. The robot is bouncing back to its hotspot now; bounce
+    // the user back to the discovery screen so they can re-pair when
+    // it shows up.
+    onBack();
+  };
 
-    return 'joining';
-  }, [
-    phase,
-    setup.isBusy,
-    setup.status?.mode,
-    connectStartedAt,
-    wlanConnectedToTarget,
-    probeFailedAt,
-  ]);
+  const handlePickSsid = (ssid: string): void => {
+    setSelectedSsid(ssid);
+    setPsk('');
+    setPhase('psk');
+  };
 
-  if (phase === 'connecting' && connectingSub !== null) {
-    return (
-      <ConnectingTakeover
-        ssid={connectTarget ?? 'your network'}
-        substate={connectingSub}
-        wifiError={setup.status?.error ?? null}
-        onRetryProbe={() => setProbeFailedAt(Date.now() - SWITCH_PHONE_HINT_MS - 1_000)}
-        onTryAnotherNetwork={handleTryAnotherNetwork}
-        onBackToScan={() => void handleBack()}
-      />
-    );
-  }
+  const handleSubmitPsk = async (): Promise<void> => {
+    if (!selectedSsid) return;
+    setErrorMsg(null);
+    // Trim invisible whitespace that almost always comes from a
+    // copy-paste off a sticker. WPA2 passwords can technically
+    // contain leading/trailing spaces, but in practice that's so
+    // rare and the typo case so common that the trade-off favours
+    // trim. Power users can disable it from a future settings panel.
+    const trimmedPsk = psk.trim();
+    // Snapshot the start-of-verify timestamp BEFORE we send the
+    // command, so any heartbeat with `last_seen_age` younger than
+    // (now - this) is unambiguously post-WIFI_CONNECT.
+    setVerificationStartedAt(Date.now());
+    setPhase('connecting');
+    const ok = await setup.connect(selectedSsid, trimmedPsk);
+    if (!ok) {
+      setErrorMsg(setup.error ?? 'Could not start the Wi-Fi connect.');
+      setPhase('failed');
+      return;
+    }
+    // BLE WIFI_CONNECT command was ACK'd. Keep the BLE link alive
+    // (the BLE watcher below detects fast-fail conditions like a
+    // wrong PSK) and switch to verifying. The central watcher polls
+    // until a freshly-stamped heartbeat lands.
+    setPhase('verifying');
+  };
 
-  const showBack = phase !== 'pin-running';
-  const stepperIdx = stepperIndexFor(phase);
-  const stepperError = phase === 'pin-failed' || phase === 'connect-failed';
-  const heroSrc = heroForPhase(phase);
+  const handleRetry = (): void => {
+    setErrorMsg(null);
+    setPinError(null);
+    setSelectedSsid(null);
+    setPsk('');
+    setPhase('pin');
+  };
 
+  // ─── Render ───────────────────────────────────────────────────────
   return (
     <Stack
       sx={{
         height: '100%',
         width: '100%',
-        position: 'relative',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
         px: 3,
         pt: LAYOUT.safeAreaTop,
         pb: 4,
       }}
     >
-      {showBack && (
-        <Box sx={{ position: 'absolute', top: 48, left: 12 }}>
-          <IconButton size="small" onClick={() => void handleBack()} aria-label="Back">
-            <ArrowBackIosNewIcon fontSize="small" />
-          </IconButton>
-        </Box>
-      )}
-
       <Stack
-        spacing={2}
+        direction="row"
         alignItems="center"
-        sx={{
-          width: '100%',
-          maxWidth: LAYOUT.contentMaxWidth,
-          flex: 1,
-          justifyContent: 'center',
-        }}
+        spacing={1}
+        sx={{ mb: 2, minHeight: 40 }}
       >
-        <Box sx={{ width: '100%', px: 1 }}>
-          <StepperHeader
-            steps={STEP_LABELS}
-            activeStep={stepperIdx}
-            error={stepperError}
-          />
-        </Box>
-
-        <HeroIllustration
-          src={heroSrc}
-          alt={titleFor(phase)}
-          animation="float"
-          size={LAYOUT.heroSizeSmall}
-          mb={0.5}
-        />
-
-        <Stack spacing={0.5} alignItems="center" sx={{ width: '100%', px: 1 }}>
-          <Typography
-            sx={{
-              fontSize: TYPO.xl,
-              fontWeight: FONT_WEIGHT.semibold,
-              color: 'text.primary',
-              textAlign: 'center',
-              letterSpacing: '-0.2px',
-            }}
-          >
-            {titleFor(phase)}
-          </Typography>
-          <Typography
-            sx={{
-              fontSize: TYPO.md,
-              color: 'text.secondary',
-              textAlign: 'center',
-              lineHeight: 1.5,
-              maxWidth: 320,
-            }}
-          >
-            {subtitleFor(phase, robotName, connectTarget)}
-          </Typography>
-        </Stack>
-
-        <Box sx={{ width: '100%', mt: 1 }}>
-          {phase === 'pin-idle' || phase === 'pin-running' || phase === 'pin-failed' ? (
-            <PinStep busy={setup.isBusy} error={pinError} onSubmit={handlePinSubmit} />
-          ) : phase === 'picker-idle' ? (
-            <PickerStep
-              busy={setup.isBusy}
-              scanResults={setup.scanResults}
-              connectedSsid={setup.status?.connected ?? null}
-              onScan={setup.scan}
-              onConnect={handleConnectSubmit}
-            />
-          ) : phase === 'connect-failed' ? (
-            <ConnectFailedStep
-              ssid={connectTarget ?? ''}
-              error={connectError ?? ''}
-              onTryAgain={handleConnectRetry}
-            />
-          ) : null}
-        </Box>
-      </Stack>
-    </Stack>
-  );
-}
-
-/* --- Phase helpers ---------------------------------------------------- */
-
-function stepperIndexFor(phase: Phase): number {
-  switch (phase) {
-    case 'pin-idle':
-    case 'pin-running':
-    case 'pin-failed':
-      return 0;
-    case 'picker-idle':
-      return 1;
-    case 'connecting':
-    case 'connect-failed':
-      return 2;
-  }
-}
-
-function heroForPhase(phase: Phase): string {
-  switch (phase) {
-    case 'pin-idle':
-    case 'pin-running':
-      return lockedReachySvg;
-    case 'pin-failed':
-      return connectionLostSvg;
-    case 'picker-idle':
-      return blueprintSvg;
-    case 'connecting':
-      return rocketSvg;
-    case 'connect-failed':
-      return connectionLostSvg;
-  }
-}
-
-function titleFor(phase: Phase): string {
-  switch (phase) {
-    case 'pin-idle':
-    case 'pin-running':
-      return 'Set up WiFi';
-    case 'pin-failed':
-      return 'Wrong PIN';
-    case 'picker-idle':
-      return 'Choose a WiFi';
-    case 'connecting':
-      return '';
-    case 'connect-failed':
-      return "Couldn't join";
-  }
-}
-
-function subtitleFor(phase: Phase, robotName: string, target: string | null): string {
-  switch (phase) {
-    case 'pin-idle':
-    case 'pin-running':
-      return `Enter the PIN shown on ${robotName}.`;
-    case 'pin-failed':
-      return 'Check the PIN on the robot and try again.';
-    case 'picker-idle':
-      return 'Pick a network the robot can reach.';
-    case 'connecting':
-      return '';
-    case 'connect-failed':
-      return target ? `We couldn't join "${target}".` : '';
-  }
-}
-
-/* --- PIN step --------------------------------------------------------- */
-
-function PinStep({
-  busy,
-  error,
-  onSubmit,
-}: {
-  busy: boolean;
-  error: string | null;
-  onSubmit: (pin: string) => Promise<void>;
-}) {
-  const [pin, setPin] = useState('');
-  const clean = pin.replace(/\D/g, '').slice(0, 5);
-  const canSubmit = !busy && clean.length >= 4;
-
-  useEffect(() => {
-    if (error) setPin('');
-  }, [error]);
-
-  return (
-    <Stack spacing={2.5} alignItems="stretch">
-      {error && (
-        <Typography
-          sx={{ fontSize: TYPO.sm, color: STATUS.error, textAlign: 'center' }}
-        >
-          {error}
-        </Typography>
-      )}
-
-      <TextField
-        label="PIN"
-        value={clean}
-        onChange={e => setPin(e.target.value)}
-        inputProps={{
-          inputMode: 'numeric',
-          pattern: '[0-9]*',
-          autoComplete: 'off',
-          maxLength: 5,
-          style: {
-            fontSize: '1.6rem',
-            letterSpacing: '0.5em',
-            textAlign: 'center',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          },
-        }}
-        autoFocus
-        disabled={busy}
-        fullWidth
-      />
-
-      {busy ? (
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={1.5}
-          justifyContent="center"
-          sx={{ py: 1 }}
-        >
-          <CircularProgress size={18} />
-          <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-            Authenticating…
-          </Typography>
-        </Stack>
-      ) : (
-        <Button
-          variant="contained"
-          size="large"
-          disabled={!canSubmit}
-          onClick={() => void onSubmit(clean)}
-          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-        >
-          {error ? 'Try again' : 'Continue'}
-        </Button>
-      )}
-    </Stack>
-  );
-}
-
-/* --- Picker step ------------------------------------------------------ */
-
-function PickerStep({
-  busy,
-  scanResults,
-  connectedSsid,
-  onScan,
-  onConnect,
-}: {
-  busy: boolean;
-  scanResults: string[];
-  connectedSsid: string | null;
-  onScan: () => Promise<string[]>;
-  onConnect: (ssid: string, psk: string) => Promise<void>;
-}) {
-  const [selectedSsid, setSelectedSsid] = useState('');
-  const [manualSsid, setManualSsid] = useState('');
-  const [psk, setPsk] = useState('');
-  const [showHidden, setShowHidden] = useState(false);
-  const scannedRef = useRef(false);
-
-  useEffect(() => {
-    if (scannedRef.current) return;
-    scannedRef.current = true;
-    void onScan();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const ssidToConnect = selectedSsid || manualSsid.trim();
-  const canConnect = !busy && ssidToConnect.length > 0;
-
-  return (
-    <Stack spacing={2}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Box sx={{ flex: 1 }}>
-          <NetworkSelect
-            value={selectedSsid}
-            onChange={ssid => {
-              setSelectedSsid(ssid);
-              setManualSsid('');
-            }}
-            networks={scanResults}
-            isLoading={busy}
-            connectedNetwork={connectedSsid}
-            disabled={busy && scanResults.length === 0}
-          />
-        </Box>
+        {/* Disable Back during in-flight BLE round-trips: WIFI_CONNECT
+            (connecting) and WIFI_FORGET (forgetting) both keep running
+            on the daemon side regardless of what the UI does, so a
+            tap here would feel like a cancel without actually
+            cancelling anything. Re-enabled during `verifying` so a
+            user who's stuck waiting (e.g. their phone is parked on a
+            now-defunct hotspot) can opt out of the watchdog. */}
         <IconButton
-          onClick={() => void onScan()}
-          disabled={busy}
-          size="small"
-          aria-label="Rescan"
-          sx={{
-            border: theme => `1px solid ${theme.palette.divider}`,
-            borderRadius: 1.5,
-            height: 40,
-            width: 40,
-          }}
+          aria-label="Back"
+          onClick={onBack}
+          edge="start"
+          disabled={phase === 'connecting' || phase === 'forgetting'}
         >
-          {busy ? <CircularProgress size={14} thickness={5} /> : <ReplayIcon fontSize="small" />}
+          <ArrowBackIosNewIcon />
         </IconButton>
-      </Stack>
-
-      <TextField
-        label="Password"
-        value={psk}
-        onChange={e => setPsk(e.target.value)}
-        type="password"
-        autoComplete="new-password"
-        fullWidth
-        disabled={busy}
-      />
-
-      {!showHidden ? (
-        <Button
-          size="small"
-          variant="text"
-          color="inherit"
-          onClick={() => setShowHidden(true)}
-          sx={{ alignSelf: 'center', opacity: 0.7, textTransform: 'none' }}
-        >
-          Hidden network? Type SSID ›
-        </Button>
-      ) : (
-        <TextField
-          label="SSID (hidden network)"
-          value={manualSsid}
-          onChange={e => {
-            setSelectedSsid('');
-            setManualSsid(e.target.value);
-          }}
-          size="small"
-          fullWidth
-          disabled={busy}
-        />
-      )}
-
-      <Button
-        variant="contained"
-        size="large"
-        disabled={!canConnect}
-        onClick={() => void onConnect(ssidToConnect, psk)}
-        startIcon={<WifiIcon />}
-        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-      >
-        Connect
-      </Button>
-    </Stack>
-  );
-}
-
-/* --- Connect failed --------------------------------------------------- */
-
-function ConnectFailedStep({
-  ssid,
-  error,
-  onTryAgain,
-}: {
-  ssid: string;
-  error: string;
-  onTryAgain: () => void;
-}) {
-  return (
-    <Stack spacing={2} alignItems="stretch">
-      <Typography
-        sx={{ fontSize: TYPO.sm, color: STATUS.error, textAlign: 'center' }}
-      >
-        {error}
-      </Typography>
-      {ssid && (
         <Typography
           sx={{
-            fontSize: TYPO.xs,
-            color: 'text.secondary',
-            fontFamily: 'monospace',
-            textAlign: 'center',
-          }}
-        >
-          Target: {ssid}
-        </Typography>
-      )}
-
-      <Button
-        variant="contained"
-        size="large"
-        onClick={onTryAgain}
-        startIcon={<ReplayIcon />}
-        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-      >
-        Try again
-      </Button>
-    </Stack>
-  );
-}
-
-/* --- Connecting takeover --------------------------------------------- */
-
-interface ConnectingTakeoverProps {
-  ssid: string;
-  substate: ConnectingSubstate;
-  /** `setup.status.error` as reported by the daemon, when available. */
-  wifiError: string | null;
-  /** Force an immediate HTTP probe (used by the "switch phone" hint). */
-  onRetryProbe: () => void;
-  /** User acknowledges the robot fell back to hotspot; go back to the
-   *  picker with a fresh scan. */
-  onTryAnotherNetwork: () => void;
-  /** Hard exit: drop the BLE session and go back to the scan screen. */
-  onBackToScan: () => void;
-}
-
-/**
- * Fullscreen takeover covering the entire "connecting" phase.
- *
- * Never reports "failed" to the user if the robot actually joined. The
- * possible outcomes are:
- *
- *  - success (handled by the parent via `onConnected`)
- *  - `fallback-hotspot` - robot came back to hotspot => bad password,
- *     user is nudged to pick another network.
- *  - the user manually gave up and tapped "Back to scan".
- */
-function ConnectingTakeover({
-  ssid,
-  substate,
-  wifiError,
-  onRetryProbe,
-  onTryAnotherNetwork,
-  onBackToScan,
-}: ConnectingTakeoverProps) {
-  const isWorking =
-    substate === 'sending' || substate === 'joining' || substate === 'joined-probing';
-  const heroSrc = substate === 'fallback-hotspot' ? connectionLostSvg : rocketSvg;
-  const heroAnim: 'float' | 'pulse' = isWorking ? 'pulse' : 'float';
-
-  return (
-    <Stack
-      sx={{
-        height: '100%',
-        width: '100%',
-        position: 'relative',
-        alignItems: 'center',
-        justifyContent: 'center',
-        px: 4,
-        pt: LAYOUT.safeAreaTop,
-        pb: 3,
-      }}
-      spacing={2.5}
-    >
-      <HeroIllustration
-        src={heroSrc}
-        alt={ssid}
-        animation={heroAnim}
-        size={LAYOUT.heroSize}
-        mb={0}
-      />
-
-      <Stack
-        spacing={0.5}
-        alignItems="center"
-        sx={{ textAlign: 'center', maxWidth: 360 }}
-      >
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-          {headerLabelFor(substate)}
-        </Typography>
-        <Typography
-          sx={{
-            fontSize: TYPO.hero,
+            flex: 1,
+            fontSize: TYPO.lg,
             fontWeight: FONT_WEIGHT.semibold,
-            color: 'text.primary',
-            letterSpacing: '-0.3px',
+            textAlign: 'center',
+            mr: 5,
           }}
           noWrap
         >
-          {ssid}
+          Wi-Fi setup
         </Typography>
       </Stack>
 
-      <ConnectingSubstatusBlock substate={substate} wifiError={wifiError} />
-
-      <ConnectingActions
-        substate={substate}
-        onRetryProbe={onRetryProbe}
-        onTryAnotherNetwork={onTryAnotherNetwork}
-        onBackToScan={onBackToScan}
-      />
-    </Stack>
-  );
-}
-
-function headerLabelFor(substate: ConnectingSubstate): string {
-  switch (substate) {
-    case 'sending':
-      return 'Sending credentials to';
-    case 'joining':
-      return 'Robot is joining';
-    case 'joined-probing':
-      return 'Connected to';
-    case 'joined-switch-phone':
-      return 'Robot is on';
-    case 'fallback-hotspot':
-      return "Couldn't join";
-  }
-}
-
-function ConnectingSubstatusBlock({
-  substate,
-  wifiError,
-}: {
-  substate: ConnectingSubstate;
-  wifiError: string | null;
-}) {
-  if (substate === 'sending' || substate === 'joining') {
-    return (
-      <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minHeight: 40 }}>
-        <CircularProgress size={16} thickness={4} />
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-          {substate === 'sending'
-            ? 'Transferring over Bluetooth…'
-            : 'Waiting for the robot to connect…'}
-        </Typography>
-      </Stack>
-    );
-  }
-
-  if (substate === 'joined-probing') {
-    return (
       <Stack
-        direction="row"
-        spacing={1.5}
+        flex={1}
         alignItems="center"
+        justifyContent="center"
+        spacing={3}
         sx={{
-          minHeight: 40,
-          px: 2,
-          py: 1,
-          borderRadius: 2,
-          bgcolor: 'action.hover',
+          width: '100%',
+          maxWidth: LAYOUT.contentMaxWidth,
+          mx: 'auto',
+          overflowY: 'auto',
+          minHeight: 0,
         }}
       >
-        <CheckRoundedIcon sx={{ fontSize: 18, color: STATUS.success }} />
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-          Robot joined the network. Checking reachability…
-        </Typography>
+        {phase === 'preparing' && <PreparingView bleStatus={bleStatus} />}
+
+        {phase === 'already-online' && (
+          <AlreadyOnlineView
+            ssid={currentSsid}
+            ip={networkStatus?.ip ?? null}
+            onForget={() => {
+              setPin('');
+              setPinError(null);
+              setPhase('pin-forget');
+            }}
+          />
+        )}
+
+        {phase === 'pin' && (
+          <PinView
+            pin={pin}
+            onPinChange={setPin}
+            onComplete={(value) => void handleSubmitPin(value)}
+            error={pinError}
+            isBusy={setup.isBusy}
+          />
+        )}
+
+        {phase === 'pin-forget' && (
+          <PinView
+            pin={pin}
+            onPinChange={setPin}
+            onComplete={(value) => void handleSubmitPinForget(value)}
+            error={pinError}
+            isBusy={setup.isBusy}
+            intent="forget"
+            currentSsid={currentSsid}
+          />
+        )}
+
+        {phase === 'scan' && (
+          <ScanView
+            isBusy={setup.isBusy}
+            ssids={setup.scanResults}
+            error={setup.error}
+            onPick={handlePickSsid}
+            onRefresh={() => void setup.scan()}
+          />
+        )}
+
+        {phase === 'psk' && selectedSsid && (
+          <PskView
+            ssid={selectedSsid}
+            psk={psk}
+            onPskChange={setPsk}
+            isBusy={setup.isBusy}
+            onSubmit={() => void handleSubmitPsk()}
+            onCancel={() => setPhase('scan')}
+          />
+        )}
+
+        {phase === 'connecting' && <ConnectingView ssid={selectedSsid} />}
+
+        {phase === 'verifying' && <VerifyingView ssid={selectedSsid} />}
+
+        {phase === 'forgetting' && <ForgettingView ssid={currentSsid} />}
+
+        {phase === 'failed' && (
+          <FailedView
+            rawError={errorMsg}
+            onRetry={handleRetry}
+            onBack={onBack}
+            onProbe={() => setup.probe()}
+            bleConnected={!!connectedAddress}
+          />
+        )}
       </Stack>
-    );
-  }
-
-  if (substate === 'joined-switch-phone') {
-    return (
-      <Stack
-        spacing={1.25}
-        alignItems="center"
-        sx={{ maxWidth: 340, textAlign: 'center' }}
-      >
-        <Typography sx={{ fontSize: TYPO.md, color: 'text.primary', fontWeight: FONT_WEIGHT.semibold }}>
-          Almost there
-        </Typography>
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.5 }}>
-          The robot is online but this phone can&apos;t reach it yet. Make sure your
-          phone is on the same WiFi network, then tap <strong>Retry</strong>.
-        </Typography>
-      </Stack>
-    );
-  }
-
-  if (substate === 'fallback-hotspot') {
-    return (
-      <Stack
-        spacing={1}
-        alignItems="center"
-        sx={{ maxWidth: 340, textAlign: 'center' }}
-      >
-        <Typography sx={{ fontSize: TYPO.sm, color: STATUS.error }}>
-          {wifiError || 'The robot reopened its hotspot.'}
-        </Typography>
-        <Typography sx={{ fontSize: TYPO.xs, color: 'text.disabled', lineHeight: 1.5 }}>
-          Most of the time this means the password was wrong or the network was out
-          of range.
-        </Typography>
-      </Stack>
-    );
-  }
-
-  return null;
-}
-
-function ConnectingActions({
-  substate,
-  onRetryProbe,
-  onTryAnotherNetwork,
-  onBackToScan,
-}: {
-  substate: ConnectingSubstate;
-  onRetryProbe: () => void;
-  onTryAnotherNetwork: () => void;
-  onBackToScan: () => void;
-}) {
-  if (substate === 'sending' || substate === 'joining' || substate === 'joined-probing') {
-    return (
-      <Box sx={{ position: 'absolute', bottom: 24, left: 0, right: 0, textAlign: 'center' }}>
-        <Link
-          component="button"
-          onClick={onBackToScan}
-          underline="hover"
-          sx={{ fontSize: TYPO.xs, color: 'text.disabled' }}
-        >
-          Cancel and go back
-        </Link>
-      </Box>
-    );
-  }
-
-  if (substate === 'joined-switch-phone') {
-    return (
-      <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 320 }}>
-        <Button
-          variant="contained"
-          size="large"
-          startIcon={<ReplayIcon />}
-          onClick={onRetryProbe}
-          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-        >
-          I&apos;m on the same WiFi - Retry
-        </Button>
-        <Button
-          variant="text"
-          onClick={onBackToScan}
-          sx={{ textTransform: 'none' }}
-        >
-          Back to scan
-        </Button>
-      </Stack>
-    );
-  }
-
-  if (substate === 'fallback-hotspot') {
-    return (
-      <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 320 }}>
-        <Button
-          variant="contained"
-          size="large"
-          startIcon={<WifiIcon />}
-          onClick={onTryAnotherNetwork}
-          sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-        >
-          Try another network
-        </Button>
-        <Button
-          variant="text"
-          onClick={onBackToScan}
-          sx={{ textTransform: 'none' }}
-        >
-          Back to scan
-        </Button>
-      </Stack>
-    );
-  }
-
-  return null;
+    </Stack>
+  );
 }

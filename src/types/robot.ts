@@ -70,3 +70,31 @@ export interface BleWifiStatus {
   known: string[];
   error: string | null;
 }
+
+/**
+ * Result of the daemon's `WIFI_PROBE` BLE command (see `_wifi_probe`
+ * in `bluetooth_service.py`). One tag per layer of the connectivity
+ * stack so the UI can pinpoint which hop failed.
+ *
+ * Each value is a small free-form string; we don't enumerate the
+ * possible values at the type level so a future daemon can add new
+ * statuses (`captive-portal`, `slow`, ...) without a client release.
+ * The reference daemon emits:
+ *
+ *   * `wlan`     - `ok` | `down` | `error`
+ *   * `gateway`  - `ok` | `unreachable`
+ *   * `dns`      - `ok` | `fail`
+ *   * `internet` - `ok` | `fail`
+ *   * `daemon`   - `ok` | `fail`
+ *
+ * Probes that exceeded the daemon's total budget (typically a stuck
+ * DNS or a hung subprocess) report `timeout`. Any unmodelled value
+ * is rendered as-is by the UI ("status: <value>").
+ */
+export interface WifiProbeResult {
+  wlan: string;
+  gateway: string;
+  dns: string;
+  internet: string;
+  daemon: string;
+}

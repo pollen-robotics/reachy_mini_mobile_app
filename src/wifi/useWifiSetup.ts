@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { BleWifiStatus } from '../types/robot';
+import type { BleWifiStatus, WifiProbeResult } from '../types/robot';
 import { formatBlecError, useBleSession } from '../ble/useBleSession';
 
 const STATUS_POLL_MS = 3_000;
@@ -34,6 +34,14 @@ const FAST_POLL_DURATION_MS = 30_000;
 
 /** WIFI_SCAN blocks the daemon BT loop for up to ~10 s (nmcli rescan). */
 const WIFI_SCAN_READ_DELAY_MS = 1_000;
+
+/**
+ * Daemon-side budget for `WIFI_PROBE` is ~2.5 s + a 1 s individual
+ * cap; we wait one extra second on the BLE round-trip before
+ * reading back the response characteristic. Anything past that is
+ * almost certainly a stalled DBus loop, not a slow probe.
+ */
+const WIFI_PROBE_READ_DELAY_MS = 3_500;
 
 type IntervalHandle = ReturnType<typeof setInterval>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
@@ -53,6 +61,19 @@ export interface UseWifiSetupResult {
    * a clean find-robot + connect cycle. */
   forget: (ssid: string, options?: { disconnectAfter?: boolean }) => Promise<boolean>;
   refresh: () => Promise<void>;
+  /** One-shot read of the public `WIFI_STATUS` BLE command (no auth
+   * required), bypassing the periodic poller's React-state cycle.
+   * Useful in synchronous routing decisions where we need the
+   * authoritative value right now (e.g. on connect, deciding
+   * `already-online` vs `pin` flow without waiting for the next
+   * poll tick). Returns `null` if the daemon's payload was
+   * unparseable; throws on BLE errors. */
+  getStatus: () => Promise<BleWifiStatus | null>;
+  /** Run the `WIFI_PROBE` BLE diagnostic and return the parsed result.
+   * No auth required (read-only). Resolves to `null` if the BLE
+   * exchange succeeded but the payload was unparseable, throws on
+   * BLE errors. */
+  probe: () => Promise<WifiProbeResult | null>;
   clearError: () => void;
 }
 
@@ -153,6 +174,15 @@ export function useWifiSetup(): UseWifiSetupResult {
     await pollOnce();
   }, [pollOnce]);
 
+  const getStatus = useCallback(async (): Promise<BleWifiStatus | null> => {
+    // Direct one-shot read - intentionally side-effect free. We do
+    // NOT update `setup.status` here: callers want a snapshot in a
+    // routing decision, not to drive the polling state. The next
+    // `pollOnce` will refresh the cached state in due course.
+    const raw = await sendCommand('WIFI_STATUS');
+    return parseWifiStatus(raw);
+  }, [sendCommand]);
+
   const authenticate = useCallback(
     async (pin: string): Promise<boolean> => {
       const trimmed = pin.trim();
@@ -226,6 +256,13 @@ export function useWifiSetup(): UseWifiSetupResult {
       }
       setIsBusy(true);
       setError(null);
+      // Clear the cached status so the auto-advance effect on the
+      // joining screen cannot fire on a stale `mode: 'wlan'` from the
+      // previous WiFi session (e.g. when the user came in via the
+      // "Already on Wi-Fi" path and wants to switch network). The
+      // first poll after WIFI_CONNECT will re-populate this with the
+      // authoritative post-attempt state.
+      setStatus(null);
       userActionInFlightRef.current = true;
       try {
         const payload = JSON.stringify({ ssid: trimmed, psk });
@@ -248,6 +285,43 @@ export function useWifiSetup(): UseWifiSetupResult {
     },
     [sendCommand, startFastPoll]
   );
+
+  const probe = useCallback(async (): Promise<WifiProbeResult | null> => {
+    // No `setIsBusy` here: the WiFi screen renders the diagnostic
+    // result inside `FailedView`, which already has its own local
+    // loading state. Surfacing it via `isBusy` would block legitimate
+    // background polls and feel wrong (probe is not a write, it
+    // doesn't take the daemon's `busy_lock`).
+    setError(null);
+    try {
+      const raw = await sendCommand('WIFI_PROBE', {
+        delayMs: WIFI_PROBE_READ_DELAY_MS,
+      });
+      if (raw.startsWith('ERROR:')) {
+        setError(raw.slice('ERROR:'.length).trim());
+        return null;
+      }
+      const parsed = safeJsonParse<Partial<WifiProbeResult>>(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        setError('Unexpected diagnostic payload from the daemon.');
+        return null;
+      }
+      // Coerce missing keys to `unknown` so the UI can render every
+      // row without runtime guards. The daemon always emits all five,
+      // but a future version might add new ones; we only validate the
+      // shape we know.
+      return {
+        wlan: typeof parsed.wlan === 'string' ? parsed.wlan : 'unknown',
+        gateway: typeof parsed.gateway === 'string' ? parsed.gateway : 'unknown',
+        dns: typeof parsed.dns === 'string' ? parsed.dns : 'unknown',
+        internet: typeof parsed.internet === 'string' ? parsed.internet : 'unknown',
+        daemon: typeof parsed.daemon === 'string' ? parsed.daemon : 'unknown',
+      };
+    } catch (err) {
+      setError(formatBlecError(err));
+      throw err;
+    }
+  }, [sendCommand]);
 
   const forget = useCallback(
     async (
@@ -297,6 +371,8 @@ export function useWifiSetup(): UseWifiSetupResult {
     connect,
     forget,
     refresh,
+    getStatus,
+    probe,
     clearError,
   };
 }

@@ -31,6 +31,7 @@ import {
   Avatar,
   Box,
   Button,
+  Chip,
   CircularProgress,
   IconButton,
   List,
@@ -45,18 +46,23 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import UsbIcon from '@mui/icons-material/Usb';
+import WifiIcon from '@mui/icons-material/Wifi';
 
 import { SCAN_TIMEOUT_MS } from '../ble/constants';
 import { useBleSession, type ReachyBleDevice } from '../ble/useBleSession';
 import {
+  extractRobotHardwareId,
   extractRobotId,
   extractRobotName,
+  extractRobotTransport,
   type CentralRobotEntry,
 } from '../auth/fetchRobotsFromCentral';
 import { useRemoteRobots } from '../auth/useRemoteRobots';
-import HeroIllustration from '../components/HeroIllustration';
-import detectiveSvg from '../assets/reachy-detective.svg';
-import reachiesSvg from '../assets/reachies.svg';
+import {
+  useLocalDaemonProbe,
+  type LocalDaemonInfo,
+} from '../local/useLocalDaemonProbe';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
 interface ScanScreenProps {
@@ -84,62 +90,104 @@ export default function ScanScreen({
   token,
   username,
 }: ScanScreenProps) {
-  const { status, devices, adapterUnavailable, startScanning } = useBleSession();
+  // BLE discovery is intentionally disabled for now - we are
+  // focusing the mobile app on Central listing + connect/disconnect
+  // + conversation. The BLE scanning hook, the section rendering
+  // and the Wi-Fi setup flow are kept in code (commented JSX +
+  // unused imports tree-shaken by Vite) so we can re-enable the
+  // first-time Wi-Fi onboarding path without rewriting it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _ble = useBleSession;
+  // const { status, devices, adapterUnavailable, startScanning } = useBleSession();
   const remote = useRemoteRobots(token, { pollMs: 30_000 });
+  const local = useLocalDaemonProbe();
 
-  const started = useRef(false);
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    void startScanning();
-    const id = window.setInterval(() => {
-      if (adapterUnavailable) return;
-      void startScanning({ preserve: true });
-    }, SCAN_REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, [startScanning, adapterUnavailable]);
+  // const started = useRef(false);
+  // useEffect(() => {
+  //   if (started.current) return;
+  //   started.current = true;
+  //   void startScanning();
+  //   const id = window.setInterval(() => {
+  //     if (adapterUnavailable) return;
+  //     void startScanning({ preserve: true });
+  //   }, SCAN_REFRESH_MS);
+  //   return () => window.clearInterval(id);
+  // }, [startScanning, adapterUnavailable]);
 
-  const isScanning = status === 'scanning';
-  const bleList = Object.values(devices);
-  const hasAnyRobot =
-    bleList.length > 0 ||
-    (remote.state.kind === 'ready' && remote.state.robots.length > 0) ||
-    (remote.state.kind === 'loading' && remote.state.robots.length > 0);
+  // const isScanning = status === 'scanning';
+  // const bleList = Object.values(devices);
+  const remoteRobots =
+    remote.state.kind === 'ready' || remote.state.kind === 'loading'
+      ? remote.state.robots
+      : [];
+
+  // Local USB discovery is also disabled for now - the focus is the
+  // central listing path. The probe hook, the section and the
+  // matching logic stay in code so it can be reactivated later
+  // (e.g. for desktop dev where the loopback daemon is the fastest
+  // path to a connected robot).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _local = local;
+  // const handleLocalPicked = (info: LocalDaemonInfo): void => {
+  //   const match = remoteRobots.find(
+  //     (r) => extractRobotName(r) === info.robotName,
+  //   );
+  //   if (match) {
+  //     onRemotePicked(match);
+  //     return;
+  //   }
+  //   onRemotePicked({ name: info.robotName, id: info.robotName });
+  // };
 
   return (
     <Stack
       sx={{
         height: '100%',
         width: '100%',
-        px: 3,
-        pt: LAYOUT.safeAreaTop,
-        pb: 4,
         overflowY: 'auto',
       }}
     >
+      {/* Inner content column. `m: 'auto'` distributes free space
+          equally on all four sides → fully centred (both axes) when
+          the cards fit within the viewport, and falls back to
+          top-aligned scrolling when they don't (the `auto` margins
+          collapse to zero once the content overflows, the parent's
+          `overflowY` then takes over). The fixed safe-area /
+          horizontal paddings are applied to this inner column so
+          they don't break the auto-margin centering math. */}
       <Stack
         spacing={2}
-        alignItems="center"
-        sx={{ width: '100%', maxWidth: LAYOUT.contentMaxWidth, mx: 'auto' }}
+        sx={{
+          m: 'auto',
+          width: '100%',
+          maxWidth: LAYOUT.contentMaxWidth,
+          px: 3,
+          py: LAYOUT.safeAreaTop,
+        }}
       >
-        <HeroIllustration
-          src={hasAnyRobot ? reachiesSvg : detectiveSvg}
-          alt={hasAnyRobot ? 'Reachy Minis found' : 'Looking for Reachy Minis'}
-          animation="float"
-          size={hasAnyRobot ? 120 : 140}
-          mb={1}
-        />
         <Typography
+          component="h1"
           sx={{
+            m: 0,
+            mb: 1,
+            textAlign: 'center',
             fontSize: TYPO.display,
             fontWeight: FONT_WEIGHT.semibold,
             color: 'text.primary',
-            textAlign: 'center',
             letterSpacing: '-0.3px',
           }}
         >
-          {hasAnyRobot ? 'Choose your Reachy' : 'Looking for your Reachy'}
+          Find your Reachy
         </Typography>
+
+        {/* Local USB + BLE sections are hidden for now - the mobile
+            app focuses on the Central (HF) listing path. The
+            `LocalUsbSection`, `BluetoothSection` and their card
+            components stay in this file so re-enabling is a one-line
+            revert.
+        {local.info && (
+          <LocalUsbSection info={local.info} onPick={handleLocalPicked} />
+        )}
 
         <BluetoothSection
           devices={bleList}
@@ -147,6 +195,7 @@ export default function ScanScreen({
           adapterUnavailable={adapterUnavailable}
           onPick={onRobotPicked}
         />
+        */}
 
         <RemoteSection
           username={username}
@@ -157,6 +206,84 @@ export default function ScanScreen({
         />
       </Stack>
     </Stack>
+  );
+}
+
+/* --- Local USB section (loopback / desktop dev) ----------------------- */
+
+function LocalUsbSection({
+  info,
+  onPick,
+}: {
+  info: LocalDaemonInfo;
+  onPick: (info: LocalDaemonInfo) => void;
+}) {
+  return (
+    <Section
+      title="Local USB"
+      subtitle="Robots reachable on this device's loopback (127.0.0.1)"
+    >
+      <List
+        disablePadding
+        sx={{
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+        }}
+      >
+        <LocalRobotCard info={info} onTap={() => onPick(info)} />
+      </List>
+    </Section>
+  );
+}
+
+function LocalRobotCard({
+  info,
+  onTap,
+}: {
+  info: LocalDaemonInfo;
+  onTap: () => void;
+}) {
+  return (
+    <ListItemButton
+      onClick={onTap}
+      sx={{
+        p: 2,
+        borderRadius: 2,
+        bgcolor: 'background.paper',
+        border: theme => `1px solid ${theme.palette.divider}`,
+        '&:hover': {
+          bgcolor: 'action.hover',
+          borderColor: 'primary.main',
+        },
+      }}
+    >
+      <Stack direction="row" alignItems="center" spacing={2} sx={{ width: '100%' }}>
+        <Avatar
+          sx={{
+            bgcolor: 'success.main',
+            color: 'success.contrastText',
+            width: 40,
+            height: 40,
+          }}
+        >
+          <UsbIcon fontSize="small" />
+        </Avatar>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography variant="body1" fontWeight={600} noWrap sx={{ minWidth: 0 }}>
+              {info.robotName}
+            </Typography>
+            <ShortId hardwareId={info.hardwareId} />
+          </Stack>
+          <Typography variant="caption" color="text.secondary" fontFamily="monospace" noWrap>
+            127.0.0.1:8000{info.version ? ` · v${info.version}` : ''}
+          </Typography>
+        </Stack>
+        <ChevronRightIcon color="action" />
+      </Stack>
+    </ListItemButton>
   );
 }
 
@@ -174,7 +301,10 @@ function BluetoothSection({
   onPick: (d: ReachyBleDevice) => void;
 }) {
   return (
-    <Section title="Bluetooth" subtitle="Nearby robots on the local network">
+    <Section
+      title="Wi-Fi (BLE)"
+      subtitle="Nearby robots over Bluetooth - tap to set up Wi-Fi"
+    >
       {adapterUnavailable ? (
         <SectionEmpty
           text="Bluetooth is off"
@@ -238,9 +368,19 @@ function BleRobotCard({
           <BluetoothIcon fontSize="small" />
         </Avatar>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" fontWeight={600} noWrap>
-            {device.name}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography variant="body1" fontWeight={600} noWrap sx={{ minWidth: 0 }}>
+              {device.name}
+            </Typography>
+            {/* `hardwareId` is parsed from the BLE advertisement TLV
+                manufacturer data at scan time, so it is available
+                pre-connect. When null (older daemon without TLV
+                advert, or no Reachy attached), no chip is rendered -
+                we deliberately do NOT fall back to a different id
+                space (BLE address) here: a "different id per
+                section" was the exact UX confusion this PR closes. */}
+            <ShortId hardwareId={device.hardwareId} />
+          </Stack>
           <Typography variant="caption" color="text.secondary" fontFamily="monospace">
             {device.rssi ? `${device.rssi} dBm · BLE` : 'BLE'}
           </Typography>
@@ -266,9 +406,9 @@ function RemoteSection({
   onSignOut: () => void;
   onRefresh: () => void;
 }) {
-  const subtitle = `Signed in${
-    username ? ` as ${username}` : ''
-  } · Hugging Face central`;
+  const subtitle = `Connectable via Hugging Face${
+    username ? ` · ${username}` : ''
+  }`;
 
   const action = (
     <Stack direction="row" spacing={0.5} alignItems="center">
@@ -292,7 +432,7 @@ function RemoteSection({
   );
 
   return (
-    <Section title="Over the internet" subtitle={subtitle} action={action}>
+    <Section title="Distant (Central)" subtitle={subtitle} action={action}>
       {state.kind === 'loading' && state.robots.length === 0 ? (
         <Stack
           alignItems="center"
@@ -359,6 +499,8 @@ function RemoteRobotCard({
   onTap: () => void;
 }) {
   const id = extractRobotId(robot);
+  const transport = extractRobotTransport(robot);
+  const hardwareId = extractRobotHardwareId(robot);
   return (
     <ListItemButton
       disabled={disabled}
@@ -379,16 +521,106 @@ function RemoteRobotCard({
           <SmartToyIcon fontSize="small" />
         </Avatar>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" fontWeight={600} noWrap>
-            {extractRobotName(robot)}
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+            <Typography variant="body1" fontWeight={600} noWrap sx={{ minWidth: 0 }}>
+              {extractRobotName(robot)}
+            </Typography>
+            <TransportChip transport={transport} />
+            {/* `hardwareId` from the daemon's ``meta.hardware_id`` is
+                stable per physical robot, so we prefer it for the
+                user-visible tag. Falls through to a truncated
+                ``peerId`` for daemons that haven't shipped PR-1084
+                yet (the peerId rotates on reconnect, but it's still
+                a sane disambiguator within a single session). */}
+            <ShortId hardwareId={hardwareId} fallbackId={id} />
+          </Stack>
           <Typography variant="caption" color="text.secondary" fontFamily="monospace" noWrap>
-            {id ? `${id.slice(0, 8)}… · Signaling` : 'no peerId'}
+            Signaling
           </Typography>
         </Stack>
         <ChevronRightIcon color="action" />
       </Stack>
     </ListItemButton>
+  );
+}
+
+/**
+ * Render the first 5 chars of the stable per-robot identity
+ * (`hardware_id`) as a small monospace tag. A user can use this to
+ * recognise a specific robot across sessions even when the
+ * `peerId` changes (peer ids rotate on every relay reconnect).
+ *
+ * Falls back to the first 5 chars of `fallbackId` (typically the
+ * `peerId` for central listings) when `hardware_id` is unavailable
+ * - daemons older than PR-1084 don't advertise it. Renders nothing
+ * when neither is present (e.g. a BLE card pre-connect, where the
+ * GATT read hasn't happened yet and there is no `peerId` either).
+ *
+ * 5 chars on a SHA-256 prefix = 20 bits of entropy, more than enough
+ * to disambiguate the robots in a personal fleet without making the
+ * tag visually heavy.
+ */
+function ShortId({
+  hardwareId,
+  fallbackId,
+}: {
+  hardwareId: string | null;
+  fallbackId?: string | null;
+}) {
+  const id = hardwareId ?? fallbackId ?? null;
+  if (!id) return null;
+  return (
+    <Typography
+      variant="caption"
+      sx={{
+        fontFamily: 'monospace',
+        color: 'text.secondary',
+        fontSize: 11,
+        flexShrink: 0,
+      }}
+    >
+      id:{id.slice(0, 5)}
+    </Typography>
+  );
+}
+
+/**
+ * Small chip rendering the transport tag the daemon advertised on
+ * central. Two known values get a typed icon + tinted color; anything
+ * else falls through to a generic "label" rendering so a future
+ * `"ethernet"` / `"sim"` / `"mockup"` value still shows up legibly
+ * without a chip-component update.
+ */
+function TransportChip({ transport }: { transport: string }) {
+  if (transport === 'usb') {
+    return (
+      <Chip
+        size="small"
+        icon={<UsbIcon sx={{ fontSize: 14 }} />}
+        label="USB"
+        variant="outlined"
+        sx={{ height: 20, fontSize: 11, '.MuiChip-icon': { ml: 0.5 } }}
+      />
+    );
+  }
+  if (transport === 'wifi') {
+    return (
+      <Chip
+        size="small"
+        icon={<WifiIcon sx={{ fontSize: 14 }} />}
+        label="Wi-Fi"
+        variant="outlined"
+        sx={{ height: 20, fontSize: 11, '.MuiChip-icon': { ml: 0.5 } }}
+      />
+    );
+  }
+  return (
+    <Chip
+      size="small"
+      label={transport}
+      variant="outlined"
+      sx={{ height: 20, fontSize: 11, textTransform: 'capitalize' }}
+    />
   );
 }
 

@@ -58,11 +58,41 @@ function writeStored(token: string | null, username: string | null): void {
   }
 }
 
-function syncSessionStorage(token: string | null): void {
+/** Far-future expiry stamp for the SDK's sessionStorage check.
+ *
+ * The SDK's `authenticate()` rejects the cached token unless
+ * `new Date(hf_token_expires) > new Date()`. Personal access tokens
+ * (the most common case here) don't carry an expiry, and the
+ * daemon-mediated OAuth tokens are long-lived too, so we hand the
+ * SDK a date a year out. If the actual server-side token ends up
+ * being rejected we'll see it as a 401 on the first authenticated
+ * call, not as a bogus "auth ok then fails immediately" race.
+ */
+const HF_TOKEN_FAR_FUTURE_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
+
+function syncSessionStorage(token: string | null, username: string | null): void {
   if (typeof sessionStorage === 'undefined') return;
   try {
-    if (token) sessionStorage.setItem('hf_token', token);
-    else sessionStorage.removeItem('hf_token');
+    if (token) {
+      sessionStorage.setItem('hf_token', token);
+      // The SDK's `authenticate()` requires ALL three fields in
+      // sessionStorage to fast-path the cached token: bearer,
+      // username, and a not-yet-elapsed expiry. Username comes from
+      // our own state (when we have it); when we don't (token-only
+      // login path), we seed a placeholder so the check passes - the
+      // SDK only uses this field for display purposes via
+      // `robot.username`, which the engine already rebroadcasts via
+      // its own callbacks.
+      sessionStorage.setItem('hf_username', username ?? 'user');
+      sessionStorage.setItem(
+        'hf_token_expires',
+        new Date(Date.now() + HF_TOKEN_FAR_FUTURE_EXPIRY_MS).toISOString(),
+      );
+    } else {
+      sessionStorage.removeItem('hf_token');
+      sessionStorage.removeItem('hf_username');
+      sessionStorage.removeItem('hf_token_expires');
+    }
   } catch {
     // mirror localStorage's silent failure, see above
   }
@@ -81,13 +111,13 @@ export function useRemoteHfToken(): RemoteHfTokenState {
   // of any descendant component (no useEffect race window).
   const [{ token, username }, setState] = useState(() => {
     const stored = readStored();
-    syncSessionStorage(stored.token);
+    syncSessionStorage(stored.token, stored.username);
     return stored;
   });
 
   useEffect(() => {
-    syncSessionStorage(token);
-  }, [token]);
+    syncSessionStorage(token, username);
+  }, [token, username]);
 
   const setToken = useCallback((nextToken: string, nextUsername?: string | null) => {
     const cleanToken = nextToken.trim();

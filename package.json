@@ -25,6 +25,7 @@
     "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^7.3.5",
     "@mui/material": "^7.3.5",
+    "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.10.0",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-os": "^2.3.2",

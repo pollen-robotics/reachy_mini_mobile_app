@@ -50,6 +50,7 @@ import {
   SCAN_TIMEOUT_MS,
   STATUS_SERVICE_UUID,
 } from './constants';
+import { parseAdvertHardwareId } from './parseAdvertPayload';
 
 // ===========================================================================
 // Types
@@ -78,6 +79,21 @@ export interface ReachyBleDevice {
   /** Unix ms of the last advertisement seen. Advertisements come in
    * bursts, so this lets us age-out entries if needed. */
   lastSeenMs: number;
+  /**
+   * Stable per-robot identity, parsed from the daemon's BLE
+   * advertisement manufacturer data (TLV v0x02, tag 0x01) at scan
+   * time. Same value as the daemon's `meta.hardware_id` on its
+   * central listing and `hardware_id` from `GET /api/daemon/status`,
+   * so the picker can dedupe a BLE row against the same robot's
+   * Local USB / Distant rows on a single key.
+   *
+   * `null` when the advert does not carry it yet - either the daemon
+   * is older than the TLV-format change (#1085) or no Reachy is
+   * attached (the daemon omits the manufacturer data in that case).
+   * Consumers MUST NOT invent a tag from another id space here:
+   * leave the chip empty rather than pretend.
+   */
+  hardwareId: string | null;
 }
 
 // ===========================================================================
@@ -161,6 +177,18 @@ interface BleSessionActions {
   startScanning: (options?: { preserve?: boolean }) => Promise<void>;
   stopScanning: () => Promise<void>;
   /**
+   * Record a device as the user's current selection without opening
+   * the BLE link. Used by the picker on the scan screen so the next
+   * route (`WifiSetupScreen`) reads a non-null `selectedDevice` from
+   * the store and can drive the actual `connectToDevice()` itself.
+   *
+   * Separating selection from connection keeps the BLE write
+   * lifecycle owned by exactly one screen at a time and avoids a
+   * race where the picker connects in the background while the
+   * setup screen is also trying to.
+   */
+  selectDevice: (device: ReachyBleDevice) => void;
+  /**
    * Stop the scan, connect to the given device, and record it as the
    * current `selectedDevice`. Resolves `true` on success.
    */
@@ -227,11 +255,20 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
           if (!name) continue;
           const normalized = name.toLowerCase().replace(/-/g, '');
           if (!normalized.includes(REACHY_NAME_SUBSTRING)) continue;
+          // The daemon embeds `hardware_id` in its BLE manufacturer
+          // data (TLV v0x02, tag 0x01). Parse it on every burst so
+          // a late-joining hwid (e.g. audio device hot-plugged after
+          // boot) propagates without a reconnect, and prefer a freshly
+          // parsed value over the previous one - if both fail to
+          // parse, we hold on to whatever we had so we don't flap.
+          const previous = next[raw.address];
+          const parsedHwid = parseAdvertHardwareId(raw.manufacturerData);
           next[raw.address] = {
             address: raw.address,
             name,
             rssi: raw.rssi ?? 0,
             lastSeenMs: Date.now(),
+            hardwareId: parsedHwid ?? previous?.hardwareId ?? null,
           };
           changed = true;
         }
@@ -262,6 +299,14 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
       // Already stopped.
     }
     if (get().status === 'scanning') set({ status: 'idle' });
+  },
+
+  selectDevice: (device: ReachyBleDevice) => {
+    // Pure assignment: do NOT touch `connectedAddress` or
+    // `networkStatus`. The next `connectToDevice` (typically fired by
+    // the screen we are about to navigate to) will reset them when
+    // the actual link opens.
+    set({ selectedDevice: device, error: null });
   },
 
   connectToDevice: async (device: ReachyBleDevice) => {
@@ -296,6 +341,12 @@ export const useBleSessionStore = create<BleSessionStore>((set, get) => ({
       } catch (e) {
         console.warn('[ble] NETWORK_STATUS read after connect failed', e);
       }
+      // No post-connect HARDWARE_ID read here: the scan callback
+      // already parsed it from the manufacturer data (TLV v0x02,
+      // tag 0x01) and assigned `device.hardwareId` synchronously.
+      // If that came back null, it means the daemon is older than
+      // PR-1085 or has no Reachy attached - either way, a GATT read
+      // would buy us nothing the parser hasn't already established.
       return true;
     } catch (err) {
       const msg = formatBlecError(err);
@@ -469,6 +520,7 @@ export interface UseBleSessionResult {
 
   startScanning: (options?: { preserve?: boolean }) => Promise<void>;
   stopScanning: () => Promise<void>;
+  selectDevice: (device: ReachyBleDevice) => void;
   connectToDevice: (device: ReachyBleDevice) => Promise<boolean>;
   disconnectDevice: () => Promise<void>;
   sendCommand: (command: string, options?: { delayMs?: number }) => Promise<string>;
@@ -491,6 +543,7 @@ export function useBleSession(): UseBleSessionResult {
 
   const startScanning = useBleSessionStore(s => s.startScanning);
   const stopScanning = useBleSessionStore(s => s.stopScanning);
+  const selectDevice = useBleSessionStore(s => s.selectDevice);
   const connectToDevice = useBleSessionStore(s => s.connectToDevice);
   const disconnectDevice = useBleSessionStore(s => s.disconnectDevice);
   const sendCommand = useBleSessionStore(s => s.sendCommand);
@@ -512,6 +565,7 @@ export function useBleSession(): UseBleSessionResult {
     adapterUnavailable,
     startScanning,
     stopScanning,
+    selectDevice,
     connectToDevice,
     disconnectDevice,
     sendCommand,

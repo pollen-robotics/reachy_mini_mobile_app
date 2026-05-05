@@ -13,6 +13,13 @@ export const STATUS_SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef3';
 /** Network status characteristic (read-only, no auth). */
 export const NETWORK_STATUS_CHAR_UUID = '12345678-1234-5678-1234-56789abcdef4';
 
+// Note: the daemon also exposes a HARDWARE_ID GATT characteristic
+// (`12345678-1234-5678-1234-56789abcdef7`) but the mobile app does
+// not need it: the same value is published in the BLE advertisement
+// manufacturer data (TLV v0x02, tag 0x01) and is parsed at scan
+// time without GATT-connecting. Keep this comment as a pointer for
+// other clients that might still want the GATT path.
+
 /** Command service hosting the read/write command channel. */
 export const CMD_SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
 

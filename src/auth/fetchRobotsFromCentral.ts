@@ -29,10 +29,28 @@
  * owns the token controls the robot".
  */
 
-const CENTRAL_ROBOT_STATUS_URL =
-  'https://cduss-reachy-mini-central.hf.space/api/robot-status';
+import { CENTRAL_SIGNALING_URL } from '../config';
+
+const CENTRAL_ROBOT_STATUS_URL = `${CENTRAL_SIGNALING_URL}/api/robot-status`;
 
 const CENTRAL_REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * How a client physically reaches the daemon backing this listing.
+ * Matches the daemon's `meta.transport` advertised on `setPeerStatus`
+ * (see `_build_producer_meta` in `central_signaling_relay.py`).
+ *
+ * - `"usb"`  - desktop-tray daemon, robot tethered to the user's
+ *              machine over USB (loopback HTTP available too).
+ * - `"wifi"` - autonomous daemon (Wireless variant or Lite on its own
+ *              Pi), reached over Wi-Fi / LAN.
+ *
+ * Pre-feature daemons don't emit this field; consumers MUST treat
+ * `undefined` as `"wifi"` (the autonomous case is the broad default).
+ * The shape is intentionally a free-form string to leave room for
+ * `"ethernet"`, `"sim"`, `"mockup"`, ... without a wire schema bump.
+ */
+export type RobotTransport = string;
 
 export interface CentralRobotEntry {
   // Central's wire format is loose: id / peerId / peer_id have all
@@ -41,8 +59,53 @@ export interface CentralRobotEntry {
   id?: string;
   peerId?: string;
   peer_id?: string;
-  meta?: { name?: string };
+  /**
+   * Wall-clock seconds since central last received a heartbeat from
+   * this producer (POST /send setPeerStatus). Used by the WiFi setup
+   * verifying phase to confirm a freshly-joined robot is actually
+   * online (a young value, < ~30 s) vs. about to be swept by the TTL
+   * sweeper. Older centrals don't emit this field.
+   */
+  last_seen_age_seconds?: number;
+  meta?: {
+    name?: string;
+    transport?: RobotTransport;
+    /**
+     * `meta.hardware_id` (post-PR-1084): SHA-256 prefix of the Pollen
+     * audio device's USB serial. Stable per physical robot, identical
+     * to what the daemon advertises on BLE GATT and exposes via
+     * `GET /api/daemon/hardware-id`. Absent when the daemon has no
+     * Reachy attached, or when the daemon is older than PR-1084.
+     */
+    hardware_id?: string;
+  };
   name?: string;
+}
+
+/**
+ * Resolve the transport this entry advertises, with a `"wifi"` fallback
+ * for pre-feature daemons. UI consumers branch on the return value.
+ */
+export function extractRobotTransport(
+  entry: CentralRobotEntry | undefined,
+): RobotTransport {
+  const raw = entry?.meta?.transport;
+  return typeof raw === 'string' && raw.length > 0 ? raw : 'wifi';
+}
+
+/**
+ * Pull the stable hardware id out of a central listing entry, or
+ * return `null` if the daemon is too old (pre-PR-1084) or runs
+ * without a Reachy attached. Callers fall back to `peerId` for
+ * display when this returns `null` - the bare `peerId` is unstable
+ * (rotates on every relay reconnect) but it's the only id we have
+ * left.
+ */
+export function extractRobotHardwareId(
+  entry: CentralRobotEntry | undefined,
+): string | null {
+  const raw = entry?.meta?.hardware_id;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
 export interface RemoteRobotsResult {

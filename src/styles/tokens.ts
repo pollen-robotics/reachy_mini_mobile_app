@@ -63,5 +63,20 @@ export const LAYOUT = {
   contentMaxWidth: 420,
   heroSize: 160,
   heroSizeSmall: 120,
-  safeAreaTop: 5.5, // MUI spacing units, accounts for iOS status bar
+  /**
+   * Top padding that respects the OS-reported safe area (notch / status
+   * bar). Resolves to the actual inset on iOS (notch devices ~44-50px,
+   * non-notch ~20px), the cutout on Android if any, and `0px` on
+   * platforms without a safe area (Tauri desktop, plain Android, web).
+   *
+   * Plumbed through MUI `sx` as a raw CSS string, which `pt`/`py`
+   * accept verbatim. `viewport-fit=cover` is set in `index.html`, which
+   * is required for iOS to expose `env(safe-area-inset-top)`.
+   */
+  safeAreaTop: 'env(safe-area-inset-top, 0px)',
+  /**
+   * Same idea for the bottom (home indicator on iPhone X+). Currently
+   * unused but exposed for symmetry.
+   */
+  safeAreaBottom: 'env(safe-area-inset-bottom, 0px)',
 } as const;
