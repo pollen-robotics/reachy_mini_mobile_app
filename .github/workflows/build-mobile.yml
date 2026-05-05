@@ -209,14 +209,19 @@ jobs:
             exit 1
           fi
           echo "Found APK at: $APK_PATH"
-          OUT="reachy-mini-mobile-android-debug-${{ github.sha }}.apk"
-          cp "$APK_PATH" "$OUT"
-          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+          # Don't `cp` to a renamed path: ubuntu runners are usually
+          # tight on disk after Cargo/Gradle have built everything,
+          # and the cp can fail with "No space left on device" right
+          # before upload-artifact@v4 has had a chance to stream the
+          # file out. We just point upload-artifact at the original
+          # APK and use the action's `name` field to give the
+          # artifact bundle its commit-stamped identity.
+          echo "apk=$APK_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-debug
+          name: reachy-mini-mobile-android-debug-${{ github.sha }}
           path: ${{ steps.pack.outputs.apk }}
           if-no-files-found: error
 
