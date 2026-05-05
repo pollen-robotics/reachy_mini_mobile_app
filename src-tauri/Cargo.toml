@@ -1,6 +1,6 @@
 [package]
 name = "reachy_mini_mobile_app"
-version = "0.1.0"
+version = "0.2.0"
 description = "Minimal Tauri client for Reachy Mini (BLE discovery + conversation iframe)"
 authors = ["Thibaud Frere"]
 edition = "2021"
