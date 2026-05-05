@@ -1,0 +1,212 @@
+name: Build mobile
+
+# Triggered on:
+#   - push to a `v*` tag         → builds iOS + Android, uploads to the matching release
+#   - manual dispatch            → builds iOS + Android as artifacts (no release attach)
+#
+# What this workflow builds today
+# ───────────────────────────────
+# iOS    : *simulator* build (`aarch64-apple-ios-sim`). No code signing required,
+#          no Apple Developer secrets needed. Produces a `.app` folder runnable
+#          on the iOS Simulator. NOT installable on a physical iPhone.
+# Android: *debug* APK. No keystore required. Installable via `adb install`
+#          on any developer-mode Android device.
+#
+# What this workflow does NOT build yet
+# ─────────────────────────────────────
+# - Signed iOS device build / TestFlight / App Store. Needs `APPLE_CERTIFICATE`,
+#   `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY*` secrets and an export options
+#   plist. Add a follow-up workflow once those secrets are set on the repo.
+# - Signed Android release / Play Store. Needs `ANDROID_KEY_BASE64`,
+#   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` secrets.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    name: iOS (simulator)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add iOS Rust targets
+        run: rustup target add aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Cache Rust target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-rust-ios-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-ios-
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build iOS (simulator, unsigned)
+        run: yarn tauri ios build --target aarch64-apple-ios-sim
+
+      - name: Locate and zip .app
+        id: pack
+        run: |
+          set -euxo pipefail
+          # Tauri's iOS build dropoff is somewhere under the Xcode DerivedData
+          # tree. We grep for the freshest `.app` produced for the
+          # iphonesimulator SDK to avoid pinning a Xcode build-version-specific
+          # path.
+          APP_PATH=$(find src-tauri/gen/apple/build -maxdepth 6 -name '*.app' -type d | head -1 || true)
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 8 -path '*Build/Products/*-iphonesimulator/*.app' -type d | head -1 || true)
+          fi
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app produced - failing the job for visibility."
+            find src-tauri/gen/apple -maxdepth 5 -type d | head -50
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          OUT="reachy-mini-mobile-ios-simulator-${{ github.sha }}.app.zip"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUT"
+          echo "zip=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          path: ${{ steps.pack.outputs.zip }}
+          if-no-files-found: error
+
+  android:
+    name: Android (debug)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android \
+                            armv7-linux-androideabi \
+                            i686-linux-android \
+                            x86_64-linux-android
+
+      - name: Install Android NDK
+        run: |
+          set -euxo pipefail
+          NDK_VERSION="27.0.12077973"
+          sdkmanager --install "ndk;$NDK_VERSION"
+          NDK_PATH="$ANDROID_HOME/ndk/$NDK_VERSION"
+          echo "NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
+
+      - name: Cache Rust target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-rust-android-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-android-
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Initialize Android project (idempotent)
+        run: |
+          set -euxo pipefail
+          if [ ! -d "src-tauri/gen/android" ]; then
+            yarn tauri android init
+          fi
+
+      - name: Build Android (debug APK)
+        run: yarn tauri android build --debug --apk
+
+      - name: Locate APK
+        id: pack
+        run: |
+          set -euxo pipefail
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -1 || true)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::No APK produced - failing the job for visibility."
+            find src-tauri/gen/android -maxdepth 8 -name '*.apk' -type f
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          OUT="reachy-mini-mobile-android-debug-${{ github.sha }}.apk"
+          cp "$APK_PATH" "$OUT"
+          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug
+          path: ${{ steps.pack.outputs.apk }}
+          if-no-files-found: error
+
+  attach-to-release:
+    name: Attach to GitHub Release
+    needs: [ios, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload all artifacts to the matching release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euxo pipefail
+          ls -laR artifacts
+          shopt -s globstar nullglob
+          mkdir -p release-files
+          for f in artifacts/**/*; do
+            if [ -f "$f" ]; then
+              cp "$f" "release-files/$(basename "$f")"
+            fi
+          done
+          ls -la release-files
+          gh release upload "$TAG" release-files/* --repo "${{ github.repository }}" --clobber
