@@ -63,7 +63,12 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Build iOS (simulator, unsigned)
-        run: yarn tauri ios build --target aarch64-apple-ios-sim
+        # Tauri CLI's `--target` for iOS only accepts the short forms
+        # `aarch64`, `aarch64-sim`, `x86_64`. The triple-style form
+        # (`aarch64-apple-ios-sim`) is rejected even though it's what
+        # `rustup target` uses. Keep the alias mapping in mind when
+        # debugging matrix builds.
+        run: yarn tauri ios build --target aarch64-sim
 
       - name: Locate and zip .app
         id: pack
@@ -155,6 +160,23 @@ jobs:
           set -euxo pipefail
           if [ ! -d "src-tauri/gen/android" ]; then
             yarn tauri android init
+          fi
+
+      - name: Bump minSdk to 26 (tauri-plugin-blec requirement)
+        # `tauri-plugin-blec` ships a manifest with `minSdk 26`; the
+        # generated Tauri Android project defaults to `minSdk 24`,
+        # which makes the manifest merger fail at build time with:
+        #   uses-sdk:minSdkVersion 24 cannot be smaller than version
+        #   26 declared in library [:tauri-plugin-blec]
+        # We patch the generated `build.gradle.kts` in CI rather than
+        # vendoring the whole gen/android tree, so the workflow stays
+        # self-contained and re-runs cleanly across Tauri CLI bumps.
+        run: |
+          set -euxo pipefail
+          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
+          if [ -f "$GRADLE_FILE" ]; then
+            sed -i 's/minSdk = 24/minSdk = 26/g' "$GRADLE_FILE"
+            grep -n 'minSdk' "$GRADLE_FILE" || true
           fi
 
       - name: Build Android (debug APK)
