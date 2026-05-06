@@ -33,6 +33,10 @@ interface IdentityChipBarProps {
   /** Falls back to the peerId when the daemon hasn't shipped PR-1084 yet. */
   fallbackId?: string | null;
   transport: string;
+  /** Daemon version reported by `robot.getVersion()`, fetched once per
+   *  session. Null when the data channel isn't open yet or when the
+   *  daemon predates the `get_version` Cmd. */
+  daemonVersion?: string | null;
 }
 
 const SHORT_ID_LENGTH = 5;
@@ -60,6 +64,7 @@ export default function IdentityChipBar({
   hardwareId,
   fallbackId,
   transport,
+  daemonVersion,
 }: IdentityChipBarProps) {
   const idTag = (hardwareId ?? fallbackId ?? '').slice(0, SHORT_ID_LENGTH);
 
@@ -104,8 +109,30 @@ export default function IdentityChipBar({
             </Box>
           ) : null}
         </Typography>
-        <Stack direction="row" alignItems="center" sx={{ minWidth: 0 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.75}
+          sx={{ minWidth: 0 }}
+        >
           <TransportChip transport={transport} height={20} />
+          {daemonVersion ? (
+            <Typography
+              component="span"
+              sx={{
+                fontSize: TYPO.xs,
+                fontFamily: 'monospace',
+                color: theme =>
+                  theme.palette.mode === 'dark'
+                    ? 'rgba(255,255,255,0.45)'
+                    : 'rgba(0,0,0,0.42)',
+                whiteSpace: 'nowrap',
+              }}
+              title="Daemon version"
+            >
+              {`v${daemonVersion}`}
+            </Typography>
+          ) : null}
         </Stack>
       </Stack>
     </Stack>

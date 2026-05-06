@@ -111,6 +111,14 @@ export class ReachyMini extends EventTarget {
    */
   playSound(file: string): boolean;
 
+  /**
+   * Read the daemon's reported version string (e.g. `"1.5.1"`),
+   * one-shot over the WebRTC data channel. Resolves to `null`
+   * when the channel isn't open yet, or when the daemon predates
+   * the `get_version` Cmd.
+   */
+  getVersion(): Promise<string | null>;
+
   // ─── Audio volume controls (DataChannel round-trips) ──────────────
   //
   // Mirror of the daemon's `/api/volume/*` REST surface, routed

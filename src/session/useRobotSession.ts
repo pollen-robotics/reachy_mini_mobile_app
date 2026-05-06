@@ -126,6 +126,10 @@ export interface RobotSessionHandle {
   /** Push a new microphone input volume (0-100). */
   setMicrophoneVolume: (volume: number) => Promise<number | null>;
 
+  /** Read the daemon's reported version string. Resolves to `null`
+   *  when the channel isn't open or the daemon predates `get_version`. */
+  getDaemonVersion: () => Promise<string | null>;
+
   /**
    * Latest measured microphone level in [0, 1]. Sampled on every
    * audio frame inside the engine (via the level monitor's `onLevels`
@@ -415,6 +419,10 @@ export function useRobotSession({
     [],
   );
 
+  const getDaemonVersion = useCallback(async (): Promise<string | null> => {
+    return handleRef.current?.getDaemonVersion() ?? Promise.resolve(null);
+  }, []);
+
   // Mic level getter: the engine writes its smoothed value into a
   // closure-level variable on every audio frame; here we just read
   // it via the handle. Returning `0` when the engine isn't mounted
@@ -449,6 +457,7 @@ export function useRobotSession({
     setSpeakerVolume,
     getMicrophoneVolume,
     setMicrophoneVolume,
+    getDaemonVersion,
     getMicLevel,
     playSound,
   };
