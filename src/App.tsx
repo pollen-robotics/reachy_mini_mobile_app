@@ -3,11 +3,13 @@ import { Box } from '@mui/material';
 
 import ScanScreen from './screens/ScanScreen';
 import SplashScreen from './screens/SplashScreen';
+import WelcomeBackScreen from './screens/WelcomeBackScreen';
 import WifiSetupScreen from './screens/WifiSetupScreen';
 import RemoteSignInScreen from './screens/RemoteSignInScreen';
 import RobotSessionScreen, {
   type ConnectionTarget,
 } from './screens/RobotSessionScreen';
+import ScreenTransition from './components/ScreenTransition';
 import {
   useBleSession,
   useInitBleListeners,
@@ -46,6 +48,11 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
   const [screen, setScreen] = useState<Screen>('scan');
   const [target, setTarget] = useState<ConnectionTarget | null>(null);
+  // True for the ~1.5 s celebratory transition that runs right
+  // after the OAuth callback resolves, on top of the freshly-
+  // mounted ScanScreen. Lets the data fetch warm up underneath
+  // while the user reads "Hello, @username".
+  const [justSignedIn, setJustSignedIn] = useState(false);
   const { disconnectDevice, connectedAddress, selectDevice } = useBleSession();
   const { token, username, setToken, clear } = useRemoteHfToken();
 
@@ -98,11 +105,64 @@ export default function App() {
           onSignedIn={(t, u) => {
             setToken(t, u);
             setScreen('scan');
+            // Trigger the welcome-back transition. The flag is
+            // cleared by the WelcomeBackScreen's `onDone` after
+            // its fade-out completes, leaving the user on the
+            // (already mounted, already fetching) scan screen.
+            setJustSignedIn(true);
           }}
         />
       </Box>
     );
   }
+
+  // Build the active screen content separately so we can hand it
+  // off to <ScreenTransition> as the *children* of a single
+  // animated wrapper - this is what lets Motion's
+  // `AnimatePresence` track enter/exit per screen via the
+  // `screenKey` prop. Each branch returns a fully-formed root
+  // node so swapping screens never produces an undefined render.
+  const currentScreen = (() => {
+    if (screen === 'session' && target) {
+      return (
+        <RobotSessionScreen
+          target={target}
+          token={token}
+          username={username}
+          onBack={() => void backToScan()}
+        />
+      );
+    }
+    if (screen === 'wifi-setup') {
+      return (
+        <WifiSetupScreen onBack={() => void backToScan()} token={token} />
+      );
+    }
+    // `scan` is the default landing screen - we fall through here
+    // even when `screen === 'session'` but `target` is null
+    // (defensive: should never happen, but renders a sane view).
+    return (
+      <ScanScreen
+        token={token}
+        username={username}
+        onRobotPicked={(device) => {
+          // Stash the picked BLE device in the store BEFORE we
+          // navigate so `WifiSetupScreen` reads a non-null
+          // `selectedDevice` on first render. Without this, the
+          // setup screen lands on its `failed` phase with a
+          // misleading "No robot selected" message - the user has
+          // to tap "Try again" to actually reach the PIN flow.
+          selectDevice(device);
+          setScreen('wifi-setup');
+        }}
+        onRemotePicked={(robot) => {
+          setTarget({ kind: 'remote', robot });
+          setScreen('session');
+        }}
+        onSignOutRemote={() => void handleSignOut()}
+      />
+    );
+  })();
 
   return (
     <Box
@@ -114,37 +174,20 @@ export default function App() {
         overflow: 'hidden',
       }}
     >
-      {screen === 'scan' && (
-        <ScanScreen
-          token={token}
+      <ScreenTransition screenKey={screen}>{currentScreen}</ScreenTransition>
+
+      {/* Post-sign-in welcome overlay. Sits at the modal layer
+          above whichever screen is currently mounted (always
+          ScanScreen in practice, since the OAuth callback always
+          lands on `screen === 'scan'`) and dismisses itself
+          after a short visible window. The screen behind it is
+          already kicking off `useRemoteRobots`, so by the time
+          the welcome fades out the list is usually populated. */}
+      {justSignedIn && (
+        <WelcomeBackScreen
           username={username}
-          onRobotPicked={(device) => {
-            // Stash the picked BLE device in the store BEFORE we
-            // navigate so `WifiSetupScreen` reads a non-null
-            // `selectedDevice` on first render. Without this, the
-            // setup screen lands on its `failed` phase with a
-            // misleading "No robot selected" message - the user has
-            // to tap "Try again" to actually reach the PIN flow.
-            selectDevice(device);
-            setScreen('wifi-setup');
-          }}
-          onRemotePicked={(robot) => {
-            setTarget({ kind: 'remote', robot });
-            setScreen('session');
-          }}
-          onSignOutRemote={() => void handleSignOut()}
+          onDone={() => setJustSignedIn(false)}
         />
-      )}
-      {screen === 'session' && target && (
-        <RobotSessionScreen
-          target={target}
-          token={token}
-          username={username}
-          onBack={() => void backToScan()}
-        />
-      )}
-      {screen === 'wifi-setup' && (
-        <WifiSetupScreen onBack={() => void backToScan()} token={token} />
       )}
     </Box>
   );

@@ -110,6 +110,38 @@ export interface RobotSessionHandle {
    * host's effect cleanup is symmetric.
    */
   attachVideo: (videoElement: HTMLVideoElement) => () => void;
+
+  // ─── Audio volume controls (pass-through to the SDK) ──────────────
+  //
+  // All four resolve with the daemon's *applied* value (post-clamp)
+  // or `null` if the platform doesn't expose volume control / the
+  // SDK isn't ready. Non-throwing.
+
+  /** Read the current speaker volume on the robot (0-100). */
+  getSpeakerVolume: () => Promise<number | null>;
+  /** Push a new speaker volume to the robot (0-100). */
+  setSpeakerVolume: (volume: number) => Promise<number | null>;
+  /** Read the current microphone input volume on the robot (0-100). */
+  getMicrophoneVolume: () => Promise<number | null>;
+  /** Push a new microphone input volume (0-100). */
+  setMicrophoneVolume: (volume: number) => Promise<number | null>;
+
+  /**
+   * Latest measured microphone level in [0, 1]. Sampled on every
+   * audio frame inside the engine (via the level monitor's `onLevels`
+   * callback) so consumers can drive a 60 Hz visualiser without
+   * triggering React re-renders. Returns `0` when the conversation
+   * isn't active.
+   */
+  getMicLevel: () => number;
+
+  /**
+   * Play one of the daemon's bundled sound files on the robot's
+   * speaker. Returns `true` when the command was queued, `false`
+   * if the DataChannel isn't open / the engine isn't ready.
+   * Non-throwing.
+   */
+  playSound: (file: string) => boolean;
 }
 
 interface UseRobotSessionOptions {
@@ -206,11 +238,13 @@ export function useRobotSession({
       const handle = mountConversation(inertRoot, {
         preselectedRobotId: robotId,
         autoStartConversation: false,
-        // Lazy: the level monitors only read this when the user
-        // taps the orb to start the conversation. By then the panel
-        // has populated the ref. If the ref is still null (e.g.
-        // race), the monitors degrade gracefully (no CSS writes).
-        audioLevelsTarget: audioLevelsTargetRef.current,
+        // Pass a *getter*, not `audioLevelsTargetRef.current`: the
+        // orb DOM may be unmounted/remounted while the engine
+        // stays alive (tab switches between Conv ↔ Apps, iframe
+        // release/reacquire). The engine re-reads this on every
+        // audio frame so its CSS-var writes always hit the
+        // currently-mounted orb instead of an old detached node.
+        audioLevelsTarget: () => audioLevelsTargetRef.current,
         onStateChange: (state) => {
           if (cancelToken.cancelled) return;
           setEngineState(state);
@@ -353,6 +387,46 @@ export function useRobotSession({
     return handle.attachVideo(el);
   }, []);
 
+  // Audio volume pass-throughs. All four return `null` if the
+  // engine hasn't booted yet; the consumer's UI can keep its
+  // current value displayed (typically the last seen one) or fall
+  // back to a sensible default.
+  const getSpeakerVolume = useCallback(async (): Promise<number | null> => {
+    return handleRef.current?.getSpeakerVolume() ?? Promise.resolve(null);
+  }, []);
+
+  const setSpeakerVolume = useCallback(
+    async (volume: number): Promise<number | null> => {
+      return handleRef.current?.setSpeakerVolume(volume) ?? Promise.resolve(null);
+    },
+    [],
+  );
+
+  const getMicrophoneVolume = useCallback(async (): Promise<number | null> => {
+    return handleRef.current?.getMicrophoneVolume() ?? Promise.resolve(null);
+  }, []);
+
+  const setMicrophoneVolume = useCallback(
+    async (volume: number): Promise<number | null> => {
+      return (
+        handleRef.current?.setMicrophoneVolume(volume) ?? Promise.resolve(null)
+      );
+    },
+    [],
+  );
+
+  // Mic level getter: the engine writes its smoothed value into a
+  // closure-level variable on every audio frame; here we just read
+  // it via the handle. Returning `0` when the engine isn't mounted
+  // matches the engine's own "no conversation = no level" contract.
+  const getMicLevel = useCallback((): number => {
+    return handleRef.current?.getMicLevel() ?? 0;
+  }, []);
+
+  const playSound = useCallback((file: string): boolean => {
+    return handleRef.current?.playSound(file) ?? false;
+  }, []);
+
   const phase = derivePhase(engineState, phaseHint);
 
   return {
@@ -371,5 +445,11 @@ export function useRobotSession({
     reacquire,
     tearDown,
     attachVideo,
+    getSpeakerVolume,
+    setSpeakerVolume,
+    getMicrophoneVolume,
+    setMicrophoneVolume,
+    getMicLevel,
+    playSound,
   };
 }

@@ -86,6 +86,21 @@ export interface ReachyMiniInstance extends EventTarget {
 
   setAudioMuted(muted: boolean): void;
   setMicMuted(muted: boolean): void;
+
+  /**
+   * Speaker volume on the robot. Both methods round-trip on the
+   * data channel and resolve with the daemon's authoritative value
+   * (or `null` on timeout / channel-closed).
+   */
+  getVolume(): Promise<number | null>;
+  setVolume(volume: number): Promise<number | null>;
+
+  /**
+   * On-robot microphone volume. Same data-channel round-trip
+   * semantics as the speaker volume getters.
+   */
+  getMicrophoneVolume(): Promise<number | null>;
+  setMicrophoneVolume(volume: number): Promise<number | null>;
 }
 
 export type ReachyMiniConstructor = new (

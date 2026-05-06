@@ -26,10 +26,19 @@
 import type { ConversationLevelEvent } from './conversation-engine';
 
 interface AudioLevelMonitorOptions {
-  /** Element onto which we write CSS variables at display rate. The
-   * orb root in our case. `null` disables the DOM writes (the
-   * `onLevels` callback is the only output then). */
-  target: HTMLElement | null;
+  /**
+   * Lazy getter for the element onto which we write CSS variables
+   * at display rate (the orb root in our case). Read on EVERY rAF
+   * tick so the binding follows React mount/unmount cycles
+   * automatically - the orb element can come and go (tab swaps,
+   * iframe handoffs) and the monitor always writes to whichever
+   * DOM is currently live, never to a detached node.
+   *
+   * Returning `null` disables the DOM writes for that frame (the
+   * `onLevels` callback is the only output then). The getter MUST
+   * be cheap: it runs at ~60 Hz inside the audio level loop.
+   */
+  getTarget: () => HTMLElement | null;
   /** Optional structured stream of every sample. Fired from inside
    * the same rAF tick that updates the CSS variables, AFTER the
    * smoothing pass. Either side (`user` or `ai`) is non-null per
@@ -85,11 +94,12 @@ export class MicLevelMonitor {
     this.timeBuf = new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
     this.freqBuf = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
 
-    // Style target: scoped to the orb if the host gave us one,
-    // otherwise we drop the writes entirely. Writing to :root is
-    // intentionally NOT a fallback - it leaks across HMR/StrictMode
-    // and made stale levels survive remounts.
-    const targetStyle = this.options.target ? this.options.target.style : null;
+    // Style target is queried via getter on each tick (NOT captured
+    // here) so a panel remount that swaps the orb DOM transparently
+    // re-targets the writes to the fresh element. Writing to :root
+    // is intentionally NOT a fallback - it leaks across HMR /
+    // StrictMode and made stale levels survive remounts.
+    const getTarget = this.options.getTarget;
     const onLevels = this.options.onLevels;
     const bandsForCallback: [number, number, number, number, number] = [
       0, 0, 0, 0, 0,
@@ -100,6 +110,11 @@ export class MicLevelMonitor {
       const tbuf = this.timeBuf;
       const fbuf = this.freqBuf;
       if (!an || !tbuf || !fbuf) return;
+
+      // Re-read the current target on every frame. Cheap (one
+      // function call, one .style access on hit) and what makes
+      // the binding remount-proof.
+      const targetStyle = getTarget()?.style ?? null;
 
       an.getFloatTimeDomainData(tbuf);
       let sum = 0;
@@ -159,8 +174,13 @@ export class MicLevelMonitor {
     this.freqBuf = null;
     this.level = 0;
     this.bands = [0, 0, 0, 0, 0];
-    if (this.options.target) {
-      const s = this.options.target.style;
+    // Reset CSS vars on the *current* target (if any). The element
+    // we wrote to over the lifetime of `start()` may have been
+    // unmounted in the meantime, in which case there's nothing to
+    // reset and we silently skip.
+    const currentTarget = this.options.getTarget();
+    if (currentTarget) {
+      const s = currentTarget.style;
       s.setProperty('--audio-level', '0');
       for (let b = 0; b < 5; b++) s.setProperty(`--bar${b}`, '0');
     }
@@ -248,13 +268,17 @@ export class AiLevelMonitor {
     this.timeBuf = new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
     this.lastActiveTs = performance.now();
 
-    const targetStyle = this.options.target ? this.options.target.style : null;
+    // See `MicLevelMonitor.start()` for the rationale: lazy DOM
+    // lookup per tick keeps the binding remount-proof.
+    const getTarget = this.options.getTarget;
     const onLevels = this.options.onLevels;
 
     const tick = () => {
       const an = this.analyser;
       const buf = this.timeBuf;
       if (!an || !buf) return;
+
+      const targetStyle = getTarget()?.style ?? null;
 
       an.getFloatTimeDomainData(buf);
       let sum = 0;
@@ -312,7 +336,9 @@ export class AiLevelMonitor {
     this.analyser = null;
     this.timeBuf = null;
     this.level = 0;
-    this.options.target?.style.setProperty('--ai-audio-level', '0');
+    // Reset the CSS var on the *current* target. May be null if the
+    // panel unmounted while we were running - silently skip.
+    this.options.getTarget()?.style.setProperty('--ai-audio-level', '0');
     if (this.options.onLevels) {
       try {
         this.options.onLevels({ user: null, ai: 0, bands: null });

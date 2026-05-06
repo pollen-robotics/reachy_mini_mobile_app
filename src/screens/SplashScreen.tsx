@@ -22,7 +22,7 @@ import { useEffect, useState } from 'react';
 import { Box, Fade, Typography } from '@mui/material';
 
 import HeroIllustration from '../components/HeroIllustration';
-import reachyStandardSvg from '../assets/reachy-standard.svg';
+import reachyBusteSvg from '../assets/reachy-buste.svg';
 import { DURATION, FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
 const SPLASH_VISIBLE_MS = 1200;
@@ -54,9 +54,9 @@ export default function SplashScreen({ onDone }: SplashScreenProps) {
         }}
       >
         <HeroIllustration
-          src={reachyStandardSvg}
+          src={reachyBusteSvg}
           alt="Reachy Mini"
-          animation="float"
+          animation="none"
           size={LAYOUT.heroSize}
           mb={2}
         />

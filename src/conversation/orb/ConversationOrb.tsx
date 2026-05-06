@@ -90,14 +90,27 @@ export function ConversationOrb({
 }
 
 /**
- * Per-state glow accent. The values mirror the original Space CSS so
- * the redesign is visually a no-op for users who already learned the
- * color language (cyan = listening, violet = AI, amber = thinking, …).
+ * Per-state glow accent. The "warming up" states (`idle`,
+ * `connecting`, `ready`) all use the app's primary orange
+ * (Pollen) so the orb's pre-conversation sequence reads as one
+ * continuous CTA: the spinner inside `connecting` and the
+ * caption ("Connecting" → "Tap to start conversation") carry
+ * the state distinction without needing a colour change. Mid-
+ * conversation states keep their own colour identity:
+ *
+ *   - `listening` / `user-speaking` (cyan) reads as "your mic
+ *     is the focus"
+ *   - `processing` (amber) reads as "AI is thinking"
+ *   - `ai-speaking` (violet) reads as "AI is the focus"
+ *   - `error` (red) reads as "something broke"
+ *
+ * Keep `#FF9500` in sync with `theme.ts`'s `ACCENT` constant if
+ * the brand colour ever moves.
  */
 const GLOW_BY_STATE: Record<OrbState, string> = {
-  idle: '#34d399',
-  connecting: '#facc15',
-  ready: '#34d399',
+  idle: '#FF9500',
+  connecting: '#FF9500',
+  ready: '#FF9500',
   listening: '#22d3ee',
   'user-speaking': '#22d3ee',
   processing: '#f59e0b',
@@ -110,7 +123,11 @@ function renderIndicator(state: OrbState): React.ReactNode {
     case 'connecting':
       return <span className="convo-orb__spinner" />;
     case 'ready':
-      return <PlayIcon />;
+      // Mic icon (not Play) so the affordance reads as "tap to
+      // talk" - the conversation is voice-first, the mic is the
+      // truth. Same icon as `idle` for consistency: both are
+      // "waiting for the user to start speaking" states.
+      return <MicIcon />;
     case 'listening':
     case 'user-speaking':
       return <Bars />;
@@ -178,30 +195,19 @@ function MicIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor" stroke="none" />
+      {/* Outlined mic capsule (no fill) - matches the rest of
+          the orb iconography. Slightly thicker stroke (1.8 vs
+          1.6) so the silhouette stays legible at the orb's
+          small render size. */}
+      <rect x="9" y="2" width="6" height="12" rx="3" />
       <path d="M5 10a7 7 0 0 0 14 0" />
       <line x1="12" y1="19" x2="12" y2="22" />
       <line x1="8" y1="22" x2="16" y2="22" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg
-      className="convo-orb__play-icon"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      stroke="none"
-      aria-hidden="true"
-    >
-      {/* Triangle nudged 1px right so the visual mass is centered. */}
-      <path d="M9 6.5v11a1 1 0 0 0 1.55.83l8-5.5a1 1 0 0 0 0-1.66l-8-5.5A1 1 0 0 0 9 6.5z" />
     </svg>
   );
 }

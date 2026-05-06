@@ -58,6 +58,13 @@ import {
   type CentralRobotEntry,
 } from '../auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '../conversation';
+import AudioControlsBar from '../conversation/control-panel/AudioControlsBar';
+// `CameraOverlay` is intentionally NOT imported here at the moment.
+// The component still ships at
+// `src/conversation/control-panel/CameraOverlay.tsx`, but we hide
+// it from the conversation tab until we're ready to ship the live
+// camera feed. Re-add the import + render it back inside the
+// `tab === 'conv'` block when reinstating.
 import { useRobotSession } from '../session/useRobotSession';
 import type { AppEntry } from '../apps/types';
 import AppIframeOverlay from './apps/AppIframeOverlay';
@@ -65,7 +72,6 @@ import AppsTabView from './apps/AppsTabView';
 import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
-import RobotCameraCard from './session/RobotCameraCard';
 import SessionErrorView from './session/SessionErrorView';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
@@ -167,7 +173,7 @@ function ConnectedSession({
     let cancelled = false;
     void (async () => {
       await session.tearDown();
-      if (cancelled) return;
+        if (cancelled) return;
       onBack();
     })();
     return () => {
@@ -218,6 +224,31 @@ function ConnectedSession({
     }
   }, [openedApp, leaving, session]);
 
+  // Tab-switch lifecycle for the conversation parts.
+  //
+  // Leaving the conversation tab stops the OpenAI Realtime pipeline,
+  // motion controllers and audio analysers. The robot stays awake
+  // (gravity-comp on the head/antennas, motors enabled, WebRTC up,
+  // SSE alive) so re-entering the tab is instant - the user just
+  // sees the orb in `ready`, taps once, and they're back in a fresh
+  // conversation.
+  //
+  // Why stop on tab switch (not on iframe-open): going to the apps
+  // surface signals "I'm browsing, not talking". Having the AI
+  // listen / speak in the background while the user picks an app
+  // wastes API tokens and is confusing audio-wise (the robot still
+  // narrates while the apps tab is shown). Stopping here is the
+  // minimal-surprise default.
+  //
+  // `stopConversation` is idempotent (no-op if no conversation is
+  // running), so this effect is safe to fire on every non-`conv`
+  // render including initial mounts and rapid tab oscillations.
+  const { stopConversation } = session;
+  useEffect(() => {
+    if (tab === 'conv') return;
+    void stopConversation();
+  }, [tab, stopConversation]);
+
   const isError = session.phase === 'error' && !leaving;
   // Connecting overlay: only fires for the INITIAL bring-up. After
   // `hasReachedReady` flips, subsequent transient states (a
@@ -243,78 +274,83 @@ function ConnectedSession({
         width: '100%',
         px: 3,
         pb: 0,
+        // No explicit bg: we inherit `background.default` (grey)
+        // from the App root and let the cards inside (audio
+        // controls, app cards) be the only WHITE surfaces. Same
+        // pattern as `ScanScreen` and the rest of the app:
+        // single grey canvas + white card islands, top + bottom
+        // bars blend with the canvas (only divider lines
+        // separate them).
       }}
     >
       {/* Top toolbar - full bleed, mirror of the BottomNavigation.
        *
        *   ┌─────────────────────────────────────────────────────────┐
-       *   │  [⏻]  reachy-mini-foo …  [id:abcd][🛜][@alice]          │
+       *   │  reachy-mini-foo  #abc12                          [⏻]  │
+       *   │  [Wi-Fi]                                                 │
        *   └─────────────────────────────────────────────────────────┘
        *
        * Visual contract:
        *   - `mx: -3` cancels the outer column's `px: 3` so the bar
        *     spans edge-to-edge of the viewport, exactly like the
        *     `BottomNavigation` does at the other end of the screen.
-       *   - The bar gets its own `bgcolor: background.paper` and a
-       *     1px bottom divider to read as a discrete chrome layer
-       *     (the body underneath uses `background.default`).
-       *   - `pt = calc(env(safe-area-inset-top) + 8px)` lets the bar
-       *     bg paint INTO the iOS notch while keeping the controls
-       *     vertically padded. On platforms without an inset we just
-       *     get the 8px fallback.
+       *   - The bar uses `background.default` (grey) - the same
+       *     tone as the body. They blend visually; only the
+       *     1 px bottom divider demarcates the bar from the
+       *     content. Cards inside the body are
+       *     `background.paper` (white) and pop as the only
+       *     "interesting" surfaces. Same convention as
+       *     `ScanScreen` and the rest of the app.
+       *   - `pt = calc(env(safe-area-inset-top) + 12px)` lets the
+       *     bar bg paint INTO the iOS notch while keeping the
+       *     controls vertically padded. On platforms without an
+       *     inset we just get the 12px fallback.
        *   - Internal `px: 3` matches the body's horizontal rhythm so
-       *     the power button and chips visually align with the body
-       *     content edges.
+       *     the identity column and power button visually align
+       *     with the body content edges.
        *
-       * Power-off is ALWAYS the leftmost glyph: on this screen we
-       * own a live WebRTC session + woken motors, so the action that
-       * takes us back is destructive (gotoSleep + motors disabled +
-       * stopSession + disconnect). The robot name takes the
-       * remaining space and truncates; the chips stick to the right
-       * with `flexShrink: 0` so they're never pushed off-screen.
+       * Identity (`IdentityChipBar`) takes the left flex column and
+       * mirrors the discovery-card taxonomy (name + short id on
+       * top, transport chip below). Power-off is the rightmost
+       * glyph, large enough to be a comfortable thumb target -
+       * tapping it is destructive (gotoSleep + motors disabled +
+       * stopSession + disconnect) so we want it deliberate but
+       * easy to reach. We dropped the `@username` chip: the user
+       * is by definition signed in here, the redundant pill was
+       * just noise.
        */}
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1}
+        spacing={1.5}
         sx={{
           flexShrink: 0,
           mx: -3,
           px: 3,
-          pb: 1,
-          pt: 'calc(env(safe-area-inset-top, 0px) + 8px)',
-          minHeight: 48,
-          bgcolor: 'background.paper',
+          pb: 2,
+          pt: 'calc(env(safe-area-inset-top, 0px) + 14px)',
+          minHeight: 76,
+          bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
         }}
       >
+        <IdentityChipBar
+          robotName={robotName}
+          hardwareId={robotHardwareId}
+          transport={robotTransport}
+        />
         <IconButton
           aria-label="End session"
           onClick={handleLeave}
-          color="error"
+          color="primary"
           disabled={leaving}
-          size="small"
-          sx={{ ml: -0.5 }}
-        >
-          <PowerSettingsNewIcon />
-        </IconButton>
-        <Typography
           sx={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: TYPO.md,
-            fontWeight: FONT_WEIGHT.semibold,
-            color: 'text.primary',
+            mr: -0.5,
+            flexShrink: 0,
           }}
-          noWrap
         >
-          {robotName}
-        </Typography>
-        <IdentityChipBar
-          hardwareId={robotHardwareId}
-          transport={robotTransport}
-          username={username}
-        />
+          <PowerSettingsNewIcon sx={{ fontSize: 24 }} />
+        </IconButton>
       </Stack>
 
       <Box
@@ -330,11 +366,19 @@ function ConnectedSession({
           position: 'relative',
         }}
       >
-        {/* The conversation panel is mounted whenever the session is
-            live. We hide it via CSS when the user switches to the
-            Apps tab so the orb chrome doesn't render, but the
-            session itself stays up - the WebRTC release happens at
-            iframe-open time, not tab-switch time. */}
+        {/* Conversation tab. Mounted whenever the session is live;
+            hidden via CSS (not unmounted) when the user is on
+            the Apps tab so the orb's `<button>` keeps providing
+            `orbRef` to the engine's audio level monitors.
+            Layout:
+              ┌──────────────────────────────────┐
+              │ ┌─SPEAKER──┐  ┌─MICROPHONE──┐    │  ← top controls
+              │ │ [🔊]●─●  │  │ [🎤]●─●     │    │
+              │ └──────────┘  └─────────────┘    │
+              │                                  │
+              │            ORB                   │  ← centre
+              │                                  │
+              └──────────────────────────────────┘ */}
         {!leaving && !isError && (
           <Box
             sx={{
@@ -345,18 +389,25 @@ function ConnectedSession({
               position: 'relative',
             }}
           >
-            <ConversationPanel session={session} orbRef={orbRef} />
-            {/* Floating camera thumbnail. Only mounted once the
-                session is physically live (robot awake, motors on,
-                WebRTC video track flowing); before that point the
-                placeholder would show "Camera offline" through the
-                whole connecting overlay, which is just noise. The
-                card is `position: absolute` against the conv-tab
-                column so it floats above the orb without disturbing
-                its centring math. */}
+            {/* Top audio controls. Gated on `hasReachedReady` so
+                the cards don't pop in during the initial
+                connecting overlay (where they'd be unreachable
+                anyway). */}
             {session.hasReachedReady && (
-              <RobotCameraCard session={session} />
+              <Box sx={{ flexShrink: 0, mt: 1, mb: 1.5 }}>
+                <AudioControlsBar
+                  session={session}
+                  isLive={session.hasReachedReady}
+                />
+              </Box>
             )}
+
+            {/* Orb + caption + side buttons + tool toast. Takes
+                the remaining vertical space and centres the orb
+                inside it. */}
+            <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+              <ConversationPanel session={session} orbRef={orbRef} />
+            </Box>
           </Box>
         )}
 
@@ -401,8 +452,39 @@ function ConnectedSession({
         sx={{
           flexShrink: 0,
           mx: -3,
+          // Bumped vs the 56px default for a more comfortable
+          // thumb target on mobile + a bit more visual presence.
+          height: 'auto',
+          minHeight: 68,
+          // No padding on the parent: spacing lives INSIDE each
+          // action below. That way each action covers the full
+          // bar height (incl. safe area), so MUI's ripple
+          // animation reaches the bar's true top and bottom
+          // edges instead of stopping at an inner padding box.
           borderTop: t => `1px solid ${t.palette.divider}`,
-          bgcolor: 'background.paper',
+          bgcolor: 'background.default',
+          '& .MuiBottomNavigationAction-root': {
+            minWidth: 0,
+            // Inner spacing: small visual padding above the icon,
+            // safe-area + small gap below the label so the home
+            // indicator on iPhone X+ never crowds the text.
+            paddingTop: 1,
+            paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 8px)`,
+            gap: 0.5,
+          },
+          '& .MuiBottomNavigationAction-label': {
+            fontSize: TYPO.xs,
+            fontWeight: FONT_WEIGHT.medium,
+            // Keep the label size stable in the selected state -
+            // MUI defaults grow it which makes the bar feel
+            // jittery when switching tabs.
+            '&.Mui-selected': {
+              fontSize: TYPO.xs,
+            },
+          },
+          '& .MuiSvgIcon-root': {
+            fontSize: 26,
+          },
         }}
       >
         <BottomNavigationAction
@@ -514,8 +596,8 @@ function NoPeerIdView({
         sx={{ mb: 2, minHeight: 40 }}
       >
         <IconButton aria-label="Back" onClick={onBack} edge="start">
-          <ArrowBackIcon />
-        </IconButton>
+            <ArrowBackIcon />
+          </IconButton>
         <Typography
           sx={{
             flex: 1,

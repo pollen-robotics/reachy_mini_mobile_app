@@ -5,15 +5,17 @@
  * `motion/head-wobbler.ts`) with engine-level coordination:
  *
  *   - Lazy instantiation per session.
- *   - Gated `setHeadRpyDeg` writes that yield to:
+ *   - Gated routing of `setHead` writes that yield to:
  *       * tool-call head poses ("look up", "look right", …),
  *       * streamed choreographies ("dance"),
  *       * daemon-side trajectories (wake_up, goto_sleep).
- *   - Send-result reporting back to the data-channel health monitor
- *     so a flaky link gets surfaced rather than moving silently.
- *   - Tracking of the last-actually-sent pose so a follow-up
- *     `glideToNeutral()` can ease the head smoothly back to (0, 0, 0)
- *     instead of snapping.
+ *   - Pose updates flow through `PoseDispatcher` (NOT directly to
+ *     the SDK) so head + antennas are coalesced into one
+ *     `set_full_target` per dispatcher tick. This halves the data-
+ *     channel message rate and aligns the two axes temporally.
+ *   - Tracking of the last-actually-pushed pose so `glideToNeutral`
+ *     can ease the head smoothly back to (0, 0, 0) instead of
+ *     snapping.
  *
  * The controller is recreated on every `start(track)` because the
  * underlying analyser is bound to a specific assistant audio track
@@ -24,6 +26,7 @@
 import { HeadWobbler } from "../../motion/head-wobbler";
 import { isTrajectoryPlaying } from "../trajectoryGate";
 import type { ReachyMiniInstance } from "../globals";
+import type { PoseDispatcher } from "./pose-dispatcher";
 
 export interface WobblerControlDeps {
   /** Live SDK accessor. The control bails out (no-op) when null. */
@@ -36,9 +39,10 @@ export interface WobblerControlDeps {
   /** True while a streamed choreography is playing. The wobbler
    *  yields so the recorded frames don't fight the live offsets. */
   isMovePlaying: () => boolean;
-  /** Forward the outcome of every `setHeadRpyDeg` to the engine's
-   *  data-channel health monitor. */
-  recordSend: (ok: boolean, where: string) => void;
+  /** Pose dispatcher to push `setHead` updates into. The
+   *  dispatcher coalesces with antennas updates and runs its own
+   *  fixed-rate tick. */
+  poseDispatcher: PoseDispatcher;
 }
 
 export interface WobblerControl {
@@ -60,8 +64,8 @@ export interface WobblerControl {
   /**
    * Smoothly ease the head back to its neutral (0, 0, 0) home
    * pose over `durationMs`. Resolves once the (0, 0, 0) frame
-   * has been sent. Bypasses the pose-lock / move / trajectory
-   * gate so the landing is guaranteed even mid-cleanup.
+   * has been pushed to the dispatcher. The dispatcher's flush
+   * eventually emits the final `set_full_target` on the bus.
    *
    * Call this AFTER `stop()` in shutdown paths (stopConversation,
    * release, …) for a calm, animated landing rather than a snap.
@@ -81,10 +85,10 @@ export function createWobblerControl(
   deps: WobblerControlDeps,
 ): WobblerControl {
   let wobbler: HeadWobbler | null = null;
-  // Last value we ACTUALLY sent through `setHeadRpyDeg`. Recorded
+  // Last value we ACTUALLY pushed to the dispatcher. Recorded
   // inside the gated callback so the snapshot reflects the robot's
-  // current command (gated frames don't reach the daemon, so they
-  // don't change the pose, so we don't track them).
+  // current command (gated frames don't reach the dispatcher, so
+  // they don't change the pose, so we don't track them).
   let lastRoll = 0;
   let lastPitch = 0;
   let lastYaw = 0;
@@ -105,17 +109,13 @@ export function createWobblerControl(
         // they own the head for ~2 s and a 30 Hz setHeadPose stream
         // would freeze the animation mid-flight.
         if (isTrajectoryPlaying()) return;
-        // Offsets are in degrees; we push them as absolute target
-        // poses around the neutral head position (no base pose is
-        // preserved, which keeps the motion unambiguously around
-        // "looking forward").
-        const ok = deps.getRobot()?.setHeadRpyDeg(roll, pitch, yaw) ?? false;
-        if (ok) {
-          lastRoll = roll;
-          lastPitch = pitch;
-          lastYaw = yaw;
-        }
-        deps.recordSend(ok, "wobbler");
+        // Push to the dispatcher rather than calling
+        // `robot.setHeadRpyDeg` directly: the dispatcher batches
+        // with antennas and rate-limits the data channel.
+        deps.poseDispatcher.setHead(roll, pitch, yaw);
+        lastRoll = roll;
+        lastPitch = pitch;
+        lastYaw = yaw;
       },
     });
     wobbler.start();
@@ -124,13 +124,9 @@ export function createWobblerControl(
   const stop = (): void => {
     // `stopWithoutFinalFrame()` drops the wobbler's tick timer +
     // tears down the AudioContext but does NOT push a (0, 0, 0)
-    // frame on the bus. The caller is expected to follow up with
-    // `glideToNeutral()` (or, if it really wants a snap, just
-    // `setHeadRpyDeg(0, 0, 0)` directly). This avoids a single-
-    // frame jump from the last animated pose straight to neutral,
-    // which the daemon executes in one Dynamixel servo tick - a
-    // visibly abrupt motion AND an audible bus burst on the
-    // physical robot.
+    // frame. The caller is expected to follow up with
+    // `glideToNeutral()` so the head lands on a known calm pose
+    // through the dispatcher's coalescing path.
     wobbler?.stopWithoutFinalFrame();
     wobbler = null;
   };
@@ -144,8 +140,7 @@ export function createWobblerControl(
   };
 
   const glideToNeutral = async (durationMs: number): Promise<void> => {
-    const robot = deps.getRobot();
-    if (!robot) return;
+    if (!deps.getRobot()) return;
     const startRoll = lastRoll;
     const startPitch = lastPitch;
     const startYaw = lastYaw;
@@ -155,9 +150,8 @@ export function createWobblerControl(
       Math.abs(startYaw) < NEUTRAL_EPSILON_DEG
     ) {
       // Already neutral; just push one explicit (0, 0, 0) so the
-      // daemon's tracked pose is exact.
-      const ok = robot.setHeadRpyDeg(0, 0, 0);
-      deps.recordSend(ok, "wobbler-glide");
+      // dispatcher's tracked pose is exact.
+      deps.poseDispatcher.setHead(0, 0, 0);
       lastRoll = 0;
       lastPitch = 0;
       lastYaw = 0;
@@ -172,27 +166,21 @@ export function createWobblerControl(
       const roll = startRoll * (1 - e);
       const pitch = startPitch * (1 - e);
       const yaw = startYaw * (1 - e);
-      const ok =
-        deps.getRobot()?.setHeadRpyDeg(roll, pitch, yaw) ?? false;
-      if (ok) {
-        lastRoll = roll;
-        lastPitch = pitch;
-        lastYaw = yaw;
-      }
-      deps.recordSend(ok, "wobbler-glide");
+      deps.poseDispatcher.setHead(roll, pitch, yaw);
+      lastRoll = roll;
+      lastPitch = pitch;
+      lastYaw = yaw;
       await new Promise((resolve) => setTimeout(resolve, frameMs));
     }
     // Belt-and-braces final landing: easing math floors to 0 but a
     // stray rounding error could leave a sub-degree residue. Push
-    // an exact (0, 0, 0) so the daemon-side tracking is clean for
-    // the next motor-mode switch.
-    const ok = deps.getRobot()?.setHeadRpyDeg(0, 0, 0) ?? false;
-    if (ok) {
-      lastRoll = 0;
-      lastPitch = 0;
-      lastYaw = 0;
-    }
-    deps.recordSend(ok, "wobbler-glide");
+    // an exact (0, 0, 0) and force-flush so the daemon-side tracking
+    // is clean for the next motor-mode switch.
+    deps.poseDispatcher.setHead(0, 0, 0);
+    deps.poseDispatcher.flushNow();
+    lastRoll = 0;
+    lastPitch = 0;
+    lastYaw = 0;
   };
 
   return { start, stop, reset, resumeAudio, glideToNeutral };

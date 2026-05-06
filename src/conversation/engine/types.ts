@@ -196,6 +196,49 @@ export interface ConversationEngineHandle {
    * unmounted or the SDK instance hasn't been created yet.
    */
   attachVideo: (videoElement: HTMLVideoElement) => () => void;
+
+  // ─── Audio volume controls ────────────────────────────────────────
+  //
+  // Thin pass-through to the underlying SDK's volume round-trips.
+  // The engine holds the SDK instance so consumers don't have to
+  // reach into it - they can keep talking to one handle.
+
+  /** Get the robot's current speaker volume (0-100). Resolves to
+   *  `null` when the platform has no volume control or the SDK
+   *  isn't ready. Always non-throwing. */
+  getSpeakerVolume: () => Promise<number | null>;
+  /** Set the robot's speaker volume (0-100). Resolves with the
+   *  applied value (which may differ if the daemon clamped it),
+   *  or `null` on failure. Non-throwing. */
+  setSpeakerVolume: (volume: number) => Promise<number | null>;
+  /** Get the robot's current microphone input volume (0-100).
+   *  Same `null` semantics as `getSpeakerVolume`. */
+  getMicrophoneVolume: () => Promise<number | null>;
+  /** Set the robot's microphone input volume (0-100). Same
+   *  `null` semantics as `setSpeakerVolume`. */
+  setMicrophoneVolume: (volume: number) => Promise<number | null>;
+
+  /**
+   * Latest measured microphone level in [0, 1], smoothed by the
+   * engine's `MicLevelMonitor`. Updated every audio frame; consumers
+   * are expected to read it from a `requestAnimationFrame` loop
+   * (canvas viz, DoA indicator, …) so we never re-render React for
+   * level changes. Returns `0` when the conversation isn't active.
+   */
+  getMicLevel: () => number;
+
+  /**
+   * Ask the daemon to play one of the bundled sound files on the
+   * robot's speaker (e.g. `"wake_up.wav"`, `"count.wav"`). Mostly
+   * used as audible feedback for UI actions that change something
+   * the user can't otherwise hear (a fresh speaker volume, a
+   * successful auth, …).
+   *
+   * Resolves to `true` when the command was queued onto the
+   * DataChannel, `false` if the engine isn't ready or the DC is
+   * down. Non-throwing.
+   */
+  playSound: (file: string) => boolean;
 }
 
 export interface ConversationEngineOptions {
@@ -275,17 +318,29 @@ export interface ConversationEngineOptions {
   onTransportChange?: (kind: ConversationTransportKind) => void;
 
   /**
-   * Element on which the engine writes audio-reactive CSS custom
-   * properties (`--audio-level`, `--ai-audio-level`, `--bar0..--bar4`)
-   * at display rate. The React orb passes its own root here so the
+   * Where to write the audio-reactive CSS custom properties
+   * (`--audio-level`, `--ai-audio-level`, `--bar0..--bar4`) at
+   * display rate. The React orb passes its own root here so the
    * audio loop drives only that node's style, instead of polluting
    * `document.documentElement` (which used to leak across HMR /
    * StrictMode remounts).
    *
-   * When `null` / omitted the engine writes nowhere - the host gets
-   * the levels via `onLevels` if it cares.
+   * Two shapes accepted:
+   *   - **Lazy getter (recommended)**: `() => HTMLElement | null`.
+   *     The engine queries the function on every audio frame, so
+   *     a panel remount that swaps the orb DOM is picked up
+   *     automatically - no re-bind required. This is what the
+   *     React mobile shell uses, since the panel can unmount on
+   *     tab switches without dropping the engine.
+   *   - **Element value (legacy)**: `HTMLElement | null`. Captured
+   *     once at engine init. Fine for hosts that mount the orb
+   *     for the lifetime of the engine, but stales if the DOM
+   *     ever changes underneath.
+   *
+   * When `null` / omitted the engine writes nowhere - the host
+   * gets the levels via `onLevels` if it cares.
    */
-  audioLevelsTarget?: HTMLElement | null;
+  audioLevelsTarget?: HTMLElement | null | (() => HTMLElement | null);
 
   /**
    * Optional structured stream of audio-reactivity updates. Mostly

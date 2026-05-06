@@ -123,7 +123,7 @@ export function ConversationPanel({
         direction="row"
         alignItems="center"
         justifyContent="center"
-        spacing={2}
+        spacing={1.25}
       >
         <MuteSideButton
           live={live}

@@ -91,6 +91,7 @@ import { installBackgroundResilience } from "./runtime/background-resilience";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
+import { createPoseDispatcher } from "./motion-control/pose-dispatcher";
 import { createOpenaiBridge } from "./bridge/openai-bridge";
 import type {
   AppState,
@@ -170,13 +171,55 @@ const onTransportChange: ((kind: ConversationTransportKind) => void) | null =
 // engine quietly skips that emission. We capture them once here so
 // the rest of the engine can read them through stable closure refs.
 
-const audioLevelsTarget: HTMLElement | null =
-  options.audioLevelsTarget instanceof HTMLElement
-    ? options.audioLevelsTarget
-    : null;
+// Lazy getter for the orb DOM element. The host (React) may swap
+// the underlying node mid-session (panel unmount/remount on tab
+// switch, iframe release/reacquire), so we never capture the
+// element value here - only the getter. The audio level monitors
+// re-read this on every rAF tick so their CSS-var writes always
+// land on whichever element is currently mounted.
+//
+// Backwards-compat: callers can still pass a raw HTMLElement (or
+// null) instead of a getter. We normalise both shapes to a
+// getter at this single boundary so the rest of the engine
+// doesn't have to care which form was used.
+const getAudioLevelsTarget: () => HTMLElement | null = (() => {
+  const raw = options.audioLevelsTarget;
+  if (typeof raw === "function") return raw;
+  if (raw instanceof HTMLElement) return () => raw;
+  return () => null;
+})();
 
-const onLevels: ((level: ConversationLevelEvent) => void) | null =
+// Latest mic level in [0, 1], updated on every audio frame by the
+// MicLevelMonitor via the `onLevels` callback. Read via the
+// engine handle's `getMicLevel()` for visualisations driven by
+// `requestAnimationFrame` (e.g. the microphone card waveform on
+// the mobile app) - never trigger React re-renders on this.
+//
+// Reset to 0 on `unmount()` and on conversation stop, so a stale
+// value doesn't bleed into the next session's first paint.
+let latestMicLevel = 0;
+
+// Wrap the host's `onLevels` so we capture the mic side into
+// `latestMicLevel` before forwarding. The wrapper is what we
+// hand to the audio monitors; the user's callback (if any)
+// runs untouched. The same wrapper is used for both monitors,
+// so the AI side just falls through (only `e.user` matters
+// for the mic level capture).
+const userOnLevels: ((level: ConversationLevelEvent) => void) | null =
   typeof options.onLevels === "function" ? options.onLevels : null;
+
+const onLevels: (level: ConversationLevelEvent) => void = (level) => {
+  if (level.user !== null) {
+    latestMicLevel = level.user;
+  }
+  if (userOnLevels) {
+    try {
+      userOnLevels(level);
+    } catch (err) {
+      console.warn("[conversation-engine] onLevels callback threw:", err);
+    }
+  }
+};
 
 const onToolToast: ((toast: ConversationToolToastEvent) => void) | null =
   typeof options.onToolToast === "function" ? options.onToolToast : null;
@@ -322,6 +365,40 @@ let aiLevel: AiLevelMonitor | null = null;
 // antennas oscillator can skip their 30 Hz writes for the duration
 // of the dance (otherwise they'd fight the recorded frames).
 let movePlaying = false;
+
+// ─── Stop-session intent counter ──────────────────────────────────────
+//
+// `robot.stopSession()` triggers a `sessionStopped` event. Two very
+// different scenarios produce that event:
+//
+//   1. WE called stopSession deliberately (release, teardown, watchdog
+//      timeout). The caller has its own follow-up logic (state, motor
+//      mode, video cache, …); the listener must NOT touch any of that.
+//   2. The SDK / central / daemon dropped the session unilaterally
+//      (network drop, central evict, daemon crash). Nobody else is
+//      responsible; the listener IS the recovery path.
+//
+// We track case 1 with a single counter: every internal
+// `stopSession()` call goes through `expectedStop()`, which bumps the
+// counter; the listener checks `pendingExpectedStops > 0` and bails.
+// The decrement is deferred by one macrotask (`setTimeout(0)`) so any
+// asynchronously-dispatched listener body (resuming after its own
+// internal awaits) still reads the count as pending.
+let pendingExpectedStops = 0;
+
+function expectedStop(fn: () => Promise<unknown>): Promise<void> {
+  pendingExpectedStops++;
+  return fn()
+    .catch((err) => {
+      console.warn("[engine] expectedStop failed:", err);
+    })
+    .finally(() => {
+      window.setTimeout(() => {
+        pendingExpectedStops--;
+      }, 0);
+    })
+    .then(() => undefined);
+}
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
@@ -639,8 +716,13 @@ async function doStart(): Promise<void> {
     timedOut = true;
     // Fire-and-forget: stopSession() sends `endSession` to central so
     // the session is released even if the local _pc handshake is in
-    // a weird half-open state.
-    void robot?.stopSession().catch(() => {});
+    // a weird half-open state. Wrapped in `expectedStop` so the
+    // resulting `sessionStopped` event doesn't trigger the listener's
+    // unsolicited-drop recovery path - we own the follow-up state via
+    // the `onFatalError` call in the catch block below.
+    if (robot) {
+      void expectedStop(() => robot!.stopSession());
+    }
   }, START_TIMEOUT_MS);
 
   try {
@@ -773,6 +855,12 @@ async function runConversationParts(): Promise<void> {
   }
 
   startMicLevelMonitor(robotMicTrack);
+  // Bring the pose dispatcher up BEFORE the wobbler / antennas
+  // start pushing into it - otherwise the first ~50 ms of pose
+  // updates would be staged but never flushed (no tick timer
+  // running yet). Idempotent: a re-acquire after a release lands
+  // here too with the dispatcher already running, no harm done.
+  poseDispatcher.start();
   antennasControl.start();
   if (robot._pc) startTransportMonitor(robot._pc, onTransportChange);
 
@@ -844,18 +932,29 @@ const toolCallHandler = createToolCallHandler({
 // constructor options on first use, so the class itself is purely
 // data-driven and trivially unit-testable in isolation.
 function startMicLevelMonitor(track: MediaStreamTrack): void {
-  micLevel ??= new MicLevelMonitor({ target: audioLevelsTarget, onLevels });
+  micLevel ??= new MicLevelMonitor({
+    getTarget: getAudioLevelsTarget,
+    onLevels,
+  });
   micLevel.start(track);
 }
 
 function stopMicLevelMonitor(): void {
   micLevel?.stop();
+  // Reset the cached level so a stale value can't bleed into a
+  // remounted visualiser before the first `onLevels` callback of
+  // the next session lands. The monitor's `stop()` already clears
+  // its CSS vars on the orb; this mirrors that on our cache.
+  latestMicLevel = 0;
 }
 
 // `AiLevelMonitor` lives in `./audioLevelMonitor.ts` (same file as
 // `MicLevelMonitor`). Same closure-capture pattern as the mic side.
 function startAiLevelMonitor(track: MediaStreamTrack): void {
-  aiLevel ??= new AiLevelMonitor({ target: audioLevelsTarget, onLevels });
+  aiLevel ??= new AiLevelMonitor({
+    getTarget: getAudioLevelsTarget,
+    onLevels,
+  });
   aiLevel.start(track);
 }
 
@@ -938,24 +1037,40 @@ const probeRobotLink = dcHealth.probeRobotLink;
 
 // ─── Motion controllers ────────────────────────────────────────────────
 //
-// `motion-control/wobbler-control.ts` and `motion-control/antennas-control.ts`
-// own the lifecycle of the head wobbler + antennas oscillator. They
-// take a small `deps` object and expose a focused `start / stop /
-// freeze / resume / reset / resumeAudio` surface so the rest of the
-// engine doesn't have to know about the underlying `HeadWobbler` /
-// `AntennasOscillator` classes from `../motion/`.
+// `motion-control/pose-dispatcher.ts` is a single 30 Hz coalescing
+// tick that batches the wobbler's head writes + the antennas
+// oscillator's writes into ONE `set_full_target` per tick (with
+// SCTP backpressure throttling). Both controllers push their
+// updates into the dispatcher rather than calling
+// `robot.setHeadRpyDeg` / `robot.setAntennasDeg` directly: that
+// halves the data-channel message rate and aligns the two axes
+// temporally so the daemon's trajectory player gets a clean,
+// predictable cadence.
+//
+// `motion-control/wobbler-control.ts` and
+// `motion-control/antennas-control.ts` own the lifecycle of the
+// head wobbler + antennas oscillator. They take a small `deps`
+// object and expose a focused `start / stop / freeze / resume /
+// reset / resumeAudio / glideToNeutral` surface so the rest of
+// the engine doesn't have to know about the underlying
+// `HeadWobbler` / `AntennasOscillator` classes from `../motion/`.
+
+const poseDispatcher = createPoseDispatcher({
+  getRobot: () => robot,
+  recordSend,
+});
 
 const wobblerControl = createWobblerControl({
   getRobot: () => robot,
   isPoseLocked: () => toolCallHandler.isPoseLocked(),
   isMovePlaying: () => movePlaying,
-  recordSend,
+  poseDispatcher,
 });
 
 const antennasControl = createAntennasControl({
   getRobot: () => robot,
   isMovePlaying: () => movePlaying,
-  recordSend,
+  poseDispatcher,
 });
 
 // ─── OpenAI bridge ─────────────────────────────────────────────────────
@@ -1074,6 +1189,11 @@ async function teardown(): Promise<void> {
   // is enough to wedge the Dynamixel bus on the way out.
   wobblerControl.stop();
   antennasControl.stop();
+  // Stop the pose dispatcher's coalesced flush. We don't run the
+  // glide here (gotoSleep takes over the head/antennas trajectory)
+  // so any pending dirty values would be wasted bus traffic
+  // immediately fighting the daemon-side sleep animation.
+  poseDispatcher.stop();
 
   // Bridge owns the OpenAI client, audio sink and reconnect counter
   // teardown - including the hidden `<audio>` element used to pump
@@ -1135,10 +1255,15 @@ async function teardown(): Promise<void> {
     }
   }
 
-  try {
-    await robot?.stopSession();
-  } catch {
-    // ignored
+  if (robot) {
+    // Wrapped in `expectedStop` so the `sessionStopped` listener
+    // doesn't try to run its own (now redundant) cleanup path. The
+    // teardown() function above already handles motor mode, audio
+    // monitors, conversation parts, and the wake-lock; the listener
+    // would otherwise also reset `selectedRobotId` and force a
+    // state transition, racing with the calling site (handleHostStop
+    // / unmount / the fatal-error handler).
+    await expectedStop(() => robot!.stopSession());
   }
 }
 
@@ -1174,12 +1299,29 @@ function wireRobot(): void {
   });
 
   robot.addEventListener("sessionStopped", async () => {
-    // Drop the cached video stream so a late `attachVideo()` after
-    // a session has ended doesn't replay a dead track. The SDK's
-    // own `attachVideo()` listener already nulls any bound element's
-    // `srcObject` on this same event, so the React side stays in
-    // sync without us touching the video element directly here.
+    // Drop the cached video stream regardless of the source: a
+    // late `attachVideo()` after a session ends should never replay
+    // a dead track. The SDK's own `attachVideo` listener already
+    // nulls any bound element's `srcObject` on this same event, so
+    // the React side stays in sync without us touching the video
+    // element directly here.
     latestVideoStream = null;
+
+    // Distinguish stops we initiated from stops we're observing. See
+    // the `expectedStop` counter above for the full rationale; the
+    // short version is: when WE called stopSession (release,
+    // teardown, watchdog), the caller already owns its own follow-up
+    // (state, motor mode, selectedRobotId clearing). Touching any of
+    // those here would race the caller and corrupt the FSM - which
+    // is exactly the bug that broke the apps-tab handoff in earlier
+    // revisions of this file.
+    if (pendingExpectedStops > 0) {
+      return;
+    }
+
+    // Unsolicited drop: SDK / central / daemon decided this session
+    // ended. Nobody else is responsible, so this listener IS the
+    // recovery path.
     await teardown();
     selectedRobotId = null;
     applyMicMuted(false);
@@ -1189,6 +1331,16 @@ function wireRobot(): void {
       setState("authenticated");
     } else {
       setState("signed-out");
+    }
+    if (onErrorMessageChange) {
+      try {
+        onErrorMessageChange("The session ended unexpectedly.");
+      } catch (callbackErr) {
+        console.warn(
+          "[conversation-engine] onErrorMessageChange threw:",
+          callbackErr,
+        );
+      }
     }
   });
 
@@ -1215,6 +1367,12 @@ function wireRobot(): void {
   });
 
   robot.addEventListener("disconnected", () => {
+    // Skip during teardown: `unmount()` calls `robot.disconnect()`
+    // and immediately nulls the local handle, so a state transition
+    // here would just churn React state on a tree the host is
+    // already unmounting. The unmount path doesn't rely on this
+    // listener for any of its cleanup.
+    if (unmounted) return;
     if (robot?.isAuthenticated) {
       setState("authenticated");
     } else {
@@ -1295,7 +1453,20 @@ async function boot(): Promise<void> {
     // → drive `doConnect()` whenever we have a preselected robot,
     // regardless of OpenAI configuration.
     if (preselectedRobotId) {
-      void doConnect();
+      // Awaited (no longer fire-and-forget): the unmount path uses
+      // the parent boot promise as a "boot still in flight" guard
+      // so it can wait for `doStart`'s `robot.startSession()` to
+      // settle before calling `robot.stopSession()`. Without this
+      // await, central races stopSession against startSession and
+      // emits the "Session ended before it could start: unknown
+      // reason" fatal that used to bite intermittent reconnects
+      // (StrictMode double-mount, fast remounts, ...).
+      //
+      // `doConnect` swallows its own errors via `onFatalError`, so
+      // awaiting here cannot throw; the promise simply resolves
+      // once the WebRTC + wake-up dance is fully landed (or
+      // failed).
+      await doConnect();
     }
   } else {
     setState("signed-out");
@@ -1331,7 +1502,25 @@ setState(currentState);
 // touches `root` after mount.
 
 let unmounted = false;
-void whenReachyReady()
+/**
+ * Captures the entire boot chain (`whenReachyReady → boot →
+ * doConnect → doStart → robot.startSession + wake-up`) as a single
+ * promise. `unmount()` awaits this (with a timeout) before tearing
+ * down so we never call `robot.stopSession()` while
+ * `robot.startSession()` is still mid-flight - that race is what
+ * central reports as `Session ended before it could start: unknown
+ * reason`.
+ *
+ * The chain swallows its own errors via `onFatalError`, so awaiting
+ * it cannot throw. It resolves either:
+ *   - successfully, once the wake-up dance has landed and the FSM
+ *     is in `ready` (or further);
+ *   - via `onFatalError`, which sets state to `error` and itself
+ *     calls `teardown()` (idempotent against the unmount path -
+ *     `teardown()` reads `wasSessionEstablished` once, and a second
+ *     entry just re-disables motors / re-stops the conversation).
+ */
+const bootChain: Promise<void> = whenReachyReady()
   .then(async () => {
     if (unmounted) return;
     await boot();
@@ -1368,6 +1557,34 @@ return {
     if (unmounted) return;
     unmounted = true;
     disposeBackgroundResilience();
+    // Wait for the in-flight boot chain to settle before teardown.
+    //
+    // Why: teardown() calls `robot.stopSession()`. If the boot
+    // chain is still in `await robot.startSession()`, central sees
+    // those two interleaved and emits `Session ended before it
+    // could start: unknown reason`. By awaiting bootChain first,
+    // we let startSession complete (success path) or fail (timeout
+    // path inside `doStart`) before tearing down - both end states
+    // leave central in a consistent slot we can stopSession on.
+    //
+    // The 6 s upper bound is a defensive escape hatch: bootChain
+    // already has its own 15 s timeout inside `doStart` for a
+    // wedged daemon, but we don't want unmount to block longer
+    // than the user can tolerate (a tap on Back / power-off should
+    // feel instantaneous). 6 s covers the common cases (auth +
+    // connect + a brief startSession) without sitting through the
+    // worst-case 15 s timeout.
+    try {
+      await Promise.race([
+        bootChain,
+        new Promise<void>((resolve) =>
+          window.setTimeout(resolve, 6_000),
+        ),
+      ]);
+    } catch {
+      // bootChain swallows its errors, so this catch is purely
+      // defensive against the timeout race.
+    }
     try {
       await teardown();
     } catch (err) {
@@ -1442,6 +1659,11 @@ return {
     ]);
     await openaiBridge?.close();
     await glide;
+    // Glide is done (final (0,0,0) + (0,0) flushed via flushNow on
+    // each axis). Stop the dispatcher's tick - no more pose pushes
+    // will arrive until the next conversation starts and brings it
+    // back up.
+    poseDispatcher.stop();
     openaiBridge?.resetReconnectCounter();
     stopMicLevelMonitor();
     stopAiLevelMonitor();
@@ -1522,6 +1744,11 @@ return {
       ]);
       await openaiBridge?.close();
       await glide;
+      // Glide is done; the dispatcher has flushed the final neutral
+      // frame. Stop its tick so the iframe-bound consumer below
+      // gets a clean handover (no stale dispatcher writes racing
+      // its first commands).
+      poseDispatcher.stop();
       openaiBridge?.resetReconnectCounter();
       stopMicLevelMonitor();
       stopAiLevelMonitor();
@@ -1545,11 +1772,11 @@ return {
     // Resetting the dedup cache forces the first post-reacquire
     // `syncMotorModeForState()` to send rather than skip on stale info.
     lastSetMotorMode = null;
-    try {
-      await robot.stopSession();
-    } catch (err) {
-      console.warn("[engine] stopSession during release failed:", err);
-    }
+    // Wrapped in `expectedStop` so the `sessionStopped` listener
+    // doesn't run its unsolicited-drop recovery (which would reset
+    // `selectedRobotId` to null and force the FSM to `authenticated`,
+    // breaking the matching `reacquireSession()` call).
+    await expectedStop(() => robot!.stopSession());
     // Park in `released` so the host (and any visual state observer)
     // can distinguish "we deliberately let go of the robot" from
     // "we never connected" (`connected`) or "we're tearing down for
@@ -1585,12 +1812,15 @@ return {
     // Step 2 - bring the WebRTC tunnel back up. Same `startSession`
     // call as in `doStart()`, with the same 15 s timeout-and-cancel
     // safety net so a stuck robot doesn't leave us in `starting`
-    // forever.
+    // forever. Wrapped in `expectedStop` so the cancel doesn't
+    // trip the unsolicited-drop recovery.
     const START_TIMEOUT_MS = 15_000;
     let timedOut = false;
     const timeoutHandle = window.setTimeout(() => {
       timedOut = true;
-      void robot?.stopSession().catch(() => {});
+      if (robot) {
+        void expectedStop(() => robot!.stopSession());
+      }
     }, START_TIMEOUT_MS);
     try {
       await robot.startSession(selectedRobotId);
@@ -1609,18 +1839,20 @@ return {
       return;
     }
     window.clearTimeout(timeoutHandle);
-    // Step 3 - mark session up. We DO NOT call wakeUp() here: the
-    // robot was kept awake during the handoff (that's the whole
-    // point of `releaseSessionKeepAwake`). Going through wakeUp
-    // would replay the trajectory and freeze the head/antennas
-    // back to the wake pose, defeating the "stay where you were"
-    // promise.
+    // Step 3 - mark session up and park in `ready`. We DO NOT call
+    // wakeUp() here: the robot was kept awake during the handoff
+    // (that's the whole point of `releaseSessionKeepAwake`). Going
+    // through wakeUp would replay the trajectory and freeze the
+    // head/antennas back to the wake pose, defeating the "stay
+    // where you were" promise.
+    //
+    // The conversation parts are intentionally NOT auto-resumed:
+    // the host stops the conversation when the user leaves the
+    // conversation tab (see `RobotSessionScreen`), so by the time
+    // we're reacquiring after an iframe handoff there's nothing to
+    // resume - the user is back on the conv tab and will tap the
+    // orb to start a fresh conversation.
     setSessionEstablished(true);
-    // Park in `ready`: the conversation parts may or may not be
-    // wanted on resume. The host triggers `startConversation()`
-    // explicitly if the user was mid-conversation before the
-    // handoff. Mirroring `doStart`'s parking branch keeps the
-    // post-release UX symmetric with the initial bring-up.
     setState("ready");
   },
 
@@ -1657,6 +1889,103 @@ return {
     } catch (err) {
       console.warn("[conversation-engine] attachVideo failed:", err);
       return () => {};
+    }
+  },
+
+  // ─── Audio volume controls ────────────────────────────────────────
+  //
+  // Thin pass-throughs to the SDK's DataChannel round-trips. We
+  // wrap them with try/catch + null guard so the consumer can
+  // call them at any time (including before the DC opens or after
+  // unmount) without having to special-case the lifecycle.
+
+  getSpeakerVolume: async () => {
+    if (unmounted || !robot) {
+      console.warn("[volume] getSpeakerVolume: engine not ready");
+      return null;
+    }
+    try {
+      const v = await robot.getVolume();
+      console.info("[volume] getSpeakerVolume →", v);
+      return v;
+    } catch (err) {
+      console.warn("[volume] getSpeakerVolume failed:", err);
+      return null;
+    }
+  },
+
+  setSpeakerVolume: async (volume: number) => {
+    if (unmounted || !robot) {
+      console.warn("[volume] setSpeakerVolume: engine not ready");
+      return null;
+    }
+    try {
+      const applied = await robot.setVolume(volume);
+      console.info(
+        "[volume] setSpeakerVolume requested",
+        volume,
+        "→ applied",
+        applied,
+      );
+      return applied;
+    } catch (err) {
+      console.warn("[volume] setSpeakerVolume failed:", err);
+      return null;
+    }
+  },
+
+  getMicrophoneVolume: async () => {
+    if (unmounted || !robot) {
+      console.warn("[volume] getMicrophoneVolume: engine not ready");
+      return null;
+    }
+    try {
+      const v = await robot.getMicrophoneVolume();
+      console.info("[volume] getMicrophoneVolume →", v);
+      return v;
+    } catch (err) {
+      console.warn("[volume] getMicrophoneVolume failed:", err);
+      return null;
+    }
+  },
+
+  setMicrophoneVolume: async (volume: number) => {
+    if (unmounted || !robot) {
+      console.warn("[volume] setMicrophoneVolume: engine not ready");
+      return null;
+    }
+    try {
+      const applied = await robot.setMicrophoneVolume(volume);
+      console.info(
+        "[volume] setMicrophoneVolume requested",
+        volume,
+        "→ applied",
+        applied,
+      );
+      return applied;
+    } catch (err) {
+      console.warn("[volume] setMicrophoneVolume failed:", err);
+      return null;
+    }
+  },
+
+  getMicLevel: () => latestMicLevel,
+
+  playSound: (file: string) => {
+    if (unmounted || !robot) {
+      console.warn("[engine] playSound: engine not ready");
+      return false;
+    }
+    try {
+      // SDK returns false when the DataChannel isn't open. We
+      // surface that to the caller so the UI can decide to skip
+      // audible feedback (rather than hang on a silent failure).
+      const ok = robot.playSound(file);
+      if (!ok) console.warn("[engine] playSound: data channel not open");
+      return ok;
+    } catch (err) {
+      console.warn("[engine] playSound failed:", err);
+      return false;
     }
   },
 };

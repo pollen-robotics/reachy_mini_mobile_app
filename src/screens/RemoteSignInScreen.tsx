@@ -57,12 +57,6 @@ export default function RemoteSignInScreen({
     }
   }, [onSignedIn]);
 
-  const cancel = useCallback(async () => {
-    await cancelLoginFlow();
-    setBusy(false);
-    setError('Sign-in cancelled.');
-  }, []);
-
   const handleBack = useCallback(async () => {
     await cancelLoginFlow();
     onBack?.();
@@ -128,15 +122,16 @@ export default function RemoteSignInScreen({
             m: 0,
           }}
         >
-          Welcome to Reachy Mini
+          Sign in to Hugging Face
         </Typography>
 
-        {/* Subtitle with semantic emphasis on the three concrete things
-         * the user gets out of signing in (their robots, Bluetooth,
-         * remote). The bolded fragments are rendered as inline `Box`
-         * spans so the rest of the line keeps the secondary-text
-         * colour while the highlights use the primary text colour for
-         * extra contrast.
+        {/* Subtitle: explain *why* signing in is the gateway to the
+         * rest of the app. Reachy Minis register themselves with
+         * their owner's HF account once online, so the token we
+         * obtain here is what lets us list the robots reachable on
+         * the user's network. Emphasis is reserved for the two
+         * concepts the user needs to register: which robots show up
+         * (their Reachies) and how (their Hugging Face account).
          */}
         <Typography
           sx={{
@@ -147,10 +142,10 @@ export default function RemoteSignInScreen({
             lineHeight: 1.5,
           }}
         >
-          Sign in with Hugging Face to discover{' '}
-          <EmphasizedSpan>your robots</EmphasizedSpan>, locally over{' '}
-          <EmphasizedSpan>Bluetooth</EmphasizedSpan> or remotely from{' '}
-          <EmphasizedSpan>anywhere</EmphasizedSpan>.
+          This is how we'll detect the{' '}
+          <EmphasizedSpan>Reachies</EmphasizedSpan> linked to your{' '}
+          <EmphasizedSpan>Hugging Face account</EmphasizedSpan> and let you
+          connect to them from anywhere on your network.
         </Typography>
 
         {error ? (
@@ -159,12 +154,24 @@ export default function RemoteSignInScreen({
           </Alert>
         ) : null}
 
-        {!busy ? (
-          <Button
-            variant="outlined"
-            color="primary"
-            size="large"
-            startIcon={
+        {/* Single primary CTA. Morphs in place when the OAuth flow
+         * is in flight: the HF logo turns into a small spinner and
+         * the label flips to a "waiting" message, but the button's
+         * size, position, and surrounding layout stay put. This
+         * avoids the layout jump the previous "swap to a different
+         * Stack" approach produced and keeps the user's eye anchored
+         * on the same affordance from start to finish. The button is
+         * `disabled` while busy so a stray re-tap can't queue a
+         * second OAuth attempt. */}
+        <Button
+          variant="outlined"
+          color="primary"
+          size="large"
+          disabled={busy}
+          startIcon={
+            busy ? (
+              <CircularProgress size={18} thickness={5} color="primary" />
+            ) : (
               <Box
                 component="img"
                 src={hfLogoUrl}
@@ -180,50 +187,39 @@ export default function RemoteSignInScreen({
                   transform: 'translateY(-1px)',
                 }}
               />
-            }
-            onClick={() => void startLogin()}
-            sx={{
-              textTransform: 'none',
-              fontSize: TYPO.md,
-              fontWeight: FONT_WEIGHT.semibold,
+            )
+          }
+          onClick={() => void startLogin()}
+          sx={{
+            textTransform: 'none',
+            fontSize: TYPO.md,
+            fontWeight: FONT_WEIGHT.semibold,
+            borderWidth: 1.5,
+            borderRadius: 2,
+            px: 2.5,
+            py: 1,
+            minWidth: 260,
+            // MUI dims `disabled` outlined buttons to a low-contrast
+            // grey - too faded for our "active waiting" semantic.
+            // Override so the button still reads as the primary
+            // affordance while the OAuth tab is open.
+            '&.Mui-disabled': {
+              borderColor: theme => theme.palette.primary.main,
+              color: theme => theme.palette.primary.main,
+              opacity: 0.85,
               borderWidth: 1.5,
-              borderRadius: 2,
-              px: 2.5,
-              py: 1,
-              minWidth: 260,
-              '&:hover': {
-                borderWidth: 1.5,
-              },
-              '& .MuiButton-startIcon': {
-                mr: 1.25,
-              },
-            }}
-          >
-            Continue with Hugging Face
-          </Button>
-        ) : (
-          <Stack alignItems="center" spacing={2}>
-            <CircularProgress size={28} />
-            <Typography
-              sx={{
-                fontSize: TYPO.sm,
-                color: 'text.secondary',
-                textAlign: 'center',
-                maxWidth: 320,
-              }}
-            >
-              Finish signing in your browser, then come back here.
-            </Typography>
-            <Button
-              variant="text"
-              size="small"
-              onClick={() => void cancel()}
-              sx={{ textTransform: 'none' }}
-            >
-              Cancel
-            </Button>
-          </Stack>
-        )}
+            },
+            '&:hover': {
+              borderWidth: 1.5,
+            },
+            '& .MuiButton-startIcon': {
+              mr: 1.25,
+            },
+          }}
+        >
+          {busy ? 'Waiting for Hugging Face…' : 'Continue with Hugging Face'}
+        </Button>
+
       </Stack>
     </Stack>
   );

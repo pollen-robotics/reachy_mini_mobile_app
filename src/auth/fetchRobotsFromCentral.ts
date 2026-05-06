@@ -71,6 +71,15 @@ export interface CentralRobotEntry {
     name?: string;
     transport?: RobotTransport;
     /**
+     * Typed flag set by the daemon when running in MuJoCo-sim or
+     * mockup-sim mode. Redundant with `transport === 'simulation'`
+     * but emitted as a real boolean so a strict client can branch
+     * without string parsing. Older daemons don't emit this field;
+     * consumers that care about pre-update daemons should also
+     * accept `transport === 'simulation'` as a signal.
+     */
+    simulation?: boolean;
+    /**
      * `meta.hardware_id` (post-PR-1084): SHA-256 prefix of the Pollen
      * audio device's USB serial. Stable per physical robot, identical
      * to what the daemon advertises on BLE GATT and exposes via
@@ -106,6 +115,24 @@ export function extractRobotHardwareId(
 ): string | null {
   const raw = entry?.meta?.hardware_id;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Whether this listing represents a virtual (simulated) robot.
+ *
+ * Two signals, in priority order:
+ *   1. `meta.simulation === true` (typed boolean, post-update daemons).
+ *   2. `meta.transport === 'simulation'` (string fallback for the
+ *      first iteration of the feature, or for non-bool consumers).
+ *
+ * Returns `false` for daemons that don't advertise either - which
+ * is the correct default for any real robot.
+ */
+export function extractRobotSimulation(
+  entry: CentralRobotEntry | undefined,
+): boolean {
+  if (entry?.meta?.simulation === true) return true;
+  return entry?.meta?.transport === 'simulation';
 }
 
 export interface RemoteRobotsResult {

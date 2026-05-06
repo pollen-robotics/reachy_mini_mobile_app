@@ -177,11 +177,28 @@
   opacity: calc(0.55 + 0.45 * var(--h));
   transition: height 0.08s ease-out, opacity 0.08s ease-out;
 }
-.convo-orb__bar:nth-child(1) { --h: var(--bar0); }
-.convo-orb__bar:nth-child(2) { --h: var(--bar1); }
-.convo-orb__bar:nth-child(3) { --h: var(--bar2); }
-.convo-orb__bar:nth-child(4) { --h: var(--bar3); }
-.convo-orb__bar:nth-child(5) { --h: var(--bar4); }
+/*
+ * Mirror-symmetric band-to-bar mapping.
+ *
+ * The engine ships 5 log-spaced FFT bands (`--bar0` = bass …
+ * `--bar4` = treble). Speech energy is concentrated in the
+ * lower bands, so a literal `nth-child(N) → --barN` mapping
+ * left a permanently-loud-on-the-left bar shape that read as
+ * lopsided.
+ *
+ * We re-arrange the bands so the strongest band (`--bar0`)
+ * lands on the centre bar, and the remaining bands are paired
+ * symmetrically around it - bars 1 and 5 mirror each other
+ * (averaged treble), bars 2 and 4 mirror (averaged mid). The
+ * result is an axially-symmetric "mountain" that pulses with
+ * the user's voice, peaking in the centre, mathematically
+ * guaranteed to be left-right balanced.
+ */
+.convo-orb__bar:nth-child(1) { --h: calc((var(--bar3) + var(--bar4)) / 2); }
+.convo-orb__bar:nth-child(2) { --h: calc((var(--bar1) + var(--bar2)) / 2); }
+.convo-orb__bar:nth-child(3) { --h: var(--bar0); }
+.convo-orb__bar:nth-child(4) { --h: calc((var(--bar1) + var(--bar2)) / 2); }
+.convo-orb__bar:nth-child(5) { --h: calc((var(--bar3) + var(--bar4)) / 2); }
 
 .convo-orb__voice .wave {
   transform-origin: 50% 50%;

@@ -5,15 +5,17 @@
  * `motion/antennas.ts`) with engine-level coordination:
  *
  *   - Lazy instantiation per session.
- *   - Gated `setAntennasDeg` writes that yield to:
+ *   - Gated routing of `setAntennas` writes that yield to:
  *       * streamed choreographies (the move owns the antennas),
  *       * daemon-side trajectories (wake_up, goto_sleep also drive
  *         the antennas, and we don't want our 0.5 Hz sine fighting
  *         the recorded keyframes).
- *   - Send-result reporting back to the data-channel health monitor.
+ *   - Pose updates flow through `PoseDispatcher` (NOT directly to
+ *     the SDK) so head + antennas are coalesced into one
+ *     `set_full_target` per dispatcher tick.
  *   - `freeze()` / `resume()` proxies forwarded straight through so
  *     the engine can pause the oscillator while the user speaks.
- *   - Tracking of the last-actually-sent pose so a follow-up
+ *   - Tracking of the last-actually-pushed pose so a follow-up
  *     `glideToNeutral()` can ease the antennas smoothly back to
  *     (0, 0) instead of snapping.
  *
@@ -24,6 +26,7 @@
 import { AntennasOscillator } from "../../motion/antennas";
 import { isTrajectoryPlaying } from "../trajectoryGate";
 import type { ReachyMiniInstance } from "../globals";
+import type { PoseDispatcher } from "./pose-dispatcher";
 
 export interface AntennasControlDeps {
   /** Live SDK accessor. The control bails out when null. */
@@ -31,15 +34,16 @@ export interface AntennasControlDeps {
   /** True while a streamed choreography is playing. The oscillator
    *  yields so the recorded antenna frames don't fight our sine. */
   isMovePlaying: () => boolean;
-  /** Forward the outcome of every `setAntennasDeg` to the engine's
-   *  data-channel health monitor. */
-  recordSend: (ok: boolean, where: string) => void;
+  /** Pose dispatcher to push `setAntennas` updates into. The
+   *  dispatcher coalesces with head updates and runs its own
+   *  fixed-rate tick. */
+  poseDispatcher: PoseDispatcher;
 }
 
 export interface AntennasControl {
   /** Spawn a fresh oscillator. Replaces any existing instance. */
   start: () => void;
-  /** Stop the oscillator without sending any final frame. The
+  /** Stop the oscillator without pushing any final frame. The
    *  caller is responsible for landing the antennas (typically
    *  via `glideToNeutral()`). */
   stop: () => void;
@@ -50,8 +54,8 @@ export interface AntennasControl {
   /**
    * Smoothly ease the antennas back to their neutral (0, 0) home
    * pose over `durationMs`. Resolves once the (0, 0) frame has
-   * been sent. Bypasses the move / trajectory gate so the landing
-   * is guaranteed even mid-cleanup.
+   * been pushed to the dispatcher. The dispatcher's flush
+   * eventually emits the final `set_full_target` on the bus.
    *
    * Call this AFTER `stop()` in shutdown paths (stopConversation,
    * release, …) for a calm, animated landing rather than a snap.
@@ -71,10 +75,11 @@ export function createAntennasControl(
   deps: AntennasControlDeps,
 ): AntennasControl {
   let antennas: AntennasOscillator | null = null;
-  // Last value we ACTUALLY sent through `setAntennasDeg`. We record
-  // it inside the gated callback so the snapshot reflects the
-  // robot's current command (gated frames don't reach the daemon,
-  // so they don't change the pose, so we don't track them).
+  // Last value we ACTUALLY pushed to the dispatcher. Recorded
+  // inside the gated callback so the snapshot reflects the
+  // robot's current command (gated frames don't reach the
+  // dispatcher, so they don't change the pose, so we don't track
+  // them).
   let lastRight = 0;
   let lastLeft = 0;
 
@@ -86,12 +91,12 @@ export function createAntennasControl(
       onAntennas: (right, left) => {
         if (deps.isMovePlaying()) return;
         if (isTrajectoryPlaying()) return;
-        const ok = deps.getRobot()?.setAntennasDeg(right, left) ?? false;
-        if (ok) {
-          lastRight = right;
-          lastLeft = left;
-        }
-        deps.recordSend(ok, "antennas");
+        // Push to the dispatcher rather than calling
+        // `robot.setAntennasDeg` directly: the dispatcher batches
+        // with head updates and rate-limits the data channel.
+        deps.poseDispatcher.setAntennas(right, left);
+        lastRight = right;
+        lastLeft = left;
       },
     });
     antennas.start();
@@ -99,13 +104,9 @@ export function createAntennasControl(
 
   const stop = (): void => {
     // `stopWithoutFinalFrame()` drops the oscillator's tick timer
-    // but does NOT push a (0, 0) frame on the bus. The caller is
-    // expected to follow up with `glideToNeutral()` (or, if it
-    // really wants a snap, just `setAntennasDeg(0, 0)` directly).
-    // This avoids a single-frame jump from the last animated pose
-    // straight to neutral, which the daemon executes in one
-    // Dynamixel servo tick - a visibly abrupt motion AND an audible
-    // bus burst on the physical robot.
+    // but does NOT push a (0, 0) frame. The caller is expected to
+    // follow up with `glideToNeutral()` so the antennas land on a
+    // known calm pose through the dispatcher's coalescing path.
     antennas?.stopWithoutFinalFrame();
     antennas = null;
   };
@@ -119,8 +120,7 @@ export function createAntennasControl(
   };
 
   const glideToNeutral = async (durationMs: number): Promise<void> => {
-    const robot = deps.getRobot();
-    if (!robot) return;
+    if (!deps.getRobot()) return;
     const startRight = lastRight;
     const startLeft = lastLeft;
     if (
@@ -128,9 +128,8 @@ export function createAntennasControl(
       Math.abs(startLeft) < NEUTRAL_EPSILON_DEG
     ) {
       // Already neutral; just push one explicit (0, 0) so the
-      // daemon's tracked pose is exact.
-      const ok = robot.setAntennasDeg(0, 0);
-      deps.recordSend(ok, "antennas-glide");
+      // dispatcher's tracked pose is exact.
+      deps.poseDispatcher.setAntennas(0, 0);
       lastRight = 0;
       lastLeft = 0;
       return;
@@ -143,24 +142,19 @@ export function createAntennasControl(
       const e = 1 - Math.pow(1 - t, 3);
       const right = startRight * (1 - e);
       const left = startLeft * (1 - e);
-      const ok = deps.getRobot()?.setAntennasDeg(right, left) ?? false;
-      if (ok) {
-        lastRight = right;
-        lastLeft = left;
-      }
-      deps.recordSend(ok, "antennas-glide");
+      deps.poseDispatcher.setAntennas(right, left);
+      lastRight = right;
+      lastLeft = left;
       await new Promise((resolve) => setTimeout(resolve, frameMs));
     }
-    // Belt-and-braces final landing: the math above floors to 0
-    // through the easing, but a stray rounding error could leave a
-    // sub-degree residue. Push an exact (0, 0) so the daemon-side
-    // tracking is clean for the next motor-mode switch.
-    const ok = deps.getRobot()?.setAntennasDeg(0, 0) ?? false;
-    if (ok) {
-      lastRight = 0;
-      lastLeft = 0;
-    }
-    deps.recordSend(ok, "antennas-glide");
+    // Belt-and-braces final landing: easing math floors to 0 but a
+    // stray rounding error could leave a sub-degree residue. Push
+    // an exact (0, 0) and force-flush so the daemon-side tracking
+    // is clean for the next motor-mode switch.
+    deps.poseDispatcher.setAntennas(0, 0);
+    deps.poseDispatcher.flushNow();
+    lastRight = 0;
+    lastLeft = 0;
   };
 
   return { start, stop, freeze, resume, glideToNeutral };

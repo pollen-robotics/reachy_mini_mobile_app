@@ -7,8 +7,10 @@
  * the same product. The mobile variant trims:
  *   - no install/uninstall flow (mobile only iframes)
  *   - no Private / Web type chips (we only ever embed)
- *   - a single full-width "Open" button instead of the install/open
- *     branch
+ *   - a single full-width "Launch" button instead of the install/open
+ *     branch (the app boots in an in-app iframe overlay, not in an
+ *     external browser, so we deliberately avoid the
+ *     `OpenInNew`-style external-link metaphor)
  *
  * The card is `React.memo`'d because we render it inside a virtualizer
  * (see `AppsTabView`), where avoiding re-renders on scroll matters
@@ -24,7 +26,7 @@ import {
 } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
 import type { AppEntry } from '../../apps/types';
@@ -90,23 +92,33 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
         flexDirection: 'column',
         width: '100%',
         minWidth: 0,
-        borderRadius: RADIUS.xxl / 8,
+        borderRadius: '14px',
         position: 'relative',
         overflow: 'hidden',
+        // White card on the grey canvas - same convention as
+        // the robot cards in `ScanScreen` and the audio
+        // controls in `ControlCard`.
         bgcolor: 'background.paper',
         border: `1px solid ${theme.palette.divider}`,
         cursor: 'pointer',
-        transition: theme.transitions.create(['transform', 'border-color'], {
-          duration: theme.transitions.duration.short,
-        }),
-        '&:hover': {
-          transform: 'translateY(-1px)',
-          borderColor: 'primary.main',
-        },
+        // No hover effect: this is a mobile-first surface, the
+        // primary-outlined Launch button at the bottom of each
+        // card already advertises the affordance. Hover would
+        // only fire on the desktop wrapper and create
+        // inconsistency with touch (where there is none).
         '&:focus-visible': {
           outline: `2px solid ${theme.palette.primary.main}`,
           outlineOffset: 2,
         },
+        '&:active': {
+          // Touch feedback: subtle press-down on tap so the
+          // tap registers visually even before the iframe
+          // overlay starts mounting.
+          transform: 'scale(0.99)',
+        },
+        transition: theme.transitions.create('transform', {
+          duration: theme.transitions.duration.shortest,
+        }),
       })}
     >
       {/* Header: author + Official chip on the left, likes on the right.
@@ -139,8 +151,8 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
                 gap: 0.75,
                 minWidth: 0,
               }}
-            >
-              <Avatar
+      >
+        <Avatar
                 sx={(theme) => ({
                   width: 20,
                   height: 20,
@@ -218,7 +230,7 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
       </Box>
 
       {/* Body: name + description + date on the left, emoji on the right.
-          Then the "Open" button at the bottom. */}
+          Then the "Launch" button at the bottom. */}
       <Box
         sx={{
           px: 2,
@@ -263,7 +275,7 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
             </Typography>
 
             <Typography
-              sx={{
+                sx={{
                 fontSize: TYPO.sm,
                 color: 'text.secondary',
                 lineHeight: 1.5,
@@ -313,7 +325,7 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
           variant="outlined"
           color="primary"
           size="small"
-          endIcon={<OpenInNewIcon sx={{ fontSize: TYPO.md }} />}
+          startIcon={<PlayArrowOutlinedIcon sx={{ fontSize: TYPO.lg }} />}
           onClick={(e) => {
             e.stopPropagation();
             onOpen(app);
@@ -325,10 +337,26 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
             fontSize: TYPO.sm,
             fontWeight: FONT_WEIGHT.semibold,
             textTransform: 'none',
-            borderRadius: RADIUS.lg / 8,
+            borderRadius: '10px',
+            // Explicit outlined treatment: 1.5 px primary border,
+            // transparent background. Override MUI's default
+            // hover-fill (subtle alpha tint) so the button stays
+            // outlined in every state - no "filled at rest /
+            // tinted on hover" inconsistency that reads as
+            // "wait, is this filled or outlined?".
+            borderWidth: 1.5,
+            bgcolor: 'transparent',
+            '&:hover': {
+              borderWidth: 1.5,
+              bgcolor: 'transparent',
+            },
+            '&:active': {
+              borderWidth: 1.5,
+              bgcolor: 'transparent',
+            },
           }}
         >
-          Open
+          Launch
         </Button>
       </Box>
     </Box>

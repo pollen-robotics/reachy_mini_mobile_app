@@ -6,11 +6,17 @@
  * the orb with the layout it wants. Buttons collapse to width 0
  * outside live states so the idle orb stays optically centered
  * without empty placeholder slots.
+ *
+ * Design language: white pill buttons with primary-orange OUTLINED
+ * icons - matches the rest of the conversation surface (cards =
+ * white, primary = orange call-to-action). Negative actions
+ * (muted mic, stop hover) flip to error red so destructive intent
+ * still reads at a glance.
  */
 import { Box, IconButton } from '@mui/material';
-import MicIcon from '@mui/icons-material/Mic';
-import MicOffIcon from '@mui/icons-material/MicOff';
-import StopIcon from '@mui/icons-material/Stop';
+import MicNoneOutlinedIcon from '@mui/icons-material/MicNoneOutlined';
+import MicOffOutlinedIcon from '@mui/icons-material/MicOffOutlined';
+import StopOutlinedIcon from '@mui/icons-material/StopOutlined';
 
 export interface MuteSideButtonProps {
   live: boolean;
@@ -32,23 +38,26 @@ export function MuteSideButton({
         sx={(theme) => ({
           width: 52,
           height: 52,
+          // White pill on the conversation surface; border + icon
+          // colour signal the state. Primary orange when active,
+          // error red when muted (so the "off" state pops at a
+          // glance even with the same white background).
+          bgcolor: theme.palette.background.paper,
           border: `1px solid ${
             micMuted ? theme.palette.error.main : theme.palette.divider
           }`,
           color: micMuted
-            ? theme.palette.error.contrastText
-            : theme.palette.text.primary,
-          bgcolor: micMuted
             ? theme.palette.error.main
-            : theme.palette.action.hover,
+            : theme.palette.primary.main,
           '&:hover': {
-            bgcolor: micMuted
-              ? theme.palette.error.dark
-              : theme.palette.action.selected,
+            bgcolor: theme.palette.background.paper,
+            borderColor: micMuted
+              ? theme.palette.error.main
+              : theme.palette.primary.main,
           },
         })}
       >
-        {micMuted ? <MicOffIcon /> : <MicIcon />}
+        {micMuted ? <MicOffOutlinedIcon /> : <MicNoneOutlinedIcon />}
       </IconButton>
     </SideSlot>
   );
@@ -69,17 +78,20 @@ export function StopSideButton({ live, onStop }: StopSideButtonProps) {
         sx={(theme) => ({
           width: 52,
           height: 52,
+          bgcolor: theme.palette.background.paper,
           border: `1px solid ${theme.palette.divider}`,
-          color: theme.palette.text.primary,
-          bgcolor: theme.palette.action.hover,
+          color: theme.palette.primary.main,
           '&:hover': {
+            // Hover flips to destructive red so the "this ends
+            // the conversation" intent reads clearly the moment
+            // the user mouses over.
             bgcolor: theme.palette.error.main,
             color: theme.palette.error.contrastText,
             borderColor: theme.palette.error.main,
           },
         })}
       >
-        <StopIcon />
+        <StopOutlinedIcon />
       </IconButton>
     </SideSlot>
   );

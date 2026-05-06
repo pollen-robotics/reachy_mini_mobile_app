@@ -99,6 +99,39 @@ export class ReachyMini extends EventTarget {
    * resolves authoritatively after the trajectory player finishes.
    */
   requestState(): void;
+
+  /**
+   * Play one of the bundled sound files on the robot's speaker
+   * (e.g. `"wake_up.wav"`, `"count.wav"`, `"impatient1.wav"`).
+   * Sends a `play_sound` command on the DataChannel.
+   *
+   * Returns `false` if the DataChannel isn't open, `true` once
+   * the command has been queued. The daemon plays the file
+   * asynchronously - the SDK doesn't expose a completion event.
+   */
+  playSound(file: string): boolean;
+
+  // ─── Audio volume controls (DataChannel round-trips) ──────────────
+  //
+  // Mirror of the daemon's `/api/volume/*` REST surface, routed
+  // through the WebRTC DataChannel so the mobile app (which can't
+  // talk to the daemon directly) can still adjust speaker / mic
+  // volume from anywhere on the network. Both methods round-trip
+  // and resolve with the daemon's *applied* value (clamped to 0-100,
+  // or `null` if the platform doesn't expose volume control).
+
+  /** Speaker volume currently applied on the robot (0-100), or
+   *  `null` when the platform's audio stack doesn't expose it. */
+  getVolume(): Promise<number | null>;
+  /** Set the speaker volume (0-100). Persists across sessions on
+   *  the robot side. Resolves with the applied value. */
+  setVolume(volume: number): Promise<number | null>;
+  /** Microphone input volume currently applied (0-100), or `null`
+   *  if unavailable. */
+  getMicrophoneVolume(): Promise<number | null>;
+  /** Set the microphone input volume (0-100). Persists across
+   *  sessions. Resolves with the applied value. */
+  setMicrophoneVolume(volume: number): Promise<number | null>;
 }
 
 export default ReachyMini;

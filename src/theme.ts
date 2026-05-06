@@ -20,7 +20,13 @@ function buildTheme(mode: 'light' | 'dark'): Theme {
       mode,
       primary: { main: ACCENT },
       background: {
-        default: isDark ? '#0a0a0a' : '#f5f5f7',
+        // Lighter "canvas" tone so the contrast with the white
+        // cards (`paper`) is subtle - the cards still pop but
+        // the body doesn't feel "hard" grey. The dark mode
+        // counterpart bumps from pitch black to a softer near-
+        // black so the cards (#1a1a1a) still stand out without
+        // the body crushing into the OLED's true black.
+        default: isDark ? '#101013' : '#fafafa',
         paper: isDark ? '#1a1a1a' : '#ffffff',
       },
       text: {

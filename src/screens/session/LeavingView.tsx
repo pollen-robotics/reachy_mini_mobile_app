@@ -26,7 +26,7 @@ export default function LeavingView() {
       spacing={2.5}
       sx={{ flex: 1, minHeight: 0, width: '100%' }}
     >
-      <CircularProgress size={56} thickness={3.5} />
+      <CircularProgress size={42} thickness={3.5} sx={{ color: 'text.secondary' }} />
       <Typography
         sx={{
           fontSize: TYPO.lg,
