@@ -13,6 +13,7 @@ import {
   useInitBleListeners,
 } from './ble/useBleSession';
 import { useRemoteHfToken } from './auth/useRemoteHfToken';
+import { usePrefetchApps } from './apps/useApps';
 
 type Screen = 'scan' | 'session' | 'wifi-setup';
 
@@ -49,6 +50,12 @@ export default function App() {
   const { token, username, setToken, clear } = useRemoteHfToken();
 
   useInitBleListeners();
+  // Warm the apps catalog cache as soon as the app boots so the
+  // Apps tab opens with the list already in place (no spinner on
+  // first visit). The catalog endpoint is public, so it's safe to
+  // fetch even before the auth gate. The cache lives for the whole
+  // JS session and is naturally refreshed on cold start.
+  usePrefetchApps();
 
   const backToScan = async (): Promise<void> => {
     if (connectedAddress) {

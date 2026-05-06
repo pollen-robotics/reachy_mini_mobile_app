@@ -50,7 +50,11 @@ import {
   SCAN_TIMEOUT_MS,
   STATUS_SERVICE_UUID,
 } from './constants';
+import { parseNetworkStatus, type NetworkStatus } from './networkStatus';
 import { parseAdvertHardwareId } from './parseAdvertPayload';
+
+export { parseNetworkStatus };
+export type { NetworkStatus };
 
 // ===========================================================================
 // Types
@@ -130,17 +134,6 @@ async function runExclusive<T>(task: () => Promise<T>): Promise<T> {
 // ===========================================================================
 // Store
 // ===========================================================================
-
-export interface NetworkStatus {
-  hostname: string;
-  ip: string | null;
-  port: number;
-  /** Free-form mode string as advertised by the daemon (`connected`,
-   * `hotspot`, `offline`, ...). We don't enumerate it here because the
-   * daemon may add new modes in future firmwares; consumers match
-   * against known values and fall back to "unknown". */
-  mode: string;
-}
 
 interface BleSessionState {
   status: BleSessionStatus;
@@ -418,65 +411,6 @@ async function readNetworkStatusInternal(): Promise<NetworkStatus> {
     throw new Error(`Unexpected NETWORK_STATUS payload: ${raw}`);
   }
   return ns;
-}
-
-/**
- * Parse the daemon's plain-text NETWORK_STATUS payload.
- *
- * Rules:
- *   - Empty / "ERROR" payloads → null (caller should retry).
- *   - "OFFLINE" (no interfaces) → mode='offline', ip=null.
- *   - "HOTSPOT [wlan0] 10.42.0.1" → mode='hotspot', ip=10.42.0.1.
- *     The IP is technically reachable (if you're on the robot's AP)
- *     but the HTTP probe will decide that.
- *   - "CONNECTED [wlan0] 192.168.1.19 ; [eth0] 10.0.0.5" → mode='connected',
- *     ip picked from wlan0 > eth0 > first-listed interface.
- *
- * Exported for unit testing; not used elsewhere at runtime.
- */
-export function parseNetworkStatus(raw: string): NetworkStatus | null {
-  if (!raw || raw === 'ERROR') return null;
-
-  // Head word is the mode, rest is interface list. Split on first whitespace.
-  const firstSpace = raw.indexOf(' ');
-  const head = firstSpace === -1 ? raw : raw.slice(0, firstSpace);
-  const rest = firstSpace === -1 ? '' : raw.slice(firstSpace + 1).trim();
-  const mode = head.toLowerCase();
-
-  if (rest.length === 0) {
-    // Just "OFFLINE" or any other bare mode - no IP yet.
-    return { hostname: '', ip: null, port: 8000, mode };
-  }
-
-  // Interface entries are separated by " ; "; each entry looks like
-  // "[wlan0] 192.168.1.19". We tolerate missing spaces / extra
-  // whitespace since the format is hand-built on the daemon side.
-  const entries = rest
-    .split(';')
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  const interfaces: Array<{ iface: string; ip: string }> = [];
-  for (const entry of entries) {
-    const match = entry.match(/^\[([^\]]+)\]\s*(\S+)/);
-    if (match && match[1] && match[2]) {
-      interfaces.push({ iface: match[1], ip: match[2] });
-    }
-  }
-
-  // Prefer wlan0, then eth0, then whatever the daemon listed first.
-  const preferred =
-    interfaces.find(i => i.iface === 'wlan0') ??
-    interfaces.find(i => i.iface === 'eth0') ??
-    interfaces[0] ??
-    null;
-
-  return {
-    hostname: '',
-    ip: preferred?.ip ?? null,
-    port: 8000,
-    mode,
-  };
 }
 
 /**

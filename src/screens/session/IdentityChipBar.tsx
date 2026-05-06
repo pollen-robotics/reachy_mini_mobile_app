@@ -15,9 +15,9 @@
  * and robot name without breaking the header into multiple lines.
  */
 import { Chip, Stack } from '@mui/material';
-import UsbIcon from '@mui/icons-material/Usb';
-import WifiIcon from '@mui/icons-material/Wifi';
 
+import { ShortId } from '../../components/ShortId';
+import { TransportChip } from '../../components/TransportChip';
 import { TYPO } from '../../styles/tokens';
 
 interface IdentityChipBarProps {
@@ -41,19 +41,8 @@ export default function IdentityChipBar({
         flexWrap: 'nowrap',
       }}
     >
-      {hardwareId && (
-        <Chip
-          label={`id:${hardwareId.slice(0, 5)}`}
-          size="small"
-          variant="outlined"
-          sx={{
-            height: 22,
-            fontSize: TYPO.tiny,
-            fontFamily: 'monospace',
-          }}
-        />
-      )}
-      <TransportChip transport={transport} />
+      <ShortId hardwareId={hardwareId} as="chip" />
+      <TransportChip transport={transport} height={22} />
       {username && (
         <Chip
           label={`@${username}`}
@@ -71,42 +60,5 @@ export default function IdentityChipBar({
         />
       )}
     </Stack>
-  );
-}
-
-function TransportChip({ transport }: { transport: string }) {
-  if (transport === 'usb') {
-    return (
-      <Chip
-        icon={<UsbIcon sx={{ fontSize: 14 }} />}
-        label="USB"
-        size="small"
-        variant="outlined"
-        sx={{ height: 22, fontSize: TYPO.tiny, '.MuiChip-icon': { ml: 0.5 } }}
-      />
-    );
-  }
-  if (transport === 'wifi') {
-    return (
-      <Chip
-        icon={<WifiIcon sx={{ fontSize: 14 }} />}
-        label="Wi-Fi"
-        size="small"
-        variant="outlined"
-        sx={{ height: 22, fontSize: TYPO.tiny, '.MuiChip-icon': { ml: 0.5 } }}
-      />
-    );
-  }
-  return (
-    <Chip
-      label={transport}
-      size="small"
-      variant="outlined"
-      sx={{
-        height: 22,
-        fontSize: TYPO.tiny,
-        textTransform: 'capitalize',
-      }}
-    />
   );
 }

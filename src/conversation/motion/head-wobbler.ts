@@ -143,6 +143,19 @@ export class HeadWobbler {
   }
 
   stop(): void {
+    this.stopWithoutFinalFrame();
+    // Return to neutral head pose on teardown so the robot doesn't freeze
+    // mid-motion.
+    this.onOffsets({ roll: 0, pitch: 0, yaw: 0 });
+  }
+
+  /**
+   * Same as `stop()` minus the final neutral frame. Used by callers
+   * that want to take over the landing themselves (e.g. a smooth
+   * easing back to neutral over a few hundred ms instead of an
+   * instant snap).
+   */
+  stopWithoutFinalFrame(): void {
     if (this.timer !== null) {
       this.timer.clear();
       this.timer = null;
@@ -159,10 +172,6 @@ export class HeadWobbler {
     this.audioCtx = null;
     this.frameBuf = null;
     this.pendingOffsets = [];
-
-    // Return to neutral head pose on teardown so the robot doesn't freeze
-    // mid-motion.
-    this.onOffsets({ roll: 0, pitch: 0, yaw: 0 });
   }
 
   /**

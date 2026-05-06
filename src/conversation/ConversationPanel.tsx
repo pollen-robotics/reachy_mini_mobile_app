@@ -158,8 +158,10 @@ export function ConversationPanel({
  * vocabulary the orb knows. `released` maps to `idle` so the orb
  * shows a neutral state during a handoff (the panel is typically
  * hidden at that point but we keep the mapping defensive).
+ *
+ * Exported for unit testing.
  */
-function mapAppStateToOrb(state: AppState): OrbState {
+export function mapAppStateToOrb(state: AppState): OrbState {
   switch (state) {
     case 'connecting':
     case 'starting':

@@ -1,5 +1,5 @@
 /**
- * Apps catalog hook.
+ * Apps catalog hook (TanStack Query).
  *
  * Single source: the curated catalog served by the public Reachy
  * Mini website Space:
@@ -11,16 +11,37 @@
  * iframe them at their HF Space runtime URL. So a single fetch +
  * minimal normalization is enough.
  *
- * Caching strategy is intentionally short (5 minutes) so the user
- * gets up-to-date listings when they re-enter the Apps tab without
- * paying a network round-trip every render.
+ * Caching strategy: ONE fetch per JS session.
+ * ────────────────────────────────────────────
+ * The catalog rarely changes within a session, the user can't
+ * change it, and re-fetching on every Apps-tab visit just adds a
+ * "loading…" flash for no information gain. Through TanStack
+ * Query we get:
+ *
+ *   1. A single shared cache slot keyed by `APPS_QUERY_KEY` -
+ *      every `useApps()` consumer subscribes to it, every
+ *      `prefetchApps()` writes into it, no double fetches.
+ *   2. `staleTime: Infinity` - the data is treated as fresh for
+ *      the whole JS session. Cold starts (Tauri WebView reload,
+ *      app relaunch) drop the in-memory cache naturally, which
+ *      gives the "fetch on every app start" behaviour without
+ *      any TTL math.
+ *   3. `refetch()` for the explicit "Refresh" button on the Apps
+ *      tab. Keeps the previous list visible while the refetch is
+ *      in flight (`isFetching`), so a transient hub hiccup
+ *      doesn't blank the surface.
+ *
+ * Public endpoint - no token, no credentials. Safe to prefetch
+ * even before the auth gate.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+import { queryClient } from '../queryClient';
 
 import type { AppEntry, AppSdk } from './types';
 
 const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/apps';
-const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Tag that marks a catalog entry as a JS-only Reachy Mini app the
@@ -34,6 +55,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
  * curated subset - there's exactly one place to change the contract.
  */
 const REQUIRED_APP_TAG = 'reachy_mini_js_app';
+
+/** TanStack Query cache key for the catalog. Stable, no params. */
+const APPS_QUERY_KEY = ['apps-catalog'] as const;
 
 interface RawCatalogApp {
   id?: string;
@@ -187,7 +211,11 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   };
 }
 
-function normalizeCatalog(payload: unknown): AppEntry[] {
+/**
+ * Normalize and filter the raw catalog payload. Exported for unit
+ * tests; the runtime path goes through `useQuery`.
+ */
+export function normalizeCatalog(payload: unknown): AppEntry[] {
   const raw = Array.isArray(payload)
     ? (payload as RawCatalogApp[])
     : ((payload as RawCatalogPayload | null)?.apps ?? []);
@@ -206,13 +234,22 @@ function normalizeCatalog(payload: unknown): AppEntry[] {
   return apps;
 }
 
-interface CacheSlot {
-  apps: AppEntry[];
-  fetchedAt: number;
+async function fetchAppsCatalog(): Promise<AppEntry[]> {
+  const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload = (await res.json()) as unknown;
+  return normalizeCatalog(payload);
 }
 
-let moduleCache: CacheSlot | null = null;
+// ===========================================================================
+// Public API
+// ===========================================================================
 
+/**
+ * Public state shape consumed by `<AppsTabView>`. Discriminated
+ * union so the consumer can branch on `state.kind` without
+ * counting boolean flags.
+ */
 export type AppsState =
   | { kind: 'idle' }
   | { kind: 'loading'; apps: AppEntry[] }
@@ -225,56 +262,79 @@ interface UseAppsReturn {
 }
 
 /**
- * Fetch the public Reachy Mini apps catalog with a 5-minute
- * module-level cache. The cache is shared across components, so
- * multiple `useApps()` consumers share a single network call.
+ * Warm the catalog cache. Idempotent: TanStack Query dedupes
+ * concurrent prefetches against the same key, and re-prefetching
+ * a fresh query is a free no-op.
+ *
+ * Call this from the App root (or use `usePrefetchApps()`) so the
+ * catalog is ready by the time the user navigates to the Apps tab.
+ */
+export function prefetchApps(): Promise<void> {
+  return queryClient.prefetchQuery({
+    queryKey: APPS_QUERY_KEY,
+    queryFn: fetchAppsCatalog,
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Hook variant of `prefetchApps()`. Designed to live at the App
+ * root: fires the prefetch on mount and forgets.
+ */
+export function usePrefetchApps(): void {
+  useEffect(() => {
+    void prefetchApps();
+  }, []);
+}
+
+/**
+ * Subscribe to the apps catalog. Returns a discriminated state
+ * + a `refresh()` action for the explicit "reload" button.
+ *
+ * Mounting `useApps()` triggers the underlying query, which
+ * dedupes against any concurrent `prefetchApps()` (App-root
+ * warm-up) so consumers always share a single network call.
  */
 export function useApps(): UseAppsReturn {
-  const [state, setState] = useState<AppsState>(() => {
-    if (moduleCache && Date.now() - moduleCache.fetchedAt < CACHE_TTL_MS) {
-      return { kind: 'ready', apps: moduleCache.apps };
-    }
-    return { kind: 'idle' };
+  const query = useQuery({
+    queryKey: APPS_QUERY_KEY,
+    queryFn: fetchAppsCatalog,
+    // Treat the data as fresh for the whole JS session - the only
+    // refresh paths are (a) cold start (cache wiped naturally),
+    // (b) explicit `refresh()` from the UI button.
+    staleTime: Infinity,
   });
-  const inFlightRef = useRef<Promise<void> | null>(null);
 
-  const fetchOnce = useCallback(async (): Promise<void> => {
-    if (inFlightRef.current) return inFlightRef.current;
-    const previous =
-      state.kind === 'ready' || state.kind === 'error' ? state.apps : [];
-    setState({ kind: 'loading', apps: previous });
-    const run = (async () => {
-      try {
-        const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const payload = (await res.json()) as unknown;
-        const apps = normalizeCatalog(payload);
-        moduleCache = { apps, fetchedAt: Date.now() };
-        setState({ kind: 'ready', apps });
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        setState({ kind: 'error', reason, apps: previous });
-      } finally {
-        inFlightRef.current = null;
-      }
-    })();
-    inFlightRef.current = run;
-    return run;
-    // We deliberately omit `state` from the dep list - it would
-    // create a new callback on every render and cause an infinite
-    // refresh loop in the effect below. The previous-list snapshot
-    // is captured at call time, which is what we want.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const apps = query.data ?? [];
 
-  useEffect(() => {
-    if (state.kind === 'idle') {
-      void fetchOnce();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  let state: AppsState;
+  if (query.isFetching && apps.length === 0) {
+    state = { kind: 'loading', apps: [] };
+  } else if (query.isFetching) {
+    // Refresh in-flight with a previous list available - keep it
+    // visible so the surface doesn't blank.
+    state = { kind: 'loading', apps };
+  } else if (query.isError) {
+    state = {
+      kind: 'error',
+      reason:
+        query.error instanceof Error
+          ? query.error.message
+          : String(query.error),
+      apps,
+    };
+  } else if (query.isSuccess) {
+    state = { kind: 'ready', apps };
+  } else {
+    // Pre-fetch resting state (very brief: TanStack Query goes to
+    // `isFetching` on mount). The discriminated `idle` keeps the
+    // public type stable for consumers that branch on it.
+    state = { kind: 'idle' };
+  }
 
-  return { state, refresh: fetchOnce };
+  const refresh = async (): Promise<void> => {
+    await query.refetch();
+  };
+
+  return { state, refresh };
 }

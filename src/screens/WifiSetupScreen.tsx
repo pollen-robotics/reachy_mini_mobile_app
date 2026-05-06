@@ -273,7 +273,6 @@ export default function WifiSetupScreen({ onBack, token }: WifiSetupScreenProps)
       setErrorMsg(err);
       setPhase('failed');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, setup.status?.mode, setup.status?.error]);
 
   // ─── Verification: central freshness poll ─────────────────────────

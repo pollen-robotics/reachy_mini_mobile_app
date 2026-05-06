@@ -1,8 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CssBaseline, ThemeProvider, useMediaQuery } from '@mui/material';
+import { QueryClientProvider } from '@tanstack/react-query';
 
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { queryClient } from './queryClient';
 import { lightTheme, darkTheme } from './theme';
 
 function Root() {
@@ -13,10 +16,12 @@ function Root() {
   const theme = prefersDark ? darkTheme : lightTheme;
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline enableColorScheme />
-      <App />
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline enableColorScheme />
+        <App />
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -25,6 +30,14 @@ if (!container) throw new Error('Missing #root container');
 
 createRoot(container).render(
   <StrictMode>
-    <Root />
+    {/* ErrorBoundary lives OUTSIDE the ThemeProvider on purpose: a
+        crash inside MUI itself (or its theme creation) would leave
+        a regular boundary unmounted alongside the broken tree.
+        Keeping the boundary at the React-tree root with a
+        framework-light fallback means we always have *something*
+        to render, even if MUI is the source of the failure. */}
+    <ErrorBoundary>
+      <Root />
+    </ErrorBoundary>
   </StrictMode>
 );

@@ -59,6 +59,19 @@ export class AntennasOscillator {
   }
 
   /**
+   * Same as `stop()` minus the final neutral frame. Used by callers
+   * that want to take over the landing themselves (e.g. a smooth
+   * easing back to (0, 0) over a few hundred ms instead of an
+   * instant snap).
+   */
+  stopWithoutFinalFrame(): void {
+    if (this.timer !== null) {
+      this.timer.clear();
+      this.timer = null;
+    }
+  }
+
+  /**
    * Freeze the antennas on their current position. Used when the user is
    * speaking: the robot "listens attentively" instead of keeping its
    * idle animation.

@@ -65,6 +65,7 @@ import AppsTabView from './apps/AppsTabView';
 import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
+import RobotCameraCard from './session/RobotCameraCard';
 import SessionErrorView from './session/SessionErrorView';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
 
@@ -341,9 +342,21 @@ function ConnectedSession({
               minHeight: 0,
               display: tab === 'conv' ? 'flex' : 'none',
               flexDirection: 'column',
+              position: 'relative',
             }}
           >
             <ConversationPanel session={session} orbRef={orbRef} />
+            {/* Floating camera thumbnail. Only mounted once the
+                session is physically live (robot awake, motors on,
+                WebRTC video track flowing); before that point the
+                placeholder would show "Camera offline" through the
+                whole connecting overlay, which is just noise. The
+                card is `position: absolute` against the conv-tab
+                column so it floats above the orb without disturbing
+                its centring math. */}
+            {session.hasReachedReady && (
+              <RobotCameraCard session={session} />
+            )}
           </Box>
         )}
 

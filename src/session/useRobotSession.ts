@@ -44,31 +44,12 @@ import {
   type ConversationToolToastEvent,
 } from '../conversation/engine/conversation-engine';
 
-/**
- * High-level session phase observed by the host. Derived from the
- * engine's `AppState` plus the in-flight handoff transitions that
- * the engine doesn't track itself.
- */
-export type SessionPhase =
-  /** No engine yet (initial render, or after teardown). */
-  | 'idle'
-  /** Engine is bringing the SDK / WebRTC / wake-up dance up. */
-  | 'bringing-up'
-  /** Engine is up; robot is physically online. May or may not be
-   *  in a live conversation. */
-  | 'live'
-  /** Engine is mid-handoff: WebRTC session is being released. */
-  | 'releasing'
-  /** Session was deliberately released; robot is still awake;
-   *  iframe (or another consumer) holds the producer slot. */
-  | 'released'
-  /** Engine is bringing the WebRTC session back after a release. */
-  | 'reacquiring'
-  /** Full teardown is in flight (sleep + disable + stopSession +
-   *  disconnect). */
-  | 'tearing-down'
-  /** Engine surfaced a fatal error. */
-  | 'error';
+import { derivePhase, type SessionPhase } from './phase';
+
+// Re-exported so existing call sites that import `SessionPhase` /
+// `derivePhase` from this module keep working without churn.
+export { derivePhase };
+export type { SessionPhase };
 
 export interface RobotSessionHandle {
   /** High-level phase observed by the host. Use this to drive the
@@ -117,6 +98,18 @@ export interface RobotSessionHandle {
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
   tearDown: () => Promise<void>;
+  /**
+   * Bind a `<video>` element to the robot's camera stream. Returns a
+   * detach function the caller MUST run on unmount. The binding is
+   * resilient to release / reacquire cycles (the SDK clears the
+   * `srcObject` on `stopSession` and refills it on the next
+   * `videoTrack` event), so the host can attach once and forget.
+   *
+   * Safe to call before the engine has finished mounting: if the
+   * underlying SDK instance isn't ready yet we return a no-op so the
+   * host's effect cleanup is symmetric.
+   */
+  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 }
 
 interface UseRobotSessionOptions {
@@ -134,39 +127,6 @@ interface UseRobotSessionOptions {
 }
 
 const TOOL_TOAST_MIN_MS = 1500;
-
-/**
- * Map an engine `AppState` to the host-facing session phase, given
- * a `phaseHint` that captures the in-flight handoff transitions
- * (which the engine itself doesn't track).
- */
-function derivePhase(
-  engineState: AppState,
-  phaseHint: SessionPhase | null,
-): SessionPhase {
-  if (phaseHint && phaseHint !== 'idle') return phaseHint;
-  switch (engineState) {
-    case 'signed-out':
-    case 'authenticated':
-    case 'connecting':
-    case 'connected':
-    case 'auto-selecting':
-    case 'starting':
-      return 'bringing-up';
-    case 'ready':
-    case 'listening':
-    case 'user-speaking':
-    case 'processing':
-    case 'ai-speaking':
-      return 'live';
-    case 'released':
-      return 'released';
-    case 'error':
-      return 'error';
-    default:
-      return 'bringing-up';
-  }
-}
 
 export function useRobotSession({
   robotId,
@@ -387,6 +347,12 @@ export function useRobotSession({
     }
   }, []);
 
+  const attachVideo = useCallback((el: HTMLVideoElement): (() => void) => {
+    const handle = handleRef.current;
+    if (!handle) return () => {};
+    return handle.attachVideo(el);
+  }, []);
+
   const phase = derivePhase(engineState, phaseHint);
 
   return {
@@ -404,5 +370,6 @@ export function useRobotSession({
     releaseForHandoff,
     reacquire,
     tearDown,
+    attachVideo,
   };
 }

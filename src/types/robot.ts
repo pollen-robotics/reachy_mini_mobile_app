@@ -1,54 +1,12 @@
 /**
- * Shared types describing a Reachy Mini as seen from the mobile client.
+ * Shared types for the BLE-driven Wi-Fi setup flow.
  *
- * Everything in this file is transport-agnostic: `DiscoveredRobot` is what
- * the UI consumes, whether it came from mDNS, a manual IP input, or a
- * future BLE path.
+ * Earlier revisions of the app exposed an mDNS / Rust-side
+ * `DiscoveredRobot` shape too. That path is now handled directly
+ * by `useBleSession` (BLE plugin) and `useRemoteRobots` (HF central),
+ * so this file only carries the Wi-Fi state types still consumed by
+ * `useWifiSetup`, `humanizeWifiError`, and `FailedView`.
  */
-
-/** Robot network mode as reported by the daemon's BLE status char. */
-export type RobotNetworkMode = 'connected' | 'hotspot' | 'offline' | 'unknown';
-
-/**
- * A robot resolved by the Rust discovery task (BLE scan + GATT read) or
- * added manually by the user.
- *
- * Matches the Rust payload emitted via `robot:discovered` events (see
- * `src-tauri/src/discovery.rs::DiscoveredRobot`). `ip` is `null` when
- * the robot is in OFFLINE mode - the BLE link is still usable but we
- * cannot reach the daemon over HTTP yet.
- */
-export interface DiscoveredRobot {
-  /** Advertised local name, e.g. `ReachyMini`, or a user-typed label. */
-  name: string;
-  /** Informational hostname guess. Empty for BLE-only discovery. */
-  hostname: string;
-  /** Primary IPv4 address. Null when the robot is offline. */
-  ip: string | null;
-  /** Daemon HTTP port, defaults to 8000 when unknown. */
-  port: number;
-  /** Robot network mode decoded from the BLE NETWORK_STATUS char. */
-  mode: RobotNetworkMode;
-  /** Stable identifier for this entry (BLE peripheral id or manual host). */
-  address: string;
-  /** Unix ms timestamp of the last successful BLE read. */
-  lastSeenMs: number;
-  /** How this robot ended up in the cache. */
-  source: 'ble' | 'manual';
-}
-
-/**
- * High-level connection state machine for the current robot.
- *
- * We only promote to `connected` once the daemon answered
- * `/api/daemon/status` successfully over HTTP.
- */
-export type ConnectionState =
-  | 'idle'
-  | 'scanning'
-  | 'daemon-probing'
-  | 'connected'
-  | 'error';
 
 /**
  * WiFi state as returned by the daemon's `WIFI_STATUS` BLE command

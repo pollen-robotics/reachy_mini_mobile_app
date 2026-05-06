@@ -1,6 +1,6 @@
 /**
  * Reactive view of "what robots does Hugging Face central know about
- * for this user, right now?".
+ * for this user, right now?" - via TanStack Query.
  *
  * Wraps `fetchRobotsFromCentral` with token-aware lifecycle:
  *
@@ -9,21 +9,18 @@
  *   - Fetch ok                → state: 'ready' with `robots[]`.
  *   - Fetch failed            → state: 'error' with `reason`.
  *
- * The fetch retriggers automatically when:
- *   - the token changes,
+ * The query refetches automatically when:
+ *   - the token changes (it's part of the cache key, so a switch
+ *     creates a new entry instead of leaking the old one),
  *   - `pollMs` elapses (default: 30 s, off when `pollMs <= 0`),
  *   - the consumer calls `refresh()`.
  *
- * Why a dedicated hook rather than calling the fetcher inline:
- *   - Multiple screens want the same list (the unified ScanScreen and
- *     RemoteScreen's pick step). Centralising avoids duplicate network
- *     requests and lets us share the freshness window (initial fetch
- *     stays valid across navigation).
- *   - Coming back to the discovery screen after a BLE session must
- *     show the previous remote list immediately (no flash of empty);
- *     keeping `robots` cached on the hook achieves that.
+ * Keeping the previous list visible across polls / refreshes is
+ * given to us by TanStack Query's `data` cache: `refresh()` /
+ * polling produce `isFetching === true` while `data` still holds
+ * the last good value, so the UI doesn't blank between rounds.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import {
   fetchRobotsFromCentral,
@@ -44,81 +41,78 @@ export interface UseRemoteRobotsResult {
 
 const DEFAULT_POLL_MS = 30_000;
 
+/**
+ * Cache key shape: `['remote-robots', token]`.
+ *
+ * Including the token makes a sign-out / sign-in cycle replace the
+ * cache slot rather than reuse it - we never want robot data
+ * stamped against another user's session to flash in the UI.
+ */
+function remoteRobotsKey(token: string): readonly unknown[] {
+  return ['remote-robots', token] as const;
+}
+
 export function useRemoteRobots(
   token: string | null,
   opts: { pollMs?: number } = {},
 ): UseRemoteRobotsResult {
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
 
-  // Keep the last successful list across token-equal re-renders so the
-  // UI doesn't blank out between polls. We move it across state
-  // transitions explicitly via `previousRobots`.
-  const [state, setState] = useState<RemoteRobotsState>(() =>
-    token ? { kind: 'loading', robots: [] } : { kind: 'no-token' },
-  );
-
-  // Bumped on every fetch so a late-resolving previous request can't
-  // overwrite the current state.
-  const fetchIdRef = useRef(0);
-
-  const runFetch = useCallback(
-    async (currentToken: string, previousRobots: CentralRobotEntry[]) => {
-      const id = ++fetchIdRef.current;
-      setState({ kind: 'loading', robots: previousRobots });
-      const result = await fetchRobotsFromCentral(currentToken);
-      if (id !== fetchIdRef.current) return;
-      if (!result.ok) {
-        setState({
-          kind: 'error',
-          robots: previousRobots,
-          reason: result.reason ?? 'Unknown error',
-        });
-        return;
+  const query = useQuery({
+    // The cache slot is keyed on the token; with `enabled: false`
+    // for null tokens, no query is registered until sign-in.
+    queryKey: token ? remoteRobotsKey(token) : ['remote-robots', null],
+    queryFn: async () => {
+      if (!token) {
+        // Defensive - `enabled: false` should keep this from
+        // firing, but TanStack Query's queryFn must always exist.
+        throw new Error('No HF token');
       }
-      setState({ kind: 'ready', robots: result.robots });
+      const result = await fetchRobotsFromCentral(token);
+      if (!result.ok) {
+        throw new Error(result.reason ?? 'Unknown error');
+      }
+      return result.robots;
     },
-    [],
-  );
+    enabled: !!token,
+    refetchInterval: pollMs > 0 ? pollMs : false,
+    // Keep the polling running even when the WebView is in the
+    // background so the user finds an up-to-date list when they
+    // re-foreground the app.
+    refetchIntervalInBackground: true,
+    staleTime: pollMs > 0 ? pollMs : Infinity,
+  });
 
-  // The previous list is the one currently in state when we trigger a
-  // new fetch; capture it via a ref so refreshes don't depend on
-  // `state` (avoids re-creating callbacks).
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const robots = query.data ?? [];
 
-  const refresh = useCallback(async (): Promise<void> => {
+  let state: RemoteRobotsState;
+  if (!token) {
+    state = { kind: 'no-token' };
+  } else if (query.isFetching && robots.length === 0 && !query.isError) {
+    state = { kind: 'loading', robots: [] };
+  } else if (query.isError) {
+    state = {
+      kind: 'error',
+      robots,
+      reason:
+        query.error instanceof Error
+          ? query.error.message
+          : String(query.error),
+    };
+  } else if (query.isFetching) {
+    // Refresh / poll in-flight with a previous list still
+    // available. Surface as `loading` (with the cached list) so
+    // the UI can decorate the existing rows with a spinner if it
+    // wants to, without blanking.
+    state = { kind: 'loading', robots };
+  } else {
+    state = { kind: 'ready', robots };
+  }
+
+  const refresh = async (): Promise<void> => {
     if (!token) return;
-    const previous =
-      stateRef.current.kind === 'no-token'
-        ? []
-        : stateRef.current.robots;
-    await runFetch(token, previous);
-  }, [token, runFetch]);
-
-  useEffect(() => {
-    if (!token) {
-      // Cancel any in-flight fetch, drop everything.
-      fetchIdRef.current += 1;
-      setState({ kind: 'no-token' });
-      return;
-    }
-
-    // Token (re-)appeared: do an initial fetch keeping any previous
-    // list as a soft cache so the UI doesn't blank.
-    const previous =
-      stateRef.current.kind === 'no-token' ? [] : stateRef.current.robots;
-    void runFetch(token, previous);
-
-    if (pollMs <= 0) return;
-    const handle = window.setInterval(() => {
-      const prev =
-        stateRef.current.kind === 'no-token'
-          ? []
-          : stateRef.current.robots;
-      void runFetch(token, prev);
-    }, pollMs);
-    return () => window.clearInterval(handle);
-  }, [token, pollMs, runFetch]);
+    await query.refetch();
+  };
 
   return { state, refresh };
 }
