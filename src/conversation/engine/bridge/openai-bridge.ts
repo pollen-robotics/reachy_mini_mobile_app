@@ -308,16 +308,66 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     const pc = robot._pc;
     if (!pc) return;
 
-    const audioSender = pc
-      .getSenders()
-      .find((s) => s.track && s.track.kind === "audio");
+    const transceivers = pc.getTransceivers();
+    const audioTransceiver = transceivers.find(
+      (t) =>
+        t.receiver.track?.kind === "audio" ||
+        t.sender.track?.kind === "audio",
+    );
+    console.log(
+      "[openai-bridge] route:",
+      "transceivers=",
+      transceivers.map(
+        (t) =>
+          `dir=${t.direction}/curr=${t.currentDirection}/recv=${t.receiver.track?.kind ?? "-"}/send=${t.sender.track?.kind ?? "-"}`,
+      ),
+      "audioMuted=",
+      robot.audioMuted,
+    );
+    const audioSender = audioTransceiver?.sender ?? null;
     if (audioSender) {
-      audioSender.replaceTrack(track).catch((err) => {
-        console.error("[openai-bridge] replaceTrack failed", err);
-      });
+      // If the negotiated direction stranded our side at recvonly
+      // (which happens when the SDK couldn't open the phone mic and
+      // therefore answered with no local track), bump it back to
+      // sendrecv so the freshly-replaced track has an actual
+      // transmit path. Direction changes after negotiation trigger
+      // a `negotiationneeded` event - the SDK will emit a fresh
+      // offer/answer over its data channel.
+      if (
+        audioTransceiver &&
+        audioTransceiver.direction !== "sendrecv" &&
+        audioTransceiver.direction !== "sendonly"
+      ) {
+        try {
+          audioTransceiver.direction = "sendrecv";
+          console.log(
+            "[openai-bridge] flipped transceiver direction to sendrecv",
+          );
+        } catch (err) {
+          console.warn(
+            "[openai-bridge] could not bump transceiver direction:",
+            err,
+          );
+        }
+      }
+      audioSender
+        .replaceTrack(track)
+        .then(() => {
+          console.log(
+            "[openai-bridge] replaceTrack OK; sender.track=",
+            audioSender.track?.id,
+            "transceiver.direction=",
+            audioTransceiver?.direction,
+            "currentDirection=",
+            audioTransceiver?.currentDirection,
+          );
+        })
+        .catch((err) => {
+          console.error("[openai-bridge] replaceTrack failed", err);
+        });
     } else {
       console.warn(
-        "[openai-bridge] no audio sender on the robot peer — " +
+        "[openai-bridge] no audio transceiver on the robot peer — " +
           "the robot may not support bidirectional audio",
       );
     }
