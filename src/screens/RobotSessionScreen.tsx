@@ -163,6 +163,23 @@ function ConnectedSession({
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
 
+  // Daemon version, fetched once per session over the WebRTC data
+  // channel after `hasReachedReady` flips. Stays null when the daemon
+  // predates the `get_version` Cmd. Mirrors the webrtc_example pattern.
+  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!session.hasReachedReady) return;
+    if (daemonVersion !== null) return;
+    let cancelled = false;
+    void (async () => {
+      const v = await session.getDaemonVersion();
+      if (!cancelled && v) setDaemonVersion(v);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session, session.hasReachedReady, daemonVersion]);
+
   // Power-off / back: drives `session.tearDown()` (gotoSleep + motors
   // disabled + stopSession + disconnect) before navigating away. The
   // screen renders the leaving view in the meantime.
@@ -338,6 +355,7 @@ function ConnectedSession({
           robotName={robotName}
           hardwareId={robotHardwareId}
           transport={robotTransport}
+          daemonVersion={daemonVersion}
         />
         <IconButton
           aria-label="End session"

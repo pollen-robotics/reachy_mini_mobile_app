@@ -101,6 +101,13 @@ export interface ReachyMiniInstance extends EventTarget {
    */
   getMicrophoneVolume(): Promise<number | null>;
   setMicrophoneVolume(volume: number): Promise<number | null>;
+
+  /**
+   * Daemon version string (e.g. `"1.5.1"`), one-shot over the data
+   * channel. Resolves to `null` when the channel isn't open or the
+   * daemon predates the `get_version` Cmd.
+   */
+  getVersion(): Promise<string | null>;
 }
 
 export type ReachyMiniConstructor = new (

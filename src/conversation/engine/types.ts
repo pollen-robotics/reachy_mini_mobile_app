@@ -218,6 +218,12 @@ export interface ConversationEngineHandle {
    *  `null` semantics as `setSpeakerVolume`. */
   setMicrophoneVolume: (volume: number) => Promise<number | null>;
 
+  /** Read the daemon's reported version string (e.g. `"1.5.1"`).
+   *  Resolves to `null` when the data channel isn't open yet, when
+   *  the SDK isn't bootstrapped, or when the daemon predates the
+   *  `get_version` Cmd. Non-throwing. */
+  getDaemonVersion: () => Promise<string | null>;
+
   /**
    * Latest measured microphone level in [0, 1], smoothed by the
    * engine's `MicLevelMonitor`. Updated every audio frame; consumers

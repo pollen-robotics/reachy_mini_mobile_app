@@ -1969,6 +1969,19 @@ return {
     }
   },
 
+  getDaemonVersion: async () => {
+    if (unmounted || !robot || typeof robot.getVersion !== "function") {
+      return null;
+    }
+    try {
+      const v = await robot.getVersion();
+      return typeof v === "string" && v.length > 0 ? v : null;
+    } catch (err) {
+      console.warn("[engine] getDaemonVersion failed:", err);
+      return null;
+    }
+  },
+
   getMicLevel: () => latestMicLevel,
 
   playSound: (file: string) => {
