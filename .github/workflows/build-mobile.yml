@@ -78,6 +78,53 @@ jobs:
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
 
+      - name: Inject CoreBluetooth.framework link in regenerated pbxproj
+        # `tauri-plugin-blec` calls into Apple's CoreBluetooth via the
+        # `btleplug` crate, but neither emits a link directive that
+        # the Xcode-driven final link picks up:
+        #
+        #   - `cargo:rustc-link-lib=framework=CoreBluetooth` (which we
+        #     do try in `src-tauri/build.rs`) only travels with the
+        #     final Rust binary, not with the `libapp.a` staticlib that
+        #     ends up consumed by Xcode. Xcode does NOT read the build-
+        #     script outputs of an upstream Cargo invocation.
+        #
+        #   - The plugin's README tells contributors to add
+        #     CoreBluetooth.framework manually via the Xcode UI, which
+        #     doesn't survive `tauri ios init` regeneration here.
+        #
+        # The robust fix is to inject `OTHER_LDFLAGS` directly into the
+        # pbxproj's XCBuildConfiguration build settings (both Debug and
+        # Release), preserving inherited flags. We use Python because
+        # macOS sed's `a\` syntax is awkward and Python is preinstalled
+        # on the runner.
+        run: |
+          set -euxo pipefail
+          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          python3 - "$PBXPROJ" <<'PY'
+          import re, sys
+          path = sys.argv[1]
+          with open(path, 'r') as f:
+              content = f.read()
+          # Insert OTHER_LDFLAGS at the top of every buildSettings block.
+          # The pbxproj format wraps build settings in `buildSettings = {`
+          # ... `};` blocks; we anchor on the opener so the injection
+          # lands in both Debug and Release configurations of every
+          # target/project node. `$(inherited)` keeps any existing
+          # framework flags intact.
+          new_content, n = re.subn(
+              r'(buildSettings = \{\n)',
+              r'\1\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n',
+              content,
+          )
+          if n == 0:
+              print('ERROR: no buildSettings blocks matched in pbxproj', file=sys.stderr)
+              sys.exit(1)
+          with open(path, 'w') as f:
+              f.write(new_content)
+          print(f'Injected OTHER_LDFLAGS into {n} buildSettings block(s)')
+          PY
+
       - name: Build iOS (simulator, unsigned)
         # Tauri CLI's `--target` for iOS only accepts the short forms
         # `aarch64`, `aarch64-sim`, `x86_64`. The triple-style form
