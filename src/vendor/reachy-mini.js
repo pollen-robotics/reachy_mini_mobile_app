@@ -465,6 +465,15 @@ export class ReachyMini extends EventTarget {
         this._iceConnected = false;
         this._dcOpen = false;
         this._micSupported = false;
+        // ICE candidates that arrive before `setRemoteDescription` are
+        // queued here and replayed once the SDP exchange completes.
+        // Without this buffer, Safari / iOS WKWebView (and any strict
+        // WebRTC stack) throws `InvalidStateError: The remote
+        // description was null` and the candidate is lost — sometimes
+        // wedging ICE altogether on transports where the SSE message
+        // order isn't FIFO (cross-origin iframes are a common
+        // offender). Reset on every fresh session.
+        this._pendingRemoteIce = [];
 
         // Acquire mic eagerly so the browser permission prompt appears now,
         // but tracks stay disabled (muted) until the user explicitly unmutes.
@@ -1195,6 +1204,20 @@ export class ReachyMini extends EventTarget {
                 },
                 body: JSON.stringify(message),
             });
+            if (!res.ok) {
+                // Central refused this message. The browser already logs
+                // the bare "Failed to load resource: 400" line; surface
+                // the message type and (when available) the central's
+                // explanation so we can tell which call produced the
+                // race (typically a tardy `peer`/`endSession`/`setPeer
+                // Status` after the session has been torn down).
+                let body = '';
+                try { body = await res.text(); } catch { /* ignore */ }
+                console.warn(
+                    `[reachy-mini] /send rejected (${res.status}) for type=${message?.type}; body=${body || '<empty>'}`,
+                );
+                return null;
+            }
             return await res.json();
         } catch (e) {
             console.error('Send error:', e);
@@ -1355,9 +1378,41 @@ export class ReachyMini extends EventTarget {
                 } else {
                     await this._pc.setRemoteDescription(new RTCSessionDescription(sdp));
                 }
+                // Drain any ICE candidates that arrived before the
+                // SDP exchange completed. Necessary on transports
+                // where SSE messages aren't strictly ordered (cross-
+                // origin iframes, WKWebView), otherwise Safari throws
+                // `InvalidStateError: The remote description was
+                // null` and the candidate is silently lost.
+                const pending = this._pendingRemoteIce ?? [];
+                this._pendingRemoteIce = [];
+                for (const ice of pending) {
+                    try {
+                        await this._pc.addIceCandidate(new RTCIceCandidate(ice));
+                    } catch (err) {
+                        console.warn('[reachy-mini] buffered ICE candidate rejected:', err);
+                    }
+                }
             }
             if (msg.ice) {
-                await this._pc.addIceCandidate(new RTCIceCandidate(msg.ice));
+                // Safari (and the iOS WKWebView Tauri ships on) rejects
+                // empty candidate strings with `OperationError: Expect
+                // line: candidate:<candidate-str>`. The signaling
+                // server uses an empty string as the end-of-candidates
+                // marker (legal per the WebRTC spec but optional).
+                // Chrome/Firefox swallow it silently. We mirror that
+                // here so the iOS WebView stops showing the noise.
+                if (!msg.ice.candidate) return;
+                if (this._pc.remoteDescription) {
+                    await this._pc.addIceCandidate(new RTCIceCandidate(msg.ice));
+                } else {
+                    // Buffer until the SDP exchange completes (see the
+                    // drain block above). The central can race the
+                    // offer with the first ICE bursts on cross-origin
+                    // iframes.
+                    if (!this._pendingRemoteIce) this._pendingRemoteIce = [];
+                    this._pendingRemoteIce.push(msg.ice);
+                }
             }
         } catch (e) {
             console.error('WebRTC error:', e);

@@ -226,6 +226,9 @@ function ConnectedSession({
     const previous = previousOpenedAppRef.current;
     previousOpenedAppRef.current = openedApp;
     if (previous === null && openedApp !== null) {
+      console.log(
+        `[shell-webrtc] iframe-open: releasing session for app ${openedApp.id}`,
+      );
       // Just opened an app: release the session so the iframe can
       // dial in. The overlay itself shows a "Releasing…" hint while
       // the promise is in flight; we don't await here so React
@@ -233,6 +236,9 @@ function ConnectedSession({
       // effects can drive its phase indicator.
       void session.releaseForHandoff();
     } else if (previous !== null && openedApp === null && !leaving) {
+      console.log(
+        `[shell-webrtc] iframe-close: reacquiring session after app ${previous.id}`,
+      );
       // Just closed an app: bring the session back up so the
       // conversation tab is usable again. We skip this when
       // `leaving` is true because tearDown is already in flight
@@ -451,13 +457,6 @@ function ConnectedSession({
             <ConnectingView state="connecting" />
           </Overlay>
         )}
-
-        {isError && (
-          <SessionErrorView
-            message={session.errorMessage}
-            onBack={handleLeave}
-          />
-        )}
       </Box>
 
       <BottomNavigation
@@ -542,6 +541,24 @@ function ConnectedSession({
       {leaving && (
         <FullScreenTransition>
           <LeavingView />
+        </FullScreenTransition>
+      )}
+      {/* Full-screen error transition: when the engine reports a
+          fatal state (connection lost, etc.), the error card must
+          cover EVERYTHING - top bar, body, bottom nav. Rendering
+          it inside the body column would scope it to whatever tab
+          the user happened to be on when the engine died (e.g.
+          showing the "connection lost" card *inside the apps
+          list*, which reads as a contextual error rather than the
+          critical session-level event it is). The overlay sits
+          above all other surfaces and lets the user back out via
+          its primary CTA. */}
+      {isError && (
+        <FullScreenTransition>
+          <SessionErrorView
+            message={session.errorMessage}
+            onBack={handleLeave}
+          />
         </FullScreenTransition>
       )}
     </Stack>

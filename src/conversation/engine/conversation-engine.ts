@@ -624,6 +624,7 @@ async function handleHostStop(): Promise<void> {
 
 async function doConnect(): Promise<void> {
   if (!robot) return;
+  console.log("[shell-webrtc] doConnect: entering, robot.state =", robot.state);
   setState("connecting");
   try {
     // iOS-only WebKit privacy quirk: get the LAN host candidates flowing
@@ -640,7 +641,20 @@ async function doConnect(): Promise<void> {
     // (`stopSession`), so the daemon WebRTC is still up afterwards and
     // we must skip `connect()` to avoid the "Already connected" throw.
     if (robot.state === "disconnected") {
+      const t0 = performance.now();
+      console.log("[shell-webrtc] doConnect: calling robot.connect()...");
       await robot.connect();
+      console.log(
+        `[shell-webrtc] doConnect: connect resolved in ${Math.round(
+          performance.now() - t0,
+        )}ms, robot.state = ${robot.state}, robots = [${robot.robots
+          .map((r) => r.id)
+          .join(",")}]`,
+      );
+    } else {
+      console.log(
+        "[shell-webrtc] doConnect: already connected, skipping connect()",
+      );
     }
     setState("connected");
 
@@ -670,6 +684,9 @@ async function doConnect(): Promise<void> {
 
 async function doStart(): Promise<void> {
   if (!robot || !selectedRobotId) return;
+  console.log(
+    `[shell-webrtc] doStart: entering, selectedRobotId = ${selectedRobotId}, robot.state = ${robot.state}`,
+  );
 
   // The OpenAI key gate used to live here, gating `robot.startSession()`
   // entirely. That was the wrong layer: `startSession()` is what opens
@@ -725,10 +742,25 @@ async function doStart(): Promise<void> {
     }
   }, START_TIMEOUT_MS);
 
+  const startSessionT0 = performance.now();
+  console.log(
+    `[shell-webrtc] doStart: calling robot.startSession(${selectedRobotId})...`,
+  );
   try {
     await robot.startSession(selectedRobotId);
+    console.log(
+      `[shell-webrtc] doStart: startSession resolved in ${Math.round(
+        performance.now() - startSessionT0,
+      )}ms, robot.state = ${robot.state}`,
+    );
   } catch (err) {
     window.clearTimeout(timeoutHandle);
+    console.warn(
+      `[shell-webrtc] doStart: startSession rejected after ${Math.round(
+        performance.now() - startSessionT0,
+      )}ms (timedOut=${timedOut}):`,
+      err,
+    );
     if (timedOut) {
       onFatalError(
         new Error(
@@ -1293,6 +1325,26 @@ async function onFatalError(err: unknown): Promise<void> {
 function wireRobot(): void {
   if (!robot) return;
 
+  // Global SDK probes: log every state-affecting event the central
+  // pushes us so we can correlate handoff timing with what the SDK
+  // actually saw on its SSE feed. Pure observability, no side
+  // effects. Same probe set as the embedded conversation Space's
+  // [doStart][probe] block - using the same vocabulary so a single
+  // grep across both consoles shows the full handoff trace.
+  for (const name of [
+    "stateChanged",
+    "sessionStarted",
+    "sessionStopped",
+    "sessionRejected",
+    "peerStatusChanged",
+    "error",
+  ] as const) {
+    robot.addEventListener(name, (event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      console.log(`[shell-webrtc][probe] event=${name} detail=`, detail);
+    });
+  }
+
   robot.addEventListener("robotsChanged", (event) => {
     const list = (event as CustomEvent<{ robots: RobotInfo[] }>).detail.robots;
     renderRobotList(list);
@@ -1714,7 +1766,13 @@ return {
 
   releaseSessionKeepAwake: async () => {
     if (unmounted) return;
+    console.log(
+      `[shell-webrtc] releaseSessionKeepAwake: entering, sessionEstablished=${sessionEstablished}, robot.state=${robot?.state}, conversationStarted=${conversationStarted}`,
+    );
     if (!robot || !sessionEstablished) {
+      console.log(
+        "[shell-webrtc] releaseSessionKeepAwake: no session to release, no-op",
+      );
       // Nothing to release. The host should never call this in a
       // state where there's no session, but we guard defensively
       // so a fast double-tap doesn't throw.
@@ -1776,7 +1834,42 @@ return {
     // doesn't run its unsolicited-drop recovery (which would reset
     // `selectedRobotId` to null and force the FSM to `authenticated`,
     // breaking the matching `reacquireSession()` call).
+    const stopT0 = performance.now();
+    console.log(
+      `[shell-webrtc] releaseSessionKeepAwake: calling robot.stopSession() (state before = ${robot.state})...`,
+    );
     await expectedStop(() => robot!.stopSession());
+    console.log(
+      `[shell-webrtc] releaseSessionKeepAwake: stopSession resolved in ${Math.round(
+        performance.now() - stopT0,
+      )}ms, robot.state = ${robot.state}`,
+    );
+
+    // Then drop the central's *producer subscription* too. The earlier
+    // "keep-awake" design only called `stopSession()` so a re-acquire
+    // could skip a full reconnect, but in practice that left the shell's
+    // SSE producer-subscription open on the central, and the central
+    // routes any subsequent `startSession` for the same robot back to
+    // that still-open subscription instead of relaying it to the new
+    // client (the iframe). Empirical signature was: iframe sees the
+    // robot in `robot.robots`, calls `startSession`, and gets exactly
+    // zero events for the full 15 s timeout window — no
+    // `sessionRejected`, no `peerStatusChanged`, nothing. Disconnecting
+    // here makes the iframe's `connect()` the sole producer subscription
+    // for the lease window, which is what the central actually expects.
+    //
+    // Cost: the matching `reacquireSession()` now needs a fresh
+    // `connect()` before its `startSession()` (~700 ms on LAN). The
+    // path is already handled there (the `if (robot.state ===
+    // "disconnected") await robot.connect()` branch).
+    console.log(
+      "[shell-webrtc] releaseSessionKeepAwake: calling robot.disconnect() to free the central's producer subscription...",
+    );
+    robot.disconnect();
+    console.log(
+      `[shell-webrtc] releaseSessionKeepAwake: disconnected, robot.state = ${robot.state}`,
+    );
+
     // Park in `released` so the host (and any visual state observer)
     // can distinguish "we deliberately let go of the robot" from
     // "we never connected" (`connected`) or "we're tearing down for
@@ -1787,7 +1880,13 @@ return {
   reacquireSession: async () => {
     if (unmounted) return;
     if (!robot || !selectedRobotId) return;
+    console.log(
+      `[shell-webrtc] reacquireSession: entering, sessionEstablished=${sessionEstablished}, robot.state=${robot.state}, selectedRobotId=${selectedRobotId}`,
+    );
     if (sessionEstablished) {
+      console.log(
+        "[shell-webrtc] reacquireSession: session already up, no-op",
+      );
       // Defensive: the host shouldn't call us when we're already up.
       // Make it a no-op rather than throwing so a UI race doesn't
       // crash the screen.
@@ -1801,9 +1900,22 @@ return {
     // (e.g. central kicked the producer during the release),
     // reconnect first.
     if (robot.state === "disconnected") {
+      const connectT0 = performance.now();
+      console.log(
+        "[shell-webrtc] reacquireSession: SDK is disconnected, calling robot.connect()...",
+      );
       try {
         await robot.connect();
+        console.log(
+          `[shell-webrtc] reacquireSession: connect resolved in ${Math.round(
+            performance.now() - connectT0,
+          )}ms`,
+        );
       } catch (err) {
+        console.warn(
+          "[shell-webrtc] reacquireSession: connect rejected:",
+          err,
+        );
         onFatalError(err);
         return;
       }
@@ -1822,10 +1934,25 @@ return {
         void expectedStop(() => robot!.stopSession());
       }
     }, START_TIMEOUT_MS);
+    const startT0 = performance.now();
+    console.log(
+      `[shell-webrtc] reacquireSession: calling robot.startSession(${selectedRobotId})...`,
+    );
     try {
       await robot.startSession(selectedRobotId);
+      console.log(
+        `[shell-webrtc] reacquireSession: startSession resolved in ${Math.round(
+          performance.now() - startT0,
+        )}ms, robot.state = ${robot.state}`,
+      );
     } catch (err) {
       window.clearTimeout(timeoutHandle);
+      console.warn(
+        `[shell-webrtc] reacquireSession: startSession rejected after ${Math.round(
+          performance.now() - startT0,
+        )}ms (timedOut=${timedOut}):`,
+        err,
+      );
       if (timedOut) {
         onFatalError(
           new Error(
