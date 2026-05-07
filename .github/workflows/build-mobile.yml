@@ -512,30 +512,100 @@ jobs:
           print(f'Patched {n} buildSettings block(s) for manual signing')
           PY
 
-      - name: Build signed iOS IPA (App Store profile)
-        # `tauri ios build --target aarch64` calls xcodebuild archive
-        # against the regenerated project. Tauri reads the team id
-        # from `tauri.conf.json` (`bundle.iOS.developmentTeam`); the
-        # provisioning profile installed in the previous step is
-        # auto-matched by the runner's Xcode based on App ID +
-        # certificate. The `--export-method app-store-connect` flag
-        # tells Tauri to bundle the IPA for TestFlight / App Store
-        # distribution rather than ad-hoc.
+      - name: Archive signed iOS app (export step expected to fail)
+        # `tauri ios build --target aarch64` calls xcodebuild's
+        # `archive` then `-exportArchive` actions. Tauri's auto-
+        # generated exportOptions.plist for manual signing leaves
+        # the `provisioningProfiles` map empty, which makes the
+        # export step fail with:
+        #   error: exportArchive "Reachy Mini.app" requires a
+        #          provisioning profile.
+        # The archive itself is fine - we re-export it manually with
+        # our own exportOptions.plist in the next step. We trap the
+        # failure so the workflow continues to that step.
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-        run: yarn tauri ios build --target aarch64 --export-method app-store-connect
+        run: |
+          set -uxo pipefail
+          yarn tauri ios build --target aarch64 --export-method app-store-connect || \
+            echo "Tauri export step failed (expected; manual re-export follows)"
+
+      - name: Locate xcarchive
+        id: archive
+        run: |
+          set -euxo pipefail
+          XCARCHIVE=$(find src-tauri/gen/apple/build -maxdepth 8 -name '*.xcarchive' -type d | head -1 || true)
+          if [ -z "$XCARCHIVE" ]; then
+            XCARCHIVE=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 10 -name '*.xcarchive' -type d | head -1 || true)
+          fi
+          if [ -z "$XCARCHIVE" ]; then
+            echo "::error::No .xcarchive found - the archive step itself failed, not just the export."
+            find src-tauri/gen/apple -maxdepth 6 -type d | head -30
+            exit 1
+          fi
+          echo "Found archive at: $XCARCHIVE"
+          echo "xcarchive=$XCARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Write exportOptions.plist for manual signing
+        # Tauri's generated exportOptions.plist works for automatic
+        # signing but doesn't populate `provisioningProfiles` for
+        # manual signing. We write our own to map the bundle id
+        # explicitly to the profile name we installed earlier.
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euxo pipefail
+          cat > exportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.pollen-robotics.reachy-mini</key>
+              <string>Reachy Mini App Store</string>
+            </dict>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+          echo "--- exportOptions.plist ---"
+          cat exportOptions.plist
+
+      - name: Export IPA from archive
+        # Re-run the export step with our hand-crafted plist. This
+        # produces the .ipa next to the archive in `exported/`.
+        run: |
+          set -euxo pipefail
+          mkdir -p exported
+          xcodebuild -exportArchive \
+            -archivePath "${{ steps.archive.outputs.xcarchive }}" \
+            -exportOptionsPlist exportOptions.plist \
+            -exportPath exported \
+            -allowProvisioningUpdates
+          ls -la exported/
 
       - name: Locate IPA
         id: pack
         run: |
           set -euxo pipefail
-          IPA_PATH=$(find src-tauri/gen/apple/build -maxdepth 8 -name '*.ipa' -type f | head -1 || true)
+          IPA_PATH=$(find exported -maxdepth 2 -name '*.ipa' -type f | head -1 || true)
           if [ -z "$IPA_PATH" ]; then
-            IPA_PATH=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 10 -name '*.ipa' -type f | head -1 || true)
-          fi
-          if [ -z "$IPA_PATH" ]; then
-            echo "::error::No IPA produced - failing the job for visibility."
-            find src-tauri/gen/apple -maxdepth 6 -type f | head -50
+            echo "::error::No IPA produced after manual export."
+            find exported -maxdepth 3 | head -30
             exit 1
           fi
           echo "Found IPA at: $IPA_PATH"
