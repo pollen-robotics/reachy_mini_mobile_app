@@ -56,8 +56,14 @@ interface AppsTabViewProps {
  * description and a fixed-height button, so the variance is small
  * enough that a constant estimate keeps scroll math correct without
  * needing dynamic measurement.
+ *
+ * Geometry: card content area = `ROW_HEIGHT_PX - ROW_GAP_PX`. Bump
+ * `ROW_GAP_PX` for more breathing room between cards; bump
+ * `ROW_HEIGHT_PX` in lockstep if you want to keep card size
+ * unchanged when adjusting the gap.
  */
-const ROW_HEIGHT_PX = 220;
+const ROW_HEIGHT_PX = 228;
+const ROW_GAP_PX = 16;
 
 /**
  * Shared `sx` that re-constrains a row to the centred content
@@ -223,10 +229,10 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     left: 0,
                     width: '100%',
                     transform: `translateY(${virtualRow.start}px)`,
-                    // Reserve the full estimated row height; the card
-                    // itself fills minus the inter-row gap.
-                    height: `${virtualRow.size}px`,
-                    pb: 1,
+                  // Reserve the full estimated row height; the card
+                  // itself fills minus the inter-row gap.
+                  height: `${virtualRow.size}px`,
+                  pb: `${ROW_GAP_PX}px`,
                     // 24px gutter on each side so the card borders
                     // never touch the column edge. Matches the
                     // sub-header's `px: 3`.

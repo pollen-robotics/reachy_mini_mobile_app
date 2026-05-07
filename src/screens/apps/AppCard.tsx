@@ -91,6 +91,19 @@ function AppCardImpl({ app, onOpen }: AppCardProps) {
         display: 'flex',
         flexDirection: 'column',
         width: '100%',
+        // Stretch to fill the virtual row's full height. Without
+        // this the card is content-sized, which means a card
+        // with a 1-line description ends up shorter than one
+        // with a 2-line description + date - and since the
+        // virtualizer's row height is constant (`ROW_HEIGHT_PX`
+        // in `AppsTabView`), the leftover empty space below
+        // each card varies, producing visually inconsistent
+        // gaps between cards. Filling the row keeps the gap
+        // constant (= the row wrapper's `pb` gutter); the card
+        // body already uses `flex: 1` to absorb the description
+        // height variance internally, with the Launch button
+        // pinned to the bottom via `mt: 'auto'`.
+        height: '100%',
         minWidth: 0,
         borderRadius: '14px',
         position: 'relative',
