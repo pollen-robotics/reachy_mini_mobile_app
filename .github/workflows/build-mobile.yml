@@ -88,7 +88,7 @@ jobs:
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
 
-      - name: Inject CoreBluetooth.framework link in regenerated pbxproj
+      - name: Inject CoreBluetooth link + disable code signing in pbxproj
         # `tauri-plugin-blec` calls into Apple's CoreBluetooth via the
         # `btleplug` crate, but neither emits a link directive that
         # the Xcode-driven final link picks up:
@@ -105,9 +105,18 @@ jobs:
         #
         # The robust fix is to inject `OTHER_LDFLAGS` directly into the
         # pbxproj's XCBuildConfiguration build settings (both Debug and
-        # Release), preserving inherited flags. We use Python because
-        # macOS sed's `a\` syntax is awkward and Python is preinstalled
-        # on the runner.
+        # Release), preserving inherited flags.
+        #
+        # In the same pass we strip code-signing requirements: the
+        # simulator SDK doesn't need a signed binary, but Xcode still
+        # validates the project's `DEVELOPMENT_TEAM` against the
+        # runner's logged-in Apple IDs (none on a fresh CI runner).
+        # When that check fails we get:
+        #   error: No Accounts: Add a new account in Accounts settings.
+        #   error: No profiles for 'com.pollen-robotics.reachy-mini' were found
+        # Disabling signing for this job (only) avoids the check
+        # entirely. The signed device build runs in `ios-release` with
+        # its own keychain + provisioning profile setup.
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
@@ -116,15 +125,23 @@ jobs:
           path = sys.argv[1]
           with open(path, 'r') as f:
               content = f.read()
-          # Insert OTHER_LDFLAGS at the top of every buildSettings block.
-          # The pbxproj format wraps build settings in `buildSettings = {`
-          # ... `};` blocks; we anchor on the opener so the injection
-          # lands in both Debug and Release configurations of every
-          # target/project node. `$(inherited)` keeps any existing
-          # framework flags intact.
+          # Insert OTHER_LDFLAGS + signing disablers at the top of every
+          # buildSettings block. The pbxproj format wraps build settings
+          # in `buildSettings = {` ... `};` blocks; we anchor on the
+          # opener so the injection lands in both Debug and Release
+          # configurations of every target/project node.
+          # `$(inherited)` keeps any existing framework flags intact.
+          injection = (
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
+              '\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n'
+              '\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n'
+              '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
+              '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
+              '\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "";\n'
+          )
           new_content, n = re.subn(
               r'(buildSettings = \{\n)',
-              r'\1\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n',
+              r'\1' + injection,
               content,
           )
           if n == 0:
@@ -132,7 +149,7 @@ jobs:
               sys.exit(1)
           with open(path, 'w') as f:
               f.write(new_content)
-          print(f'Injected OTHER_LDFLAGS into {n} buildSettings block(s)')
+          print(f'Injected build settings into {n} buildSettings block(s)')
           PY
 
       - name: Build iOS (simulator, unsigned)
