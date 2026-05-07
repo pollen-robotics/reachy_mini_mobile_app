@@ -352,17 +352,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pick the newest Xcode available on the runner
+      - name: Pick the newest non-beta Xcode available on the runner
         # Defensive: even on macos-26, the default symlink can lag
         # behind the latest installed Xcode. Find every Xcode_*.app
-        # under /Applications, sort by version, and select the top.
-        # Failing fast with a clear log here is better than being
-        # surprised by an Apple-side validation rejection 30+ min
-        # into the run.
+        # under /Applications, exclude beta builds (which exposed an
+        # `xcodebuild: Found no destinations` regression on macos-26
+        # / Xcode_26.5_beta_2 against the Tauri-generated iOS scheme),
+        # sort by semantic version, and select the top.
         run: |
           set -euxo pipefail
           ls /Applications | grep -E '^Xcode_?' || true
           XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null \
+            | grep -v -iE 'beta|preview|rc' \
             | sort -V | tail -1)
           if [ -z "$XCODE_PATH" ]; then
             XCODE_PATH=/Applications/Xcode.app
