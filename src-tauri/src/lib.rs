@@ -21,6 +21,7 @@
 mod commands;
 mod oauth;
 
+use tauri::Manager;
 use tracing::info;
 
 /// Tauri entrypoint, shared between the binary target (`main.rs`) and the
@@ -57,8 +58,22 @@ pub fn run() {
                 tauri_plugin_blec::init()
             }
         })
-        .setup(|_app| {
+        .setup(|app| {
             info!("reachy_mini_mobile_app starting");
+            // In debug builds, auto-open the WebView devtools so the
+            // developer doesn't have to dig through Safari's `Develop`
+            // menu to inspect the page. The `devtools` Cargo feature
+            // (in `Cargo.toml`) gates the runtime API itself; we
+            // additionally guard with `debug_assertions` so a release
+            // build never pops the inspector even if someone enabled
+            // the feature for some reason.
+            #[cfg(debug_assertions)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
+            // Silence the unused-import warning when the cfg is off.
+            #[cfg(not(debug_assertions))]
+            let _ = app;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

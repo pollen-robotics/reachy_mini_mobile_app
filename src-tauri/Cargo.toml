@@ -19,7 +19,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `devtools` enables the WKWebView / WebView2 inspector AND the
+# `WebviewWindow::open_devtools()` runtime API. Auto-disabled by
+# Tauri in release builds via its own `cfg(debug_assertions)`
+# guard on the binding, so shipping it is safe — the inspector is
+# only callable while running in debug.
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-os = "2"
 tauri-plugin-http = "2"
 
