@@ -393,10 +393,28 @@ jobs:
           done
           echo '--- Xcode bundles after pruning ---'
           ls /Applications | grep -E '^Xcode_?' || true
-          XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null \
-            | sort -V | tail -1)
-          if [ -z "$XCODE_PATH" ]; then
+          # Walk descending versions and pick the first one whose
+          # Contents/Developer is a real directory. Some bundles
+          # under /Applications/ on macos-26 are stubs / broken
+          # symlinks (e.g. Xcode_26.5.0.app appearing alongside
+          # Xcode_26.5.app, only one of which has a populated
+          # Contents/Developer); xcode-select rejects those with
+          # 'invalid developer directory'.
+          XCODE_PATH=""
+          for candidate in $(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -Vr); do
+            if [ -d "$candidate/Contents/Developer" ] && [ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]; then
+              XCODE_PATH="$candidate"
+              break
+            else
+              echo "Skipping invalid Xcode bundle: $candidate"
+            fi
+          done
+          if [ -z "$XCODE_PATH" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
             XCODE_PATH=/Applications/Xcode.app
+          fi
+          if [ -z "$XCODE_PATH" ]; then
+            echo "::error::No usable Xcode found under /Applications"
+            exit 1
           fi
           DEV_DIR="$XCODE_PATH/Contents/Developer"
           echo "Selected Xcode: $XCODE_PATH"
