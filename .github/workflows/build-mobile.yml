@@ -750,10 +750,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Upload all artifacts to the matching release
+      - name: Create GitHub Release if missing then upload artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euxo pipefail
           ls -laR artifacts
@@ -765,4 +766,18 @@ jobs:
             fi
           done
           ls -la release-files
-          gh release upload "$TAG" release-files/* --repo "${{ github.repository }}" --clobber
+          # Create the release if it doesn't exist yet. We don't
+          # rely on the user having pre-created it via `gh release
+          # create`: pushing the tag is sufficient. The release notes
+          # default to the auto-generated changelog from the previous
+          # tag, which is enough for an internal TestFlight build.
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG does not exist yet, creating."
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
+          gh release upload "$TAG" release-files/* \
+            --repo "$REPO" --clobber
