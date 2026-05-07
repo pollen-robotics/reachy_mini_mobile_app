@@ -72,6 +72,38 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      - name: Strip developmentTeam from tauri.conf.json (simulator only)
+        # The simulator SDK doesn't need a signed binary, but Xcode
+        # still validates `DEVELOPMENT_TEAM` in TargetAttributes
+        # (set from `bundle.iOS.developmentTeam` by `tauri ios init`)
+        # against the runner's logged-in Apple IDs. With the Pollen
+        # team `4KLHP7L6KP` baked in and no Apple ID in the runner,
+        # the validation fails before our pbxproj patches get a
+        # chance to disable signing.
+        # Solution: clear the team in the cloned `tauri.conf.json`
+        # before regenerating the Apple project, so the project file
+        # never gets that DEVELOPMENT_TEAM in the first place.
+        # The original config is untouched in git; this only affects
+        # the runner's working copy.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import json
+          path = 'src-tauri/tauri.conf.json'
+          with open(path) as f:
+              cfg = json.load(f)
+          ios_cfg = cfg.get('bundle', {}).get('iOS', {})
+          if 'developmentTeam' in ios_cfg:
+              del ios_cfg['developmentTeam']
+          # Drop empty iOS dict so tauri doesn't think we passed any
+          # iOS-specific config it should respect.
+          if not ios_cfg and 'iOS' in cfg.get('bundle', {}):
+              del cfg['bundle']['iOS']
+          with open(path, 'w') as f:
+              json.dump(cfg, f, indent=2)
+          print('Stripped developmentTeam for simulator build')
+          PY
+
       - name: Regenerate Xcode project for runner toolchain
         # The committed `src-tauri/gen/apple/` was saved by a local Xcode
         # newer than what GH runners ship (project file format 77, from
