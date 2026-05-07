@@ -20,3 +20,28 @@ src-tauri/gen/schemas
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# ──────────────────────────────────────────────────────────────────────
+# Signing secrets - NEVER commit these.
+#
+# Apple signing artefacts (Distribution cert, App Store Connect API
+# key, provisioning profile) and Android keystores are sensitive
+# enough that a leak forces an immediate revocation + regeneration
+# cycle and could compromise the published app's integrity. We
+# protect them at three layers:
+#   1. The explicit `secrets/` folder where humans drop the files.
+#   2. Per-extension globs (so a `.p8` left elsewhere by mistake is
+#      still ignored).
+#   3. The rotated `*-credentials.zip` bundles we sometimes use to
+#      ship a full set to the CI vault.
+# All of these are also stored in the Pollen 1Password vault; the
+# repo only ever sees the raw files transiently.
+# ──────────────────────────────────────────────────────────────────────
+secrets/
+*.p8
+*.p12
+*.mobileprovision
+*.jks
+*.keystore
+*-credentials.zip
+*-service-account.json
