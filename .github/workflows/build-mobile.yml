@@ -359,6 +359,14 @@ jobs:
         # `xcodebuild: Found no destinations` regression on macos-26
         # / Xcode_26.5_beta_2 against the Tauri-generated iOS scheme),
         # sort by semantic version, and select the top.
+        #
+        # We MUST export DEVELOPER_DIR alongside `xcode-select`. The
+        # GH runner pre-sets DEVELOPER_DIR pointing at the runner's
+        # default Xcode (often a beta on macos-26), and `xcrun` /
+        # `xcodebuild` honor DEVELOPER_DIR FIRST, falling back to the
+        # `xcode-select` symlink only when it's unset. Without this
+        # we kept seeing Tauri call `Xcode_26.5_beta_2/.../xcodebuild`
+        # despite having xcode-select'd 26.5.0.
         run: |
           set -euxo pipefail
           ls /Applications | grep -E '^Xcode_?' || true
@@ -368,8 +376,14 @@ jobs:
           if [ -z "$XCODE_PATH" ]; then
             XCODE_PATH=/Applications/Xcode.app
           fi
+          DEV_DIR="$XCODE_PATH/Contents/Developer"
           echo "Selected Xcode: $XCODE_PATH"
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          sudo xcode-select -s "$DEV_DIR"
+          # Persist DEVELOPER_DIR for every subsequent step so
+          # tauri / xcrun / xcodebuild all converge on the same
+          # Xcode regardless of the runner image's default.
+          echo "DEVELOPER_DIR=$DEV_DIR" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="$DEV_DIR"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
