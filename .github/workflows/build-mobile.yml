@@ -340,10 +340,37 @@ jobs:
     # already runs in parallel and a green simulator job doesn't
     # add real signal for the device build (different SDK, different
     # signing path).
-    runs-on: macos-15
+    #
+    # `macos-26` is the runner image with Xcode 26.x preinstalled,
+    # which ships the iOS 26 SDK. Apple started enforcing
+    # "all submissions must be built with iOS 26 SDK or later"
+    # in 2026, so an Xcode 16-based macos-15 runner now produces
+    # IPAs that App Store Connect rejects at upload with:
+    #   SDK version issue. This app was built with the iOS 18.5 SDK.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - name: Pick the newest Xcode available on the runner
+        # Defensive: even on macos-26, the default symlink can lag
+        # behind the latest installed Xcode. Find every Xcode_*.app
+        # under /Applications, sort by version, and select the top.
+        # Failing fast with a clear log here is better than being
+        # surprised by an Apple-side validation rejection 30+ min
+        # into the run.
+        run: |
+          set -euxo pipefail
+          ls /Applications | grep -E '^Xcode_?' || true
+          XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null \
+            | sort -V | tail -1)
+          if [ -z "$XCODE_PATH" ]; then
+            XCODE_PATH=/Applications/Xcode.app
+          fi
+          echo "Selected Xcode: $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - uses: actions/setup-node@v4
         with:
