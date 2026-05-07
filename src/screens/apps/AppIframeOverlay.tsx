@@ -136,7 +136,19 @@ export default function AppIframeOverlay({
       robotName,
       theme: isDark ? 'dark' : 'light',
     };
-    return buildAppEmbedUrl(app.id, app.sdk, ctx);
+    const built = buildAppEmbedUrl(app.id, app.sdk, ctx);
+    // Dev-only diagnostic: surface the full iframe URL (including the
+    // `#hf_token=…` fragment) so the developer can copy-paste it into
+    // a desktop browser to inspect the embedded app's console /
+    // network without the WebView's cross-origin opacity. The URL
+    // carries an HF access token; do NOT enable this in production
+    // builds.
+    if (import.meta.env.DEV) {
+      console.info(
+        `[app-iframe] embed URL for ${app.id}\n${built}`,
+      );
+    }
+    return built;
   }, [app.id, app.sdk, hfToken, hfUsername, robotPeerId, robotName, isDark]);
 
   // Origin we'll target with `postMessage`. Derived from the
