@@ -13,8 +13,7 @@
  */
 import { Box, Stack } from '@mui/material';
 
-import SpeakerCard from './components/SpeakerCard';
-import MicrophoneCard from './components/MicrophoneCard';
+import AudioControlCard from './components/AudioControlCard';
 import { useAudioVolumes } from './hooks/useAudioVolumes';
 import type { RobotSessionHandle } from '../../session/useRobotSession';
 
@@ -50,17 +49,19 @@ export default function AudioControlsBar({
   return (
     <Stack direction="row" spacing={1.25} sx={{ width: '100%' }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <SpeakerCard
-          volume={volumes.speakerVolume}
-          onVolumeChange={volumes.setSpeakerVolume}
+        <AudioControlCard
+          kind="speaker"
+          value={volumes.speakerVolume}
+          onChange={volumes.setSpeakerVolume}
           onToggleMute={volumes.toggleSpeakerMute}
           disabled={!isLive}
         />
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <MicrophoneCard
-          volume={volumes.microphoneVolume}
-          onVolumeChange={volumes.setMicrophoneVolume}
+        <AudioControlCard
+          kind="microphone"
+          value={volumes.microphoneVolume}
+          onChange={volumes.setMicrophoneVolume}
           onToggleMute={volumes.toggleMicrophoneMute}
           disabled={!isLive}
         />
