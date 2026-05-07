@@ -53,5 +53,7 @@
 	<string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
