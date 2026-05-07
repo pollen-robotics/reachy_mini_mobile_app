@@ -446,27 +446,70 @@ jobs:
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
 
-      - name: Inject CoreBluetooth.framework link in regenerated pbxproj
-        # See simulator job comment for full reasoning.
+      - name: Configure pbxproj for manual signing + CoreBluetooth link
+        # Two-fold patching for the release build:
+        #
+        # 1. CoreBluetooth.framework link (same as simulator job - see
+        #    that job's comment for the full reasoning on why
+        #    `cargo:rustc-link-lib=...` doesn't propagate through the
+        #    Tauri-built staticlib).
+        #
+        # 2. Force MANUAL code signing. Tauri's regenerated project
+        #    defaults to ProvisioningStyle = Automatic, which makes
+        #    Xcode try to fetch a Development provisioning profile
+        #    via App Store Connect API (impossible without a logged-in
+        #    Apple ID on the runner). The build fails before our
+        #    archive ever starts with:
+        #      error: No Accounts: Add a new account in Accounts settings.
+        #      error: No profiles for 'com.pollen-robotics.reachy-mini' were found
+        #    We override:
+        #      - TargetAttributes.ProvisioningStyle = Manual
+        #      - buildSettings.CODE_SIGN_STYLE = Manual
+        #      - buildSettings.PROVISIONING_PROFILE_SPECIFIER = "Reachy Mini App Store"
+        #        (matches the .mobileprovision name we created on Apple Dev)
+        #      - buildSettings.CODE_SIGN_IDENTITY = "Apple Distribution"
+        #        (matches the cert we imported from the .p12)
+        #      - buildSettings.DEVELOPMENT_TEAM = APPLE_TEAM_ID
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          PROFILE_NAME: 'Reachy Mini App Store'
         run: |
           set -euxo pipefail
-          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
-          python3 - "$PBXPROJ" <<'PY'
-          import re, sys
-          path = sys.argv[1]
+          export PBXPROJ_PATH="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          python3 <<'PY'
+          import os, re, sys
+          path = os.environ['PBXPROJ_PATH']
+          team = os.environ['APPLE_TEAM_ID']
+          profile_name = os.environ['PROFILE_NAME']
           with open(path, 'r') as f:
               content = f.read()
-          new_content, n = re.subn(
-              r'(buildSettings = \{\n)',
-              r'\1\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n',
+          # buildSettings injection: framework link + manual signing.
+          inj = (
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
+              '\t\t\t\tCODE_SIGN_STYLE = Manual;\n'
+              f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n'
+              f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile_name}";\n'
+              '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
+              '\t\t\t\t"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";\n'
+          )
+          # Use a callable replacement so re.subn doesn't interpret
+          # `\1`, `\g<name>`, etc inside `inj` as backreferences.
+          content, n = re.subn(
+              r'buildSettings = \{\n',
+              lambda m: m.group(0) + inj,
               content,
           )
           if n == 0:
               print('ERROR: no buildSettings blocks matched in pbxproj', file=sys.stderr)
               sys.exit(1)
+          # TargetAttributes: flip ProvisioningStyle from Automatic to Manual.
+          content = content.replace(
+              'ProvisioningStyle = Automatic;',
+              'ProvisioningStyle = Manual;',
+          )
           with open(path, 'w') as f:
-              f.write(new_content)
-          print(f'Injected OTHER_LDFLAGS into {n} buildSettings block(s)')
+              f.write(content)
+          print(f'Patched {n} buildSettings block(s) for manual signing')
           PY
 
       - name: Build signed iOS IPA (App Store profile)
