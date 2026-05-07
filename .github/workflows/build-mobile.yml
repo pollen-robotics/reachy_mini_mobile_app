@@ -352,26 +352,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pick the newest non-beta Xcode available on the runner
-        # Defensive: even on macos-26, the default symlink can lag
-        # behind the latest installed Xcode. Find every Xcode_*.app
-        # under /Applications, exclude beta builds (which exposed an
-        # `xcodebuild: Found no destinations` regression on macos-26
-        # / Xcode_26.5_beta_2 against the Tauri-generated iOS scheme),
-        # sort by semantic version, and select the top.
+      - name: Pin Xcode to the newest non-beta release
+        # Three-pronged approach because Xcode discovery on macos-26
+        # is deceptively layered:
         #
-        # We MUST export DEVELOPER_DIR alongside `xcode-select`. The
-        # GH runner pre-sets DEVELOPER_DIR pointing at the runner's
-        # default Xcode (often a beta on macos-26), and `xcrun` /
-        # `xcodebuild` honor DEVELOPER_DIR FIRST, falling back to the
-        # `xcode-select` symlink only when it's unset. Without this
-        # we kept seeing Tauri call `Xcode_26.5_beta_2/.../xcodebuild`
-        # despite having xcode-select'd 26.5.0.
+        #   1. `xcode-select -s` updates `/var/db/xcode_select_link`,
+        #      which `xcrun` consults when DEVELOPER_DIR is unset.
+        #   2. `DEVELOPER_DIR` env var, which `xcrun` / `xcodebuild`
+        #      consult FIRST and which is pre-set by the runner image
+        #      to point at whatever Xcode the image vendor decided
+        #      was "default" (frequently a beta on macos-26).
+        #   3. cargo-mobile2 (Tauri's iOS backend) appears to scan
+        #      `/Applications/Xcode_*.app` directly, ignoring both
+        #      mechanisms above, and picks the highest version by
+        #      filename. That's why the previous pinning attempts
+        #      kept landing back on `Xcode_26.5_beta_2.app`.
+        #
+        # We address all three at once: physically move beta /
+        # preview / rc Xcodes out of `/Applications/` so the scan
+        # can only find releases, then xcode-select + export the
+        # newest one.
+        #
+        # Removing the betas is fine because GH runners are
+        # ephemeral - the change vanishes when the job ends.
         run: |
           set -euxo pipefail
+          echo '--- Xcode bundles before pruning ---'
+          ls /Applications | grep -E '^Xcode_?' || true
+          # Move beta-flavoured Xcode bundles out of the search path.
+          # Using `mv` instead of `rm` so the parent disk usage stays
+          # untouched (still on /Applications volume) but the apps
+          # are no longer in the list cargo-mobile2 enumerates.
+          for app in /Applications/Xcode_*.app; do
+            case "$(basename "$app")" in
+              *beta*|*preview*|*rc*|*Preview*|*Beta*|*RC*)
+                sudo mv "$app" "/Applications/_hidden_$(basename "$app")"
+                echo "Hid $app"
+                ;;
+            esac
+          done
+          echo '--- Xcode bundles after pruning ---'
           ls /Applications | grep -E '^Xcode_?' || true
           XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null \
-            | grep -v -iE 'beta|preview|rc' \
             | sort -V | tail -1)
           if [ -z "$XCODE_PATH" ]; then
             XCODE_PATH=/Applications/Xcode.app
@@ -379,9 +401,6 @@ jobs:
           DEV_DIR="$XCODE_PATH/Contents/Developer"
           echo "Selected Xcode: $XCODE_PATH"
           sudo xcode-select -s "$DEV_DIR"
-          # Persist DEVELOPER_DIR for every subsequent step so
-          # tauri / xcrun / xcodebuild all converge on the same
-          # Xcode regardless of the runner image's default.
           echo "DEVELOPER_DIR=$DEV_DIR" >> "$GITHUB_ENV"
           export DEVELOPER_DIR="$DEV_DIR"
           xcodebuild -version
