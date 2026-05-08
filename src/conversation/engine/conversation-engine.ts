@@ -1451,7 +1451,9 @@ async function boot(): Promise<void> {
 
   robot = new window.ReachyMini({
     appName: "Reachy Mini Minimal Voice",
-    clientId: settings.hfClientId || undefined,
+    // No `clientId`: the SDK uses its own default, and the mobile
+    // app handles HF OAuth itself via `useRemoteHfToken` /
+    // `oauthLoopback` rather than letting the SDK initiate it.
     signalingUrl: CENTRAL_SIGNALING_URL,
     // Negotiate the audio tracks up front so the OpenAI Realtime
     // bridge has them ready when the user taps the orb to start
