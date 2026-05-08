@@ -55,14 +55,24 @@ export interface Settings {
 }
 
 /**
- * Build-time OpenAI key, populated by Vite from `.env.local` at
- * build time (`VITE_OPENAI_API_KEY=…`). The mobile shell currently
- * has no settings screen for the key, so we let developers bake
- * theirs into the bundle for debug builds. `.env.local` is in
- * `.gitignore`, so the secret never reaches the repo.
+ * ⚠️ TEMPORARY: build-time OpenAI key, populated by Vite from
+ * `.env.local` at build time (`VITE_OPENAI_API_KEY=…`). The
+ * mobile shell currently has no settings screen for the key, so
+ * we let developers bake theirs into the bundle - and the GitHub
+ * Actions workflow does the same for TestFlight / internal
+ * Android builds via the `OPENAI_API_KEY` repo secret (see
+ * `.github/workflows/build-mobile.yml`). `.env.local` is in
+ * `.gitignore`, so the secret never reaches the repo, but it
+ * DOES end up in the distributed `.ipa` / `.apk` - anyone with
+ * the binary can extract the key.
  *
- * Production releases will need a proper user-facing flow (server-
- * side ephemeral keys, per-user OAuth, …); this is debug-only.
+ * This is a known anti-pattern, kept ONLY for the debug /
+ * internal-tester window where we want the conversation to
+ * "just work" out of the box. Production releases MUST replace
+ * this with a proper architecture (server-side ephemeral keys,
+ * per-user OAuth, …) and remove the build-time injection from
+ * both `.env.local` AND the workflow's three "Inject OpenAI
+ * API key (TEMPORARY)" steps.
  */
 const BUILD_TIME_OPENAI_KEY: string =
   (import.meta.env?.VITE_OPENAI_API_KEY as string | undefined) ?? '';
