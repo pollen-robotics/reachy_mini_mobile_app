@@ -119,6 +119,13 @@ jobs:
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
+          # Regenerate the iOS / Android icon set from src-tauri/icons/icon.png.
+          # `tauri ios init` creates the gen/apple project skeleton but does
+          # NOT populate Assets.xcassets/AppIcon.appiconset with our brand
+          # icon - it leaves the Tauri default placeholders, which is why
+          # the first TestFlight build shipped with the wrong app icon.
+          # Running `tauri icon` after init fixes it idempotently.
+          yarn tauri icon src-tauri/icons/icon.png || true
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # `tauri ios init` regenerates a barebones Info.plist that
@@ -565,6 +572,13 @@ jobs:
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
+          # Regenerate the iOS / Android icon set from src-tauri/icons/icon.png.
+          # `tauri ios init` creates the gen/apple project skeleton but does
+          # NOT populate Assets.xcassets/AppIcon.appiconset with our brand
+          # icon - it leaves the Tauri default placeholders, which is why
+          # the first TestFlight build shipped with the wrong app icon.
+          # Running `tauri icon` after init fixes it idempotently.
+          yarn tauri icon src-tauri/icons/icon.png || true
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # See the matching step in the simulator job for full reasoning.
