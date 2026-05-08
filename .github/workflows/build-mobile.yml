@@ -169,8 +169,13 @@ jobs:
           # because Android adaptive icons need it; here we flatten every
           # iOS variant onto white so the IPA passes altool validation.
           # We use Pillow (pip install ~3s) instead of ImageMagick,
-          # which isn't pre-installed on macos-26 runners. Idempotent.
-          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          # which isn't pre-installed on macos-26 runners. The runner's
+          # system Python is PEP 668 "externally managed", so we pass
+          # --break-system-packages: safe on an ephemeral runner, and
+          # avoids spinning up a throwaway venv just for one import.
+          # Idempotent.
+          python3 -m pip install --quiet --disable-pip-version-check \
+            --break-system-packages Pillow
           python3 - <<'PY'
           import glob
           from PIL import Image
@@ -680,8 +685,10 @@ jobs:
           # See the matching step in the simulator job: App Store Connect
           # rejects iOS icons with an alpha channel (altool error 90717).
           # Flatten every variant onto white so the signed IPA passes
-          # validation.
-          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          # validation. --break-system-packages because PEP 668 (runner
+          # is ephemeral, so safe).
+          python3 -m pip install --quiet --disable-pip-version-check \
+            --break-system-packages Pillow
           python3 - <<'PY'
           import glob
           from PIL import Image
