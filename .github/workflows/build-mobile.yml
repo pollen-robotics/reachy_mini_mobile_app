@@ -331,6 +331,12 @@ jobs:
           if [ ! -d "src-tauri/gen/android" ]; then
             yarn tauri android init
           fi
+          # Same icon-regeneration trick as the iOS jobs: tauri android
+          # init creates the project skeleton with placeholder Tauri
+          # icons in mipmap-*. Running tauri icon after init re-fills
+          # them from src-tauri/icons/icon.png so the Android app ships
+          # with the Reachy brand icon. Idempotent.
+          yarn tauri icon src-tauri/icons/icon.png || true
 
       - name: Bump minSdk to 26 (tauri-plugin-blec requirement)
         # `tauri-plugin-blec` ships a manifest with `minSdk 26`; the

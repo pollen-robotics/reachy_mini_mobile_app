@@ -47,12 +47,10 @@ export const SUPPORTED_DAEMON_VERSION = '1.7.0';
  * Central HF signaling Space used by the WebRTC SDK.
  *
  * Override at build time via `VITE_REACHY_CENTRAL_URL` (e.g. on a staging
- * environment). Defaults to the `tfrere-` instance, which is where the
- * mobile-app-integration-light daemons (Wi-Fi robot + tray) currently
- * publish their producer status. Once the mobile-app integration lands on
- * `main` and the `pollen-robotics-` central is back in lockstep, switch
- * the default back to `pollen-robotics-reachy-mini-central.hf.space`.
+ * environment). Defaults to the org-owned canonical Space; the legacy
+ * `cduss-` and `tfrere-` instances stay running for backward compatibility
+ * during the transition but should NOT be the default for new installs.
  */
 export const CENTRAL_SIGNALING_URL: string =
   (import.meta.env.VITE_REACHY_CENTRAL_URL as string | undefined) ??
-  'https://tfrere-reachy-mini-central.hf.space';
+  'https://pollen-robotics-reachy-mini-central.hf.space';
