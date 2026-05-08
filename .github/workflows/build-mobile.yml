@@ -168,11 +168,22 @@ jobs:
           # or contain an alpha channel"). Our source icon keeps alpha
           # because Android adaptive icons need it; here we flatten every
           # iOS variant onto white so the IPA passes altool validation.
-          # Idempotent.
-          for icon in src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-*.png; do
-            [[ -f "$icon" ]] || continue
-            magick "$icon" -background white -alpha remove -alpha off "$icon"
-          done
+          # We use Pillow (pip install ~3s) instead of ImageMagick,
+          # which isn't pre-installed on macos-26 runners. Idempotent.
+          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          python3 - <<'PY'
+          import glob
+          from PIL import Image
+          for path in sorted(glob.glob(
+              'src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-*.png'
+          )):
+              img = Image.open(path)
+              if img.mode in ('RGBA', 'LA'):
+                  bg = Image.new('RGB', img.size, (255, 255, 255))
+                  bg.paste(img, mask=img.split()[-1])
+                  bg.save(path, 'PNG')
+                  print(f'flattened {path}')
+          PY
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # `tauri ios init` regenerates a barebones Info.plist that
@@ -670,10 +681,20 @@ jobs:
           # rejects iOS icons with an alpha channel (altool error 90717).
           # Flatten every variant onto white so the signed IPA passes
           # validation.
-          for icon in src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-*.png; do
-            [[ -f "$icon" ]] || continue
-            magick "$icon" -background white -alpha remove -alpha off "$icon"
-          done
+          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          python3 - <<'PY'
+          import glob
+          from PIL import Image
+          for path in sorted(glob.glob(
+              'src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-*.png'
+          )):
+              img = Image.open(path)
+              if img.mode in ('RGBA', 'LA'):
+                  bg = Image.new('RGB', img.size, (255, 255, 255))
+                  bg.paste(img, mask=img.split()[-1])
+                  bg.save(path, 'PNG')
+                  print(f'flattened {path}')
+          PY
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # See the matching step in the simulator job for full reasoning.
