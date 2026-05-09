@@ -15,7 +15,7 @@ import { Chip } from '@mui/material';
 import UsbIcon from '@mui/icons-material/Usb';
 import WifiIcon from '@mui/icons-material/Wifi';
 
-import { TYPO } from '../styles/tokens';
+import { TYPO } from './tokens';
 
 export interface TransportChipProps {
   transport: string;

@@ -21,9 +21,9 @@
 import { useEffect, useState } from 'react';
 import { Box, Fade, Typography } from '@mui/material';
 
-import HeroIllustration from '../components/HeroIllustration';
+import HeroIllustration from '@/ui/design/HeroIllustration';
 import reachyBusteSvg from '../assets/reachy-buste.svg';
-import { DURATION, FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import { DURATION, FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 const SPLASH_VISIBLE_MS = 1200;
 

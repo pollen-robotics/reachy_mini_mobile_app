@@ -31,7 +31,7 @@ import {
 } from 'react';
 import { Stack, TextField } from '@mui/material';
 
-import { FONT_WEIGHT, RADIUS } from '../styles/tokens';
+import { FONT_WEIGHT, RADIUS } from './tokens';
 
 const PIN_LENGTH = 5;
 

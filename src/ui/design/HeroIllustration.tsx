@@ -7,7 +7,7 @@
  */
 
 import { Box, keyframes } from '@mui/material';
-import { LAYOUT } from '../styles/tokens';
+import { LAYOUT } from './tokens';
 
 const floatKf = keyframes`
   0%, 100% { transform: translateY(0); }

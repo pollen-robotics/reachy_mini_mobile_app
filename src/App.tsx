@@ -9,7 +9,7 @@ import RemoteSignInScreen from './screens/RemoteSignInScreen';
 import RobotSessionScreen, {
   type ConnectionTarget,
 } from './screens/RobotSessionScreen';
-import ScreenTransition from './components/ScreenTransition';
+import ScreenTransition from '@/ui/design/ScreenTransition';
 import {
   useBleSession,
   useInitBleListeners,

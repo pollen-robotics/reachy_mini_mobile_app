@@ -23,9 +23,9 @@
  */
 import { Box, Stack, Typography } from '@mui/material';
 
-import { TransportChip } from '../../components/TransportChip';
-import RobotAvatar from '../../components/RobotAvatar';
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { TransportChip } from '@/ui/design/TransportChip';
+import RobotAvatar from '@/ui/design/RobotAvatar';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface IdentityChipBarProps {
   robotName: string;

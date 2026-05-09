@@ -23,7 +23,7 @@ import { Box } from '@mui/material';
 
 import VideoFeed from './components/VideoFeed';
 import type { RobotSessionHandle } from '../../session/useRobotSession';
-import { RADIUS } from '../../styles/tokens';
+import { RADIUS } from '@/ui/design/tokens';
 
 interface CameraOverlayProps {
   /** Only `attachVideo` is consumed - keeps the call-site

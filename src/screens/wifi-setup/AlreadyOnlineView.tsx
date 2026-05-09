@@ -10,7 +10,7 @@ import { Button, Stack, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import WifiIcon from '@mui/icons-material/Wifi';
 
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 export function AlreadyOnlineView({
   ssid,

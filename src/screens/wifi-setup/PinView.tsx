@@ -7,8 +7,8 @@
  */
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
 
-import PinInput, { PIN_INPUT_LENGTH } from '../../components/PinInput';
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import PinInput, { PIN_INPUT_LENGTH } from '@/ui/design/PinInput';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 export function PinView({
   pin,

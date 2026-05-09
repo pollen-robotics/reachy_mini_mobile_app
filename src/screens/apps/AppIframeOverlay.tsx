@@ -69,7 +69,7 @@ import {
 } from '../../apps/buildEmbedUrl';
 import type { AppEntry } from '../../apps/types';
 import type { SessionPhase } from '../../session/useRobotSession';
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 /**
  * Hard timeout for the iframe load step. If the embed hasn't fired

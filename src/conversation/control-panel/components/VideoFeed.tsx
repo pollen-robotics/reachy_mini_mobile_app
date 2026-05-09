@@ -18,7 +18,7 @@ import VideocamOffIcon from '@mui/icons-material/VideocamOff';
 import { useEffect, useRef, useState } from 'react';
 
 import type { RobotSessionHandle } from '../../../session/useRobotSession';
-import { FONT_WEIGHT, TYPO } from '../../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface VideoFeedProps {
   /** Only `attachVideo` is consumed - keeps the call-site minimal

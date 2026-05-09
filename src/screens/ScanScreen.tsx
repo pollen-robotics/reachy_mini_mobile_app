@@ -78,7 +78,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 
 import type { ReachyBleDevice } from '../ble/useBleSession';
 import reachyBusteSvg from '../assets/reachy-buste.svg';
-import RobotAvatar from '../components/RobotAvatar';
+import RobotAvatar from '@/ui/design/RobotAvatar';
 import {
   extractRobotHardwareId,
   extractRobotId,
@@ -88,9 +88,9 @@ import {
 } from '../auth/fetchRobotsFromCentral';
 import { useHfProfile } from '../auth/useHfProfile';
 import { useRemoteRobots } from '../auth/useRemoteRobots';
-import { ShortId } from '../components/ShortId';
-import { TransportChip } from '../components/TransportChip';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import { ShortId } from '@/ui/design/ShortId';
+import { TransportChip } from '@/ui/design/TransportChip';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 interface ScanScreenProps {
   /**

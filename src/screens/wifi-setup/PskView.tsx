@@ -17,7 +17,7 @@ import {
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 export function PskView({
   ssid,

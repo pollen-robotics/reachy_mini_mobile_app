@@ -10,7 +10,7 @@
  */
 import { CircularProgress, Stack, Typography } from '@mui/material';
 
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 function InFlightView({
   title,

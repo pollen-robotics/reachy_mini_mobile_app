@@ -22,7 +22,7 @@
 import { Box, Button, Paper, Stack, Typography } from '@mui/material';
 
 import connectionLostUrl from '../../assets/connection-lost.svg';
-import { FONT_WEIGHT, RADIUS, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface SessionErrorViewProps {
   /** Headline. Defaults to "Reachy connection lost". */

@@ -28,7 +28,7 @@ import { useEffect, useState } from 'react';
 import { Box, Fade, Stack, Typography, keyframes } from '@mui/material';
 
 import hfLogoUrl from '../assets/hf-logo.svg';
-import { DURATION, FONT_WEIGHT, TYPO } from '../styles/tokens';
+import { DURATION, FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 /**
  * How long the welcome sits at full opacity before starting to

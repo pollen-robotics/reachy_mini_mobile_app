@@ -22,7 +22,7 @@ import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 import VolumeOffRoundedIcon from '@mui/icons-material/VolumeOffRounded';
 import type { ReactNode } from 'react';
 
-import { FONT_WEIGHT, TYPO } from '../../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 export type AudioKind = 'speaker' | 'microphone';
 

@@ -28,7 +28,7 @@ import {
   summarizeProbeResult,
 } from '../../wifi/humanizeWifiError';
 import type { WifiProbeResult } from '../../types/robot';
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 type ProbeState =
   | { kind: 'idle' }

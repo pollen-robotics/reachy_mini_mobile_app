@@ -4,7 +4,7 @@ import { CssBaseline, ThemeProvider, useMediaQuery } from '@mui/material';
 import { QueryClientProvider } from '@tanstack/react-query';
 
 import App from './App';
-import { ErrorBoundary } from './components/ErrorBoundary';
+import { ErrorBoundary } from '@/ui/design/ErrorBoundary';
 import { queryClient } from './queryClient';
 import { lightTheme, darkTheme } from './theme';
 

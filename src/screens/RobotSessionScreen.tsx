@@ -85,7 +85,7 @@ import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import SessionErrorView from './session/SessionErrorView';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 export type ConnectionTarget = {
   kind: 'remote';

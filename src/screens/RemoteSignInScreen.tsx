@@ -23,7 +23,7 @@ import {
   loginWithHuggingFace,
 } from '../auth/oauthLoopback';
 import hfLogoUrl from '../assets/hf-logo.svg';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 interface RemoteSignInScreenProps {
   onSignedIn: (token: string, username: string | null) => void;

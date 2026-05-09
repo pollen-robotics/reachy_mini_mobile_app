@@ -32,7 +32,7 @@ import { useEffect, useState } from 'react';
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
 
 import type { ConversationConnectionAttempt, ConversationState } from '../../conversation';
-import { FONT_WEIGHT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface ConnectingViewProps {
   /**

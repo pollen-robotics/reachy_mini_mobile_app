@@ -41,10 +41,10 @@ import {
   extractRobotHardwareId,
   fetchRobotsFromCentral,
 } from '../auth/fetchRobotsFromCentral';
-import { PIN_INPUT_LENGTH } from '../components/PinInput';
+import { PIN_INPUT_LENGTH } from '@/ui/design/PinInput';
 import { useBleSession } from '../ble/useBleSession';
 import { useWifiSetup } from '../wifi/useWifiSetup';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import { AlreadyOnlineView } from './wifi-setup/AlreadyOnlineView';
 import {

@@ -25,7 +25,7 @@
  */
 import { Chip, Typography } from '@mui/material';
 
-import { TYPO } from '../styles/tokens';
+import { TYPO } from './tokens';
 
 const PREFIX_LENGTH = 5;
 

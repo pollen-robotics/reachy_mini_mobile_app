@@ -49,7 +49,7 @@ import AudioControlCard from '../../conversation/control-panel/components/AudioC
 import { useAudioVolumes } from '../../conversation/control-panel/hooks/useAudioVolumes';
 import { HeadJoystickOverlay } from '../../conversation/control-panel/head-control';
 import type { RobotSessionHandle } from '../../session/useRobotSession';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface RobotTabViewProps {
   /**

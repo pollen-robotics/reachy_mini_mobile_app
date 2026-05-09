@@ -42,7 +42,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 
 import type { AppEntry } from '../../apps/types';
 import { useApps } from '../../apps/useApps';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '../../styles/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import AppCard from './AppCard';
 
