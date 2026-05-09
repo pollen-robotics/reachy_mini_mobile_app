@@ -88,6 +88,7 @@ import { loadSettings, type Settings } from "./settings";
 import { memoryStore } from "./memory";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
+import { startRobotSession } from "@/features/robot-session/start-session";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -733,158 +734,24 @@ async function doStart(): Promise<void> {
   // peer that no longer exists; the daemon-side /refresh-relay
   // endpoint and the 15s timeout below cover those cases instead.
 
-  // ─── startSession with auto-retry on transient daemon crashes ─────
-  //
-  // The dominant intermittent failure mode in the wild is a libnice
-  // assertion crash deep inside the daemon's WebRTC stack
-  // (`priv_conn_check_tick_stream_nominate` in `agent/conncheck.c`),
-  // which kills the daemon outright via SIGABRT. systemd then takes
-  // ~3 s (`RestartSec=3s`) plus ~10-13 s of FastAPI/GStreamer
-  // bring-up to put the daemon back online - a ~13-16 s blackout.
-  //
-  // The single-shot 15 s timeout we used to ship would expire pile
-  // au moment où le daemon revient and surface a misleading "Robot
-  // did not respond in time" to the user, even though the next
-  // attempt 1 s later would have worked. That is exactly the
-  // "marche / marche pas / remarche" behaviour reported on Reachy
-  // Wi-Fi.
-  //
-  // We now do up to two attempts:
-  //
-  //   - ATTEMPT_TIMEOUT_MS = 8 s   (was 15 s single shot)
-  //                                Healthy LAN handshakes complete in
-  //                                1-3 s, so 8 s is a generous upper
-  //                                bound that detects the silent
-  //                                daemon death without holding the
-  //                                user hostage.
-  //   - RETRY_GAP_MS       = 12 s  Time we wait between attempts.
-  //                                Sized to comfortably exceed the
-  //                                measured 13-16 s window minus the
-  //                                8 s we already spent on attempt 1
-  //                                (so the 2nd attempt typically
-  //                                lands on a freshly-restarted
-  //                                daemon, not on the half-resurrected
-  //                                one).
-  //   - MAX_ATTEMPTS       = 2     One retry is enough - the libnice
-  //                                crash is a true random race, not a
-  //                                deterministic incompatibility.
-  //                                Two crashes in a row is
-  //                                vanishingly rare with a 12 s gap.
-  //
-  // Worst case latency:    8 + 12 + 8 = 28 s before we surface error.
-  // First-shot success:    same as before, just 8 s timeout instead
-  //                        of 15 s (so we are FASTER on the happy
-  //                        path).
-  //
-  // The engine state stays in `starting` throughout the loop, so the
-  // host's connecting overlay keeps the spinner up. The
-  // `onConnectionAttempt` callback is fired on each attempt so the
-  // host can show "Reconnecting… (2 of 2)" instead of an unchanging
-  // caption that looks frozen.
-  const ATTEMPT_TIMEOUT_MS = 8_000;
-  const RETRY_GAP_MS = 12_000;
-  const MAX_ATTEMPTS = 2;
+  // Bring the WebRTC session up. The retry loop + per-attempt
+  // timeout + libnice-crash recovery all live in
+  // `features/robot-session/start-session.ts` - extracted from the
+  // engine so the session-bring-up logic is independently
+  // testable and the engine stays a thin orchestrator. We pass
+  // `expectedStop` so internal stopSession bailouts on timeout
+  // don't trigger the engine's unsolicited-drop recovery path.
+  const result = await startRobotSession({
+    robot,
+    peerId: selectedRobotId,
+    expectedStop,
+    onAttempt: emitConnectionAttempt,
+    isCancelled: () => !robot || !selectedRobotId,
+  });
 
-  // The actual per-attempt logic, hoisted into a closure so the loop
-  // below stays a clean orchestrator.
-  const tryStartSession = async (
-    timeoutMs: number,
-  ): Promise<{ ok: true } | { ok: false; reason: Error; timedOut: boolean }> => {
-    if (!robot || !selectedRobotId) {
-      return {
-        ok: false,
-        reason: new Error("Robot or peer id missing"),
-        timedOut: false,
-      };
-    }
-    let timedOut = false;
-    // Timeout guard. Same rationale as the original 15 s guard:
-    // leaving the promise hanging leaks a session on HF central
-    // and every subsequent attempt comes back as "Robot is busy".
-    // `expectedStop` keeps the resulting `sessionStopped` event
-    // from triggering the listener's unsolicited-drop recovery
-    // path - the loop below owns the follow-up.
-    const timeoutHandle = window.setTimeout(() => {
-      timedOut = true;
-      if (robot) {
-        void expectedStop(() => robot!.stopSession());
-      }
-    }, timeoutMs);
-
-    const t0 = performance.now();
-    try {
-      await robot.startSession(selectedRobotId);
-      window.clearTimeout(timeoutHandle);
-      console.log(
-        `[shell-webrtc] doStart: startSession resolved in ${Math.round(
-          performance.now() - t0,
-        )}ms, robot.state = ${robot.state}`,
-      );
-      return { ok: true };
-    } catch (err) {
-      window.clearTimeout(timeoutHandle);
-      console.warn(
-        `[shell-webrtc] doStart: startSession rejected after ${Math.round(
-          performance.now() - t0,
-        )}ms (timedOut=${timedOut}):`,
-        err,
-      );
-      const reason = timedOut
-        ? new Error(
-            "Robot did not respond in time. It may be busy with another app. " +
-              "Try again in a moment, or restart the robot if the problem persists.",
-          )
-        : err instanceof Error
-          ? err
-          : new Error(String(err));
-      return { ok: false, reason, timedOut };
-    }
-  };
-
-  let lastError: Error | null = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    if (attempt > 1) {
-      console.log(
-        `[shell-webrtc] doStart: retry attempt ${attempt}/${MAX_ATTEMPTS} after ${RETRY_GAP_MS}ms gap`,
-      );
-      // Wait for the daemon (potentially) to fully recover from a
-      // libnice crash before retrying. The host is informed via
-      // `onConnectionAttempt` BEFORE the gap so the overlay can
-      // immediately switch to the "Reconnecting…" caption rather
-      // than feeling frozen for 12 s.
-      emitConnectionAttempt({ attempt, maxAttempts: MAX_ATTEMPTS });
-      await new Promise<void>((resolve) =>
-        window.setTimeout(resolve, RETRY_GAP_MS),
-      );
-      // Bail if the engine was unmounted during the retry gap. The
-      // caller (host) tearing the engine down nullifies `robot`;
-      // pressing on would just produce a noisy fatal error for a
-      // session the user no longer cares about.
-      if (!robot || !selectedRobotId) {
-        emitConnectionAttempt(null);
-        return;
-      }
-    } else {
-      emitConnectionAttempt({ attempt, maxAttempts: MAX_ATTEMPTS });
-    }
-
-    console.log(
-      `[shell-webrtc] doStart: calling robot.startSession(${selectedRobotId})... (attempt ${attempt}/${MAX_ATTEMPTS})`,
-    );
-    const result = await tryStartSession(ATTEMPT_TIMEOUT_MS);
-    if (result.ok) {
-      lastError = null;
-      break;
-    }
-    lastError = result.reason;
-  }
-
-  // Always clear the retry hint before either succeeding into the
-  // wake-up path or surfacing a fatal error.
-  emitConnectionAttempt(null);
-
-  if (lastError) {
-    onFatalError(lastError);
+  if (!result.ok) {
+    if (result.cancelled) return;
+    onFatalError(result.reason);
     return;
   }
 
