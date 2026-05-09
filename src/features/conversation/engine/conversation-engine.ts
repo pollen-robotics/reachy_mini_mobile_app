@@ -75,7 +75,7 @@
 import "./sdkBootstrap";
 
 import type { ReachyMiniInstance, RobotInfo } from "./globals";
-import { CENTRAL_SIGNALING_URL } from "../../config";
+import { CENTRAL_SIGNALING_URL } from "@/config";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
 import {

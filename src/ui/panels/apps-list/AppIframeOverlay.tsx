@@ -68,7 +68,7 @@ import {
   type AppEmbedContext,
 } from '@/features/apps/buildEmbedUrl';
 import type { AppEntry } from '@/features/apps/types';
-import type { SessionPhase } from '@/session/useRobotSession';
+import type { SessionPhase } from '@/features/session/useRobotSession';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 /**

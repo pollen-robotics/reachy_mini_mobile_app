@@ -48,7 +48,7 @@ import VideoFeed from '@/ui/widgets/video-feed/VideoFeed';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { useAudioVolumes } from '@/ui/widgets/audio-controls/useAudioVolumes';
 import { HeadJoystickOverlay } from '@/ui/widgets/head-control';
-import type { RobotSessionHandle } from '@/session/useRobotSession';
+import type { RobotSessionHandle } from '@/features/session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface RobotTabViewProps {

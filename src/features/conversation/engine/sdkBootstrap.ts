@@ -27,7 +27,7 @@
  * (the assignment guards against double-set) so repeated imports are
  * a no-op.
  */
-import { ReachyMini } from '../../vendor/reachy-mini';
+import { ReachyMini } from '@/vendor/reachy-mini';
 
 if (typeof window !== 'undefined') {
   // Type story: the engine's `globals.ts` augments `Window` with a

@@ -10,7 +10,7 @@
  * and `derivePhase` from here so existing imports keep working.
  */
 
-import type { AppState } from '../conversation/engine/types';
+import type { AppState } from '@/features/conversation/engine/types';
 
 /**
  * High-level session phase observed by the host. Derived from the

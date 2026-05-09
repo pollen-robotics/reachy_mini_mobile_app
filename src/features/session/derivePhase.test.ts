@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { AppState } from '../conversation/engine/types';
+import type { AppState } from '@/features/conversation/engine/types';
 
 import { derivePhase, type SessionPhase } from './phase';
 

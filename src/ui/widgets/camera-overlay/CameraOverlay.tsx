@@ -22,7 +22,7 @@
 import { Box } from '@mui/material';
 
 import VideoFeed from '@/ui/widgets/video-feed/VideoFeed';
-import type { RobotSessionHandle } from '@/session/useRobotSession';
+import type { RobotSessionHandle } from '@/features/session/useRobotSession';
 import { RADIUS } from '@/ui/design/tokens';
 
 interface CameraOverlayProps {

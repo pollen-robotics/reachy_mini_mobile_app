@@ -76,7 +76,7 @@ import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // the `tab === 'conv'` block if/when we want a small PIP during
 // conversations too (the underlying `VideoFeed` already supports
 // release/reacquire and concurrent mounts on the same SDK track).
-import { useRobotSession } from '@/session/useRobotSession';
+import { useRobotSession } from '@/features/session/useRobotSession';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';

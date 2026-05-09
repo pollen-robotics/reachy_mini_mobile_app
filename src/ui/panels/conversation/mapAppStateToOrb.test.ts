@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { AppState } from '@/conversation/engine/conversation-engine';
+import type { AppState } from '@/features/conversation/engine/conversation-engine';
 
 import { mapAppStateToOrb } from './ConversationPanel';
 

@@ -36,14 +36,14 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { chainLifecycle } from '../conversation/lifecycle';
+import { chainLifecycle } from '@/features/conversation/lifecycle';
 import {
   mountConversation,
   type AppState,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
-} from '../conversation/engine/conversation-engine';
+} from '@/features/conversation/engine/conversation-engine';
 
 import { derivePhase, type SessionPhase } from './phase';
 

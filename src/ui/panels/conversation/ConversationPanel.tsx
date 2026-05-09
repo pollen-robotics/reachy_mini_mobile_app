@@ -45,8 +45,8 @@ import {
   StopSideButton,
 } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
-import type { AppState } from '@/conversation/engine/conversation-engine';
-import type { RobotSessionHandle } from '@/session/useRobotSession';
+import type { AppState } from '@/features/conversation/engine/conversation-engine';
+import type { RobotSessionHandle } from '@/features/session/useRobotSession';
 
 export interface ConversationPanelProps {
   /**
