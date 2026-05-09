@@ -1,143 +1,104 @@
 # Reachy Mini Mobile
 
-Minimal cross-platform Tauri client for Reachy Mini. Designed to:
+Cross-platform Tauri 2 app (iOS / Android / desktop) for **Reachy Mini**.
+Sign in with Hugging Face, pick one of your robots, and:
 
-1. Discover a Reachy Mini nearby via **Bluetooth Low Energy**.
-2. Read its network status (mode + IPv4) from the daemon's BLE characteristic.
-3. Check the phone and the robot are on the same `/24` subnet.
-4. Probe `/api/daemon/status` on the robot over HTTP (via a native Rust proxy).
-5. Open the [conversation HF Space](https://huggingface.co/spaces/tfrere/reachy-mini-minimal-js-conversation-app) in an iframe.
+- **Talk to it** with a real-time voice conversation (OpenAI Realtime API,
+  in-app orb panel - no more iframe).
+- **Browse and launch apps** from the Hugging Face Hub catalog (each app
+  runs in a sandboxed iframe with the robot handed off seamlessly).
+- **Drive the head manually** with a virtual joystick + monitor camera +
+  adjust speaker / microphone volume from a dedicated Robot tab.
+- **Bootstrap a fresh robot's Wi-Fi** over Bluetooth (PIN exchange,
+  network credentials, daemon health probe).
 
-It is a **client only**: the daemon runs on the robot, never on the phone. No
-sidecar, no Python, no auto-updater. All of the lifecycle complexity that
-lives in the desktop app has been removed on purpose.
+## Status
 
-> **Status**: POC / v0. iOS + Android first, desktop builds should work from
-> day one thanks to Tauri 2's unified targets.
+`v0.3.x` - the app is shippable. iOS + Android CI builds run on every tag,
+and we sideload internal-tester IPAs / APKs through the GitHub Actions
+workflow (`.github/workflows/build-mobile.yml`). Desktop dev builds work
+out of the box on macOS / Linux / Windows.
 
 ## Stack
 
 | Concern | Choice | Why |
 |---|---|---|
 | App shell | Tauri 2 | iOS + Android + desktop from one codebase |
-| Frontend | Vite + React 19 + TS + SWC | Same family as the desktop app, fast dev loop |
-| UI kit | MUI v7 + Emotion | Matches the desktop app, battle-tested on mobile WebViews |
-| State | Zustand | Lightweight, trivially migrates to/from the desktop store |
-| BLE | [`tauri-plugin-blec`](https://github.com/MnlPhlp/tauri-plugin-blec) (+ `@mnlphlp/plugin-blec`) | Supports iOS + Android, based on `btleplug` |
-| HTTP to daemon | Native `reqwest` via Tauri command | Bypasses mobile WebView mixed-content blocking |
+| Frontend | Vite 7 + React 19 + TypeScript + SWC | Fast dev loop, modern toolchain |
+| UI kit | MUI v7 + Emotion | Battle-tested on mobile WebViews |
+| Async state | TanStack Query v5 | Apps catalog + central robots fetching |
+| BLE | [`tauri-plugin-blec`](https://github.com/MnlPhlp/tauri-plugin-blec) (`@mnlphlp/plugin-blec`) | iOS + Android, based on `btleplug` |
+| WebRTC + AI | OpenAI Realtime API direct WebRTC | No backend, browser-side handshake |
+| Robot signaling | Hugging Face central Space (`pollen-robotics-reachy-mini-central.hf.space`) | Producer-consumer relay over WebSocket |
+| Tests | Vitest | Pure logic + parsing tests |
 
-## Architecture
+## What's inside (architecture in 30 seconds)
 
-### Three screens, one flow
-
-```
-  ┌──────────────┐       ┌────────────────┐       ┌──────────────────────┐
-  │  ScanScreen  │ tap → │ DashboardScreen│ tap → │ ConversationScreen   │
-  │  (BLE scan)  │       │ (IP + health)  │       │ (iframe HF Space)    │
-  └──────────────┘       └────────────────┘       └──────────────────────┘
-         ▲                     │   ▲                         │
-         └─────────── back ────┘   └──────── back ───────────┘
-```
-
-### Data flow
-
-```
-    BLE                           HTTP (via Rust)            iframe
- ┌──────┐        scan + read     ┌───────────┐              ┌───────────────┐
- │phone │  ────────────────────▶ │ daemon    │              │ HF Space      │
- │      │  ◀──── NETWORK_STATUS  │ :8000     │              │ (HTTPS, OAuth │
- └──────┘        "[wlan0] ip"    └───────────┘              │  + WebRTC)    │
-                                                            └───────┬───────┘
-                                                                    │
-                                                                    ▼
-                                                         HF-hosted signaling
-                                                         server, rendezvous
-                                                         with the robot
-```
-
-The conversation iframe does **not** talk to the daemon in HTTP: the
-conversation app uses a HF-hosted WebRTC signaling server, which both the
-phone and the robot connect to. That is why we can serve the iframe from
-HTTPS (`https://huggingface.co/...`) without running into mixed-content or
-microphone permission issues.
-
-### Key design decisions
-
-- **No `fetch()` to `http://` from the frontend.** Mobile WebViews block
-  plain-HTTP calls from our HTTPS-origin page. Everything goes through the
-  Rust `daemon_fetch` command (`src-tauri/src/commands.rs`), which uses
-  `reqwest`. Single place to reason about timeouts, headers, and TLS later.
-- **No custom URI scheme in v0.** The conversation iframe is already HTTPS
-  (HF Space). If we ever want to iframe a *daemon-hosted* app (needed to
-  bypass HTTPS + get microphone in a secure context), we will add a
-  `reachy://` scheme at that point and not before.
-- **No `/api/state/ws/full` in v0.** The viewer3D / audio bars / log
-  console from the desktop app would make the POC heavier by 3-5 kLOC.
-  Scope-locked to a pure shell for now; porting those components is
-  tracked separately.
-- **BLE-first discovery, not mDNS.** Bluetooth gives us a reliable, user-
-  visible "the robot is right here" signal *and* tells us whether the
-  phone and the robot share a subnet before any HTTP call. mDNS stays an
-  option for a later iteration when users ask for contactless discovery.
-- **Subnet check is /24-only.** Works for every realistic home WiFi and
-  for the robot's built-in hotspot. CIDR math can be added if someone runs
-  in a weirder network, but it's unneeded complexity today.
-
-### Code layout
+The codebase is split into two pillars:
 
 ```
 src/
-├── App.tsx               # Root + screen router (plain state machine)
-├── main.tsx              # Vite entry, MUI theme binding
-├── theme.ts              # Light + dark MUI themes
-├── config.ts             # Single place for URLs, timeouts, BLE prefix
-├── store/
-│   └── useRobotStore.ts  # Zustand store (connection, discovered, network)
-├── types/
-│   └── robot.ts          # Shared types used by every screen
-├── ble/
-│   ├── constants.ts      # Service + char UUIDs (mirrors daemon)
-│   ├── parseNetworkStatus.ts
-│   └── useBle.ts         # scan / connect / readNetworkStatus / disconnect
-├── daemon/
-│   ├── daemonFetch.ts    # Typed wrapper over the Rust command
-│   └── useDaemonStatus.ts# Probe /api/daemon/status with optional polling
-├── network/
-│   ├── sameSubnet.ts     # /24 comparison helpers
-│   └── useLocalIps.ts    # Pulls phone IPs from Rust on mount
-├── screens/
-│   ├── ScanScreen.tsx
-│   ├── DashboardScreen.tsx
-│   └── ConversationScreen.tsx
-└── components/
-    ├── RobotListItem.tsx
-    ├── StatusBadge.tsx
-    ├── ErrorBanner.tsx
-    └── NetworkMismatchPanel.tsx
-
-src-tauri/
-├── Cargo.toml
-├── tauri.conf.json
-├── capabilities/default.json
-├── build.rs
-└── src/
-    ├── main.rs           # Thin entrypoint
-    ├── lib.rs            # Tauri builder, plugin registration
-    └── commands.rs       # daemon_fetch + local_ips
+├── ui/         All React UI: design system, widgets, panels, screens
+└── features/   All non-UI logic: auth, ble, wifi, apps, robot-session, conversation
 ```
+
+The two key features:
+
+- **`features/robot-session/`** owns everything WebRTC + physical robot:
+  the `RobotSession` class wraps the SDK with retry-aware bring-up
+  (`start`), wake/sleep trajectories (`wakeUp`, `sleepAndDisable`),
+  iframe-handoff release/reacquire, video stream caching, transport +
+  data-channel health monitoring.
+- **`features/conversation/`** owns the OpenAI Realtime conversation:
+  the engine drives a `RobotSession` plus the audio bridge, motion
+  controllers (head wobbler, antennas), tool-call dispatch, and the
+  long-term memory store.
+
+The architecture is enforced by ESLint rules (`no-restricted-imports`)
+so layers can't accidentally cross-depend.
+
+**Read [`AGENTS.md`](./AGENTS.md) before contributing** - it covers the
+folder structure, the import conventions, the layer rules, and a
+"where do I put X?" cheat sheet.
+
+For the deep specs:
+- [`docs/CONNECTION_FLOW.md`](./docs/CONNECTION_FLOW.md) - end-to-end
+  auth + discovery + session lifecycle
+- [`docs/VISION.md`](./docs/VISION.md) - design for a future
+  scene-awareness module (VLM)
+- [`docs/MCP_DESIGN.md`](./docs/MCP_DESIGN.md) - design draft for an MCP
+  server wrapping the daemon
+- [`docs/WEBRTC_LOGS.md`](./docs/WEBRTC_LOGS.md) - PR plan for streaming
+  daemon journalctl over WebRTC
 
 ## Setup
 
 ### Prerequisites
 
 - Node.js 20+ (24 LTS recommended)
-- Yarn (or npm)
-- Rust 1.77+ with `cargo`
+- Yarn 1.x
+- Rust stable with `cargo`
 - Xcode 15+ (for iOS)
 - Android Studio + NDK (for Android)
 
 Follow the [Tauri 2 mobile prerequisites](https://v2.tauri.app/start/prerequisites/)
 for your platform.
+
+### Environment variables
+
+Copy `.env.example` to `.env.local` and fill in:
+
+```env
+# OpenAI Realtime API key (required for the in-app voice conversation).
+# ⚠️ TEMPORARY: baked into the bundle at build time, extractable from
+# the .ipa / .apk - debug / internal-tester only. See AGENTS.md for the
+# proper-arch TODO.
+VITE_OPENAI_API_KEY=sk-proj-...
+
+# Optional: override the central signaling Space for staging.
+# Defaults to the production pollen-robotics instance.
+# VITE_REACHY_CENTRAL_URL=https://my-staging-central.hf.space
+```
 
 ### Install
 
@@ -145,15 +106,17 @@ for your platform.
 yarn install
 ```
 
-### Desktop dev
+## Development
 
-Works from day one on macOS / Linux / Windows:
+### Desktop
+
+Works on macOS / Linux / Windows from day one:
 
 ```bash
 yarn tauri:dev
 ```
 
-### iOS dev
+### iOS
 
 First-time setup (once per workspace):
 
@@ -167,22 +130,23 @@ Then:
 yarn ios:dev
 ```
 
-The first `--open` run launches Xcode. You will need to:
+The first run launches Xcode. You'll need to:
 
-1. Add `NSBluetoothAlwaysUsageDescription` to `src-tauri/gen/apple/<app>_iOS/Info.plist`
-   (the Bluetooth plugin relies on this).
-2. Add the **CoreBluetooth.framework** under *Project → General → Frameworks,
-   Libraries, and Embedded Content*.
+1. Confirm `NSBluetoothAlwaysUsageDescription` is in
+   `src-tauri/gen/apple/<app>_iOS/Info.plist` (CI patches this
+   automatically; for local dev it's already in the repo).
+2. Add the **CoreBluetooth.framework** under *Project → General →
+   Frameworks, Libraries, and Embedded Content*.
 3. Select a signing team (personal or organization).
 
-### Android dev
+### Android
 
 ```bash
 yarn tauri android init   # once
 yarn android:dev
 ```
 
-`AndroidManifest.xml` will need:
+Required permissions in `AndroidManifest.xml`:
 
 ```xml
 <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
@@ -190,26 +154,25 @@ yarn android:dev
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 ```
 
-(The Tauri plugin handles the rest on newer Android versions.)
+## Validation
 
-## What is intentionally **not** here
+```bash
+yarn typecheck   # tsc --noEmit (strict)
+yarn lint        # ESLint, includes architectural layer rules
+yarn test        # Vitest
+```
 
-The following features from the desktop app were deferred:
+The `lint` step enforces the layer rules from `AGENTS.md` via
+`no-restricted-imports` (e.g. `features/` cannot import from `ui/`).
 
-- 3D URDF viewer / X-ray / scan effects
-- Audio level bars + DoA indicator
-- Log console (daemon + frontend + app logs)
-- Application store (install / start / stop apps)
-- Camera WebRTC feed
-- Auto-updater
-- USB detection
-- First-time WiFi setup wizard
-- Robot commands (head pose, expressions, choreographies)
+## CI / release
 
-Each of these has well-defined entry points in the desktop codebase and
-can be ported incrementally. The goal of v0 is to lock down the
-connection-and-iframe flow before touching any of them.
+GitHub Actions builds iOS + Android tester bundles on every tag push.
+See `.github/workflows/build-mobile.yml` for the matrix. The workflow
+injects the OpenAI API key into the bundle from a repo secret
+(`OPENAI_API_KEY`) - same temporary mechanism as local dev, marked for
+replacement in `AGENTS.md`.
 
 ## License
 
-Apache 2.0 (matching the parent Reachy Mini repos).
+Apache 2.0 - see [`LICENSE`](./LICENSE).
