@@ -24,7 +24,7 @@
  */
 import { Box } from '@mui/material';
 
-import reachyStandardSvg from '../assets/reachy-standard.svg';
+import reachyStandardSvg from '@/assets/reachy-standard.svg';
 
 interface RobotAvatarProps {
   /** Disc diameter in pixels. The SVG scales with the disc, so the
