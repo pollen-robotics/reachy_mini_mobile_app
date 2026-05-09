@@ -26,8 +26,8 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import {
   humanizeWifiError,
   summarizeProbeResult,
-} from '../../wifi/humanizeWifiError';
-import type { WifiProbeResult } from '../../types/robot';
+} from '@/wifi/humanizeWifiError';
+import type { WifiProbeResult } from '@/types/robot';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 type ProbeState =

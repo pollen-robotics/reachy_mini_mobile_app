@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Box } from '@mui/material';
 
-import ScanScreen from './screens/ScanScreen';
-import SplashScreen from './screens/SplashScreen';
-import WelcomeBackScreen from './screens/WelcomeBackScreen';
-import WifiSetupScreen from './screens/WifiSetupScreen';
-import RemoteSignInScreen from './screens/RemoteSignInScreen';
+import ScanScreen from '@/ui/screens/ScanScreen';
+import SplashScreen from '@/ui/screens/SplashScreen';
+import WelcomeBackScreen from '@/ui/screens/WelcomeBackScreen';
+import WifiSetupScreen from '@/ui/screens/WifiSetupScreen';
+import RemoteSignInScreen from '@/ui/screens/RemoteSignInScreen';
 import RobotSessionScreen, {
   type ConnectionTarget,
-} from './screens/RobotSessionScreen';
+} from '@/ui/screens/RobotSessionScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
 import {
   useBleSession,

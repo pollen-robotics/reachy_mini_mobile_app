@@ -27,7 +27,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Fade, Stack, Typography, keyframes } from '@mui/material';
 
-import hfLogoUrl from '../assets/hf-logo.svg';
+import hfLogoUrl from '@/assets/hf-logo.svg';
 import { DURATION, FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 /**

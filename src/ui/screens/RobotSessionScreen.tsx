@@ -65,7 +65,7 @@ import {
   extractRobotName,
   extractRobotTransport,
   type CentralRobotEntry,
-} from '../auth/fetchRobotsFromCentral';
+} from '@/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
@@ -76,8 +76,8 @@ import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // the `tab === 'conv'` block if/when we want a small PIP during
 // conversations too (the underlying `VideoFeed` already supports
 // release/reacquire and concurrent mounts on the same SDK track).
-import { useRobotSession } from '../session/useRobotSession';
-import type { AppEntry } from '../apps/types';
+import { useRobotSession } from '@/session/useRobotSession';
+import type { AppEntry } from '@/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
 import RobotTabView from '@/ui/panels/robot/RobotTabView';

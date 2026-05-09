@@ -21,8 +21,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import {
   cancelLoginFlow,
   loginWithHuggingFace,
-} from '../auth/oauthLoopback';
-import hfLogoUrl from '../assets/hf-logo.svg';
+} from '@/auth/oauthLoopback';
+import hfLogoUrl from '@/assets/hf-logo.svg';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 interface RemoteSignInScreenProps {
