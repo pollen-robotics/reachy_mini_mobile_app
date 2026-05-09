@@ -37,7 +37,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { queryClient } from '../queryClient';
+import { queryClient } from '@/queryClient';
 
 import type { AppEntry, AppSdk } from './types';
 

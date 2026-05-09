@@ -65,7 +65,7 @@ import {
   extractRobotName,
   extractRobotTransport,
   type CentralRobotEntry,
-} from '@/auth/fetchRobotsFromCentral';
+} from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
@@ -77,7 +77,7 @@ import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // conversations too (the underlying `VideoFeed` already supports
 // release/reacquire and concurrent mounts on the same SDK track).
 import { useRobotSession } from '@/session/useRobotSession';
-import type { AppEntry } from '@/apps/types';
+import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
 import RobotTabView from '@/ui/panels/robot/RobotTabView';

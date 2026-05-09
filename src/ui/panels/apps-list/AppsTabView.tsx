@@ -40,8 +40,8 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import type { AppEntry } from '@/apps/types';
-import { useApps } from '@/apps/useApps';
+import type { AppEntry } from '@/features/apps/types';
+import { useApps } from '@/features/apps/useApps';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import AppCard from './AppCard';

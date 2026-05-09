@@ -36,7 +36,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 
-import { openExternalUrl } from '../utils/openUrl';
+import { openExternalUrl } from '@/utils/openUrl';
 
 const HF_OAUTH_CLIENT_ID = '71146982-8184-45a2-b05a-d561b3cd701d';
 const HF_OAUTH_REDIRECT_URI = 'http://localhost:8000/api/hf-auth/oauth/callback';

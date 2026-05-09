@@ -19,8 +19,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { BleWifiStatus, WifiProbeResult } from '../types/robot';
-import { formatBlecError, useBleSession } from '../ble/useBleSession';
+import type { BleWifiStatus, WifiProbeResult } from '@/types/robot';
+import { formatBlecError, useBleSession } from '@/features/ble/useBleSession';
 
 const STATUS_POLL_MS = 3_000;
 const FAST_POLL_MS = 1_500;

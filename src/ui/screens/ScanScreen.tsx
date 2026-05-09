@@ -76,7 +76,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
-import type { ReachyBleDevice } from '@/ble/useBleSession';
+import type { ReachyBleDevice } from '@/features/ble/useBleSession';
 import reachyBusteSvg from '@/assets/reachy-buste.svg';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import {
@@ -85,9 +85,9 @@ import {
   extractRobotName,
   extractRobotTransport,
   type CentralRobotEntry,
-} from '@/auth/fetchRobotsFromCentral';
-import { useHfProfile } from '@/auth/useHfProfile';
-import { useRemoteRobots } from '@/auth/useRemoteRobots';
+} from '@/features/auth/fetchRobotsFromCentral';
+import { useHfProfile } from '@/features/auth/useHfProfile';
+import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { ShortId } from '@/ui/design/ShortId';
 import { TransportChip } from '@/ui/design/TransportChip';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';

@@ -13,9 +13,9 @@ import ScreenTransition from '@/ui/design/ScreenTransition';
 import {
   useBleSession,
   useInitBleListeners,
-} from './ble/useBleSession';
-import { useRemoteHfToken } from './auth/useRemoteHfToken';
-import { usePrefetchApps } from './apps/useApps';
+} from '@/features/ble/useBleSession';
+import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
+import { usePrefetchApps } from '@/features/apps/useApps';
 
 type Screen = 'scan' | 'session' | 'wifi-setup';
 

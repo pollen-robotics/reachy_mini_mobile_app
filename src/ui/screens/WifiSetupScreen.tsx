@@ -40,10 +40,10 @@ import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import {
   extractRobotHardwareId,
   fetchRobotsFromCentral,
-} from '@/auth/fetchRobotsFromCentral';
+} from '@/features/auth/fetchRobotsFromCentral';
 import { PIN_INPUT_LENGTH } from '@/ui/design/PinInput';
-import { useBleSession } from '@/ble/useBleSession';
-import { useWifiSetup } from '@/wifi/useWifiSetup';
+import { useBleSession } from '@/features/ble/useBleSession';
+import { useWifiSetup } from '@/features/wifi/useWifiSetup';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import { AlreadyOnlineView } from './wifi-setup/AlreadyOnlineView';

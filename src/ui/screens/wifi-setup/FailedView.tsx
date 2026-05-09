@@ -26,7 +26,7 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import {
   humanizeWifiError,
   summarizeProbeResult,
-} from '@/wifi/humanizeWifiError';
+} from '@/features/wifi/humanizeWifiError';
 import type { WifiProbeResult } from '@/types/robot';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
