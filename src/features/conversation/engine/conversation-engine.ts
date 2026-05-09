@@ -90,8 +90,7 @@ import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { startRobotSession } from "@/features/robot-session/start-session";
 import { sleepAndDisableRobot, wakeRobot } from "@/features/robot-session/physical";
-import { createSessionGuard } from "@/features/robot-session/session-guard";
-import { createVideoStreamCache } from "@/features/robot-session/video-cache";
+import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -270,10 +269,10 @@ const emitConnectionAttempt = (
 // talking" behaviour). The host can toggle it later via
 // `handle.startConversation()` / `handle.stopConversation()`.
 let convoActiveRequested: boolean = options.autoStartConversation !== false;
-// True once `robot.startSession()` has resolved successfully. We use
-// this to decide whether `startConversation()` can run the conversation
-// parts immediately or has to be queued for `doStart` to pick up.
-let sessionEstablished = false;
+// `session.isEstablished()` (was: `let sessionEstablished`) - true once
+// `robot.startSession()` has resolved successfully. Used to decide
+// whether `startConversation()` can run the conversation parts
+// immediately or has to be queued for `doStart` to pick up.
 // True once the conversation parts (antennas, OpenAI, wobbler) are
 // running. Prevents double-start if the host flips the gate twice or
 // `doStart` and `startConversation()` race.
@@ -338,13 +337,6 @@ let knownRobots: RobotInfo[] = [];
 
 let robot: ReachyMiniInstance | null = null;
 
-// Robot video stream cache. The SDK's `videoTrack` event is one-shot
-// per session, so consumers that mount AFTER that event (e.g. the
-// camera card on the Robot tab) must replay the cached stream to
-// reach a live frame. See `features/robot-session/video-cache.ts` for
-// the full contract.
-const videoCache = createVideoStreamCache();
-
 // OpenAI session lifecycle (client + audio sink + reconnect
 // counters + reconnecting flag) is owned end-to-end by the OpenAI
 // bridge below. The engine just observes its events and drives the
@@ -385,13 +377,15 @@ let aiLevel: AiLevelMonitor | null = null;
 // of the dance (otherwise they'd fight the recorded frames).
 let movePlaying = false;
 
-// Stop-session intent guard. See `features/robot-session/session-guard.ts`
-// for the full contract; in short, every internal `robot.stopSession()`
-// call goes through `expectedStop()` so the `sessionStopped` listener
-// (further down) can tell our own stops from unsolicited drops and
-// avoid running its recovery path twice.
-const sessionGuard = createSessionGuard();
+// Session state holder. Owns the session-level state vars
+// (sessionEstablished, lastSetMotorMode), the stop-intent guard
+// (expectedStop counter), and the video stream cache. The engine
+// keeps owning the FSM, the conversation pipeline and the host
+// callbacks - this is purely the session layer underneath.
+const session = new RobotSession();
+const sessionGuard = session.guard;
 const expectedStop = sessionGuard.expectedStop;
+const videoCache = session.videoCache;
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
@@ -463,11 +457,11 @@ function setState(next: AppState): void {
  * after `gotoSleep` resolves; this helper deliberately stays out
  * of its way.
  */
-let lastSetMotorMode: "enabled" | "disabled" | "gravity_compensation" | null =
-  null;
+// `session.getLastMotorMode()` / `session.recordMotorMode()` (was: a
+// bare `let lastSetMotorMode: ... = null` here) hold the dedup cache.
 
 function syncMotorModeForState(next: AppState): void {
-  if (!robot || !sessionEstablished) return;
+  if (!robot || !session.isEstablished()) return;
   let mode: "enabled" | null = null;
   switch (next) {
     case "starting":
@@ -485,10 +479,10 @@ function syncMotorModeForState(next: AppState): void {
   // Without this guard the engine would emit a setMotorMode message
   // on every turn boundary - 4-5 redundant DC writes per turn that
   // can interrupt the pose stream and produce visible motion hiccups.
-  if (mode === lastSetMotorMode) return;
+  if (mode === session.getLastMotorMode()) return;
   try {
     robot.setMotorMode(mode);
-    lastSetMotorMode = mode;
+    session.recordMotorMode(mode);
   } catch (err) {
     console.warn(
       `[engine] setMotorMode(${JSON.stringify(mode)}) failed (ignored):`,
@@ -864,12 +858,12 @@ async function runConversationParts(): Promise<void> {
 }
 
 /**
- * Hook into `sessionEstablished` so test code / future callers can
- * observe the transition. Today it's just a setter, but kept as a
- * function so the assignments are greppable.
+ * Thin wrapper around `session.setEstablished()`. Kept as a function
+ * so the assignment sites stay greppable and we have a future hook
+ * point for test instrumentation / observers.
  */
 function setSessionEstablished(value: boolean): void {
-  sessionEstablished = value;
+  session.setEstablished(value);
 }
 
 // ─── Tool-call handler ─────────────────────────────────────────────────
@@ -1190,13 +1184,13 @@ async function teardown(): Promise<void> {
   // `if (sessionEstablished)` guard always fall through, so the
   // robot stayed wide awake on disconnect with motors enabled and
   // the head/antennas frozen wherever the last frame put them.
-  const wasSessionEstablished = sessionEstablished;
+  const wasSessionEstablished = session.isEstablished();
 
   // Reset the convo-gate bookkeeping so a subsequent
   // `connect → startSession → startConversation` cycle behaves
   // identically to the first one.
   conversationStarted = false;
-  sessionEstablished = false;
+  session.setEstablished(false);
 
   // Self-contained: play the goto-sleep trajectory + release motors
   // BEFORE we tear the WebRTC session. Sending the command after
@@ -1217,9 +1211,7 @@ async function teardown(): Promise<void> {
     // Both steps run BEFORE `stopSession()` below so they land
     // while the WebRTC DataChannel is still up.
     const result = await sleepAndDisableRobot(robot);
-    if (result.motorMode === 'disabled') {
-      lastSetMotorMode = 'disabled';
-    }
+    session.recordMotorMode(result.motorMode);
   }
 
   if (robot) {
@@ -1607,7 +1599,7 @@ return {
     //      before robotsChanged fired). The flag is now set, so when
     //      `doStart` runs it'll fall through to `runConversationParts()`
     //      directly instead of returning early.
-    if (sessionEstablished && !conversationStarted) {
+    if (session.isEstablished() && !conversationStarted) {
       try {
         await runConversationParts();
       } catch (err) {
@@ -1680,7 +1672,7 @@ return {
     // 'gravity_compensation')` (driven by `syncMotorModeForState`)
     // silences the Dynamixel idle buzz now that we've landed on
     // a known neutral pose just above.
-    if (sessionEstablished) setState("ready");
+    if (session.isEstablished()) setState("ready");
   },
 
   setMicMuted: (muted: boolean) => {
@@ -1709,9 +1701,9 @@ return {
   releaseSessionKeepAwake: async () => {
     if (unmounted) return;
     console.log(
-      `[shell-webrtc] releaseSessionKeepAwake: entering, sessionEstablished=${sessionEstablished}, robot.state=${robot?.state}, conversationStarted=${conversationStarted}`,
+      `[shell-webrtc] releaseSessionKeepAwake: entering, sessionEstablished=${session.isEstablished()}, robot.state=${robot?.state}, conversationStarted=${conversationStarted}`,
     );
-    if (!robot || !sessionEstablished) {
+    if (!robot || !session.isEstablished()) {
       console.log(
         "[shell-webrtc] releaseSessionKeepAwake: no session to release, no-op",
       );
@@ -1771,7 +1763,7 @@ return {
     // longer have an authoritative view of what's on the robot.
     // Resetting the dedup cache forces the first post-reacquire
     // `syncMotorModeForState()` to send rather than skip on stale info.
-    lastSetMotorMode = null;
+    session.recordMotorMode(null);
     // Wrapped in `expectedStop` so the `sessionStopped` listener
     // doesn't run its unsolicited-drop recovery (which would reset
     // `selectedRobotId` to null and force the FSM to `authenticated`,
@@ -1823,9 +1815,9 @@ return {
     if (unmounted) return;
     if (!robot || !selectedRobotId) return;
     console.log(
-      `[shell-webrtc] reacquireSession: entering, sessionEstablished=${sessionEstablished}, robot.state=${robot.state}, selectedRobotId=${selectedRobotId}`,
+      `[shell-webrtc] reacquireSession: entering, sessionEstablished=${session.isEstablished()}, robot.state=${robot.state}, selectedRobotId=${selectedRobotId}`,
     );
-    if (sessionEstablished) {
+    if (session.isEstablished()) {
       console.log(
         "[shell-webrtc] reacquireSession: session already up, no-op",
       );

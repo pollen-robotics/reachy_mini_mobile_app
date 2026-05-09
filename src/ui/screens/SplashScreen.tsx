@@ -51,6 +51,10 @@ export default function SplashScreen({ onDone }: SplashScreenProps) {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
+          // Relative so the absolutely-positioned version stamp below
+          // anchors to the screen edges (and respects the iOS home
+          // indicator safe-area inset on iPhone X+).
+          position: 'relative',
         }}
       >
         <HeroIllustration
@@ -68,6 +72,30 @@ export default function SplashScreen({ onDone }: SplashScreenProps) {
           }}
         >
           Reachy Mini
+        </Typography>
+
+        {/* Build version stamp. Anchored to the bottom of the splash
+            with a discreet `text.secondary` colour + small fixed
+            opacity so it never competes with the hero illustration.
+            Sourced from the npm `package.json` via the `__APP_VERSION__`
+            define in `vite.config.ts`, so a `yarn version` bump is
+            the only place we ever touch the value. */}
+        <Typography
+          aria-label={`App version ${__APP_VERSION__}`}
+          sx={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
+            textAlign: 'center',
+            fontSize: TYPO.tiny,
+            fontWeight: FONT_WEIGHT.regular,
+            color: 'text.secondary',
+            opacity: 0.6,
+            letterSpacing: '0.2px',
+          }}
+        >
+          v{__APP_VERSION__}
         </Typography>
       </Box>
     </Fade>

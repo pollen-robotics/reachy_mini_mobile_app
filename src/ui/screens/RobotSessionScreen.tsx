@@ -67,7 +67,6 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
-import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
 // The conversation tab keeps the orb visually clean (no floating
 // PIP); the camera surfaces in the dedicated `Robot` tab via
@@ -408,13 +407,20 @@ function ConnectedSession({
             `orbRef` to the engine's audio level monitors.
             Layout:
               ┌──────────────────────────────────┐
-              │ ┌─SPEAKER──┐  ┌─MICROPHONE──┐    │  ← top controls
-              │ │ [🔊]●─●  │  │ [🎤]●─●     │    │
-              │ └──────────┘  └─────────────┘    │
               │                                  │
-              │            ORB                   │  ← centre
               │                                  │
-              └──────────────────────────────────┘ */}
+              │            ORB                   │  ← centre, full
+              │                                  │     vertical space
+              │                                  │
+              └──────────────────────────────────┘
+
+            The Speaker / Microphone cards used to live above the
+            orb here; they were redundant with the dedicated
+            Robot tab (`<RobotTabView>`) which exposes the same
+            cards alongside the camera + future logs. Keeping the
+            conv tab orb-only matches the desktop minimal-conversation
+            shell and lets the orb breathe full-height on small
+            phones. */}
         {!leaving && !isError && (
           <Box
             sx={{
@@ -425,22 +431,6 @@ function ConnectedSession({
               position: 'relative',
             }}
           >
-            {/* Top audio controls. Gated on `hasReachedReady` so
-                the cards don't pop in during the initial
-                connecting overlay (where they'd be unreachable
-                anyway). */}
-            {session.hasReachedReady && (
-              <Box sx={{ flexShrink: 0, mt: 1, mb: 1.5 }}>
-                <AudioControlsBar
-                  session={session}
-                  isLive={session.hasReachedReady}
-                />
-              </Box>
-            )}
-
-            {/* Orb + caption + side buttons + tool toast. Takes
-                the remaining vertical space and centres the orb
-                inside it. */}
             <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
               <ConversationPanel session={session} orbRef={orbRef} />
             </Box>

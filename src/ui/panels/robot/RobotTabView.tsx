@@ -121,24 +121,33 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          // Bottom padding so the last control isn't hugged by the
-          // BottomNavigation. Top padding gives the first section
-          // some breathing room below the screen-level top bar.
-          pt: 1,
-          pb: 6,
-          // mb:4,
-          // The inner Stack uses `minHeight: '100%'` to always fill
-          // the scrollable region vertically, so the trailing Logs
-          // section can `flex: 1` itself into the leftover space.
-          // Without this the Stack would only be as tall as its
-          // natural content and the placeholder would collapse.
-          display: 'flex',
-          flexDirection: 'column',
         }}
       >
+        {/* The vertical layout (flex column) + the top/bottom
+            paddings live INSIDE this Stack, NOT on the scroll
+            container above. This is deliberate:
+              1. iOS WebKit drops `padding-bottom` on a flex container
+                 that also has `overflow: auto` when a child uses
+                 `flex: 1` — the padding is computed away during the
+                 flex pass and the bottom gap silently disappears,
+                 no matter how big the value is.
+              2. Putting flex + padding inside the inner Stack keeps
+                 the scroll Box a plain block container, which lets
+                 padding render predictably across browsers.
+              3. `minHeight: '100%'` ensures the Stack still fills the
+                 visible viewport when content is short, so the
+                 trailing Logs section's `flex: 1` has somewhere to
+                 grow into. */}
         <Stack
           spacing={3}
-          sx={{ ...COLUMN_SX, flex: 1, minHeight: 0 }}
+          sx={{
+            ...COLUMN_SX,
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: '100%',
+            pt: 1,
+            pb: 3,
+          }}
         >
           <Section label="Camera">
             <Box

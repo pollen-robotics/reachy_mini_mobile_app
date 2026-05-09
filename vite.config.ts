@@ -1,8 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
 const host = process.env.TAURI_DEV_HOST;
+
+// Read the app version from package.json at build time so the splash
+// (and any future "About" surface) can render it without us having to
+// remember to bump a constant alongside the npm version. Read with
+// `node:fs` rather than a JSON import so the tsconfig stays free of
+// `resolveJsonModule` and works in strict ESM mode under Vite 7.
+const pkg = JSON.parse(
+  readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'),
+) as { version: string };
+const APP_VERSION = pkg.version;
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -40,6 +51,13 @@ export default defineConfig(async () => ({
     },
   },
   envPrefix: ['VITE_', 'TAURI_'],
+  // Bake the npm `package.json` version into the bundle so the splash
+  // (and future "About" / settings surfaces) can render it without
+  // an extra runtime lookup. Stringified per Vite's contract: the
+  // value is inlined verbatim, so we ship `'0.3.2'` not `0.3.2`.
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   build: {
     target: ['es2021', 'chrome110', 'safari16'],
     sourcemap: !!process.env.TAURI_DEBUG,
