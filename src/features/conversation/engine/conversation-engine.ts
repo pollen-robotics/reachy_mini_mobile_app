@@ -89,6 +89,7 @@ import { memoryStore } from "./memory";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { startRobotSession } from "@/features/robot-session/start-session";
+import { sleepAndDisableRobot, wakeRobot } from "@/features/robot-session/physical";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -768,18 +769,10 @@ async function doStart(): Promise<void> {
   // "WebRTC handshake complete").
   //
   // The trajectory gate inside head-wobbler/antennas already mutes
-  // those streams for the wake's duration to avoid clashing. The
-  // 8 s cap protects against a stuck daemon: if wake never resolves
-  // we still proceed to mark the session ready so the user can at
-  // least navigate away.
-  try {
-    await Promise.race([
-      robot.wakeUp({ timeoutMs: 8000 }),
-      new Promise<void>((resolve) => setTimeout(resolve, 8500)),
-    ]);
-  } catch (err) {
-    console.warn('[engine] wakeUp failed (ignored):', err);
-  }
+  // those streams for the wake's duration to avoid clashing.
+  // `wakeRobot` enforces a JS-side hard timeout so a stuck daemon
+  // never blocks our progress to `ready`.
+  await wakeRobot(robot);
 
   // Mark the SDK / DataChannel as ready BEFORE deciding whether to
   // continue with the conversation parts. The mobile app gates the
@@ -1244,26 +1237,15 @@ async function teardown(): Promise<void> {
   // pre-promise SDK) but at runtime it's a Promise, so we await it
   // with a defensive cast.
   if (wasSessionEstablished && robot) {
-    try {
-      await Promise.race([
-        robot.gotoSleep({ timeoutMs: 6000 }),
-        new Promise<void>((resolve) => setTimeout(resolve, 6500)),
-      ]);
-    } catch (err) {
-      console.warn('[engine] gotoSleep failed (ignored):', err);
-    }
-    // Belt-and-braces: even if `gotoSleep` returned `completed:
-    // true` the daemon's motor mode logic isn't guaranteed to
-    // disable torque after the trajectory (only the version
-    // controlled by this codebase does). Pushing an explicit
-    // `setMotorMode('disabled')` makes the off-switch deterministic
-    // across daemon revisions. Synchronous over the DataChannel,
-    // so it lands while the WebRTC session is still up.
-    try {
-      robot.setMotorMode('disabled');
+    // `sleepAndDisableRobot` plays the goto-sleep trajectory,
+    // hard-bounded by a JS timeout, then forces motor mode to
+    // `'disabled'` deterministically (the daemon's own motor
+    // mode handling after gotoSleep varies across revisions).
+    // Both steps run BEFORE `stopSession()` below so they land
+    // while the WebRTC DataChannel is still up.
+    const result = await sleepAndDisableRobot(robot);
+    if (result.motorMode === 'disabled') {
       lastSetMotorMode = 'disabled';
-    } catch (err) {
-      console.warn('[engine] setMotorMode("disabled") failed (ignored):', err);
     }
   }
 
