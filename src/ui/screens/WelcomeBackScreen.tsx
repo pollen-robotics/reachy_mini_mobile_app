@@ -34,10 +34,10 @@ import { DURATION, FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
  * How long the welcome sits at full opacity before starting to
  * fade out. Includes the staggered entrance window (~750 ms for
  * logo + headline + subtitle) plus a comfortable reading beat
- * (~1.7 s) so the user has time to read the username and see
+ * (~2.7 s) so the user has time to read the username and see
  * the celebratory moment land before the scan view takes over.
  */
-const VISIBLE_MS = 2400;
+const VISIBLE_MS = 3400;
 
 /**
  * Pop-in keyframes used to stagger the entrance of the logo and
