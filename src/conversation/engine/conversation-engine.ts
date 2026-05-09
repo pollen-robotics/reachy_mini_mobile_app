@@ -95,6 +95,7 @@ import { createPoseDispatcher } from "./motion-control/pose-dispatcher";
 import { createOpenaiBridge } from "./bridge/openai-bridge";
 import type {
   AppState,
+  ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
   ConversationLevelEvent,
@@ -117,6 +118,7 @@ const GLIDE_TO_NEUTRAL_MS = 700;
 // New code should pull these straight from `./types`.
 export type {
   AppState,
+  ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
   ConversationLevelEvent,
@@ -233,6 +235,22 @@ const onErrorMessageChange: ((message: string | null) => void) | null =
   typeof options.onErrorMessageChange === "function"
     ? options.onErrorMessageChange
     : null;
+
+const onConnectionAttempt: ((info: ConversationConnectionAttempt | null) => void) | null =
+  typeof options.onConnectionAttempt === "function"
+    ? options.onConnectionAttempt
+    : null;
+
+const emitConnectionAttempt = (
+  info: ConversationConnectionAttempt | null,
+): void => {
+  if (!onConnectionAttempt) return;
+  try {
+    onConnectionAttempt(info);
+  } catch (err) {
+    console.warn("[engine] onConnectionAttempt callback threw:", err);
+  }
+};
 
 // ─── Conversation auto-start gate ───────────────────────────────────────
 //
@@ -715,65 +733,160 @@ async function doStart(): Promise<void> {
   // peer that no longer exists; the daemon-side /refresh-relay
   // endpoint and the 15s timeout below cover those cases instead.
 
-  // Timeout guard: if startSession() never resolves (e.g. the robot-side
-  // relay accepted the session but its GStreamer never produces an
-  // offer), we MUST abort client-side rather than sit in "Starting…"
-  // forever. Leaving the promise pending also leaks a live session on
-  // HF central - every subsequent connection attempt (mobile OR the
-  // web Space) is then rejected with "Robot is busy: …", until the
-  // daemon is manually restarted.
+  // ─── startSession with auto-retry on transient daemon crashes ─────
   //
-  // 15 seconds is a generous upper bound for a healthy
-  // startSession: fresh sessions usually come up in 1-3 s on LAN. If
-  // we hit the timeout we actively stopSession() + disconnect() to
-  // release central's session state, then surface a retryable error.
-  const START_TIMEOUT_MS = 15_000;
-  let timedOut = false;
-  const timeoutHandle = window.setTimeout(() => {
-    timedOut = true;
-    // Fire-and-forget: stopSession() sends `endSession` to central so
-    // the session is released even if the local _pc handshake is in
-    // a weird half-open state. Wrapped in `expectedStop` so the
-    // resulting `sessionStopped` event doesn't trigger the listener's
-    // unsolicited-drop recovery path - we own the follow-up state via
-    // the `onFatalError` call in the catch block below.
-    if (robot) {
-      void expectedStop(() => robot!.stopSession());
-    }
-  }, START_TIMEOUT_MS);
+  // The dominant intermittent failure mode in the wild is a libnice
+  // assertion crash deep inside the daemon's WebRTC stack
+  // (`priv_conn_check_tick_stream_nominate` in `agent/conncheck.c`),
+  // which kills the daemon outright via SIGABRT. systemd then takes
+  // ~3 s (`RestartSec=3s`) plus ~10-13 s of FastAPI/GStreamer
+  // bring-up to put the daemon back online - a ~13-16 s blackout.
+  //
+  // The single-shot 15 s timeout we used to ship would expire pile
+  // au moment où le daemon revient and surface a misleading "Robot
+  // did not respond in time" to the user, even though the next
+  // attempt 1 s later would have worked. That is exactly the
+  // "marche / marche pas / remarche" behaviour reported on Reachy
+  // Wi-Fi.
+  //
+  // We now do up to two attempts:
+  //
+  //   - ATTEMPT_TIMEOUT_MS = 8 s   (was 15 s single shot)
+  //                                Healthy LAN handshakes complete in
+  //                                1-3 s, so 8 s is a generous upper
+  //                                bound that detects the silent
+  //                                daemon death without holding the
+  //                                user hostage.
+  //   - RETRY_GAP_MS       = 12 s  Time we wait between attempts.
+  //                                Sized to comfortably exceed the
+  //                                measured 13-16 s window minus the
+  //                                8 s we already spent on attempt 1
+  //                                (so the 2nd attempt typically
+  //                                lands on a freshly-restarted
+  //                                daemon, not on the half-resurrected
+  //                                one).
+  //   - MAX_ATTEMPTS       = 2     One retry is enough - the libnice
+  //                                crash is a true random race, not a
+  //                                deterministic incompatibility.
+  //                                Two crashes in a row is
+  //                                vanishingly rare with a 12 s gap.
+  //
+  // Worst case latency:    8 + 12 + 8 = 28 s before we surface error.
+  // First-shot success:    same as before, just 8 s timeout instead
+  //                        of 15 s (so we are FASTER on the happy
+  //                        path).
+  //
+  // The engine state stays in `starting` throughout the loop, so the
+  // host's connecting overlay keeps the spinner up. The
+  // `onConnectionAttempt` callback is fired on each attempt so the
+  // host can show "Reconnecting… (2 of 2)" instead of an unchanging
+  // caption that looks frozen.
+  const ATTEMPT_TIMEOUT_MS = 8_000;
+  const RETRY_GAP_MS = 12_000;
+  const MAX_ATTEMPTS = 2;
 
-  const startSessionT0 = performance.now();
-  console.log(
-    `[shell-webrtc] doStart: calling robot.startSession(${selectedRobotId})...`,
-  );
-  try {
-    await robot.startSession(selectedRobotId);
-    console.log(
-      `[shell-webrtc] doStart: startSession resolved in ${Math.round(
-        performance.now() - startSessionT0,
-      )}ms, robot.state = ${robot.state}`,
-    );
-  } catch (err) {
-    window.clearTimeout(timeoutHandle);
-    console.warn(
-      `[shell-webrtc] doStart: startSession rejected after ${Math.round(
-        performance.now() - startSessionT0,
-      )}ms (timedOut=${timedOut}):`,
-      err,
-    );
-    if (timedOut) {
-      onFatalError(
-        new Error(
-          'Robot did not respond in time. It may be busy with another app. ' +
-            'Try again in a moment, or restart the robot if the problem persists.',
-        ),
-      );
-    } else {
-      onFatalError(err);
+  // The actual per-attempt logic, hoisted into a closure so the loop
+  // below stays a clean orchestrator.
+  const tryStartSession = async (
+    timeoutMs: number,
+  ): Promise<{ ok: true } | { ok: false; reason: Error; timedOut: boolean }> => {
+    if (!robot || !selectedRobotId) {
+      return {
+        ok: false,
+        reason: new Error("Robot or peer id missing"),
+        timedOut: false,
+      };
     }
+    let timedOut = false;
+    // Timeout guard. Same rationale as the original 15 s guard:
+    // leaving the promise hanging leaks a session on HF central
+    // and every subsequent attempt comes back as "Robot is busy".
+    // `expectedStop` keeps the resulting `sessionStopped` event
+    // from triggering the listener's unsolicited-drop recovery
+    // path - the loop below owns the follow-up.
+    const timeoutHandle = window.setTimeout(() => {
+      timedOut = true;
+      if (robot) {
+        void expectedStop(() => robot!.stopSession());
+      }
+    }, timeoutMs);
+
+    const t0 = performance.now();
+    try {
+      await robot.startSession(selectedRobotId);
+      window.clearTimeout(timeoutHandle);
+      console.log(
+        `[shell-webrtc] doStart: startSession resolved in ${Math.round(
+          performance.now() - t0,
+        )}ms, robot.state = ${robot.state}`,
+      );
+      return { ok: true };
+    } catch (err) {
+      window.clearTimeout(timeoutHandle);
+      console.warn(
+        `[shell-webrtc] doStart: startSession rejected after ${Math.round(
+          performance.now() - t0,
+        )}ms (timedOut=${timedOut}):`,
+        err,
+      );
+      const reason = timedOut
+        ? new Error(
+            "Robot did not respond in time. It may be busy with another app. " +
+              "Try again in a moment, or restart the robot if the problem persists.",
+          )
+        : err instanceof Error
+          ? err
+          : new Error(String(err));
+      return { ok: false, reason, timedOut };
+    }
+  };
+
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      console.log(
+        `[shell-webrtc] doStart: retry attempt ${attempt}/${MAX_ATTEMPTS} after ${RETRY_GAP_MS}ms gap`,
+      );
+      // Wait for the daemon (potentially) to fully recover from a
+      // libnice crash before retrying. The host is informed via
+      // `onConnectionAttempt` BEFORE the gap so the overlay can
+      // immediately switch to the "Reconnecting…" caption rather
+      // than feeling frozen for 12 s.
+      emitConnectionAttempt({ attempt, maxAttempts: MAX_ATTEMPTS });
+      await new Promise<void>((resolve) =>
+        window.setTimeout(resolve, RETRY_GAP_MS),
+      );
+      // Bail if the engine was unmounted during the retry gap. The
+      // caller (host) tearing the engine down nullifies `robot`;
+      // pressing on would just produce a noisy fatal error for a
+      // session the user no longer cares about.
+      if (!robot || !selectedRobotId) {
+        emitConnectionAttempt(null);
+        return;
+      }
+    } else {
+      emitConnectionAttempt({ attempt, maxAttempts: MAX_ATTEMPTS });
+    }
+
+    console.log(
+      `[shell-webrtc] doStart: calling robot.startSession(${selectedRobotId})... (attempt ${attempt}/${MAX_ATTEMPTS})`,
+    );
+    const result = await tryStartSession(ATTEMPT_TIMEOUT_MS);
+    if (result.ok) {
+      lastError = null;
+      break;
+    }
+    lastError = result.reason;
+  }
+
+  // Always clear the retry hint before either succeeding into the
+  // wake-up path or surfacing a fatal error.
+  emitConnectionAttempt(null);
+
+  if (lastError) {
+    onFatalError(lastError);
     return;
   }
-  window.clearTimeout(timeoutHandle);
 
   // Wake the robot now that the data channel is live. Self-contained
   // module: the host doesn't have an SDK ref of its own anymore, so
@@ -1374,26 +1487,31 @@ function wireRobot(): void {
     // Unsolicited drop: SDK / central / daemon decided this session
     // ended. Nobody else is responsible, so this listener IS the
     // recovery path.
-    await teardown();
+    //
+    // We route through `onFatalError()` (which sets state to `error`,
+    // emits the message, and runs `teardown()` for us) so the host
+    // gets the SAME visible surface as for any other engine failure
+    // (per-attempt timeout, libnice crash recovery, OpenAI fatal,
+    // mic introuvable, etc.): a full-screen `<SessionErrorView>`
+    // with a single "Back" CTA that returns the user to the picker.
+    //
+    // This unifies the behaviour: every session-level failure is one
+    // consistent surface with a clear way out, instead of leaving
+    // the user stranded on `RobotSessionScreen` with the engine
+    // parked on `authenticated` and the orb showing a misleading
+    // mid-bring-up visual + a tiny "session ended" caption that's
+    // easy to miss. It also keeps the cleanup deterministic: the
+    // next time the user picks the same robot from the scan view,
+    // the engine remounts on a fresh slate (motors disabled, no
+    // stale session reference, no half-running OpenAI client).
     selectedRobotId = null;
     applyMicMuted(false);
-    // Fall back to the pre-session screen rather than the picker; the
-    // user can trigger a new run with a single tap.
-    if (robot?.isAuthenticated) {
-      setState("authenticated");
-    } else {
-      setState("signed-out");
-    }
-    if (onErrorMessageChange) {
-      try {
-        onErrorMessageChange("The session ended unexpectedly.");
-      } catch (callbackErr) {
-        console.warn(
-          "[conversation-engine] onErrorMessageChange threw:",
-          callbackErr,
-        );
-      }
-    }
+    await onFatalError(
+      new Error(
+        "The session ended unexpectedly. The robot may have been " +
+          "disconnected, or its daemon was stopped.",
+      ),
+    );
   });
 
   // Cache the freshest video stream so late attachers (camera card
@@ -2127,6 +2245,22 @@ return {
       return ok;
     } catch (err) {
       console.warn("[engine] playSound failed:", err);
+      return false;
+    }
+  },
+
+  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => {
+    if (unmounted || !robot) {
+      // Manual head control surfaces (e.g. the joystick) call this
+      // at 20 Hz while the user drags. Spamming a warn on every
+      // tick before the engine boots would be noisy; stay silent.
+      return false;
+    }
+    try {
+      const ok = robot.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg);
+      return ok !== false; // SDK returns undefined on older builds
+    } catch (err) {
+      console.warn("[engine] setHeadRpyDeg failed:", err);
       return false;
     }
   },

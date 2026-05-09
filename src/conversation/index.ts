@@ -29,5 +29,8 @@
 
 export { ConversationPanel } from './ConversationPanel';
 export type { ConversationPanelProps } from './ConversationPanel';
-export type { AppState as ConversationState } from './engine/conversation-engine';
+export type {
+  AppState as ConversationState,
+  ConversationConnectionAttempt,
+} from './engine/conversation-engine';
 export { flushEngineLifecycle } from './lifecycle';

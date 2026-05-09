@@ -40,6 +40,7 @@ import { chainLifecycle } from '../conversation/lifecycle';
 import {
   mountConversation,
   type AppState,
+  type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
 } from '../conversation/engine/conversation-engine';
@@ -69,6 +70,17 @@ export interface RobotSessionHandle {
    *  once on the current session. Sticky: stays true through
    *  releases / re-acquires until `tearDown()` resets it. */
   hasReachedReady: boolean;
+  /**
+   * In-flight connection-retry info, or `null` when no retry is
+   * happening (either we are on the first attempt or we have
+   * already succeeded / given up). The host shows a "Reconnecting…
+   * (n of m)" caption inside the connecting overlay when this is
+   * non-null AND `attempt > 1`.
+   *
+   * Reset to `null` on every successful connection or fatal error,
+   * so it never bleeds across session attempts.
+   */
+  connectionAttempt: ConversationConnectionAttempt | null;
 
   /** Conversation parts (D layer): start / stop the OpenAI Realtime
    *  pipeline, antennas, head wobbler. No-op if the engine isn't
@@ -146,6 +158,18 @@ export interface RobotSessionHandle {
    * Non-throwing.
    */
   playSound: (file: string) => boolean;
+
+  /**
+   * Push an absolute head orientation (degrees) to the robot. Thin
+   * pass-through to the engine's `setHeadRpyDeg`. Used by manual
+   * control surfaces like the camera-tab joystick; never used while
+   * a conversation is active (the conversation owns the head via
+   * its pose dispatcher).
+   *
+   * Returns `true` when the command was queued, `false` if the
+   * engine isn't ready or the DC is down. Non-throwing.
+   */
+  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
 }
 
 interface UseRobotSessionOptions {
@@ -180,6 +204,8 @@ export function useRobotSession({
   const [micMuted, setMicMuted] = useState(false);
   const [toolToastLabel, setToolToastLabel] = useState<string | null>(null);
   const [hasReachedReady, setHasReachedReady] = useState(false);
+  const [connectionAttempt, setConnectionAttempt] =
+    useState<ConversationConnectionAttempt | null>(null);
   /**
    * `phaseHint` captures the in-flight handoff transitions that the
    * engine doesn't model itself: `releasing`, `reacquiring`,
@@ -271,6 +297,10 @@ export function useRobotSession({
               current === event.label ? null : current,
             );
           }, dismiss);
+        },
+        onConnectionAttempt: (info) => {
+          if (cancelToken.cancelled) return;
+          setConnectionAttempt(info);
         },
       });
       if (cancelToken.cancelled) {
@@ -435,6 +465,15 @@ export function useRobotSession({
     return handleRef.current?.playSound(file) ?? false;
   }, []);
 
+  const setHeadRpyDeg = useCallback(
+    (rollDeg: number, pitchDeg: number, yawDeg: number): boolean => {
+      return (
+        handleRef.current?.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg) ?? false
+      );
+    },
+    [],
+  );
+
   const phase = derivePhase(engineState, phaseHint);
 
   return {
@@ -444,6 +483,7 @@ export function useRobotSession({
     micMuted,
     toolToastLabel,
     hasReachedReady,
+    connectionAttempt,
     startConversation,
     stopConversation,
     triggerOrbAction,
@@ -460,5 +500,6 @@ export function useRobotSession({
     getDaemonVersion,
     getMicLevel,
     playSound,
+    setHeadRpyDeg,
   };
 }

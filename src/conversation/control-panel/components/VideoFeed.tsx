@@ -111,30 +111,30 @@ export default function VideoFeed({ session }: VideoFeedProps) {
   );
 }
 
-/** Tiny `● LIVE` badge anchored top-left while a frame is playing. */
+/** `● LIVE` badge anchored top-left while a frame is playing. */
 function LivePip() {
   return (
     <Box
       sx={{
         position: 'absolute',
-        top: 6,
-        left: 6,
+        top: 10,
+        left: 10,
         display: 'flex',
         alignItems: 'center',
-        gap: 0.5,
+        gap: 0.625,
         bgcolor: 'rgba(0, 0, 0, 0.45)',
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
-        px: 0.75,
-        py: 0.25,
+        px: 1,
+        py: 0.375,
         borderRadius: 999,
         pointerEvents: 'none',
       }}
     >
       <Box
         sx={{
-          width: 6,
-          height: 6,
+          width: 8,
+          height: 8,
           borderRadius: '50%',
           bgcolor: '#ef4444',
           animation: 'cameraLivePulse 1.6s ease-in-out infinite',
@@ -147,7 +147,7 @@ function LivePip() {
       <Typography
         component="span"
         sx={{
-          fontSize: TYPO.micro,
+          fontSize: TYPO.xs,
           fontWeight: FONT_WEIGHT.bold,
           letterSpacing: '0.6px',
           color: '#fff',

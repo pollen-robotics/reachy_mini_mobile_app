@@ -1,17 +1,17 @@
 /**
  * Robot session screen.
  *
- * Two-tab shell hosted on a single connected robot:
+ * Three-tab shell hosted on a single connected robot:
  *
- *   ┌────────────────────────────────────────┐
- *   │ Header (back/power-off + name + chips) │
- *   ├────────────────────────────────────────┤
- *   │                                        │
- *   │  Tab body  (Conversation OR Apps)      │
- *   │                                        │
- *   ├────────────────────────────────────────┤
- *   │ BottomNavigation : [Conv] [Apps]       │
- *   └────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────┐
+ *   │ Header (back/power-off + name + chips)       │
+ *   ├──────────────────────────────────────────────┤
+ *   │                                              │
+ *   │  Tab body  (Conversation | Apps | Robot)     │
+ *   │                                              │
+ *   ├──────────────────────────────────────────────┤
+ *   │ BottomNavigation : [Conv] [Apps] [Robot]     │
+ *   └──────────────────────────────────────────────┘
  *
  * Architectural separation (A / B / C / D layers)
  * ───────────────────────────────────────────────
@@ -30,11 +30,19 @@
  * the iframe dials in, and asks for it back on close (via
  * `session.reacquire()`). The robot stays awake throughout.
  *
- * Tabs are independent of the session lifecycle: switching to the
- * Apps tab does NOT release the session; only OPENING an app does.
+ * `<RobotTabView>` is a third consumer: it surfaces the robot's
+ * camera feed (via `session.attachVideo`) and the daemon-level
+ * audio controls (volume + speaker test via `session.playSound`).
+ * It never starts a conversation - the conv pipeline is owned by
+ * the Conv tab via `session.startConversation`.
+ *
+ * Tabs are independent of the session lifecycle: switching tabs
+ * does NOT release the WebRTC session; only OPENING an app does.
  * That matches the user's mental model ("I'm just browsing - the
  * robot is still listening to me" vs "I'm in this app now - the
- * robot is talking to it").
+ * robot is talking to it"). The Conv pipeline (D layer) IS stopped
+ * on tab-switch because it's the only piece whose silence-while-
+ * background is actually surprising / wasteful.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -49,6 +57,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AppsIcon from '@mui/icons-material/Apps';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 
 import {
   extractRobotHardwareId,
@@ -60,15 +69,18 @@ import {
 import { ConversationPanel } from '../conversation';
 import AudioControlsBar from '../conversation/control-panel/AudioControlsBar';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
-// The component still ships at
-// `src/conversation/control-panel/CameraOverlay.tsx`, but we hide
-// it from the conversation tab until we're ready to ship the live
-// camera feed. Re-add the import + render it back inside the
-// `tab === 'conv'` block when reinstating.
+// The conversation tab keeps the orb visually clean (no floating
+// PIP); the camera surfaces in the dedicated `Robot` tab via
+// `<RobotTabView>`, full-width and 4:3, where the user can actually
+// frame what Reachy sees. Re-add the import + render it back inside
+// the `tab === 'conv'` block if/when we want a small PIP during
+// conversations too (the underlying `VideoFeed` already supports
+// release/reacquire and concurrent mounts on the same SDK track).
 import { useRobotSession } from '../session/useRobotSession';
 import type { AppEntry } from '../apps/types';
 import AppIframeOverlay from './apps/AppIframeOverlay';
 import AppsTabView from './apps/AppsTabView';
+import RobotTabView from './robot/RobotTabView';
 import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
@@ -87,7 +99,7 @@ interface RobotSessionScreenProps {
   onBack: () => void;
 }
 
-type Tab = 'conv' | 'apps';
+type Tab = 'conv' | 'apps' | 'robot';
 
 export default function RobotSessionScreen({
   target,
@@ -448,6 +460,19 @@ function ConnectedSession({
           </Box>
         )}
 
+        {tab === 'robot' && !leaving && !isError && (
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <RobotTabView session={session} isLive={session.hasReachedReady} />
+          </Box>
+        )}
+
         {/* Reacquiring overlay stays scoped to the conversation column
             (above the panel, below the header / bottom nav) - the
             user is briefly back on the conv tab and we want them to
@@ -510,6 +535,11 @@ function ConnectedSession({
           icon={<GraphicEqIcon />}
         />
         <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
+        <BottomNavigationAction
+          value="robot"
+          label="Robot"
+          icon={<SmartToyOutlinedIcon />}
+        />
       </BottomNavigation>
 
       {openedApp && (
@@ -532,7 +562,10 @@ function ConnectedSession({
           monitors spin up. */}
       {showConnectingOverlay && (
         <FullScreenTransition>
-          <ConnectingView state={session.engineState} />
+          <ConnectingView
+            state={session.engineState}
+            connectionAttempt={session.connectionAttempt}
+          />
         </FullScreenTransition>
       )}
       {/* Full-screen leaving transition: covers EVERYTHING while the

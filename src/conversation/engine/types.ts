@@ -101,6 +101,38 @@ export interface ConversationToolToastEvent {
   durationMs: number;
 }
 
+/**
+ * Per-attempt info emitted while `doStart` runs through its
+ * connection-retry loop.
+ *
+ * Fired:
+ *   - At the start of every attempt (so the host can update the
+ *     connecting overlay if `attempt > 1`).
+ *   - With `null` when we either succeed or give up (the host
+ *     should clear any "retrying" hint at that point).
+ *
+ * Why expose this at all
+ * ──────────────────────
+ * The robot's daemon has a known intermittent failure mode where
+ * libnice asserts inside the WebRTC ICE nomination
+ * (`priv_conn_check_tick_stream_nominate`), kills the daemon
+ * outright, and systemd takes ~13-16 s to bring it back up. Our
+ * single-shot `startSession` would just time out and tell the user
+ * "Robot did not respond" while the daemon was still rebooting.
+ *
+ * The retry loop survives that crash (waits long enough for systemd
+ * to restart the daemon, then retries the handshake). For the user,
+ * we want the connecting overlay to clearly say "Reconnecting…"
+ * instead of staying stuck on the same caption for 25 s, so they
+ * understand we're actively working on it.
+ */
+export interface ConversationConnectionAttempt {
+  /** 1-indexed. `1` is the first attempt, `2` is the first retry. */
+  attempt: number;
+  /** Total number of attempts the engine will make before giving up. */
+  maxAttempts: number;
+}
+
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
    *  Safe to call multiple times. */
@@ -245,6 +277,22 @@ export interface ConversationEngineHandle {
    * down. Non-throwing.
    */
   playSound: (file: string) => boolean;
+
+  /**
+   * Push a head orientation target (roll/pitch/yaw in degrees) to the
+   * robot. Thin pass-through to the SDK's `setHeadRpyDeg` -
+   * non-blocking, no completion event. Returns `true` when the
+   * command was queued onto the DataChannel, `false` if the engine
+   * isn't ready or the DC is down. Non-throwing.
+   *
+   * Used by manual control surfaces (e.g. the mobile app's joystick
+   * over the camera feed). The conversation pipeline routes through
+   * the pose dispatcher instead, NOT via this method, so the two
+   * paths can't fight: the dispatcher is silent while the
+   * conversation is stopped, which is the only time manual control
+   * is offered to the user.
+   */
+  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
 }
 
 export interface ConversationEngineOptions {
@@ -384,4 +432,16 @@ export interface ConversationEngineOptions {
    * under the orb.
    */
   onErrorMessageChange?: (message: string | null) => void;
+
+  /**
+   * Notifies the host on each attempt of the connection-retry loop
+   * inside `doStart()`. Fired with the attempt number on every try
+   * (1-indexed), and with `null` once we either succeed or surface
+   * a fatal error.
+   *
+   * The host renders a "Reconnecting… (2 of 2)" caption inside the
+   * connecting overlay when `attempt > 1`. See
+   * `ConversationConnectionAttempt` for the rationale.
+   */
+  onConnectionAttempt?: (attempt: ConversationConnectionAttempt | null) => void;
 }

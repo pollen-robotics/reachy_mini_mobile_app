@@ -118,7 +118,18 @@ function Fallback({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 24,
+        // `max(28px, env(...))` honours the device's hardware safe
+        // area (notch, Dynamic Island, home indicator) on iOS / Android
+        // while still keeping a comfortable 28 px gutter on devices
+        // without one. Using individual side properties (instead of the
+        // shorthand) so each edge gets its own inset; the previous
+        // constant `padding: 24` had the card touching the screen edges
+        // on notched devices because the WebView's body extends
+        // edge-to-edge into those zones.
+        paddingTop: 'max(28px, env(safe-area-inset-top, 0px))',
+        paddingRight: 'max(28px, env(safe-area-inset-right, 0px))',
+        paddingBottom: 'max(28px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(28px, env(safe-area-inset-left, 0px))',
         background: palette.bg,
         color: palette.text,
         fontFamily:
