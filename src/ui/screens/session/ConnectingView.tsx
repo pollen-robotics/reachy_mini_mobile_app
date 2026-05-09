@@ -21,14 +21,20 @@
  *   Link       Session    Wake-up
  *
  *   - LINK     - HF auth + central handshake (pre-`starting` cluster).
- *   - SESSION  - WebRTC bring-up (`session.start()` first ~3 s).
+ *   - SESSION  - WebRTC bring-up (`session.start()` is in flight).
  *   - WAKE-UP  - motors enabled + wake trajectory plays (`session.wakeUp()`).
  *
- * The Session → Wake-up advance is timer-driven (~3 s into the
- * `starting` state) because the engine doesn't emit a separate FSM
- * state for the wake-up phase - it's all part of `starting`. The
- * timer is reset whenever the FSM leaves `starting`, so a retry
- * cleanly starts from Session again.
+ * The Session → Wake-up advance is EVENT-driven, not timer-driven:
+ * `connectionAttempt` is non-null while `session.start()` runs (the
+ * engine fires the callback with `{ attempt }` at the start of each
+ * try and with `null` right after success), so we can map:
+ *
+ *   - `connectionAttempt != null` AND state == `starting`  →  Session
+ *   - `connectionAttempt == null` AND state == `starting`  →  Wake-up
+ *
+ * This way the indicator advances precisely on the boundary between
+ * the two SDK calls instead of on a timer that often misses the
+ * wake-up phase entirely on a fast LAN handshake (1-2 s).
  *
  * Retry awareness
  * ───────────────
@@ -65,16 +71,6 @@ interface ConnectingViewProps {
 }
 
 /**
- * Time spent in the `starting` state before we visually advance from
- * the SESSION step to the WAKE-UP step. Tuned to the typical timing
- * of a healthy LAN bring-up: ~1-2 s for the WebRTC handshake then
- * the wake trajectory takes over. Slightly conservative so the user
- * sees the SESSION dot "pulse and complete" rather than skipping
- * straight to WAKE-UP on a fast device.
- */
-const SESSION_TO_WAKE_TRANSITION_MS = 2_500;
-
-/**
  * After this many ms in the same `starting` state without any
  * progress signal, we surface a small "taking a moment" hint so
  * the user knows we're not stuck. Slightly under the engine's 8 s
@@ -90,14 +86,19 @@ const STEPS = [
 ] as const;
 
 export default function ConnectingView({ state, connectionAttempt }: ConnectingViewProps) {
-  const isRetrying = (connectionAttempt?.attempt ?? 1) > 1;
-  const startingElapsedPastWake = useStartingElapsedPast(
-    state,
-    SESSION_TO_WAKE_TRANSITION_MS,
-  );
+  const attempt = connectionAttempt ?? null;
+  const isRetrying = (attempt?.attempt ?? 1) > 1;
+  // Sticky "we've reached the wake-up phase" flag. The engine fires
+  // `connectionAttempt = null` at the boundary between `session.start()`
+  // resolving and `session.wakeUp()` starting, so the moment we observe
+  // `state === 'starting'` AND `attempt === null` we know we're in the
+  // wake phase. We latch the bit (instead of computing it on each
+  // render) so a brief async race during the FSM transition to `ready`
+  // can't blink us back to "Session" while the indicator unmounts.
+  const inWakePhase = useReachedWakePhase(state, attempt);
   const slowHintVisible = useStartingElapsedPast(state, SLOW_HINT_DELAY_MS);
 
-  const currentStep = stepIndexFor(state, startingElapsedPastWake);
+  const currentStep = stepIndexFor(state, inWakePhase);
 
   return (
     <Stack
@@ -144,8 +145,8 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
         >
           {captionFor({
             state,
-            connectionAttempt: connectionAttempt ?? null,
-            startingElapsedPastWake,
+            connectionAttempt: attempt,
+            inWakePhase,
             slowHintVisible,
           })}
         </Typography>
@@ -156,11 +157,12 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
 
 /**
  * Map the engine's pre-ready states to the 0/1/2 step index of the
- * 3-step indicator. The starting → step 1 → step 2 transition is
- * timer-driven (see `useStartingElapsedPast`) because the engine
- * doesn't model a separate "wake-up" FSM state.
+ * 3-step indicator. The starting → Session → Wake-up advance is
+ * EVENT-driven (see `useReachedWakePhase`) because the engine
+ * fires `connectionAttempt = null` exactly between `session.start()`
+ * resolving and `session.wakeUp()` starting.
  */
-function stepIndexFor(state: ConversationState, pastWakeThreshold: boolean): 0 | 1 | 2 {
+function stepIndexFor(state: ConversationState, inWakePhase: boolean): 0 | 1 | 2 {
   switch (state) {
     case 'signed-out':
     case 'authenticated':
@@ -169,7 +171,7 @@ function stepIndexFor(state: ConversationState, pastWakeThreshold: boolean): 0 |
     case 'auto-selecting':
       return 0;
     case 'starting':
-      return pastWakeThreshold ? 2 : 1;
+      return inWakePhase ? 2 : 1;
     default:
       return 2;
   }
@@ -178,14 +180,14 @@ function stepIndexFor(state: ConversationState, pastWakeThreshold: boolean): 0 |
 interface CaptionInputs {
   state: ConversationState;
   connectionAttempt: ConversationConnectionAttempt | null;
-  startingElapsedPastWake: boolean;
+  inWakePhase: boolean;
   slowHintVisible: boolean;
 }
 
 function captionFor({
   state,
   connectionAttempt,
-  startingElapsedPastWake,
+  inWakePhase,
   slowHintVisible,
 }: CaptionInputs): string {
   // Retry caption wins over everything else - the user needs to know
@@ -205,15 +207,15 @@ function captionFor({
     case 'auto-selecting':
       return 'Opening secure link to Hugging Face';
     case 'starting':
-      // `starting` is the umbrella for both the WebRTC `startSession`
-      // handshake and the awaited `wakeUp` trajectory. We split the
-      // caption based on the same timer that drives the stepper:
-      // first half says "establishing session", second half (after
-      // ~2.5 s) says "waking up".
+      // `starting` is the umbrella for both `session.start()` (the
+      // WebRTC handshake) and `session.wakeUp()` (the trajectory).
+      // We split the caption on the SAME signal that drives the
+      // stepper: `connectionAttempt` is non-null during start(),
+      // null during wakeUp().
       if (slowHintVisible) {
         return 'Waking up your Reachy - taking a moment to settle in…';
       }
-      return startingElapsedPastWake
+      return inWakePhase
         ? 'Enabling motors and waking up your Reachy'
         : 'Establishing the WebRTC session';
     default:
@@ -224,13 +226,54 @@ function captionFor({
 }
 
 /**
+ * Returns `true` once we've observed the boundary between
+ * `session.start()` resolving and `session.wakeUp()` starting -
+ * i.e. while `state === 'starting'` we saw `connectionAttempt`
+ * flip from non-null to null.
+ *
+ * The bit is sticky for the duration of the current `starting`
+ * window: once latched, a brief race between the engine's `setState
+ * ('ready')` and the host's React render can't blink us back to the
+ * Session step before the indicator unmounts.
+ *
+ * Resets to `false` whenever the FSM leaves `starting`, so a
+ * subsequent connection cycle (after `tearDown` + new mount, or
+ * after a release+reacquire) starts fresh from the Session step.
+ */
+function useReachedWakePhase(
+  state: ConversationState,
+  connectionAttempt: ConversationConnectionAttempt | null,
+): boolean {
+  const [reached, setReached] = useState(false);
+
+  useEffect(() => {
+    if (state !== 'starting') {
+      // We're either pre-starting or post-`ready`; reset so the next
+      // cycle through `starting` starts from the Session step again.
+      setReached(false);
+      return;
+    }
+    if (!connectionAttempt) {
+      // We're in `starting` with no attempt in flight → the engine
+      // either hasn't fired the first `onConnectionAttempt` yet, or
+      // it just fired `null` because `session.start()` resolved and
+      // `session.wakeUp()` is about to run. The first case is a sub-
+      // millisecond race; the second is the boundary we care about.
+      // Latch the bit and keep it through the rest of the `starting`
+      // window (we never want to go back to Session once we've
+      // reached Wake-up - the visual would feel glitchy).
+      setReached(true);
+    }
+  }, [state, connectionAttempt]);
+
+  return reached;
+}
+
+/**
  * Returns `true` once we've been in the `starting` state for longer
  * than `delayMs`. Resets to `false` whenever we transition out of
- * `starting`, so a retry / handoff starts a fresh countdown.
- *
- * Used twice in this component:
- *   - to advance the stepper from SESSION → WAKE-UP after ~2.5 s,
- *   - to surface the "taking a moment" hint after ~6 s.
+ * `starting`. Used to surface the "taking a moment" hint after ~6 s,
+ * never to drive the stepper itself.
  */
 function useStartingElapsedPast(state: ConversationState, delayMs: number): boolean {
   const [past, setPast] = useState(false);
