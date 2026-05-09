@@ -91,6 +91,7 @@ import { installBackgroundResilience } from "@/features/robot-session/background
 import { startRobotSession } from "@/features/robot-session/start-session";
 import { sleepAndDisableRobot, wakeRobot } from "@/features/robot-session/physical";
 import { createSessionGuard } from "@/features/robot-session/session-guard";
+import { createVideoStreamCache } from "@/features/robot-session/video-cache";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -337,15 +338,12 @@ let knownRobots: RobotInfo[] = [];
 
 let robot: ReachyMiniInstance | null = null;
 
-// Latest robot video stream. Cached because the SDK's `videoTrack`
-// event fires exactly once per `startSession()`, while the host's
-// camera card can mount AFTER that point (e.g. it's gated on the
-// session reaching `ready`, which only happens once the wake-up
-// trajectory completes - well after the WebRTC video transceiver
-// has already negotiated). Without this cache, late attachers would
-// never see a frame. Cleared on `sessionStopped` so a stale stream
-// from a previous session can't leak into a new attach.
-let latestVideoStream: MediaStream | null = null;
+// Robot video stream cache. The SDK's `videoTrack` event is one-shot
+// per session, so consumers that mount AFTER that event (e.g. the
+// camera card on the Robot tab) must replay the cached stream to
+// reach a live frame. See `features/robot-session/video-cache.ts` for
+// the full contract.
+const videoCache = createVideoStreamCache();
 
 // OpenAI session lifecycle (client + audio sink + reconnect
 // counters + reconnecting flag) is owned end-to-end by the OpenAI
@@ -1294,7 +1292,7 @@ function wireRobot(): void {
     // nulls any bound element's `srcObject` on this same event, so
     // the React side stays in sync without us touching the video
     // element directly here.
-    latestVideoStream = null;
+    videoCache.clear();
 
     // Distinguish stops we initiated from stops we're observing. See
     // the `expectedStop` counter above for the full rationale; the
@@ -1347,7 +1345,7 @@ function wireRobot(): void {
   // points at the live track.
   robot.addEventListener("videoTrack", (event) => {
     const detail = (event as CustomEvent<{ track: MediaStreamTrack; stream: MediaStream }>).detail;
-    latestVideoStream = detail.stream;
+    videoCache.set(detail.stream);
     // Diagnostic line: surfaces in the mobile webview console so we
     // can tell whether the daemon is actually publishing video and
     // whether the cache picked it up. The SDK only fires this once
@@ -1911,26 +1909,14 @@ return {
     }
     try {
       const detach = robot.attachVideo(videoElement);
-      // Late-attach catch-up. The SDK's `videoTrack` event is a
-      // one-shot fired during session negotiation. If the host
-      // mounts the camera AFTER that negotiation (which is the
-      // common case - the card is gated on `hasReachedReady`), the
-      // SDK's freshly-registered listener won't fire again until
-      // the next `startSession`, so we'd be stuck on a black frame
-      // forever. Replay the cached stream onto the element here so
-      // we reach a live frame on the very next paint.
-      if (latestVideoStream && videoElement.srcObject !== latestVideoStream) {
-        videoElement.srcObject = latestVideoStream;
-        // Best-effort autoplay: the element is `autoPlay muted` on
-        // the React side, so this resolves immediately on most
-        // platforms. Swallow the rejection (Safari can throw if
-        // the user hasn't interacted with the page yet - the
-        // upstream gesture from tapping the orb satisfies the
-        // requirement, so this is mostly defensive).
-        void videoElement.play().catch(() => {
-          /* ignored */
-        });
-      }
+      // Late-attach catch-up via the cache. The SDK's `videoTrack`
+      // event is a one-shot fired during session negotiation, so a
+      // host that mounts the camera AFTER that point (the common
+      // case - the card is gated on `hasReachedReady`) would
+      // otherwise sit on a black frame until the next session
+      // start. The cache replays the live stream onto the element
+      // immediately so we reach a frame on the very next paint.
+      videoCache.replayInto(videoElement);
       return detach;
     } catch (err) {
       console.warn("[conversation-engine] attachVideo failed:", err);

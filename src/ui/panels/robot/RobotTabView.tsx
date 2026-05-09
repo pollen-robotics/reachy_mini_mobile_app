@@ -17,6 +17,13 @@
  *   │  │ [🔊]●─●  │ │ [🎤]●─●     │    │     "Audio" section header
  *   │  └──────────┘ └─────────────┘    │
  *   │                                  │
+ *   │  LOGS                            │
+ *   │  ┌────────────────────────────┐  │  ← placeholder for the upcoming
+ *   │  │                            │  │     `subscribe_logs` UI (see
+ *   │  │       Coming soon          │  │     `docs/WEBRTC_LOGS.md`).
+ *   │  │                            │  │     Grows to fill the rest of
+ *   │  └────────────────────────────┘  │     the available vertical space.
+ *   │                                  │
  *   └──────────────────────────────────┘
  *
  * Pure consumer of the session handle: takes only the slice of
@@ -118,10 +125,21 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
           // BottomNavigation. Top padding gives the first section
           // some breathing room below the screen-level top bar.
           pt: 1,
-          pb: 2,
+          pb: 6,
+          // mb:4,
+          // The inner Stack uses `minHeight: '100%'` to always fill
+          // the scrollable region vertically, so the trailing Logs
+          // section can `flex: 1` itself into the leftover space.
+          // Without this the Stack would only be as tall as its
+          // natural content and the placeholder would collapse.
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <Stack spacing={3} sx={COLUMN_SX}>
+        <Stack
+          spacing={3}
+          sx={{ ...COLUMN_SX, flex: 1, minHeight: 0 }}
+        >
           <Section label="Camera">
             <Box
               sx={(theme) => ({
@@ -174,6 +192,37 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
               />
             </Box>
           </Stack>
+
+          {/* Logs section. Placeholder card pinned to the bottom of
+              the tab, eating the rest of the vertical space so the
+              scrollable area never has dead empty grey at the
+              bottom. Wired up to `subscribe_logs` once the daemon
+              PR lands (see `docs/WEBRTC_LOGS.md`); until then we
+              render a discreet "Coming soon" so the slot is
+              visible and intentional. */}
+          <Section label="Logs" fill>
+            <Box
+              sx={(theme) => ({
+                flex: 1,
+                minHeight: 160,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: `${RADIUS.lg}px`,
+                border: `1px solid ${theme.palette.divider}`,
+                bgcolor: theme.palette.background.paper,
+              })}
+            >
+              <Typography
+                sx={{
+                  fontSize: TYPO.sm,
+                  color: 'text.secondary',
+                }}
+              >
+                Coming soon
+              </Typography>
+            </Box>
+          </Section>
         </Stack>
       </Box>
     </Stack>
@@ -184,16 +233,28 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
  * Section block: tiny uppercase label above its child(ren). Mirrors
  * the AudioControlCard's outside-label convention so the camera and
  * audio sections feel typographically aligned.
+ *
+ * `fill`: when true the section grows to consume any leftover
+ * vertical space inside its parent flex column, and wraps `children`
+ * in a `flex: 1` container so a single child Box can stretch with
+ * `flex: 1` of its own. Used by the trailing Logs placeholder so it
+ * pins to the bottom and fills the gap below the audio cards
+ * regardless of viewport height.
  */
 function Section({
   label,
   children,
+  fill = false,
 }: {
   label: string;
   children: React.ReactNode;
+  fill?: boolean;
 }) {
   return (
-    <Stack spacing={1}>
+    <Stack
+      spacing={1}
+      sx={fill ? { flex: 1, minHeight: 0 } : undefined}
+    >
       <Typography
         sx={{
           fontSize: TYPO.tiny,
@@ -207,7 +268,11 @@ function Section({
       >
         {label}
       </Typography>
-      {children}
+      {fill ? (
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>{children}</Box>
+      ) : (
+        children
+      )}
     </Stack>
   );
 }
