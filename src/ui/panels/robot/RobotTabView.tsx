@@ -209,11 +209,17 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
               PR lands (see `docs/WEBRTC_LOGS.md`); until then we
               render a discreet "Coming soon" so the slot is
               visible and intentional. */}
+          {/* `minHeight: 80` rather than 160 so the placeholder can
+              shrink on small phones (iPhone SE-class viewports) and
+              keep the camera + audio + logs trio scrollbar-free at
+              the default zoom. When the real `LogsConsole` lands
+              we'll bump this back up since virtualised log lists
+              actually need the room. */}
           <Section label="Logs" fill>
             <Box
               sx={(theme) => ({
                 flex: 1,
-                minHeight: 160,
+                minHeight: 80,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -232,16 +238,6 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
               </Typography>
             </Box>
           </Section>
-
-          {/* Explicit spacer at the very end of the column. Belt-and-
-              suspenders for the bottom gap above the BottomNavigation:
-              Stack `pb` and Box `padding-bottom` both have known iOS
-              WebKit + Chromium quirks where they get silently eaten on
-              flex containers with `flex: 1` children, but a sibling
-              with `flexShrink: 0` and a fixed pixel height ALWAYS
-              renders at that height regardless of the surrounding flex
-              math. Tweak `height` here to change the gap. */}
-          <Box sx={{ flexShrink: 0, height: 24 }} />
         </Stack>
       </Box>
     </Stack>

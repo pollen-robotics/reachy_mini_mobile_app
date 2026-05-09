@@ -67,6 +67,7 @@ import {
   buildAppEmbedUrl,
   type AppEmbedContext,
 } from '@/features/apps/buildEmbedUrl';
+import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
@@ -238,7 +239,7 @@ export default function AppIframeOverlay({
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1}
+        spacing={1.25}
         sx={{
           px: 2,
           py: 1,
@@ -247,7 +248,22 @@ export default function AppIframeOverlay({
           flexShrink: 0,
         }}
       >
-        {/* App name on the left, primary close button on the right.
+        {/* Emoji glyph on the very left so the user gets the same
+            visual identifier they tapped from the apps list - same
+            `readAppEmoji()` accessor as `AppCard`. Sized large enough
+            to register at a glance but inside the same vertical
+            footprint as the title so the bar doesn't grow taller. */}
+        <Typography
+          aria-hidden
+          sx={{
+            fontSize: '1.5rem',
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          {readAppEmoji(app)}
+        </Typography>
+        {/* App name flush left, primary close button flush right.
             Mirrors native iOS/Android sheet conventions: identifier
             anchors the user, exit affordance is in the thumb-reach
             corner. The primary tint on the close button makes it the

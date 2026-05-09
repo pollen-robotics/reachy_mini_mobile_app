@@ -30,6 +30,7 @@ import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
 import type { AppEntry } from '@/features/apps/types';
+import { readAppEmoji } from '@/features/apps/emoji';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface AppCardProps {
@@ -38,24 +39,13 @@ interface AppCardProps {
 }
 
 /**
- * Cardinality-stable accessors for the optional bits that live in
+ * Cardinality-stable accessor for `lastModified` that lives in
  * `extra` on a normalized catalog entry. Centralised here so a
- * malformed payload (a Space without cardData, or with cardData of
+ * malformed payload (a Space without lastModified, or with one of
  * the wrong shape) just renders the empty fallback instead of
- * blowing up the row.
+ * blowing up the row. The emoji glyph accessor is shared with the
+ * in-iframe top bar via `@/features/apps/emoji`.
  */
-function readEmoji(app: AppEntry): string {
-  const cardData = app.extra?.cardData as
-    | { emoji?: string }
-    | undefined;
-  const isPythonApp = (app.extra?.isPythonApp as boolean | undefined) !== false;
-  const raw = cardData?.emoji || (isPythonApp ? '📦' : '🌐');
-  // Use spread-and-take-first so multi-codepoint emoji (e.g. flags,
-  // skin-toned hands) are kept whole when the Space lists more than
-  // one in `cardData.emoji` (some catalog entries do this).
-  return [...raw][0] ?? '📦';
-}
-
 function readLastModified(app: AppEntry): string | null {
   const raw =
     (app.extra?.lastModified as string | number | undefined) ||
@@ -73,7 +63,7 @@ function readLastModified(app: AppEntry): string | null {
 
 function AppCardImpl({ app, onOpen }: AppCardProps) {
   const author = app.author;
-  const emoji = readEmoji(app);
+  const emoji = readAppEmoji(app);
   const formattedDate = readLastModified(app);
 
   return (
