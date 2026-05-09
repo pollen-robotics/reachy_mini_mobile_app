@@ -51,7 +51,7 @@
  * delivering a burst once the link recovers.
  */
 
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import { createUnthrottledInterval } from "../../motion/unthrottled-interval";
 
 export interface PoseDispatcherDeps {

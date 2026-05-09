@@ -36,7 +36,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { chainLifecycle } from '@/features/conversation/lifecycle';
+import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
 import {
   mountConversation,
   type AppState,

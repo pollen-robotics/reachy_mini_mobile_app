@@ -20,7 +20,7 @@
  * mount time without exposing the rest of its state.
  */
 
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "./sdk-types";
 
 export interface DcHealthDeps {
   /** Live robot instance. Returns null while the engine is in a

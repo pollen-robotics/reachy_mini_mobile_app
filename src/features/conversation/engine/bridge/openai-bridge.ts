@@ -29,7 +29,7 @@
 
 import { OpenaiRealtimeClient, type RealtimeStatus } from "../openai-realtime";
 import { ROBOT_TOOLS } from "../tools";
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 
 /**
  * Subset of `RealtimeStatus` the engine cares about. The bridge

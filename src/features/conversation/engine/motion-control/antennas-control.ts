@@ -25,7 +25,7 @@
 
 import { AntennasOscillator } from "../../motion/antennas";
 import { isTrajectoryPlaying } from "../trajectoryGate";
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type { PoseDispatcher } from "./pose-dispatcher";
 
 export interface AntennasControlDeps {

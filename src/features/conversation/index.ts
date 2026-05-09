@@ -31,4 +31,4 @@ export type {
   AppState as ConversationState,
   ConversationConnectionAttempt,
 } from './engine/conversation-engine';
-export { flushEngineLifecycle } from './lifecycle';
+export { flushEngineLifecycle } from '@/features/robot-session/lifecycle-queue';

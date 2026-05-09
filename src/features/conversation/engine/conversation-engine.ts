@@ -72,22 +72,22 @@
 // (`whenReachyReady()`) resolves immediately. Without this the engine
 // sits forever in `connecting`, waiting for a global that no <script>
 // tag will ever set in the bundled mobile build.
-import "./sdkBootstrap";
+import "@/features/robot-session/sdk-bootstrap";
 
-import type { ReachyMiniInstance, RobotInfo } from "./globals";
+import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
 import {
   TransportMonitor,
   type TransportKind,
-} from "./transportMonitor";
-import { WakeLockHandle } from "./wakeLock";
-import { consumeTokenFromHash, whenReachyReady } from "./tokenHash";
+} from "@/features/robot-session/transport-monitor";
+import { WakeLockHandle } from "@/features/robot-session/wake-lock";
+import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
 import { memoryStore } from "./memory";
-import { createDcHealthMonitor } from "./runtime/dc-health";
-import { installBackgroundResilience } from "./runtime/background-resilience";
+import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
+import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";

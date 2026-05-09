@@ -27,7 +27,7 @@
 import { memoryStore } from "../memory";
 import { MovePlayer, MOVE_IDS, type MoveId } from "../../motion/move-player";
 import { HEAD_POSES, type HeadPoseName } from "../tools";
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type { ConversationToolToastEvent } from "../types";
 
 export interface ToolCallEvent {

@@ -37,7 +37,7 @@
  *      `linear_pose_interpolation` (axis-angle slerp) to TypeScript.
  */
 
-import type { ReachyMiniInstance } from "../engine/globals";
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import { createUnthrottledInterval } from "./unthrottled-interval";
 
 const HF_DATASET_BASE = "https://huggingface.co/datasets";

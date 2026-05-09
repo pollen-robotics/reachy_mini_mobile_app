@@ -26,7 +26,7 @@
  *    WebView.
  */
 
-import type { ReachyMiniInstance } from "../globals";
+import type { ReachyMiniInstance } from "./sdk-types";
 
 export interface BackgroundResilienceDeps {
   /**
