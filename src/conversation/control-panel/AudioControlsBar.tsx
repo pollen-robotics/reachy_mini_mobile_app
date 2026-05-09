@@ -13,8 +13,8 @@
  */
 import { Box, Stack } from '@mui/material';
 
-import AudioControlCard from './components/AudioControlCard';
-import { useAudioVolumes } from './hooks/useAudioVolumes';
+import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
+import { useAudioVolumes } from '@/ui/widgets/audio-controls/useAudioVolumes';
 import type { RobotSessionHandle } from '../../session/useRobotSession';
 
 interface AudioControlsBarProps {

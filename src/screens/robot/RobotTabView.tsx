@@ -44,10 +44,10 @@
  */
 import { Box, Stack, Typography } from '@mui/material';
 
-import VideoFeed from '../../conversation/control-panel/components/VideoFeed';
-import AudioControlCard from '../../conversation/control-panel/components/AudioControlCard';
-import { useAudioVolumes } from '../../conversation/control-panel/hooks/useAudioVolumes';
-import { HeadJoystickOverlay } from '../../conversation/control-panel/head-control';
+import VideoFeed from '@/ui/widgets/video-feed/VideoFeed';
+import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
+import { useAudioVolumes } from '@/ui/widgets/audio-controls/useAudioVolumes';
+import { HeadJoystickOverlay } from '@/ui/widgets/head-control';
 import type { RobotSessionHandle } from '../../session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 

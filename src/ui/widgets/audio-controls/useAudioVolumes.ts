@@ -26,7 +26,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { RobotSessionHandle } from '../../../session/useRobotSession';
+import type { RobotSessionHandle } from '@/session/useRobotSession';
 
 type VolumeMethods = Pick<
   RobotSessionHandle,
