@@ -27,8 +27,6 @@
  * engage, but no AI voice).
  */
 
-export { ConversationPanel } from './ConversationPanel';
-export type { ConversationPanelProps } from './ConversationPanel';
 export type {
   AppState as ConversationState,
   ConversationConnectionAttempt,

@@ -66,9 +66,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildAppEmbedUrl,
   type AppEmbedContext,
-} from '../../apps/buildEmbedUrl';
-import type { AppEntry } from '../../apps/types';
-import type { SessionPhase } from '../../session/useRobotSession';
+} from '@/apps/buildEmbedUrl';
+import type { AppEntry } from '@/apps/types';
+import type { SessionPhase } from '@/session/useRobotSession';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 /**

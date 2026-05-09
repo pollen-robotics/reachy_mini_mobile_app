@@ -29,7 +29,7 @@ import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
-import type { AppEntry } from '../../apps/types';
+import type { AppEntry } from '@/apps/types';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface AppCardProps {

@@ -66,8 +66,8 @@ import {
   extractRobotTransport,
   type CentralRobotEntry,
 } from '../auth/fetchRobotsFromCentral';
-import { ConversationPanel } from '../conversation';
-import AudioControlsBar from '../conversation/control-panel/AudioControlsBar';
+import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
+import AudioControlsBar from '@/ui/panels/conversation/AudioControlsBar';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
 // The conversation tab keeps the orb visually clean (no floating
 // PIP); the camera surfaces in the dedicated `Robot` tab via
@@ -78,9 +78,9 @@ import AudioControlsBar from '../conversation/control-panel/AudioControlsBar';
 // release/reacquire and concurrent mounts on the same SDK track).
 import { useRobotSession } from '../session/useRobotSession';
 import type { AppEntry } from '../apps/types';
-import AppIframeOverlay from './apps/AppIframeOverlay';
-import AppsTabView from './apps/AppsTabView';
-import RobotTabView from './robot/RobotTabView';
+import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
+import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
+import RobotTabView from '@/ui/panels/robot/RobotTabView';
 import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
