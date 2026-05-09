@@ -154,6 +154,25 @@ Required permissions in `AndroidManifest.xml`:
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 ```
 
+Lock the activity to portrait so the orb / column layout doesn't get
+crushed in landscape, mirroring the iOS `UISupportedInterfaceOrientations`
+in `Info.plist`. On the `<activity>` tag inside `AndroidManifest.xml`:
+
+```xml
+<activity
+    ...
+    android:screenOrientation="portrait"
+    android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
+```
+
+Android 15+ enforces edge-to-edge on `targetSdk >= 35` apps, so the
+WebView automatically extends behind the system bars. Our screens
+already read `env(safe-area-inset-top/bottom)` to keep their content
+out of the OS chrome; the `viewport-fit=cover` meta tag in
+`index.html` is what makes those values non-zero. Verify the values
+on a real Android 15 device after `tauri android init` if anything
+looks off (the wry version pinned in `Cargo.toml` matters here).
+
 ## Validation
 
 ```bash

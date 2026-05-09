@@ -44,7 +44,11 @@ export default function SplashScreen({ onDone }: SplashScreenProps) {
       <Box
         sx={{
           width: '100vw',
-          height: '100vh',
+          // `100dvh` follows the dynamic viewport (iOS keyboard, iOS
+          // call-in-progress dynamic-island expansion) so the splash
+          // never leaks a band of system bg. `100vh` fallback ahead
+          // of `100dvh` keeps WebKits older than iOS 15.4 working.
+          height: ['100vh', '100dvh'],
           bgcolor: 'background.default',
           color: 'text.primary',
           display: 'flex',

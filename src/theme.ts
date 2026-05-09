@@ -41,6 +41,49 @@ function buildTheme(mode: 'light' | 'dark'): Theme {
     },
     shape: { borderRadius: RADIUS },
     components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          /**
+           * Force `html` AND `body` to carry the canvas colour. Without
+           * this, MUI's default CssBaseline only paints `body`, which
+           * leaves the WKWebView / wry surface area BEHIND `html`
+           * exposed in the iOS notch + home indicator zones (and in
+           * Android's system bar zones once edge-to-edge kicks in on
+           * API 35+). The visible bug is two white bands top + bottom
+           * of the screen in dark mode while the rest of the app is
+           * almost black. Painting `html` fixes that everywhere.
+           *
+           * `min-height: 100dvh` (with `100vh` fallback for older
+           * WebKits) keeps the canvas filled across the dynamic
+           * viewport: when the iOS keyboard slides up the layout
+           * viewport shrinks, `dvh` follows, and the bg keeps
+           * filling. Plain `100vh` would freeze at the initial
+           * height and leak the system bg under the keyboard.
+           *
+           * Margin reset is defensive: MUI already zeroes the body
+           * margin via the standard CssBaseline, but spelling it out
+           * makes this block self-contained for anyone reading it
+           * outside the MUI defaults context.
+           */
+          // Emotion accepts an array of values for the same property
+          // and emits both CSS declarations in order, so older WebKits
+          // (which don't know `dvh`) silently fall back to `vh`. With
+          // the object syntax a second key would just override the
+          // first, defeating the whole fallback intent.
+          html: {
+            backgroundColor: isDark ? '#101013' : '#fafafa',
+            minHeight: ['100vh', '100dvh'],
+          },
+          body: {
+            backgroundColor: isDark ? '#101013' : '#fafafa',
+            minHeight: ['100vh', '100dvh'],
+            margin: 0,
+          },
+          '#root': {
+            minHeight: ['100vh', '100dvh'],
+          },
+        },
+      },
       MuiButton: {
         defaultProps: { disableElevation: true },
         styleOverrides: {

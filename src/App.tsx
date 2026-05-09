@@ -95,7 +95,13 @@ export default function App() {
       <Box
         sx={{
           width: '100vw',
-          height: '100vh',
+          // `100dvh` follows the dynamic viewport: when the iOS
+          // keyboard slides up the layout viewport shrinks, dvh
+          // shrinks with it, so our screen never has content
+          // poking out below the keyboard. Plain `100vh` would
+          // freeze at the initial height and leak the system bg.
+          // Array fallback for older WebKits that don't know dvh.
+          height: ['100vh', '100dvh'],
           bgcolor: 'background.default',
           color: 'text.primary',
           overflow: 'hidden',
@@ -168,7 +174,11 @@ export default function App() {
     <Box
       sx={{
         width: '100vw',
-        height: '100vh',
+        // Same dynamic-viewport rationale as the auth-gate Box
+        // above: `100dvh` shrinks with the iOS keyboard so the
+        // screen never has a system-bg gap below it. Array
+        // fallback to `100vh` for older WebKits.
+        height: ['100vh', '100dvh'],
         bgcolor: 'background.default',
         color: 'text.primary',
         overflow: 'hidden',

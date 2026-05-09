@@ -43,5 +43,57 @@
     -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
+
+    <!--
+        Lock the iPhone build to portrait. The whole layout is built
+        around a 420px-wide content column, a top bar that respects
+        `safe-area-inset-top`, and a BottomNavigation that respects
+        `safe-area-inset-bottom`. Landscape would expose the notch on
+        the side of the screen (where we don't read
+        `safe-area-inset-left/right`) and squeeze the orb into a wide
+        flat band that breaks the conversation visual.
+
+        Three keys to set, on purpose:
+          - `UISupportedInterfaceOrientations` covers the iPhone case
+            (iOS uses the iPhone array on phones).
+          - `UISupportedInterfaceOrientations~ipad` covers the iPad
+            case (iOS reads the suffixed key on iPads). We allow both
+            portraits but not landscape on iPad either; the layout
+            assumes a tall column.
+          - `UIRequiresFullScreen` (true) prevents iPad multitasking /
+            Slide Over / Split View, which would resize the WebView
+            mid-session and re-trigger the WebRTC `RTCPeerConnection`
+            into a pile of `iceconnectionstatechange = checking` for
+            no good reason.
+    -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    </array>
+    <key>UIRequiresFullScreen</key>
+    <true/>
+
+    <!--
+        Status-bar styling is delegated to each view controller (true)
+        so a future call to `setNeedsStatusBarAppearanceUpdate()` from
+        a Tauri command can swap dark/light tint to follow our
+        in-app dark-mode toggle. With the default `false`, the system
+        uses the Info.plist `UIStatusBarStyle` once at launch and
+        never updates after that.
+
+        `UIStatusBarStyle = Default` lets iOS pick automatically
+        between dark and light text based on the user's system
+        appearance, which lines up with our `prefers-color-scheme`
+        theme switching.
+    -->
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <true/>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleDefault</string>
 </dict>
 </plist>
