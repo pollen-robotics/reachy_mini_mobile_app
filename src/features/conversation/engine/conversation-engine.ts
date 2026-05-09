@@ -1890,51 +1890,26 @@ return {
       }
     }
     setState("starting");
-    // Step 2 - bring the WebRTC tunnel back up. Same `startSession`
-    // call as in `doStart()`, with the same 15 s timeout-and-cancel
-    // safety net so a stuck robot doesn't leave us in `starting`
-    // forever. Wrapped in `expectedStop` so the cancel doesn't
-    // trip the unsolicited-drop recovery.
-    const START_TIMEOUT_MS = 15_000;
-    let timedOut = false;
-    const timeoutHandle = window.setTimeout(() => {
-      timedOut = true;
-      if (robot) {
-        void expectedStop(() => robot!.stopSession());
-      }
-    }, START_TIMEOUT_MS);
-    const startT0 = performance.now();
-    console.log(
-      `[shell-webrtc] reacquireSession: calling robot.startSession(${selectedRobotId})...`,
-    );
-    try {
-      await robot.startSession(selectedRobotId);
-      console.log(
-        `[shell-webrtc] reacquireSession: startSession resolved in ${Math.round(
-          performance.now() - startT0,
-        )}ms, robot.state = ${robot.state}`,
-      );
-    } catch (err) {
-      window.clearTimeout(timeoutHandle);
-      console.warn(
-        `[shell-webrtc] reacquireSession: startSession rejected after ${Math.round(
-          performance.now() - startT0,
-        )}ms (timedOut=${timedOut}):`,
-        err,
-      );
-      if (timedOut) {
-        onFatalError(
-          new Error(
-            "Robot did not respond in time after handoff. " +
-              "Try again in a moment.",
-          ),
-        );
-      } else {
-        onFatalError(err);
-      }
+    // Step 2 - bring the WebRTC tunnel back up via the same
+    // retry-aware helper used by the initial `doStart()`. Reacquire
+    // hits the same SDK call, so it benefits from the same libnice
+    // crash recovery (one retry with a 12s gap if the daemon dies
+    // mid-handshake) for free. `expectedStop` is forwarded so any
+    // internal stopSession bailout on timeout doesn't trigger the
+    // unsolicited-drop recovery path - the matching `selectedRobotId`
+    // would get nulled and the next reacquire would no-op.
+    const result = await startRobotSession({
+      robot,
+      peerId: selectedRobotId,
+      expectedStop,
+      onAttempt: emitConnectionAttempt,
+      isCancelled: () => unmounted || !robot || !selectedRobotId,
+    });
+    if (!result.ok) {
+      if (result.cancelled) return;
+      onFatalError(result.reason);
       return;
     }
-    window.clearTimeout(timeoutHandle);
     // Step 3 - mark session up and park in `ready`. We DO NOT call
     // wakeUp() here: the robot was kept awake during the handoff
     // (that's the whole point of `releaseSessionKeepAwake`). Going
