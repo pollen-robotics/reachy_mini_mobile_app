@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { BleWifiStatus, WifiProbeResult } from '@/types/robot';
+import type { BleWifiStatus, WifiProbeResult } from '@/features/wifi/types';
 import { formatBlecError, useBleSession } from '@/features/ble/useBleSession';
 
 const STATUS_POLL_MS = 3_000;

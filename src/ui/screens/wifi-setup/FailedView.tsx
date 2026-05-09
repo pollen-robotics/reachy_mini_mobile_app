@@ -27,7 +27,7 @@ import {
   humanizeWifiError,
   summarizeProbeResult,
 } from '@/features/wifi/humanizeWifiError';
-import type { WifiProbeResult } from '@/types/robot';
+import type { WifiProbeResult } from '@/features/wifi/types';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 type ProbeState =

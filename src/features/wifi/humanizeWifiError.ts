@@ -25,7 +25,7 @@
  * with the raw text presented underneath.
  */
 
-import type { WifiProbeResult } from '@/types/robot';
+import type { WifiProbeResult } from '@/features/wifi/types';
 
 export interface HumanizedError {
   /** Short, actionable headline. Always present. */
