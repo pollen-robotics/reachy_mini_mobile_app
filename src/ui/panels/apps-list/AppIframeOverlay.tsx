@@ -247,27 +247,33 @@ export default function AppIframeOverlay({
           flexShrink: 0,
         }}
       >
-        <IconButton
-          aria-label="Close app"
-          onClick={onClose}
-          edge="start"
-          size="small"
-        >
-          <CloseIcon />
-        </IconButton>
+        {/* App name on the left, primary close button on the right.
+            Mirrors native iOS/Android sheet conventions: identifier
+            anchors the user, exit affordance is in the thumb-reach
+            corner. The primary tint on the close button makes it the
+            single visible CTA in the bar so there's no ambiguity
+            about how to back out of the embed. */}
         <Typography
           sx={{
             flex: 1,
+            minWidth: 0,
             fontSize: TYPO.body,
             fontWeight: FONT_WEIGHT.semibold,
             color: 'text.primary',
-            textAlign: 'center',
-            mr: 4,
           }}
           noWrap
         >
           {app.name}
         </Typography>
+        <IconButton
+          aria-label="Close app"
+          onClick={onClose}
+          edge="end"
+          size="small"
+          color="primary"
+        >
+          <CloseIcon />
+        </IconButton>
       </Stack>
 
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
