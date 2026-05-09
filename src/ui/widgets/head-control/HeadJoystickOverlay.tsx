@@ -26,7 +26,7 @@
  */
 import { Box } from '@mui/material';
 
-import type { RobotSessionHandle } from '@/features/session/useRobotSession';
+import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import Joystick from './Joystick';
 import { useHeadVelocityControl } from './useHeadVelocityControl';
 import { useJoystickPointer } from './useJoystickPointer';

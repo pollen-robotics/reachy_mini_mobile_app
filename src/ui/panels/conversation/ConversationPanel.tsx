@@ -46,7 +46,7 @@ import {
 } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
-import type { RobotSessionHandle } from '@/features/session/useRobotSession';
+import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 
 export interface ConversationPanelProps {
   /**
