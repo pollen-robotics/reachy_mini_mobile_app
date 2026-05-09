@@ -88,8 +88,6 @@ import { loadSettings, type Settings } from "./settings";
 import { memoryStore } from "./memory";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
-import { startRobotSession } from "@/features/robot-session/start-session";
-import { sleepAndDisableRobot, wakeRobot } from "@/features/robot-session/physical";
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
@@ -327,14 +325,21 @@ void root;
 // `authenticated` or, if the preselected robot id is known,
 // straight to `connecting`) takes over almost immediately.
 let currentState: AppState = "connecting";
-let selectedRobotId: string | null = null;
+// Selection state (`selectedRobotId`) and the SDK's robot list cache
+// (`knownRobots`) live in the `RobotSession` instance now. Use
+// `session.getSelectedRobotId()` / `session.setSelectedRobotId()` /
+// `session.setKnownRobots()` everywhere.
 const settings: Settings = loadSettings();
 
-// Last known robot list from the SDK's `robotsChanged` event. Cached so we
-// can re-evaluate (e.g. after `robot.connect()` resolves) without waiting
-// for another event.
-let knownRobots: RobotInfo[] = [];
-
+// Engine-side closure alias for the SDK robot ref. The canonical
+// owner is `session` (see `session.attachRobot()` in `boot()`); this
+// `let` is the engine's working copy so the dozens of `robot.X()`
+// calls below stay terse instead of spelling `session.getRobot()?.X()`
+// each time. Kept in sync with the session via `session.attachRobot()`
+// on assignment - the session is the only consumer that needs the
+// canonical reference (its lifecycle methods `start`, `release`,
+// `reacquire`, `wakeUp`, `sleepAndDisable`, `attachVideo` use it
+// internally).
 let robot: ReachyMiniInstance | null = null;
 
 // OpenAI session lifecycle (client + audio sink + reconnect
@@ -506,14 +511,15 @@ function syncMotorModeForState(next: AppState): void {
  * live session.
  */
 function renderRobotList(robots: RobotInfo[]): void {
-  knownRobots = robots;
+  session.setKnownRobots(robots);
 
   if (currentState !== "connected") return;
   if (!robots.length) return;
-  if (selectedRobotId) return;
-
-  const picked = robots[0];
-  selectedRobotId = picked.id;
+  // `pickFirstIfNone()` is a no-op if a robot is already selected,
+  // so we don't need a separate `getSelectedRobotId()` guard here -
+  // the helper returns null and we fall through.
+  const picked = session.pickFirstIfNone();
+  if (!picked) return;
   setState("auto-selecting");
   window.setTimeout(() => {
     if (currentState === "auto-selecting") void doStart();
@@ -556,7 +562,7 @@ async function handleOrbClick(): Promise<void> {
         return;
 
       case "error":
-        selectedRobotId = null;
+        session.setSelectedRobotId(null);
         if (robot?.isAuthenticated) {
           setState("authenticated");
         } else {
@@ -593,13 +599,13 @@ function applyMicMuted(next: boolean): void {
 
 async function handleHostStop(): Promise<void> {
   await teardown();
-  selectedRobotId = null;
+  session.setSelectedRobotId(null);
   applyMicMuted(false);
   if (!robot) {
     setState("signed-out");
   } else if (robot.state !== "disconnected") {
     setState("connected");
-    renderRobotList(knownRobots);
+    renderRobotList(session.getKnownRobots() as RobotInfo[]);
   } else if (robot.isAuthenticated) {
     setState("authenticated");
   } else {
@@ -654,7 +660,7 @@ async function doConnect(): Promise<void> {
     // account that owns several would contradict the Bluetooth
     // selection and violate the least-surprise principle.
     if (preselectedRobotId) {
-      selectedRobotId = preselectedRobotId;
+      session.setSelectedRobotId(preselectedRobotId);
       setState("auto-selecting");
       await doStart();
       return;
@@ -663,16 +669,16 @@ async function doConnect(): Promise<void> {
     // Classic path: replay the last robotsChanged snapshot (if the
     // event fired during connect, which it often does) and let
     // renderRobotList auto-pick the first robot or keep waiting.
-    renderRobotList(knownRobots);
+    renderRobotList(session.getKnownRobots() as RobotInfo[]);
   } catch (err) {
     onFatalError(err);
   }
 }
 
 async function doStart(): Promise<void> {
-  if (!robot || !selectedRobotId) return;
+  if (!robot || !session.getSelectedRobotId()) return;
   console.log(
-    `[shell-webrtc] doStart: entering, selectedRobotId = ${selectedRobotId}, robot.state = ${robot.state}`,
+    `[shell-webrtc] doStart: entering, selectedRobotId = ${session.getSelectedRobotId()}, robot.state = ${robot.state}`,
   );
 
   // The OpenAI key gate used to live here, gating `robot.startSession()`
@@ -702,19 +708,15 @@ async function doStart(): Promise<void> {
   // peer that no longer exists; the daemon-side /refresh-relay
   // endpoint and the 15s timeout below cover those cases instead.
 
-  // Bring the WebRTC session up. The retry loop + per-attempt
-  // timeout + libnice-crash recovery all live in
-  // `features/robot-session/start-session.ts` - extracted from the
-  // engine so the session-bring-up logic is independently
-  // testable and the engine stays a thin orchestrator. We pass
-  // `expectedStop` so internal stopSession bailouts on timeout
+  // Bring the WebRTC session up. `session.start()` wraps the retry
+  // loop + per-attempt timeout + libnice-crash recovery
+  // (see `features/robot-session/start-session.ts`); the
+  // `expectedStop` semantics are baked in through the session's
+  // composed guard, so internal stopSession bailouts on timeout
   // don't trigger the engine's unsolicited-drop recovery path.
-  const result = await startRobotSession({
-    robot,
-    peerId: selectedRobotId,
-    expectedStop,
+  const result = await session.start({
     onAttempt: emitConnectionAttempt,
-    isCancelled: () => !robot || !selectedRobotId,
+    isCancelled: () => !session.getRobot() || !session.getSelectedRobotId(),
   });
 
   if (!result.ok) {
@@ -723,23 +725,16 @@ async function doStart(): Promise<void> {
     return;
   }
 
-  // Wake the robot now that the data channel is live. Self-contained
-  // module: the host doesn't have an SDK ref of its own anymore, so
-  // the engine owns the full `connect → session → wake → talk` chain.
-  //
-  // We AWAIT the wake-up here so the host's "Connecting to your
-  // Reachy" transition view stays up for the duration of the wake
-  // animation (~2 s on a healthy robot). The state machine doesn't
-  // flip to `ready` until motors are actually enabled and the head
-  // / antennas have settled into their wake pose - that matches the
-  // user's mental model ("ready" means physically online, not just
-  // "WebRTC handshake complete").
-  //
-  // The trajectory gate inside head-wobbler/antennas already mutes
-  // those streams for the wake's duration to avoid clashing.
-  // `wakeRobot` enforces a JS-side hard timeout so a stuck daemon
-  // never blocks our progress to `ready`.
-  await wakeRobot(robot);
+  // Wake the robot now that the data channel is live. We AWAIT the
+  // wake-up here so the host's "Connecting to your Reachy" transition
+  // view stays up for the duration of the wake animation (~2 s on a
+  // healthy robot). The state machine doesn't flip to `ready` until
+  // motors are actually enabled and the head / antennas have settled
+  // into their wake pose - that matches the user's mental model
+  // ("ready" means physically online, not just "WebRTC handshake
+  // complete"). `session.wakeUp()` enforces a JS-side hard timeout
+  // so a stuck daemon never blocks our progress to `ready`.
+  await session.wakeUp();
 
   // Mark the SDK / DataChannel as ready BEFORE deciding whether to
   // continue with the conversation parts. The mobile app gates the
@@ -1204,14 +1199,14 @@ async function teardown(): Promise<void> {
   // pre-promise SDK) but at runtime it's a Promise, so we await it
   // with a defensive cast.
   if (wasSessionEstablished && robot) {
-    // `sleepAndDisableRobot` plays the goto-sleep trajectory,
+    // `session.sleepAndDisable()` plays the goto-sleep trajectory,
     // hard-bounded by a JS timeout, then forces motor mode to
-    // `'disabled'` deterministically (the daemon's own motor
-    // mode handling after gotoSleep varies across revisions).
-    // Both steps run BEFORE `stopSession()` below so they land
-    // while the WebRTC DataChannel is still up.
-    const result = await sleepAndDisableRobot(robot);
-    session.recordMotorMode(result.motorMode);
+    // `'disabled'` deterministically (the daemon's own motor mode
+    // handling after gotoSleep varies across revisions). Both steps
+    // run BEFORE `stopSession()` below so they land while the
+    // WebRTC DataChannel is still up. The result is recorded in
+    // the session's motor-mode dedup cache automatically.
+    await session.sleepAndDisable();
   }
 
   if (robot) {
@@ -1318,7 +1313,7 @@ function wireRobot(): void {
     // next time the user picks the same robot from the scan view,
     // the engine remounts on a fresh slate (motors disabled, no
     // stale session reference, no half-running OpenAI client).
-    selectedRobotId = null;
+    session.setSelectedRobotId(null);
     applyMicMuted(false);
     await onFatalError(
       new Error(
@@ -1394,6 +1389,11 @@ async function boot(): Promise<void> {
     // returns undefined when `runConversationParts()` runs.
     enableMicrophone: true,
   });
+  // Hand the SDK ref to the session so its lifecycle methods
+  // (start, release, reacquire, wakeUp, sleepAndDisable, attachVideo)
+  // can use it. The engine's local `robot` closure stays in sync;
+  // session is the canonical owner from here on.
+  session.attachRobot(robot);
   wireRobot();
 
   let authenticated = false;
@@ -1585,6 +1585,10 @@ return {
       // ignored
     }
     robot = null;
+    // Mirror the null on the session so its lifecycle methods can
+    // see "no SDK attached" and short-circuit instead of crashing
+    // on a dead ref.
+    session.detachRobot();
   },
 
   startConversation: async () => {
@@ -1712,12 +1716,13 @@ return {
       // so a fast double-tap doesn't throw.
       return;
     }
-    // Step 1 - stop any running conversation parts (mirrors the body
-    // of `stopConversation()` minus the parking-state side effect:
-    // we'll set our own state at the end). Order matters: kill the
-    // 30 Hz pose streams synchronously BEFORE any await, otherwise
-    // the wobbler / antennas keep ticking through the bridge close
-    // and can race the trajectory gate.
+
+    // Step 1 - stop any running conversation parts (engine concern,
+    // mirrors the body of `stopConversation()` minus the parking-
+    // state side effect: we set our own state at the end). Order
+    // matters: kill the 30 Hz pose streams synchronously BEFORE any
+    // await, otherwise the wobbler / antennas keep ticking through
+    // the bridge close and can race the trajectory gate.
     if (conversationStarted) {
       convoActiveRequested = false;
       toolCallHandler.stop();
@@ -1753,69 +1758,25 @@ return {
       }
       conversationStarted = false;
     }
-    // Step 2 - release the WebRTC session at central. We deliberately
-    // do NOT call gotoSleep / setMotorMode('disabled') / disconnect()
-    // here: the robot must stay physically awake (so a re-acquire is
-    // instant, no wake animation) and the HF auth / SSE channel must
-    // stay alive (so reacquire skips a full reconnect).
-    setSessionEstablished(false);
-    // The iframe taking over may flip the motor mode itself; we no
-    // longer have an authoritative view of what's on the robot.
-    // Resetting the dedup cache forces the first post-reacquire
-    // `syncMotorModeForState()` to send rather than skip on stale info.
-    session.recordMotorMode(null);
-    // Wrapped in `expectedStop` so the `sessionStopped` listener
-    // doesn't run its unsolicited-drop recovery (which would reset
-    // `selectedRobotId` to null and force the FSM to `authenticated`,
-    // breaking the matching `reacquireSession()` call).
-    const stopT0 = performance.now();
-    console.log(
-      `[shell-webrtc] releaseSessionKeepAwake: calling robot.stopSession() (state before = ${robot.state})...`,
-    );
-    await expectedStop(() => robot!.stopSession());
-    console.log(
-      `[shell-webrtc] releaseSessionKeepAwake: stopSession resolved in ${Math.round(
-        performance.now() - stopT0,
-      )}ms, robot.state = ${robot.state}`,
-    );
 
-    // Then drop the central's *producer subscription* too. The earlier
-    // "keep-awake" design only called `stopSession()` so a re-acquire
-    // could skip a full reconnect, but in practice that left the shell's
-    // SSE producer-subscription open on the central, and the central
-    // routes any subsequent `startSession` for the same robot back to
-    // that still-open subscription instead of relaying it to the new
-    // client (the iframe). Empirical signature was: iframe sees the
-    // robot in `robot.robots`, calls `startSession`, and gets exactly
-    // zero events for the full 15 s timeout window — no
-    // `sessionRejected`, no `peerStatusChanged`, nothing. Disconnecting
-    // here makes the iframe's `connect()` the sole producer subscription
-    // for the lease window, which is what the central actually expects.
-    //
-    // Cost: the matching `reacquireSession()` now needs a fresh
-    // `connect()` before its `startSession()` (~700 ms on LAN). The
-    // path is already handled there (the `if (robot.state ===
-    // "disconnected") await robot.connect()` branch).
-    console.log(
-      "[shell-webrtc] releaseSessionKeepAwake: calling robot.disconnect() to free the central's producer subscription...",
-    );
-    robot.disconnect();
-    console.log(
-      `[shell-webrtc] releaseSessionKeepAwake: disconnected, robot.state = ${robot.state}`,
-    );
+    // Step 2 - release the WebRTC session at central. The session
+    // class encapsulates: setEstablished(false), reset motor cache,
+    // expectedStop-wrapped stopSession, then disconnect to free the
+    // SSE producer subscription. Robot stays physically awake.
+    await session.release();
 
-    // Park in `released` so the host (and any visual state observer)
-    // can distinguish "we deliberately let go of the robot" from
-    // "we never connected" (`connected`) or "we're tearing down for
-    // a goodbye" (no explicit state, the panel unmounts).
+    // Step 3 - park in `released` so the host (and any visual state
+    // observer) can distinguish "we deliberately let go of the robot"
+    // from "we never connected" (`connected`) or "we're tearing down
+    // for a goodbye" (no explicit state, the panel unmounts).
     setState("released");
   },
 
   reacquireSession: async () => {
     if (unmounted) return;
-    if (!robot || !selectedRobotId) return;
+    if (!robot || !session.getSelectedRobotId()) return;
     console.log(
-      `[shell-webrtc] reacquireSession: entering, sessionEstablished=${session.isEstablished()}, robot.state=${robot.state}, selectedRobotId=${selectedRobotId}`,
+      `[shell-webrtc] reacquireSession: entering, sessionEstablished=${session.isEstablished()}, robot.state=${robot.state}, selectedRobotId=${session.getSelectedRobotId()}`,
     );
     if (session.isEstablished()) {
       console.log(
@@ -1826,94 +1787,46 @@ return {
       // crash the screen.
       return;
     }
-    // Step 1 - the SDK keeps its peer-status producer subscription
-    // open across stopSession() (we deliberately did NOT call
-    // disconnect() in releaseSessionKeepAwake), so we typically don't
-    // need to re-authenticate or re-open the SSE here. Belt-and-
-    // suspenders: if the SDK has fallen back to `disconnected`
-    // (e.g. central kicked the producer during the release),
-    // reconnect first.
-    if (robot.state === "disconnected") {
-      const connectT0 = performance.now();
-      console.log(
-        "[shell-webrtc] reacquireSession: SDK is disconnected, calling robot.connect()...",
-      );
-      try {
-        await robot.connect();
-        console.log(
-          `[shell-webrtc] reacquireSession: connect resolved in ${Math.round(
-            performance.now() - connectT0,
-          )}ms`,
-        );
-      } catch (err) {
-        console.warn(
-          "[shell-webrtc] reacquireSession: connect rejected:",
-          err,
-        );
-        onFatalError(err);
-        return;
-      }
-    }
+
     setState("starting");
-    // Step 2 - bring the WebRTC tunnel back up via the same
-    // retry-aware helper used by the initial `doStart()`. Reacquire
-    // hits the same SDK call, so it benefits from the same libnice
-    // crash recovery (one retry with a 12s gap if the daemon dies
-    // mid-handshake) for free. `expectedStop` is forwarded so any
-    // internal stopSession bailout on timeout doesn't trigger the
-    // unsolicited-drop recovery path - the matching `selectedRobotId`
-    // would get nulled and the next reacquire would no-op.
-    const result = await startRobotSession({
-      robot,
-      peerId: selectedRobotId,
-      expectedStop,
+
+    // `session.reacquire()` reconnects the SDK if it's dropped (we
+    // disconnect during `release()` to free central's producer
+    // subscription), then runs `start()` with the same retry-aware
+    // helper as the initial bring-up. We do NOT call `wakeUp()`
+    // here because the robot stayed physically awake during the
+    // handoff - replaying the wake trajectory would freeze the
+    // head/antennas back to the wake pose, defeating the
+    // "stay where you were" promise of release+reacquire.
+    const result = await session.reacquire({
       onAttempt: emitConnectionAttempt,
-      isCancelled: () => unmounted || !robot || !selectedRobotId,
+      isCancelled: () => unmounted,
     });
     if (!result.ok) {
       if (result.cancelled) return;
       onFatalError(result.reason);
       return;
     }
-    // Step 3 - mark session up and park in `ready`. We DO NOT call
-    // wakeUp() here: the robot was kept awake during the handoff
-    // (that's the whole point of `releaseSessionKeepAwake`). Going
-    // through wakeUp would replay the trajectory and freeze the
-    // head/antennas back to the wake pose, defeating the "stay
-    // where you were" promise.
-    //
-    // The conversation parts are intentionally NOT auto-resumed:
-    // the host stops the conversation when the user leaves the
-    // conversation tab (see `RobotSessionScreen`), so by the time
-    // we're reacquiring after an iframe handoff there's nothing to
-    // resume - the user is back on the conv tab and will tap the
-    // orb to start a fresh conversation.
+
+    // Mark session up and park in `ready`. The conversation parts
+    // are intentionally NOT auto-resumed: the host stops the
+    // conversation when the user leaves the conversation tab (see
+    // `RobotSessionScreen`), so by the time we're reacquiring
+    // after an iframe handoff there's nothing to resume - the
+    // user is back on the conv tab and will tap the orb to start
+    // a fresh conversation.
     setSessionEstablished(true);
     setState("ready");
   },
 
   attachVideo: (videoElement: HTMLVideoElement) => {
-    if (unmounted || !robot) {
-      // No live SDK instance to bind to. Returning a no-op keeps the
-      // host's `useEffect` cleanup symmetrical and avoids special-
-      // casing the null branch on the consumer side.
-      return () => {};
-    }
-    try {
-      const detach = robot.attachVideo(videoElement);
-      // Late-attach catch-up via the cache. The SDK's `videoTrack`
-      // event is a one-shot fired during session negotiation, so a
-      // host that mounts the camera AFTER that point (the common
-      // case - the card is gated on `hasReachedReady`) would
-      // otherwise sit on a black frame until the next session
-      // start. The cache replays the live stream onto the element
-      // immediately so we reach a frame on the very next paint.
-      videoCache.replayInto(videoElement);
-      return detach;
-    } catch (err) {
-      console.warn("[conversation-engine] attachVideo failed:", err);
-      return () => {};
-    }
+    if (unmounted) return () => {};
+    // `session.attachVideo` already handles the no-robot guard +
+    // late-attach catch-up via the cache (the SDK's `videoTrack`
+    // event is a one-shot fired during session negotiation; the
+    // cache replay fixes the common "camera card mounts AFTER
+    // hasReachedReady" race). Returns the SDK's detach callback.
+    return session.attachVideo(videoElement);
   },
 
   // ─── Audio volume controls ────────────────────────────────────────
