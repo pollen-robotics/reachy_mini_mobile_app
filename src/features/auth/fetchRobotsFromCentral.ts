@@ -29,7 +29,7 @@
  * owns the token controls the robot".
  */
 
-import { CENTRAL_SIGNALING_URL } from '@/config';
+import { CENTRAL_SIGNALING_URL } from '@/shared/env';
 
 const CENTRAL_ROBOT_STATUS_URL = `${CENTRAL_SIGNALING_URL}/api/robot-status`;
 
