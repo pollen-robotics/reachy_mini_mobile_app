@@ -1,70 +1,85 @@
 /**
  * Reachy Mini · voice conversation engine.
  *
- * This file is the orchestrator: it wires the FSM, host options,
- * and module-level state to the focused subsystems below. Every
- * pure-function chunk that has a clean dependency boundary lives in
- * its own file.
+ * This file is the orchestrator for the CONVERSATION feature. It owns
+ * the FSM and the conversation pipeline (OpenAI Realtime, motion,
+ * tools, audio monitors) and drives a `RobotSession` instance for
+ * everything session-related (SDK boot, WebRTC handshake, wake/sleep
+ * trajectories, release/reacquire for iframe handoffs).
  *
  * Flow driven by a single central circle button:
  *
  *   signed-out  → click → robot.login()  (HF OAuth redirect)
- *   authenticated → click → robot.connect()
+ *   authenticated → click → session.ensureConnected() / robot.connect()
  *   connected  → select a robot ⇒ ready
- *   ready      → click → robot.startSession() + OpenAI Realtime WebRTC
+ *   ready      → click → session.start() + session.wakeUp() +
+ *                        OpenAI Realtime WebRTC
  *   streaming  (listening / user-speaking / ai-speaking)
  *
  * Audio routing (robot = hub):
  *   robot mic track (received on robot._pc) ─▶ OpenAI input track
  *   OpenAI output track                     ─▶ robot audio sender (replaceTrack)
  *
- * Architecture (post-refactor)
- * ────────────────────────────
+ * Layered architecture
+ * ────────────────────
  *
- *   conversation-engine.ts     ← THIS FILE: FSM, boot, robot wiring,
- *                                 mount lifecycle, host-facing handle.
+ *   features/robot-session/    ← SESSION layer (B + C in the
+ *                                A/B/C/D model).
  *
- *   types.ts                   ← Public types (Handle, AppState,
- *                                 Options, level / toast events,
- *                                 transport kinds).
+ *     RobotSession.ts          The class. Owns the SDK robot ref,
+ *                              selectedRobotId, knownRobots, the
+ *                              `established` flag and the motor-mode
+ *                              dedup cache. Exposes lifecycle methods
+ *                              (start, wakeUp, sleepAndDisable, stop,
+ *                              disconnect, ensureConnected, release,
+ *                              reacquire, attachVideo) that wrap the
+ *                              SDK + the helpers below with the right
+ *                              preconditions and bookkeeping.
+ *     start-session.ts         Per-attempt timeout + libnice retry
+ *                              loop used by `session.start()` /
+ *                              `session.reacquire()`.
+ *     physical.ts              `wakeRobot` / `sleepAndDisableRobot`
+ *                              with hard JS timeouts on top of the
+ *                              SDK's own `timeoutMs`.
+ *     session-guard.ts         Stop-intent counter (`expectedStop`).
+ *     video-cache.ts           Cached `MediaStream` for late attachers.
+ *     transport-monitor.ts     ICE candidate pair classifier.
+ *     dc-health.ts             Data-channel failure streak monitor.
+ *     wake-lock.ts             Screen Wake Lock helper.
+ *     background-resilience.ts visibility / audio-context resume.
+ *     sdk-bootstrap.ts         Side-effect import of the vendored SDK.
+ *     sdk-types.ts             `ReachyMiniInstance` shape.
+ *     token-hash.ts            `#hf_token` URL-fragment plumbing.
+ *     lifecycle-queue.ts       Module-level mount/unmount serialiser.
+ *     phase.ts                 React-side phase derivation.
+ *     useRobotSession.ts       React hook wrapper.
  *
- *   bridge/openai-bridge.ts    ← OpenAI Realtime client lifecycle:
- *                                 SDP handshake, audio sink, output
- *                                 track routing to the robot speaker,
- *                                 silent one-shot reconnect.
+ *   features/conversation/engine/  ← CONVERSATION layer (D).
  *
- *   motion-control/
- *     wobbler-control.ts       ← `HeadWobbler` lifecycle + gates
- *                                 (pose lock, move-playing, daemon
- *                                 trajectories).
- *     antennas-control.ts      ← `AntennasOscillator` lifecycle +
- *                                 freeze / resume.
+ *     conversation-engine.ts   ← THIS FILE. FSM, host handle, mount
+ *                              lifecycle, wires the session listeners,
+ *                              composes everything below.
+ *     types.ts                 Public types (Handle, AppState, …).
+ *     settings.ts              OpenAI / voice user preferences.
+ *     memory.ts                Long-term memory (`remember` tool).
+ *     audioLevelMonitor.ts     Mic/AI level monitors driving the orb.
+ *     trajectoryGate.ts        Daemon-trajectory yield flag.
+ *     tools.ts                 OpenAI tool descriptors + head poses.
  *
- *   tools/
- *     tool-call-handler.ts     ← OpenAI tool dispatch (move_head,
- *                                 play_move, remember, forget) +
- *                                 lazy `MovePlayer` + pose-restore
- *                                 timer.
+ *     bridge/openai-bridge.ts  OpenAI Realtime client lifecycle:
+ *                              SDP handshake, audio sink, output
+ *                              track routing to the robot speaker,
+ *                              silent one-shot reconnect.
  *
- *   runtime/
- *     dc-health.ts             ← Robot data-channel failure streak
- *                                 + neutral-antenna heartbeat.
- *     background-resilience.ts ← Wake lock, audio-context resume,
- *                                 page-hide beacon.
+ *     motion-control/
+ *       wobbler-control.ts     `HeadWobbler` lifecycle + gates.
+ *       antennas-control.ts    `AntennasOscillator` lifecycle.
+ *       pose-dispatcher.ts     30 Hz coalescing tick to the daemon.
  *
- *   audioLevelMonitor.ts       ← MicLevelMonitor + AiLevelMonitor
- *                                 (audio-reactive CSS variables).
- *   transportMonitor.ts        ← Active ICE candidate pair classifier.
- *   wakeLock.ts                ← Screen Wake Lock helper.
- *   settings.ts                ← Local-storage user preferences.
- *   tools.ts                   ← OpenAI tool descriptors + head poses.
- *   memory.ts                  ← Long-term memory store (`remember`).
- *   trajectoryGate.ts          ← Daemon-trajectory yield flag.
- *   tokenHash.ts               ← `#hf_token` URL-fragment plumbing.
- *   sdkBootstrap.ts            ← Side-effect: attach bundled SDK to
- *                                 `window.ReachyMini`.
- *   globals.ts                 ← `ReachyMiniInstance` shape declared
- *                                 from the vendored SDK.
+ *     tools/
+ *       tool-call-handler.ts   OpenAI tool dispatch (move_head,
+ *                              play_move, remember, forget) + lazy
+ *                              `MovePlayer` + pose-restore timer.
  */
 
 // Side-effect import: attaches the bundled SDK to `window.ReachyMini`

@@ -48,17 +48,53 @@ src/
 
 ```
 features/
-├── auth/          HF OAuth + token storage + central robot listing
-├── ble/           BLE plugin wrapper + advert parsing + network status
-├── wifi/          Wi-Fi setup over BLE (humanize errors, types, hook)
-├── apps/          HF Hub app catalog fetching + embed URL builder
-├── session/       Robot session hook + phase derivation (consumer of conversation engine)
-└── conversation/  OpenAI Realtime engine + audio bridge + motion + tools + memory
+├── auth/           HF OAuth + token storage + central robot listing
+├── ble/            BLE plugin wrapper + advert parsing + network status
+├── wifi/           Wi-Fi setup over BLE (humanize errors, types, hook)
+├── apps/           HF Hub app catalog fetching + embed URL builder
+├── robot-session/  RobotSession class + lifecycle helpers + React hook
+└── conversation/   OpenAI Realtime engine + audio bridge + motion + tools + memory
 ```
 
 Each feature folder contains its own `types.ts`, services, React
 hooks. Same-folder relative imports (`./X`) are fine; cross-feature
 imports must go through `@/features/<other>/...` aliases.
+
+#### `features/robot-session/` - SESSION layer (B + C)
+
+`RobotSession.ts` is the **central class**. It owns the SDK robot ref,
+the selected peer id + the SDK's robot list cache, the `established`
+flag and the motor-mode dedup cache. It composes `SessionGuard` (the
+`expectedStop` counter) and `VideoStreamCache`. It exposes lifecycle
+methods that wrap the SDK with the right preconditions and bookkeeping:
+
+  - `start(opts)` - retry-aware bring-up (libnice crash recovery)
+  - `wakeUp()` - hard-bounded wake trajectory
+  - `sleepAndDisable()` - sleep + disable motors + record cache
+  - `stop()` / `disconnect()` / `ensureConnected()` - low-level ops
+  - `release()` - **iframe handoff sequence** (full release + disconnect)
+  - `reacquire(opts)` - **bring session back after release** (no wakeUp)
+  - `attachVideo(el)` - bind + cache replay for late mounters
+
+Sibling modules in `features/robot-session/` provide the helpers
+(`start-session.ts`, `physical.ts`, `session-guard.ts`,
+`video-cache.ts`, `transport-monitor.ts`, `dc-health.ts`,
+`background-resilience.ts`, `wake-lock.ts`, `sdk-bootstrap.ts`,
+`sdk-types.ts`, `token-hash.ts`, `lifecycle-queue.ts`).
+
+The conversation engine instantiates ONE `RobotSession` per
+`mountConversation` and uses it as a building block for the
+high-level conversation flow (which it owns via the FSM + the
+OpenAI / motion / tools / audio pipeline).
+
+#### `features/conversation/` - CONVERSATION layer (D)
+
+`engine/conversation-engine.ts` is the orchestrator. It owns the FSM,
+the conversation pipeline (OpenAI Realtime client, motion controllers,
+tool-call handler, audio level monitors), and the host-facing handle
+(`startConversation`, `setMicMuted`, `requestStop`, …). It DRIVES the
+session for everything session-related (start, wakeUp, release, …)
+and parks the FSM around the session's transitions.
 
 ### `ui/` - the React UI layer
 
@@ -118,6 +154,8 @@ Run `yarn lint` to check.
 | A pure visual primitive (chip, badge, button) | `ui/design/...` |
 | A new design token (color, font weight, radius) | `ui/design/tokens.ts` |
 | A new feature with its own state + hook + service | `features/<feature>/...` (mirror structure of `auth/` or `apps/`) |
+| A new robot/session lifecycle method | Add it to `RobotSession` class in `features/robot-session/RobotSession.ts` |
+| A new conversation orchestration step | Add it to the engine in `features/conversation/engine/conversation-engine.ts` (drives the session) |
 | A pure helper used by 2+ features (Tauri plugin wrapper, browser API, etc.) | `shared/<area>/...` |
 | A new env var reader | `shared/env.ts` (centralised so we can grep all `import.meta.env` usage in one place) |
 | Static SVG / image | `src/assets/`, import via `@/assets/<file>.svg` |
