@@ -90,6 +90,7 @@ import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { startRobotSession } from "@/features/robot-session/start-session";
 import { sleepAndDisableRobot, wakeRobot } from "@/features/robot-session/physical";
+import { createSessionGuard } from "@/features/robot-session/session-guard";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -386,39 +387,13 @@ let aiLevel: AiLevelMonitor | null = null;
 // of the dance (otherwise they'd fight the recorded frames).
 let movePlaying = false;
 
-// ─── Stop-session intent counter ──────────────────────────────────────
-//
-// `robot.stopSession()` triggers a `sessionStopped` event. Two very
-// different scenarios produce that event:
-//
-//   1. WE called stopSession deliberately (release, teardown, watchdog
-//      timeout). The caller has its own follow-up logic (state, motor
-//      mode, video cache, …); the listener must NOT touch any of that.
-//   2. The SDK / central / daemon dropped the session unilaterally
-//      (network drop, central evict, daemon crash). Nobody else is
-//      responsible; the listener IS the recovery path.
-//
-// We track case 1 with a single counter: every internal
-// `stopSession()` call goes through `expectedStop()`, which bumps the
-// counter; the listener checks `pendingExpectedStops > 0` and bails.
-// The decrement is deferred by one macrotask (`setTimeout(0)`) so any
-// asynchronously-dispatched listener body (resuming after its own
-// internal awaits) still reads the count as pending.
-let pendingExpectedStops = 0;
-
-function expectedStop(fn: () => Promise<unknown>): Promise<void> {
-  pendingExpectedStops++;
-  return fn()
-    .catch((err) => {
-      console.warn("[engine] expectedStop failed:", err);
-    })
-    .finally(() => {
-      window.setTimeout(() => {
-        pendingExpectedStops--;
-      }, 0);
-    })
-    .then(() => undefined);
-}
+// Stop-session intent guard. See `features/robot-session/session-guard.ts`
+// for the full contract; in short, every internal `robot.stopSession()`
+// call goes through `expectedStop()` so the `sessionStopped` listener
+// (further down) can tell our own stops from unsolicited drops and
+// avoid running its recovery path twice.
+const sessionGuard = createSessionGuard();
+const expectedStop = sessionGuard.expectedStop;
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
@@ -1329,7 +1304,7 @@ function wireRobot(): void {
     // those here would race the caller and corrupt the FSM - which
     // is exactly the bug that broke the apps-tab handoff in earlier
     // revisions of this file.
-    if (pendingExpectedStops > 0) {
+    if (sessionGuard.hasPendingExpectedStop()) {
       return;
     }
 
