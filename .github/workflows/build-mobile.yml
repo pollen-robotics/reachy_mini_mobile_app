@@ -12,11 +12,6 @@ name: Build mobile
 # Android: *debug* APK. No keystore required. Installable via `adb install`
 #          on any developer-mode Android device.
 #
-# What this workflow does NOT build yet
-# ─────────────────────────────────────
-# - Signed Android release / Play Store. Needs `ANDROID_KEY_BASE64`,
-#   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` secrets.
-#
 # What this workflow DOES build on tag `v*` (signed release path)
 # ───────────────────────────────────────────────────────────────
 # - `ios-release`: a signed iOS device build (`aarch64-apple-ios`)
@@ -30,18 +25,37 @@ name: Build mobile
 #     APPLE_PROVISIONING_PROFILE_BASE64   (base64 of the .mobileprovision)
 #     APPLE_APP_STORE_CONNECT_APP_ID      (numeric app id from App Store Connect)
 #
+# - `android-release`: a signed Android release (APK + AAB) uploaded
+#   to Play Console's *Internal testing* track via the Play Developer
+#   API. Mirrors the iOS pattern (Play upload only, no GH-release
+#   attach — only the debug APK from the `android` job is attached).
+#   Required secrets:
+#     ANDROID_KEYSTORE_BASE64             (base64 of the .jks)
+#     ANDROID_KEYSTORE_PASSWORD
+#     ANDROID_KEY_ALIAS
+#     ANDROID_KEY_PASSWORD
+#     ANDROID_PLAY_SERVICE_ACCOUNT_JSON   (raw JSON of the Play API
+#                                          service account, with
+#                                          "Release manager" granted
+#                                          on the listing)
+#   Listing applicationId: `com.pollenrobotics.reachymini` (renamed
+#   in CI from the auto-generated `com.pollen_robotics.reachy_mini`
+#   to match the manually-created Play Console listing). versionCode
+#   is pinned to ${{ github.run_number }} so each tag push gets a
+#   fresh code without manual coordination.
+#
 # ⚠️  TEMPORARY: OpenAI API key injection
 # ────────────────────────────────────────
-# All three jobs (iOS sim, Android debug, iOS release) currently
-# bake `VITE_OPENAI_API_KEY` into the client bundle at build time
-# so the in-app conversation works out-of-the-box on TestFlight /
-# internal devices without each tester having to enter their own
-# OpenAI key. This is a KNOWN anti-pattern (anyone with the
-# .ipa/.apk can extract the key) and MUST be removed before any
-# public release.
+# All four release jobs (iOS sim, Android debug, iOS release, Android
+# release) currently bake `VITE_OPENAI_API_KEY` into the client
+# bundle at build time so the in-app conversation works
+# out-of-the-box on TestFlight / Play Internal devices without each
+# tester having to enter their own OpenAI key. This is a KNOWN
+# anti-pattern (anyone with the .ipa/.apk can extract the key) and
+# MUST be removed before any public release.
 #
 # To replace it: implement a proper architecture (server-side
-# ephemeral keys, per-user OAuth, …) and delete the three
+# ephemeral keys, per-user OAuth, …) and delete the four
 # "Inject OpenAI API key (TEMPORARY)" steps below.
 #
 # Required secret: `OPENAI_API_KEY` (raw `sk-proj-…`).
@@ -50,6 +64,27 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      android_release:
+        # When true, runs the signed `android-release` job (which
+        # signs + uploads to Play Internal) even though we're on a
+        # branch and not a tag. Useful for validating the
+        # release/signing/Play-upload pipeline without burning a tag.
+        # versionCode is still derived from `github.run_number` so
+        # each manual run gets a fresh code Play will accept; the
+        # versionName comes from `tauri.conf.json` (testers see the
+        # same string as the most recent tag, just with a higher
+        # build number).
+        description: 'Run signed Android release (Play Internal upload)'
+        type: boolean
+        default: false
+      ios_release:
+        # Symmetric escape hatch for the iOS pipeline. Off by default
+        # because TestFlight burn rate matters more than Play burn
+        # rate.
+        description: 'Run signed iOS release (TestFlight upload)'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -467,9 +502,13 @@ jobs:
 
   ios-release:
     name: iOS (signed, TestFlight)
-    # Only on tag pushes - releasing every push to main would burn
+    # Tag pushes always run this. Manual `workflow_dispatch` runs
+    # only when the operator explicitly opts in via the
+    # `ios_release` input — releasing every push to main would burn
     # TestFlight build slots and invite Apple-side rate-limiting.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.ios_release)
     # We don't `needs: ios` because the unsigned simulator build
     # already runs in parallel and a green simulator job doesn't
     # add real signal for the device build (different SDK, different
@@ -942,6 +981,301 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/build.keychain-db"
           rm -rf signing
           rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
+
+  android-release:
+    name: Android (signed, Play Internal)
+    # Tag pushes always run this. Manual `workflow_dispatch` runs
+    # only when the operator opts in via `android_release` — without
+    # the gate, every push to main would burn a Play versionCode and
+    # spam internal testers with update prompts. Same shape as
+    # `ios-release`.
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.android_release)
+    # No `needs:` — the unsigned debug APK runs in parallel and a
+    # green debug build doesn't add real signal for the signed path
+    # (different signing config, different applicationId, different
+    # release/debug toolchain branch). Mirrors `ios-release`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android \
+                            armv7-linux-androideabi \
+                            i686-linux-android \
+                            x86_64-linux-android
+
+      - name: Install Android NDK
+        run: |
+          set -euxo pipefail
+          NDK_VERSION="27.0.12077973"
+          sdkmanager --install "ndk;$NDK_VERSION"
+          NDK_PATH="$ANDROID_HOME/ndk/$NDK_VERSION"
+          echo "NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
+
+      - name: Cache Rust target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          # Distinct cache key from the debug job: release artefacts
+          # have different rustc fingerprints (codegen-units, opt-level,
+          # debug=false) so sharing a cache evicts both jobs' deps on
+          # every run.
+          key: ${{ runner.os }}-rust-android-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-android-release-
+            ${{ runner.os }}-rust-android-
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
+        # Same temporary key-baking as the iOS / Android-debug jobs.
+        # See workflow header for the rationale.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -uo pipefail
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
+            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
+          else
+            echo "⚠️ OPENAI_API_KEY secret not set - the built APK will require manual key entry on first launch"
+          fi
+
+      - name: Decode keystore from secret
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set."
+            echo "Generate locally with: base64 -w0 reachy-mini.jks | pbcopy"
+            exit 1
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          # Sanity-check the file is a real JKS/PKCS12 (avoids the
+          # confusing "Tag number over 30" gradle errors that mean
+          # "your secret was empty / corrupted").
+          file "$KEYSTORE_PATH"
+          if ! file "$KEYSTORE_PATH" | grep -qi 'java keystore\|pkcs12\|data'; then
+            echo "::error::Decoded keystore doesn't look like a JKS/PKCS12 file."
+            exit 1
+          fi
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Initialize Android project (idempotent)
+        # Same as the debug job: `tauri android init` regenerates
+        # `gen/android/` from scratch on a clean checkout, so any
+        # post-init patches must run *after* this step.
+        run: |
+          set -euxo pipefail
+          if [ ! -d "src-tauri/gen/android" ]; then
+            yarn tauri android init
+          fi
+          yarn tauri icon src-tauri/icons/icon.png || true
+
+      - name: Patch Android Gradle config (minSdk, applicationId, versionCode, signing)
+        # The debug job only patches minSdk. Release adds three more:
+        #
+        # - applicationId: Tauri derives it from `tauri.conf.json`'s
+        #   identifier (com.pollen-robotics.reachy-mini) by replacing
+        #   `-` with `_`, so the auto-generated value is
+        #   `com.pollen_robotics.reachy_mini`. Play Console expects
+        #   `com.pollenrobotics.reachymini` (the listing was created
+        #   with that id during the manual first upload). We rename
+        #   only `applicationId` — namespace and Kotlin source paths
+        #   stay as-generated, since Android allows applicationId to
+        #   differ from the source package.
+        #
+        # - versionCode: Play rejects re-uploads with a versionCode
+        #   that's already been used. We pin it to GITHUB_RUN_NUMBER
+        #   (monotonically increasing across the entire repo) so each
+        #   tag push gets a fresh code without manual coordination.
+        #
+        # - signingConfigs.release + buildTypes.release.signingConfig:
+        #   wires our keystore (decoded above) into the release build.
+        #   Reads keystore credentials from env so secrets never land
+        #   in build.gradle.kts on disk.
+        run: |
+          set -euxo pipefail
+          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
+          test -f "$GRADLE_FILE"
+
+          python3 - <<'PY'
+          import os, re, pathlib, sys
+
+          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
+          s = p.read_text()
+          original = s
+
+          # 1. minSdk 24 -> 26 (tauri-plugin-blec requirement, same as debug job).
+          s = s.replace("minSdk = 24", "minSdk = 26")
+
+          # 2. applicationId rename for Play Console listing.
+          s2 = re.sub(
+              r'applicationId\s*=\s*"com\.pollen_robotics\.reachy_mini"',
+              'applicationId = "com.pollenrobotics.reachymini"',
+              s,
+          )
+          if s2 == s:
+              print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
+          s = s2
+
+          # 3. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
+          run_no = int(os.environ["GITHUB_RUN_NUMBER"])
+          s3 = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {run_no}', s, count=1)
+          if s3 == s:
+              # Some Tauri versions don't emit versionCode at all; inject one.
+              s3 = re.sub(
+                  r'(defaultConfig\s*\{)',
+                  rf'\1\n        versionCode = {run_no}',
+                  s,
+                  count=1,
+              )
+          s = s3
+
+          # 4. signingConfigs block — read from env at build time.
+          signing_block = (
+              "    signingConfigs {\n"
+              "        create(\"release\") {\n"
+              "            storeFile = file(System.getenv(\"ANDROID_KEYSTORE_PATH\"))\n"
+              "            storePassword = System.getenv(\"ANDROID_KEYSTORE_PASSWORD\")\n"
+              "            keyAlias = System.getenv(\"ANDROID_KEY_ALIAS\")\n"
+              "            keyPassword = System.getenv(\"ANDROID_KEY_PASSWORD\")\n"
+              "        }\n"
+              "    }\n\n"
+          )
+          # Insert just before the buildTypes block.
+          s4 = re.sub(
+              r'(\n[ \t]*)buildTypes\s*\{',
+              r'\1' + signing_block + r'\1buildTypes {',
+              s,
+              count=1,
+          )
+          if s4 == s:
+              print("::error::buildTypes anchor not found — can't inject signingConfigs.", file=sys.stderr)
+              sys.exit(1)
+          s = s4
+
+          # 5. Wire the signingConfig into the release buildType.
+          # Tauri uses `getByName("release") {` — we add a line inside it.
+          s5 = re.sub(
+              r'(getByName\("release"\)\s*\{)',
+              r'\1\n            signingConfig = signingConfigs.getByName("release")',
+              s,
+              count=1,
+          )
+          if s5 == s:
+              print("::error::release buildType anchor not found.", file=sys.stderr)
+              sys.exit(1)
+          s = s5
+
+          if s == original:
+              print("::error::No patches applied; aborting.", file=sys.stderr)
+              sys.exit(1)
+
+          p.write_text(s)
+          print("--- patched build.gradle.kts ---")
+          print(s)
+          PY
+
+      - name: Build Android (signed release APK + AAB)
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        # `--apk --aab` produces both: APK for sideload-on-device QA
+        # (downloaded from the workflow run page if needed); AAB for
+        # the Play upload below.
+        run: yarn tauri android build --apk --aab
+
+      - name: Locate signed outputs
+        id: pack
+        run: |
+          set -euxo pipefail
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release \
+            -name '*-release.apk' -type f | head -1 || true)
+          AAB_PATH=$(find src-tauri/gen/android/app/build/outputs/bundle/release \
+            -name '*-release.aab' -type f | head -1 || true)
+          if [ -z "$APK_PATH" ] || [ -z "$AAB_PATH" ]; then
+            echo "::error::Missing signed outputs — APK=$APK_PATH AAB=$AAB_PATH"
+            find src-tauri/gen/android/app/build/outputs -maxdepth 6 -type f
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+          echo "Found AAB: $AAB_PATH"
+          echo "apk=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "aab=$AAB_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Verify APK signature
+        # apksigner is part of build-tools; this is a fast pre-flight
+        # that fails the job before we waste time uploading an
+        # unsigned/bad-signed artefact to Play (Play surfaces signing
+        # errors only after a multi-minute upload).
+        run: |
+          set -euxo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          "$APKSIGNER" verify --verbose "${{ steps.pack.outputs.apk }}"
+
+      - name: Upload AAB to Play Console (Internal Testing)
+        # `r0adkll/upload-google-play@v1` calls the Play Developer API
+        # using a service account JSON. Prereqs (one-time, manual):
+        #   1. Play Console → Setup → API access → link a Google
+        #      Cloud project, create a service account, download its
+        #      JSON, and grant the SA "Release manager" on the app.
+        #   2. Paste the full JSON into the
+        #      ANDROID_PLAY_SERVICE_ACCOUNT_JSON repo secret.
+        #   3. The first AAB MUST have been uploaded manually to
+        #      create the listing (already done at v0.4.0).
+        # `status: completed` rolls out to internal testers
+        # immediately; switch to `draft` if you want to gate behind
+        # a Play Console "Review and roll out" click.
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.ANDROID_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.pollenrobotics.reachymini
+          releaseFiles: ${{ steps.pack.outputs.aab }}
+          track: internal
+          status: completed
+          # No whatsNewDirectory: Play falls back to the previous
+          # release's notes. Acceptable for internal testing; switch
+          # to a per-tag changelog later if testers ask for it.
+          changesNotSentForReview: false
+
+      - name: Clean up keystore
+        if: always()
+        run: |
+          set +e
+          rm -f "$ANDROID_KEYSTORE_PATH"
 
   attach-to-release:
     name: Attach to GitHub Release
