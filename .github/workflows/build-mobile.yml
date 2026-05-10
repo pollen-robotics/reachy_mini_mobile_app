@@ -1220,12 +1220,21 @@ jobs:
 
       - name: Locate signed outputs
         id: pack
+        # Tauri's release-build dropoff lives at:
+        #   apk/universal/release/app-universal-release.apk
+        #   bundle/universalRelease/app-universal-release.aab
+        # i.e. it bakes a "universal" split into the path. We search
+        # broadly under outputs/{apk,bundle} and pick the first
+        # `*-release.{apk,aab}` so this stays resilient if Tauri/AGP
+        # tweaks the layout again later.
         run: |
           set -euxo pipefail
-          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release \
-            -name '*-release.apk' -type f | head -1 || true)
-          AAB_PATH=$(find src-tauri/gen/android/app/build/outputs/bundle/release \
-            -name '*-release.aab' -type f | head -1 || true)
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk \
+            -name '*-release.apk' -type f \
+            ! -name '*-unsigned*' | head -1 || true)
+          AAB_PATH=$(find src-tauri/gen/android/app/build/outputs/bundle \
+            -name '*-release.aab' -type f \
+            ! -name '*-unsigned*' | head -1 || true)
           if [ -z "$APK_PATH" ] || [ -z "$AAB_PATH" ]; then
             echo "::error::Missing signed outputs — APK=$APK_PATH AAB=$AAB_PATH"
             find src-tauri/gen/android/app/build/outputs -maxdepth 6 -type f
