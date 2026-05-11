@@ -38,14 +38,34 @@
 type Handle = { clear: () => void };
 
 let sharedWorker: Worker | null = null;
+// Sticky null sentinel: once we've decided the Worker path is unavailable
+// on this runtime (CSP block, missing API, …) we don't keep retrying on
+// every `createUnthrottledInterval` call. Subsequent timers go straight
+// to the `setInterval` fallback. A warning is emitted only once at the
+// moment of the failure so the JS console reads cleanly.
+let workerUnavailable = false;
 let nextId = 1;
 const handlers = new Map<number, () => void>();
 
-function ensureWorker(): Worker {
+function ensureWorker(): Worker | null {
   if (sharedWorker) return sharedWorker;
+  if (workerUnavailable) return null;
 
   // Inlined worker source so we don't need a separate file in the Vite
   // graph (keeps bundling simple, no chunks, no asset import).
+  //
+  // CSP requirement
+  // ───────────────
+  // `new Worker(blob:URL)` requires the document's CSP to allow
+  // `blob:` in `worker-src` (or, by fallback, in `default-src`).
+  // Tauri prod builds enforce the CSP from `tauri.conf.json`, so the
+  // app's CSP MUST include `worker-src 'self' blob:`. Without it the
+  // Worker constructor throws SecurityError silently and EVERY motion
+  // path on this app dies (head wobble, antennas, pose dispatcher,
+  // move player) - the conversation audio still plays but the robot
+  // doesn't move. We had this exact regression in 0.5.1; the fallback
+  // below + the loud warning in the catch are there to make the next
+  // occurrence loud rather than silent.
   const workerSource = `
     const timers = new Map();
     self.onmessage = (e) => {
@@ -63,9 +83,29 @@ function ensureWorker(): Worker {
     };
   `;
 
-  const blob = new Blob([workerSource], { type: "text/javascript" });
-  const url = URL.createObjectURL(blob);
-  const worker = new Worker(url);
+  let worker: Worker;
+  try {
+    const blob = new Blob([workerSource], { type: "text/javascript" });
+    const url = URL.createObjectURL(blob);
+    worker = new Worker(url);
+  } catch (err) {
+    // Most likely CSP rejecting `new Worker(blob:URL)` on a runtime
+    // whose `worker-src` (or fallback `default-src`) doesn't list
+    // `blob:`. Could also be an exotic embedder that disables Workers
+    // wholesale. In both cases we degrade to plain `setInterval`,
+    // which loses the background-throttling resilience but keeps
+    // motion working when the app is foregrounded - much better than
+    // a silent dead robot.
+    workerUnavailable = true;
+    console.warn(
+      "[unthrottled-interval] Worker creation failed - falling back to " +
+        "setInterval. Motion will throttle when the app is backgrounded. " +
+        "If this is a Tauri prod build, check that tauri.conf.json's CSP " +
+        "includes `worker-src 'self' blob:`.",
+      err,
+    );
+    return null;
+  }
 
   worker.onmessage = (e: MessageEvent<{ id: number }>) => {
     const fn = handlers.get(e.data.id);
@@ -94,6 +134,25 @@ export function createUnthrottledInterval(
   ms: number,
 ): Handle {
   const worker = ensureWorker();
+  if (worker === null) {
+    // Fallback path: plain `setInterval`. Same external contract
+    // (callback, period, `.clear()`) so callers don't have to
+    // branch. The trade-off vs the worker path is documented at the
+    // top of `ensureWorker()`.
+    const id = window.setInterval(() => {
+      try {
+        callback();
+      } catch (err) {
+        console.error("[unthrottled-interval] tick threw:", err);
+      }
+    }, ms);
+    return {
+      clear: () => {
+        window.clearInterval(id);
+      },
+    };
+  }
+
   const id = nextId++;
   handlers.set(id, callback);
   worker.postMessage({ op: "start", id, ms });
