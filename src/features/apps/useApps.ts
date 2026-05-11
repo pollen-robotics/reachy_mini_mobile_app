@@ -4,12 +4,18 @@
  * Single source: the curated catalog served by the public Reachy
  * Mini website Space:
  *
- *   GET https://pollen-robotics-reachy-mini.hf.space/api/apps
+ *   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
  *
- * The desktop app augments this with a daemon-local catalog
- * (installed apps), but mobile never installs apps - we only ever
- * iframe them at their HF Space runtime URL. So a single fetch +
- * minimal normalization is enough.
+ * The endpoint pre-filters JS apps server-side (so we no longer
+ * filter on the `reachy_mini_js_app` tag client-side) and attaches
+ * a `categories` array per app classified by an LLM running on the
+ * website Space. The shape we consume is documented in
+ * `docs/APPS_TAB_REDESIGN.md`, Section 5.1.
+ *
+ * The desktop app augments a richer catalog with a daemon-local
+ * (installed apps) view, but mobile never installs apps - we only
+ * ever iframe them at their HF Space runtime URL. So a single fetch
+ * + minimal normalization is enough.
  *
  * Caching strategy: ONE fetch per JS session.
  * ────────────────────────────────────────────
@@ -39,25 +45,12 @@ import { useQuery } from '@tanstack/react-query';
 
 import { queryClient } from '@/queryClient';
 
-import type { AppEntry, AppSdk } from './types';
+import type { AppEntry, AppSdk, CategorizationMeta } from './types';
 
-const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/apps';
-
-/**
- * Tag that marks a catalog entry as a JS-only Reachy Mini app the
- * mobile shell can iframe. The website catalog is heterogeneous
- * (Python apps, Docker apps, daemon-installed apps, …) but only the
- * `reachy_mini_js_app`-tagged ones run as a static HF Space we can
- * embed without needing the daemon to host a Python runtime.
- *
- * Filtering at the source keeps every downstream consumer (the apps
- * tab, the iframe overlay, future search/sort UIs) on the same
- * curated subset - there's exactly one place to change the contract.
- */
-const REQUIRED_APP_TAG = 'reachy_mini_js_app';
+const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/js-apps';
 
 /** TanStack Query cache key for the catalog. Stable, no params. */
-const APPS_QUERY_KEY = ['apps-catalog'] as const;
+const APPS_QUERY_KEY = ['js-apps-catalog'] as const;
 
 interface RawCatalogApp {
   id?: string;
@@ -71,6 +64,9 @@ interface RawCatalogApp {
   isOfficial?: boolean;
   tags?: string[];
   likes?: number;
+  categories?: string[] | null;
+  categories_source?: string | null;
+  categorized_at?: string | null;
   extra?: {
     id?: string;
     repo_id?: string;
@@ -95,8 +91,29 @@ interface RawCatalogApp {
   [key: string]: unknown;
 }
 
+interface RawCategorizationMeta {
+  enabled?: boolean;
+  total?: number;
+  classified?: number;
+  pending?: number;
+  inProgress?: boolean;
+  dataset?: string | null;
+  taxonomyVersion?: number | null;
+}
+
 interface RawCatalogPayload {
   apps?: RawCatalogApp[];
+  categorization?: RawCategorizationMeta;
+}
+
+/**
+ * Catalog payload after normalization. We hold both the per-app
+ * list and the top-level `categorization` meta so the UI can
+ * surface a "classifying..." chip when the server is mid-batch.
+ */
+interface CatalogPayload {
+  apps: AppEntry[];
+  categorization: CategorizationMeta | null;
 }
 
 function pickFirstString(values: Array<unknown>): string | null {
@@ -196,6 +213,21 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   // null when missing so the renderer can fall back to a generic
   // icon without a sentinel string check.
   const emoji = pickFirstString([raw.extra?.cardData?.emoji])?.trim() || null;
+  // Categories: keep them as-is (multi-valued strings). Defensive:
+  // some servers may emit `null`, an empty array, or even a single
+  // string; we normalise to `string[] | null`.
+  let categories: string[] | null = null;
+  if (Array.isArray(raw.categories)) {
+    const cleaned = raw.categories.filter(
+      (c): c is string => typeof c === 'string' && c.trim().length > 0,
+    );
+    categories = cleaned.length > 0 ? cleaned : null;
+  } else if (typeof raw.categories === 'string') {
+    const trimmed = (raw.categories as string).trim();
+    categories = trimmed.length > 0 ? [trimmed] : null;
+  }
+  const categoriesSource = pickFirstString([raw.categories_source]);
+  const categorizedAt = pickFirstString([raw.categorized_at]);
   return {
     id,
     name,
@@ -207,34 +239,49 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
     emoji,
     tags: Array.from(new Set(tags)),
     likes,
+    categories,
+    categoriesSource,
+    categorizedAt,
     extra: (raw.extra as Record<string, unknown>) ?? {},
   };
 }
 
-/**
- * Normalize and filter the raw catalog payload. Exported for unit
- * tests; the runtime path goes through `useQuery`.
- */
-export function normalizeCatalog(payload: unknown): AppEntry[] {
-  const raw = Array.isArray(payload)
-    ? (payload as RawCatalogApp[])
-    : ((payload as RawCatalogPayload | null)?.apps ?? []);
-  const apps: AppEntry[] = [];
-  for (const r of raw) {
-    const normalized = normalizeApp(r);
-    if (!normalized) continue;
-    // Mobile-only filter: drop entries that don't carry the
-    // JS-app tag. The mobile shell can't host Python apps - it
-    // iframes static HF Spaces, period - so unfiltered entries
-    // would render in the Apps tab as broken iframes (or worse,
-    // load a desktop-only flow that needs a daemon proxy).
-    if (!normalized.tags.includes(REQUIRED_APP_TAG)) continue;
-    apps.push(normalized);
-  }
-  return apps;
+function normalizeCategorization(
+  raw: RawCategorizationMeta | undefined,
+): CategorizationMeta | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    enabled: raw.enabled === true,
+    total: typeof raw.total === 'number' ? raw.total : 0,
+    classified: typeof raw.classified === 'number' ? raw.classified : 0,
+    pending: typeof raw.pending === 'number' ? raw.pending : 0,
+    inProgress: raw.inProgress === true,
+    dataset: typeof raw.dataset === 'string' ? raw.dataset : null,
+    taxonomyVersion:
+      typeof raw.taxonomyVersion === 'number' ? raw.taxonomyVersion : null,
+  };
 }
 
-async function fetchAppsCatalog(): Promise<AppEntry[]> {
+/**
+ * Normalize the raw catalog payload into apps + meta. Exported for
+ * unit tests; the runtime path goes through `useQuery`.
+ */
+export function normalizeCatalog(payload: unknown): CatalogPayload {
+  const raw = Array.isArray(payload)
+    ? ({ apps: payload as RawCatalogApp[] } as RawCatalogPayload)
+    : ((payload as RawCatalogPayload | null) ?? {});
+  const apps: AppEntry[] = [];
+  for (const r of raw.apps ?? []) {
+    const normalized = normalizeApp(r);
+    if (normalized) apps.push(normalized);
+  }
+  return {
+    apps,
+    categorization: normalizeCategorization(raw.categorization),
+  };
+}
+
+async function fetchAppsCatalog(): Promise<CatalogPayload> {
   const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const payload = (await res.json()) as unknown;
@@ -249,12 +296,21 @@ async function fetchAppsCatalog(): Promise<AppEntry[]> {
  * Public state shape consumed by `<AppsTabView>`. Discriminated
  * union so the consumer can branch on `state.kind` without
  * counting boolean flags.
+ *
+ * `apps` is always present (defaults to `[]` on idle/loading) so
+ * downstream view-model hooks can run unconditionally. `categorization`
+ * is `null` until the first successful fetch.
  */
 export type AppsState =
-  | { kind: 'idle' }
-  | { kind: 'loading'; apps: AppEntry[] }
-  | { kind: 'ready'; apps: AppEntry[] }
-  | { kind: 'error'; reason: string; apps: AppEntry[] };
+  | { kind: 'idle'; apps: AppEntry[]; categorization: CategorizationMeta | null }
+  | { kind: 'loading'; apps: AppEntry[]; categorization: CategorizationMeta | null }
+  | { kind: 'ready'; apps: AppEntry[]; categorization: CategorizationMeta | null }
+  | {
+      kind: 'error';
+      reason: string;
+      apps: AppEntry[];
+      categorization: CategorizationMeta | null;
+    };
 
 interface UseAppsReturn {
   state: AppsState;
@@ -305,15 +361,16 @@ export function useApps(): UseAppsReturn {
     staleTime: Infinity,
   });
 
-  const apps = query.data ?? [];
+  const apps = query.data?.apps ?? [];
+  const categorization = query.data?.categorization ?? null;
 
   let state: AppsState;
   if (query.isFetching && apps.length === 0) {
-    state = { kind: 'loading', apps: [] };
+    state = { kind: 'loading', apps: [], categorization };
   } else if (query.isFetching) {
     // Refresh in-flight with a previous list available - keep it
     // visible so the surface doesn't blank.
-    state = { kind: 'loading', apps };
+    state = { kind: 'loading', apps, categorization };
   } else if (query.isError) {
     state = {
       kind: 'error',
@@ -322,14 +379,15 @@ export function useApps(): UseAppsReturn {
           ? query.error.message
           : String(query.error),
       apps,
+      categorization,
     };
   } else if (query.isSuccess) {
-    state = { kind: 'ready', apps };
+    state = { kind: 'ready', apps, categorization };
   } else {
     // Pre-fetch resting state (very brief: TanStack Query goes to
     // `isFetching` on mount). The discriminated `idle` keeps the
     // public type stable for consumers that branch on it.
-    state = { kind: 'idle' };
+    state = { kind: 'idle', apps: [], categorization };
   }
 
   const refresh = async (): Promise<void> => {

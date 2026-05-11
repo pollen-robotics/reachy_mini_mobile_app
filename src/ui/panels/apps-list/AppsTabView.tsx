@@ -1,74 +1,92 @@
 /**
  * Apps tab body.
  *
- * Renders the list of Reachy Mini apps fetched from the public
- * catalog (`useApps()`). The catalog has ~200 entries today and
- * keeps growing, so the list is virtualized via
- * `@tanstack/react-virtual` to keep scroll performance flat
- * regardless of size: only the visible cards (+ a small overscan)
- * are mounted at any time.
+ * Reachy Mini app store, mobile flavour. Driven by the redesign
+ * spec in `docs/APPS_TAB_REDESIGN.md`.
  *
- * The tab itself is a "browse" surface - selecting an app triggers
- * the host's `onOpen` which mounts the iframe overlay.
+ * Three rendering modes, all hosted on a single scrollable
+ * surface so navigation feels stateless and the launch-iframe
+ * contract (`onOpen(app)`) is the only outward effect:
  *
- * Layout
- * ──────
- * The outer `<Stack>` escapes its host column (`maxWidth: 420`
- * inside a `Stack px: 3`) via the `calc(50% - 50vw)` trick, so
- * three things span the entire viewport:
+ *   1. Browse  - default. Pinned panel (omitted when empty) +
+ *                search panel + per-category horizontal rails,
+ *                each panel separated by a thin bottom divider
+ *                so the rhythm reads as a stack of sub-headers.
+ *   2. Search  - active as soon as the input has any non-empty
+ *                trimmed value. Pinned + rails collapse, the
+ *                body becomes a flat result list.
+ *   3. Focus   - opened when the user taps "See ›" on a category
+ *                rail. Drills down into a single category as a
+ *                vertical list, no other rails visible. A back
+ *                chevron in a thin in-body header returns to
+ *                Browse.
  *
- *   1. the sub-header's bottom divider (chrome-band feel),
- *   2. the scrollable area (native scrollbar lands flush with the
- *      phone edge),
- *   3. any future full-bleed UI we'd want here (search bar, …).
+ * Layout convention is shared with the Robot tab: the parent
+ * `Stack` escapes the host column constraints via the `100vw`
+ * + `calc(50% - 50vw)` trick so each panel divider spans the
+ * entire viewport. Inside each panel, content is re-constrained
+ * to the centred column via `COLUMN_SX`.
  *
- * Inside the bled-out column, every content row (header, hint,
- * scroll wrapper) re-applies the same `maxWidth: contentMaxWidth +
- * mx: 'auto'` constraint, so the title, the empty-state hints and
- * the cards are all aligned on one centred column with a 24px
- * gutter.
+ * Categorisation is server-driven (`/api/js-apps` returns the
+ * `categories: string[] \| null` array per app, classified by an
+ * LLM on the website Space). The mobile build embeds only a
+ * passive taxonomy mirror (`categoryTaxonomy.ts`) for display
+ * metadata. See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import {
+  Alert,
   Box,
   Button,
   CircularProgress,
   IconButton,
+  InputAdornment,
+  Snackbar,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
+import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
+import StarOutlineIcon from '@mui/icons-material/StarOutline';
+
+import ReachiesCarousel from '@/ui/widgets/reachies-carousel/ReachiesCarousel';
 
 import type { AppEntry } from '@/features/apps/types';
 import { useApps } from '@/features/apps/useApps';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import { useFilteredApps } from '@/features/apps/useFilteredApps';
+import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
+import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
-import AppCard from './AppCard';
+import AppCompactTile from './AppCompactTile';
+import AppPinnedTile from './AppPinnedTile';
+import AppRail from './AppRail';
 
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
 }
 
 /**
- * Estimated row height fed to the virtualizer. Includes the card's
- * own height + the inter-card gap. Cards have a clamped 2-line
- * description and a fixed-height button, so the variance is small
- * enough that a constant estimate keeps scroll math correct without
- * needing dynamic measurement.
- *
- * Geometry: card content area = `ROW_HEIGHT_PX - ROW_GAP_PX`. Bump
- * `ROW_GAP_PX` for more breathing room between cards; bump
- * `ROW_HEIGHT_PX` in lockstep if you want to keep card size
- * unchanged when adjusting the gap.
+ * Vertical gap between consecutive cards in the search-results
+ * and category-focus lists. The tile is content-driven (no fixed
+ * height) so the gap is the only thing controlling the rhythm
+ * between rows.
  */
-const ROW_HEIGHT_PX = 228;
-const ROW_GAP_PX = 16;
+const LIST_ROW_GAP_PX = 12;
 
 /**
  * Shared `sx` that re-constrains a row to the centred content
- * column. Used by the sub-header, the empty-state hints and the
- * scroll wrapper so they all line up on one vertical axis.
+ * column. Used by every panel inside a full-bleed wrapper so
+ * panel content (titles, search input, list rows) lines up on
+ * one vertical axis even though the dividers themselves span
+ * the whole viewport.
  */
 const COLUMN_SX = {
   width: '100%',
@@ -77,168 +95,98 @@ const COLUMN_SX = {
   px: 3,
 } as const;
 
+/**
+ * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
+ * Search, focused-category header) carry a thin bottom divider
+ * so the tab top reads as a vertical stack of sub-headers. The
+ * category rails below are intentionally divider-less - they
+ * already self-delimit via their `LABEL · count` headers + the
+ * tile rows, and stacking dividers between every rail made the
+ * scroll feel choppy.
+ */
+const PANEL_SX = {
+  py: 2,
+  borderBottom: (theme: { palette: { divider: string } }) =>
+    `1px solid ${theme.palette.divider}`,
+} as const;
+
+const RAIL_PANEL_SX = {
+  pt: 3,
+  pb: 0,
+} as const;
+
 export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const { state, refresh } = useApps();
-  const apps = 'apps' in state ? state.apps : [];
+  const apps = state.apps;
   const isLoading = state.kind === 'loading';
   const hasError = state.kind === 'error';
 
-  // Scroll container is held in state (not just a ref) so the
-  // scroll-direction effect below re-attaches its listener whenever
-  // the container mounts/unmounts (different render branches:
-  // empty / loading / error vs the actual list).
-  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  // Search query is owned here. Deferred via React 18's
+  // `useDeferredValue` so the input stays buttery while the
+  // filtering pass on a few dozen apps catches up. At our scale
+  // it's effectively instant, but the deferral is the right
+  // primitive when the catalog grows.
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDeferredValue(searchQuery);
 
-  // The SubHeader is offset DIRECTLY by accumulated scroll delta so
-  // it tracks the user's finger 1:1, like the iOS Safari address bar.
-  // Pull down a tiny bit -> header reveals a tiny bit; flick up fast
-  // -> header slams hidden. There is no snap, no boolean state, no
-  // CSS transition - the marginTop is mutated straight on the DOM
-  // node from the rAF callback to avoid triggering React renders
-  // every frame and to avoid the transition fighting the scroll.
-  const headerRef = useRef<HTMLDivElement | null>(null);
-  const [headerHeightPx, setHeaderHeightPx] = useState(77);
+  // Drill-down state: when set, the body renders the single
+  // category's flat list instead of the browse layout.
+  const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
 
-  // Measure the SubHeader's actual rendered height so the slide-up
-  // clamp matches it exactly (token sizes, line-height changes
-  // and font scaling all affect this without us hardcoding).
-  useLayoutEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const update = () => setHeaderHeightPx(el.offsetHeight);
-    update();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const pinnedApps = usePinnedApps();
 
-  // Wire the scroll-driven offset to the scroll container. Re-runs
-  // when `scrollEl` mounts/unmounts (loading / error / list) and
-  // when `headerHeightPx` changes (so the clamp stays correct after
-  // a font-size change).
-  useEffect(() => {
-    if (!scrollEl) return;
-
-    // Seed `lastScrollTop` from the live position so a non-zero
-    // initial scroll (e.g. browser-restored on tab return) doesn't
-    // count as a single huge delta on the first scroll event.
-    let lastScrollTop = scrollEl.scrollTop;
-    let currentOffset = 0;
-    let ticking = false;
-
-    const apply = (offset: number) => {
-      const el = headerRef.current;
-      if (!el) return;
-      // `marginTop` (not `transform`) on purpose: we want the freed
-      // space to actually be reclaimed by the scroll container so the
-      // list expands behind the header as it slides under the top
-      // bar's bottom edge. Transform would visually translate but
-      // leave a stale gap.
-      el.style.marginTop = offset === 0 ? '' : `${offset}px`;
-    };
-
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(() => {
-        const current = Math.max(0, scrollEl.scrollTop);
-        const delta = current - lastScrollTop;
-        // Accumulate: scroll DOWN (delta > 0) pushes the header up,
-        // scroll UP (delta < 0) pulls it back down. Clamped to
-        // [-headerHeight, 0] so the header can never go past
-        // "fully hidden" or "fully visible".
-        currentOffset = clamp(currentOffset - delta, -headerHeightPx, 0);
-        apply(currentOffset);
-        lastScrollTop = current;
-        ticking = false;
-      });
-    };
-
-    scrollEl.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      scrollEl.removeEventListener('scroll', onScroll);
-      // Reset on cleanup so the next mount starts with a fully
-      // visible header instead of inheriting stale inline style.
-      apply(0);
-    };
-  }, [scrollEl, headerHeightPx]);
-
-  // The virtualizer reads `getScrollElement` lazily on every
-  // measurement pass, so it picks up the live `scrollEl` state
-  // value without any extra wiring.
-  const rowVirtualizer = useVirtualizer({
-    count: apps.length,
-    getScrollElement: () => scrollEl,
-    estimateSize: () => ROW_HEIGHT_PX,
-    // ~3 rows of overscan keeps the user from ever seeing a blank
-    // strip during fast scroll on mid-tier phones, while still
-    // being small enough that the DOM stays bounded.
-    overscan: 3,
+  const filtered = useFilteredApps({
+    apps,
+    searchQuery: deferredQuery,
+    pinnedIds: pinnedApps.set,
   });
 
-  return (
-    <Stack
-      sx={{
-        flex: 1,
-        minHeight: 0,
-        // Full-bleed escape hatch. The host column caps at
-        // `LAYOUT.contentMaxWidth` and centers via `mx: 'auto'`,
-        // and the host `Stack` has `px: 3`. This pair pulls us
-        // back out to the viewport edges so the sub-header divider
-        // and the scrollbar both land flush with the phone border,
-        // independent of any ancestor constraint. Each child below
-        // re-applies the column constraints via `COLUMN_SX`.
-        width: '100vw',
-        mx: 'calc(50% - 50vw)',
-        // Cancel the host column's `pt: 2` so the sub-header's
-        // top divider sits flush against the screen's top bar
-        // chrome (chrome-on-chrome continuity).
-        mt: -2,
-        // Clip everything to our own bounds. The screen's top bar
-        // is a sibling that comes BEFORE us in document order, so
-        // without clipping, our SubHeader's negative `marginTop`
-        // (used to slide-hide on scroll-down) would paint *over*
-        // the top bar - children of later siblings always win the
-        // paint order when nothing has a stacking context. This
-        // single `overflow: hidden` keeps the slide-up purely
-        // local: the SubHeader visually disappears under the top
-        // bar's bottom edge, exactly like the iOS Safari address
-        // bar pattern, without having to tweak z-indices on the
-        // top bar (which would ripple into the rest of the screen
-        // chrome).
-        overflow: 'hidden',
-      }}
-    >
-      <SubHeader
-        title="Apps"
-        subtitle={
-          hasError
-            ? "Couldn't reach the Hub"
-            : isLoading && apps.length === 0
-              ? 'Fetching catalog…'
-              : `${apps.length} app${apps.length === 1 ? '' : 's'} available`
-        }
-        action={
-          <IconButton
-            size="small"
-            color="primary"
-            aria-label="Refresh apps catalog"
-            onClick={() => void refresh()}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <CircularProgress size={16} color="primary" />
-            ) : (
-              <RefreshIcon fontSize="small" />
-            )}
-          </IconButton>
-        }
-        nativeRef={headerRef}
-      />
+  // Snackbar for the cap-reached toast. The toggle handler
+  // signals rejection by returning `false` even though the id
+  // is not currently pinned.
+  const [snackbar, setSnackbar] = useState<string | null>(null);
 
-      {state.kind === 'loading' && apps.length === 0 ? (
-        <Box sx={{ ...COLUMN_SX, pt: 1.5 }}>
+  const handleTogglePin = useCallback(
+    (app: AppEntry) => {
+      const wasPinned = pinnedApps.set.has(app.id);
+      const ok = pinnedApps.toggle(app.id);
+      if (!wasPinned && !ok) {
+        setSnackbar(`You can pin up to ${MAX_PINNED} apps. Unpin one first.`);
+      }
+    },
+    [pinnedApps],
+  );
+
+  // Derived current focused bucket (null in browse / search modes).
+  const focusedBucket = useMemo(() => {
+    if (!focusedCategoryId) return null;
+    return filtered.rails.find((r) => r.descriptor.id === focusedCategoryId) ?? null;
+  }, [focusedCategoryId, filtered.rails]);
+
+  // Auto-exit focus mode when the focused category vanishes (e.g.
+  // catalog refresh emptied that bucket). Avoids a stale empty
+  // sub-page that the user can't escape via the rail's "See ›".
+  useEffect(() => {
+    if (focusedCategoryId && !focusedBucket) {
+      setFocusedCategoryId(null);
+    }
+  }, [focusedCategoryId, focusedBucket]);
+
+  const flatList: AppEntry[] = focusedBucket
+    ? focusedBucket.apps
+    : filtered.isSearching
+      ? filtered.searchResults
+      : [];
+
+  const showFlatList = focusedBucket !== null || filtered.isSearching;
+
+  // Initial empty / loading / error states. Rendered inside the
+  // scroll container so they share the panel rhythm without
+  // needing a dedicated chrome above.
+  const initialPlaceholder = (() => {
+    if (isLoading && apps.length === 0) {
+      return (
+        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
           <CenteredHint>
             <CircularProgress size={20} />
             <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
@@ -246,8 +194,11 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             </Typography>
           </CenteredHint>
         </Box>
-      ) : state.kind === 'error' && apps.length === 0 ? (
-        <Box sx={{ ...COLUMN_SX, pt: 1.5 }}>
+      );
+    }
+    if (hasError && apps.length === 0) {
+      return (
+        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               Couldn't reach the Hub
@@ -255,7 +206,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             <Typography
               sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}
             >
-              {state.reason}
+              {state.kind === 'error' ? state.reason : ''}
             </Typography>
             <Button
               size="small"
@@ -267,8 +218,11 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             </Button>
           </CenteredHint>
         </Box>
-      ) : apps.length === 0 ? (
-        <Box sx={{ ...COLUMN_SX, pt: 1.5 }}>
+      );
+    }
+    if (apps.length === 0) {
+      return (
+        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               No apps yet
@@ -280,142 +234,543 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             </Typography>
           </CenteredHint>
         </Box>
-      ) : (
-        <Box
-          ref={(el: HTMLDivElement | null) => setScrollEl(el)}
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: 'auto',
-            // Pad the bottom so the last card isn't hugged by the
-            // BottomNavigation - the host doesn't add bottom padding
-            // to its main column to keep the bottom nav full-bleed.
-            pb: 2,
-            pt: 3,
-          }}
-        >
-          <Box
-            sx={{
-              height: `${rowVirtualizer.getTotalSize()}px`,
-              // Re-apply the column constraint so the cards align
-              // perfectly with the sub-header above. On phones the
-              // viewport is narrower than `contentMaxWidth`, so
-              // this collapses to full width and the per-item
-              // padding below provides the 24px gutter.
-              width: '100%',
-              maxWidth: LAYOUT.contentMaxWidth,
-              mx: 'auto',
-              position: 'relative',
-            }}
-          >
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const app = apps[virtualRow.index];
-              if (!app) return null;
-              return (
+      );
+    }
+    return null;
+  })();
+
+  return (
+    <Stack
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        // Full-bleed escape hatch: pulled back out to the viewport
+        // edges so panel dividers and rails span flush to the
+        // phone border, independent of any ancestor constraint.
+        // Each panel below re-applies `COLUMN_SX` to its content.
+        width: '100vw',
+        mx: 'calc(50% - 50vw)',
+        // The body owns its own padding/dividers entirely; we
+        // clip horizontal overflow because some children (rails)
+        // intentionally spill beyond the viewport edge to host
+        // their internal scroll track.
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          // Pad the bottom so the last panel's divider isn't
+          // hugged by the BottomNavigation - the host doesn't add
+          // bottom padding to its main column to keep the bottom
+          // nav full-bleed.
+          pb: 2,
+        }}
+      >
+        {initialPlaceholder ?? (
+          <>
+            {/* Focused-category header: a thin in-body sub-header
+                with a back chevron + label + count. Replaces the
+                old sub-header chrome we used to render above the
+                body. */}
+            {focusedBucket && (
+              <Box sx={PANEL_SX}>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  spacing={1}
+                  sx={{ ...COLUMN_SX, py: 0.25, minHeight: 36 }}
+                >
+                  <IconButton
+                    size="small"
+                    aria-label="Back to apps"
+                    onClick={() => setFocusedCategoryId(null)}
+                    sx={{ ml: -0.5 }}
+                  >
+                    <ArrowBackIosNewIcon sx={{ fontSize: TYPO.md }} />
+                  </IconButton>
+                  <Stack sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography
+                      sx={{
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        color: 'text.primary',
+                      }}
+                    >
+                      {focusedBucket.descriptor.label}
+                    </Typography>
+                    <Typography
+                      sx={{ fontSize: TYPO.tiny, color: 'text.secondary' }}
+                    >
+                      {focusedBucket.apps.length} app
+                      {focusedBucket.apps.length === 1 ? '' : 's'}
+                    </Typography>
+                  </Stack>
+                </Stack>
+              </Box>
+            )}
+
+            {/* Browse panels: pinned + search + per-category rails.
+                Each lives in its own bottom-divider panel. */}
+            {!focusedBucket && (
+              <>
+                {pinnedApps.ids.length > 0 && filtered.pinned.length > 0 ? (
+                  <Box sx={PANEL_SX}>
+                    <PinnedGrid
+                      apps={filtered.pinned}
+                      recentlyAddedId={pinnedApps.recentlyAddedId}
+                      onOpen={onOpen}
+                      onUnpin={(app) => pinnedApps.unpin(app.id)}
+                    />
+                  </Box>
+                ) : (
+                  // Intro slot: occupies the same panel position
+                  // the pinned grid would fill, sized to match
+                  // the visual weight of one pinned-row + label
+                  // so the body's vertical rhythm is unchanged
+                  // before/after the user pins their first app.
+                  <Box sx={PANEL_SX}>
+                    <IntroPanel />
+                  </Box>
+                )}
+
+                {/* Search panel: sticky once it scrolls to the
+                    top of the body. The `position: sticky` works
+                    because the panel is a direct child of the
+                    scroll container above. The `bgcolor` on the
+                    panel hides the rails sliding underneath while
+                    the bar is pinned. The vertical padding here
+                    overrides `PANEL_SX.py` (2 → 4) so the search
+                    panel has more breathing room top + bottom
+                    than the surrounding pinned / rails panels.
+                 */}
                 <Box
-                  key={app.id}
-                  data-index={virtualRow.index}
                   sx={{
-                    position: 'absolute',
+                    ...PANEL_SX,
+                    py: 3,
+                    position: 'sticky',
                     top: 0,
-                    left: 0,
-                    width: '100%',
-                    transform: `translateY(${virtualRow.start}px)`,
-                  // Reserve the full estimated row height; the card
-                  // itself fills minus the inter-row gap.
-                  height: `${virtualRow.size}px`,
-                  pb: `${ROW_GAP_PX}px`,
-                    // 24px gutter on each side so the card borders
-                    // never touch the column edge. Matches the
-                    // sub-header's `px: 3`.
-                    px: 3,
+                    zIndex: 2,
+                    bgcolor: 'background.default',
                   }}
                 >
-                  <AppCard app={app} onOpen={onOpen} />
+                  {/* Tighter horizontal gutter than the rest of
+                      the column (16 px instead of the default
+                      24 px from `COLUMN_SX`). The search input is
+                      an outlined `<TextField>`, which has its own
+                      internal padding between the border rectangle
+                      and the placeholder text - if we kept the
+                      24 px wrapper, the visible left edge of the
+                      searchbar border ends up sitting visually
+                      "further in" than the first tile in the
+                      rails below. Pulling the wrapper to 16 px
+                      compensates so the border edge of the search
+                      box lines up with the rail tiles below. */}
+                  <Box sx={{ ...COLUMN_SX, px: 2 }}>
+                    <SearchInput
+                      value={searchQuery}
+                      onChange={setSearchQuery}
+                      total={apps.length}
+                    />
+                  </Box>
                 </Box>
-              );
-            })}
-          </Box>
-        </Box>
-      )}
+
+                {/* Browse rails. Hidden during search mode (the
+                    search results take over the body). The bucket
+                    size is rendered next to the label so the user
+                    knows how many apps live in each rail at a
+                    glance. Sparse buckets (< MIN_RAIL_SIZE) were
+                    already filtered out by `useFilteredApps`. */}
+                {!filtered.isSearching &&
+                  filtered.rails.map((bucket) => (
+                    <Box key={bucket.descriptor.id} sx={RAIL_PANEL_SX}>
+                      <AppRail
+                        label={bucket.descriptor.label}
+                        count={bucket.apps.length}
+                        onSeeAll={() =>
+                          setFocusedCategoryId(bucket.descriptor.id)
+                        }
+                      >
+                        {bucket.apps.map((app) => (
+                          <AppCompactTile
+                            key={app.id}
+                            app={app}
+                            isPinned={pinnedApps.set.has(app.id)}
+                            onOpen={onOpen}
+                            onTogglePin={handleTogglePin}
+                          />
+                        ))}
+                      </AppRail>
+                    </Box>
+                  ))}
+              </>
+            )}
+
+            {/* Search-mode summary chip: shows result count and a
+                clear hint. Mounted only when the user typed something. */}
+            {!focusedBucket && filtered.isSearching && (
+              <Box sx={{ ...COLUMN_SX, pt: 2, pb: 1 }}>
+                <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+                  {filtered.searchResults.length === 0
+                    ? `No apps match "${searchQuery.trim()}".`
+                    : `${filtered.searchResults.length} result${
+                        filtered.searchResults.length === 1 ? '' : 's'
+                      }`}
+                </Typography>
+              </Box>
+            )}
+
+            {focusedBucket && <Box sx={{ ...COLUMN_SX, pt: 2, pb: 1 }} />}
+
+            {/* Flat list of `AppCompactTile`s in `fullWidth` mode.
+                Mounted only in search and category-focus modes
+                (browse mode has no trailing list - sparse-bucket
+                apps surface via search). The tile is
+                content-driven, so the gap between rows is the
+                only thing controlling the rhythm. We don't
+                virtualise: the catalog is small enough that
+                rendering all matches outright is cheaper than
+                the bookkeeping a virtualizer would require for
+                content-variable rows. */}
+            {showFlatList && (
+              <Stack
+                spacing={`${LIST_ROW_GAP_PX}px`}
+                sx={{
+                  ...COLUMN_SX,
+                }}
+              >
+                {flatList.map((app) => (
+                  <AppCompactTile
+                    key={app.id}
+                    app={app}
+                    isPinned={pinnedApps.set.has(app.id)}
+                    onOpen={onOpen}
+                    onTogglePin={handleTogglePin}
+                    fullWidth
+                  />
+                ))}
+              </Stack>
+            )}
+          </>
+        )}
+      </Box>
+
+      <Snackbar
+        open={snackbar !== null}
+        autoHideDuration={3500}
+        onClose={() => setSnackbar(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{ bottom: { xs: 88, sm: 88 } }}
+      >
+        <Alert
+          severity="info"
+          variant="filled"
+          onClose={() => setSnackbar(null)}
+          sx={{ fontSize: TYPO.sm }}
+        >
+          {snackbar}
+        </Alert>
+      </Snackbar>
     </Stack>
   );
 }
 
+// ===========================================================================
+// Sub-components (file-local; not exported)
+// ===========================================================================
+
 /**
- * Sub-header chrome for a tab body.
+ * Intro panel: replaces the pinned grid until the user has at
+ * least one pinned app. Sized to mirror the visual weight of a
+ * pinned panel with a single row (label + one tile + caption)
+ * so the body's vertical rhythm is unchanged whether or not the
+ * user has pinned anything yet.
  *
- * Bottom divider spans the full viewport (the parent is bled out)
- * for the same chrome-band feel as the screen's top bar; the title
- * + subtitle + action sit on the same centred column as the body
- * content below.
+ * Layout:
  *
- * Scroll-driven slide
- * ───────────────────
- * The host (AppsTabView) drives this header's `marginTop` directly
- * on the DOM node via `nativeRef`, accumulating scroll delta from
- * the inner list so the header tracks the user's finger 1:1. There
- * is no `hidden` boolean and no CSS transition: an animation here
- * would fight the per-frame DOM mutation. The host clips the
- * sliding header to its own bounds (`overflow: hidden` on the
- * AppsTabView Stack) so the negative margin can never paint over
- * the screen's top bar.
+ *   ┌──────────┐
+ *   │          │   "Discover apps for your Reachy Mini."
+ *   │    ✨    │
+ *   │          │   Tap the ★ on any app to pin it here for
+ *   └──────────┘   quick access.
+ *
+ * The icon-box on the left has the same dimensions as a pinned
+ * tile (`(100% - 24px) / 3` wide, square). The text on the
+ * right runs two paragraphs: the hero one-liner and the affordance
+ * education.
  */
-function SubHeader({
-  title,
-  subtitle,
-  action,
-  nativeRef,
-}: {
-  title: string;
-  subtitle: string;
-  action?: React.ReactNode;
-  nativeRef?: React.Ref<HTMLDivElement>;
-}) {
+function IntroPanel() {
   return (
-    <Box
-      ref={nativeRef}
-      sx={(theme) => ({
-        flexShrink: 0,
-        borderBottom: `1px solid ${theme.palette.divider}`,
-        backgroundColor: theme.palette.background.default,
-        // `marginTop` is mutated imperatively by the host's scroll
-        // listener (see AppsTabView). We deliberately do NOT set a
-        // CSS transition here - the per-frame DOM mutation would
-        // race the transition's interpolation and produce a visible
-        // lag behind the finger. Pure scrub instead.
-      })}
-    >
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ ...COLUMN_SX, py: 1.25, minHeight: 56 }}
+    <Box sx={COLUMN_SX}>
+      {/* Phantom header. The earlier draft rendered an
+          "Apps · {count}" label here; we dropped the chrome
+          because the count is implicit (rails carry their own
+          counts) and the label was just adding noise on a
+          surface that's already heavy with copy. The phantom
+          element preserves the panel height so the transition
+          to the pinned panel (which DOES have a "Pinned · N"
+          label) is seamless: the body's vertical rhythm stays
+          identical whether or not the user has pinned anything. */}
+      <Typography
+        aria-hidden
+        sx={{
+          fontSize: TYPO.tiny,
+          fontWeight: FONT_WEIGHT.semibold,
+          lineHeight: 1.1,
+          mb: 1.5,
+          visibility: 'hidden',
+        }}
       >
-        <Stack sx={{ minWidth: 0, flex: 1 }}>
-          <Typography
+        &nbsp;
+      </Typography>
+
+      <Stack direction="row" spacing={1.5} alignItems="stretch">
+        {/* Hero column. Mirrors the structure of a single
+            `AppPinnedTile` exactly (square glyph + caption line)
+            so the IntroPanel's height matches a pinned panel
+            with one row of pins, pixel-for-pixel. The transition
+            "no pins → first pin" then swaps the panel content
+            without any vertical jump. */}
+        <Box
+          aria-hidden
+          sx={{
+            flexShrink: 0,
+            // Match the pinned grid's column width pixel-for-pixel
+            // so the hero illustration occupies the same slot a
+            // single pinned tile would. The grid uses
+            // `repeat(3, minmax(0, 1fr))` with `columnGap: 3`
+            // (24 px), so each cell is `(100% - 2 × 24px) / 3`.
+            width: 'calc((100% - 48px) / 3)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            minWidth: 0,
+          }}
+        >
+          {/* Square glyph - identical geometry to the pinned tile
+              glyph (`width: 100%, aspectRatio: 1 / 1`). The
+              carousel fills it 100 %, with `overflow: hidden`
+              clipping the carousel's `scale > 1` zoom. No border
+              and no background fill: the artwork carries the
+              entire visual weight, and the absence of chrome
+              makes the hero feel lighter than a pinned tile
+              even at the same dimensions. */}
+          <Box
             sx={{
-              fontSize: TYPO.lg,
-              fontWeight: FONT_WEIGHT.semibold,
-              color: 'text.primary',
+              width: '100%',
+              aspectRatio: '1 / 1',
+              overflow: 'hidden',
+              boxSizing: 'border-box',
             }}
           >
-            {title}
+            <ReachiesCarousel zoom={1.4} verticalAlign="60%" />
+          </Box>
+          {/* Phantom caption: same metrics as `AppPinnedTile`'s
+              name caption (`mt: 0.75`, `fontSize: TYPO.tiny`,
+              `lineHeight: 1.2`) but invisible. Reserves the
+              vertical room so this column has the exact height
+              of a real pinned tile + name. The non-breaking
+              space prevents the line from collapsing. */}
+          <Typography
+            sx={{
+              mt: 0.75,
+              fontSize: TYPO.tiny,
+              fontWeight: FONT_WEIGHT.medium,
+              lineHeight: 1.2,
+              visibility: 'hidden',
+            }}
+          >
+            &nbsp;
           </Typography>
-          <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }} noWrap>
-            {subtitle}
+        </Box>
+
+        <Stack
+          spacing={1}
+          sx={{ flex: 1, minWidth: 0, justifyContent: 'center' }}
+        >
+          <Typography
+            sx={{
+              fontSize: TYPO.xxl,
+              fontWeight: FONT_WEIGHT.bold,
+              color: 'text.primary',
+              letterSpacing: '-0.4px',
+              lineHeight: 1.15,
+            }}
+          >
+            Discover apps
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: TYPO.body,
+              color: 'text.secondary',
+              lineHeight: 1.45,
+            }}
+          >
+            Tap the{' '}
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-flex',
+                verticalAlign: '-5px',
+              }}
+            >
+              <StarOutlineIcon sx={{ fontSize: 22 }} />
+            </Box>{' '}
+            on any app to pin it here for quick access.
           </Typography>
         </Stack>
-        {action}
       </Stack>
     </Box>
   );
 }
 
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
+/**
+ * Pinned panel: a fixed 3-column grid of `AppPinnedTile`s, in
+ * insertion order. Diverges from the horizontal-rail pattern used
+ * by the thematic categories: pinned apps are a "dock" the user
+ * curates, so a stable grid that doesn't require horizontal scroll
+ * is more legible than a strip. Cap of 12 (`MAX_PINNED`) means at
+ * most 4 rows.
+ *
+ * The header reuses the same "LABEL · N" rhythm as the category
+ * rails so the panel feels of a piece with the rest of the body
+ * even though the inner layout is different.
+ *
+ * Pop-in animation:
+ *   - Driven by `recentlyAddedId`, sourced from `usePinnedApps`
+ *     so the signal survives this component's mount/unmount.
+ *     The first pin in a session transitions the IntroPanel away
+ *     and mounts this grid fresh; without a hook-level signal
+ *     the grid would have no notion of "this id just landed".
+ *   - When `recentlyAddedId === app.id`, the matching tile renders
+ *     with `isNew={true}` and plays its pop-in keyframe. Every
+ *     other tile mounts statically.
+ *   - The hook auto-resets the signal after ~500 ms (just past
+ *     the animation budget), so a tab-switch round-trip during
+ *     the animation doesn't lose it mid-flight, and a stale
+ *     value can't trigger a phantom replay.
+ */
+function PinnedGrid({
+  apps,
+  recentlyAddedId,
+  onOpen,
+  onUnpin,
+}: {
+  apps: AppEntry[];
+  recentlyAddedId: string | null;
+  onOpen: (app: AppEntry) => void;
+  onUnpin: (app: AppEntry) => void;
+}) {
+  return (
+    <Box sx={COLUMN_SX}>
+      <Typography
+        sx={{
+          fontSize: TYPO.tiny,
+          fontWeight: FONT_WEIGHT.semibold,
+          color: 'text.secondary',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          lineHeight: 1.1,
+          mb: 1.5,
+        }}
+      >
+        Pinned apps
+        <Box
+          component="span"
+          sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}
+        >
+          · {apps.length}
+        </Box>
+      </Typography>
+      <Box
+        sx={{
+          display: 'grid',
+          // `minmax(0, 1fr)` (not bare `1fr`) so a tile with a
+          // long caption can't push its column wider than 1/3 of
+          // the row. Bare `1fr` resolves its lower bound to
+          // `auto` = `min-content`, which lets a long word in
+          // the caption stretch the column and break the
+          // "all tiles the same size" guarantee.
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          // Column gap is intentionally generous so the dock
+          // reads as discrete icons rather than a packed grid.
+          // Row gap stays smaller (the captions provide their
+          // own bit of breathing room before the next square).
+          columnGap: 3,
+          rowGap: 2,
+        }}
+      >
+        {apps.map((app) => (
+          <AppPinnedTile
+            key={app.id}
+            app={app}
+            isNew={recentlyAddedId === app.id}
+            onOpen={onOpen}
+            onLongPress={onUnpin}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function SearchInput({
+  value,
+  onChange,
+  total,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  total: number;
+}) {
+  return (
+    <TextField
+      fullWidth
+      // No `size` prop = MUI default ("medium"), ~52-56 px tall.
+      // We keep growing it slightly past the default via the
+      // input padding overrides below so the bar reads as a
+      // primary input on mobile rather than a chrome filter.
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={`Search ${total} app${total === 1 ? '' : 's'}, authors...`}
+      autoComplete="off"
+      autoCorrect="off"
+      spellCheck={false}
+      InputProps={{
+        startAdornment: (
+          <InputAdornment position="start">
+            <SearchIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary' }} />
+          </InputAdornment>
+        ),
+        endAdornment:
+          value.length > 0 ? (
+            <InputAdornment position="end">
+              <IconButton
+                size="small"
+                aria-label="Clear search"
+                onClick={() => onChange('')}
+                edge="end"
+              >
+                <CloseIcon sx={{ fontSize: TYPO.lg }} />
+              </IconButton>
+            </InputAdornment>
+          ) : undefined,
+        sx: {
+          fontSize: TYPO.md,
+          borderRadius: `${RADIUS.lg}px`,
+          bgcolor: 'background.paper',
+          // Bump the input itself a bit so the bar feels weighty
+          // enough to be the primary affordance once it pins to
+          // the top of the body.
+          '& input': {
+            py: 1.75,
+          },
+        },
+      }}
+    />
+  );
 }
 
 function CenteredHint({ children }: { children: React.ReactNode }) {

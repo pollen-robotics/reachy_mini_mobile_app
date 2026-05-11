@@ -2,13 +2,14 @@
  * Catalog entry for a Reachy Mini app, after normalization from the
  * canonical website endpoint:
  *
- *   GET https://pollen-robotics-reachy-mini.hf.space/api/apps
+ *   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
  *
- * The endpoint returns a heterogeneous payload (some entries come
- * from HF Space metadata, some from a curated catalog). The shape
- * below is the *minimum* we rely on in the mobile app - additional
- * fields are kept on `extra` for future use without forcing another
- * normalization pass.
+ * The endpoint returns JS apps already pre-filtered server-side (no
+ * more client-side `reachy_mini_js_app` tag filter) and attaches a
+ * `categories` array per app, classified by an LLM running on the
+ * website Space. The shape below is the *minimum* we rely on in the
+ * mobile app - additional fields are kept on `extra` for future use
+ * without forcing another normalization pass.
  *
  * Cross-reference: the desktop app uses a much richer normalization
  * step that includes installed-on-daemon merging. Mobile doesn't
@@ -61,6 +62,51 @@ export interface AppEntry {
   tags: string[];
   /** Engagement metrics from the HF Hub. Display-only. */
   likes: number;
+  /**
+   * Server-published taxonomy ids classifying this app
+   * (e.g. `['voice', 'dance']`). Multi-valued. The set of valid
+   * ids is the closed taxonomy mirrored in `categoryTaxonomy.ts`.
+   *
+   * `null` or `[]` means "not classified yet": the app does not
+   * surface in any thematic rail but still appears in the "ALL APPS"
+   * trailing list and in search results.
+   *
+   * Source of truth lives on the website server
+   * (`reachy-mini-website/server/categories.js`); the mobile client
+   * never infers categories.
+   */
+  categories: string[] | null;
+  /**
+   * How the categories were produced. `"inferred"` today (LLM on the
+   * website Space). The server may later add `"curated"` for
+   * hand-edited overrides. V1 mobile ignores this; we keep the field
+   * typed so a future "curated" badge is one prop away.
+   */
+  categoriesSource: string | null;
+  /**
+   * ISO 8601 timestamp from when the server classified this app.
+   * Display-only. V1 mobile ignores it but keeps the field for a
+   * future "Recently classified" affordance.
+   */
+  categorizedAt: string | null;
   /** Original normalized payload, kept around for forward compatibility. */
   extra: Record<string, unknown>;
+}
+
+/**
+ * Top-level meta block published by `/api/js-apps` describing the
+ * server's classification state. Surfaced by `useApps()` so a
+ * future UI can hint "Classifying new apps..." when
+ * `inProgress === true`. V1 mobile ignores it.
+ */
+export interface CategorizationMeta {
+  enabled: boolean;
+  total: number;
+  classified: number;
+  pending: number;
+  inProgress: boolean;
+  /** HF Hub dataset id where the LLM cache lives (e.g. `tfrere/reachy-mini-app-categories`). */
+  dataset: string | null;
+  /** Server-side taxonomy version. Increments when categories ids change. */
+  taxonomyVersion: number | null;
 }

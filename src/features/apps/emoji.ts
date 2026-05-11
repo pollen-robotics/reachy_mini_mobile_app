@@ -13,9 +13,10 @@
  * taking element 0, which is codepoint-aware (handles flags + skin-
  * toned hands without splitting them).
  *
- * Centralised here so the apps list (AppCard) and the in-iframe top
- * bar (AppIframeOverlay) render the same glyph for the same app
- * without duplicating the fallback logic.
+ * Centralised here so the apps list tiles (AppCompactTile,
+ * AppPinnedTile) and the in-iframe top bar (AppIframeOverlay)
+ * render the same glyph for the same app without duplicating
+ * the fallback logic.
  */
 import type { AppEntry } from './types';
 

@@ -250,7 +250,7 @@ export default function AppIframeOverlay({
       >
         {/* Emoji glyph on the very left so the user gets the same
             visual identifier they tapped from the apps list - same
-            `readAppEmoji()` accessor as `AppCard`. Sized large enough
+            `readAppEmoji()` accessor as the apps list tiles. Sized large enough
             to register at a glance but inside the same vertical
             footprint as the title so the bar doesn't grow taller. */}
         <Typography
