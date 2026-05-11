@@ -22,11 +22,16 @@
 // - requests are issued by the native WebView and OpenAI's CORS check
 // actually succeeds - so we can just hit the public endpoint directly.
 //
-// Keep it configurable via `VITE_OPENAI_REALTIME_URL` for future setups
-// (e.g. a corporate proxy) without forcing another fork.
+// We target the GA WebRTC handshake (`POST /v1/realtime/calls`,
+// FormData body with `sdp` + `session`). The legacy Beta endpoint
+// (`POST /v1/realtime?model=...`, raw SDP body) is being deprecated
+// on April 30, 2026 and is incompatible with reasoning-capable
+// models such as `gpt-realtime-2`. Keep `VITE_OPENAI_REALTIME_URL`
+// configurable for future setups (e.g. a corporate proxy) without
+// forcing another fork.
 const REALTIME_BASE_URL =
   (import.meta.env?.VITE_OPENAI_REALTIME_URL as string | undefined) ??
-  "https://api.openai.com/v1/realtime";
+  "https://api.openai.com/v1/realtime/calls";
 
 // ─── WiFi robustness knobs ──────────────────────────────────────────────
 // Peak bitrate we allow Opus to use on our uplink. 32 kbps is plenty for
@@ -232,34 +237,13 @@ export class OpenaiRealtimeClient {
     const dc = pc.createDataChannel("oai-events");
     this.dc = dc;
 
+    // GA: session is configured at handshake (in the FormData `session`
+    // field), not via a `session.update` event after the data channel
+    // opens. We just flip status here; the DC stays open to receive
+    // server events (transcripts, tool call args, response.done, ...)
+    // and to optionally send `session.update` for runtime tweaks.
     dc.addEventListener("open", () => {
       this.setStatus("connected");
-      const tools = (this.options.tools ?? []).map((t) => ({
-        type: "function" as const,
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-      }));
-      this.sendEvent({
-        type: "session.update",
-        session: {
-          modalities: ["audio", "text"],
-          voice: this.options.voice,
-          instructions: this.options.instructions,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "whisper-1" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            create_response: true,
-            interrupt_response: true,
-          },
-          ...(tools.length ? { tools, tool_choice: "auto" } : {}),
-        },
-      });
     });
 
     dc.addEventListener("message", (event) => this.handleEvent(event.data));
@@ -280,14 +264,20 @@ export class OpenaiRealtimeClient {
       console.warn("[openai-realtime] failed to cap sender bitrate:", err);
     });
 
-    const url = `${REALTIME_BASE_URL}?model=${encodeURIComponent(this.options.model)}`;
-    const response = await fetch(url, {
+    // GA handshake: multipart/form-data with `sdp` + `session` (JSON).
+    // The `Content-Type` header is set automatically by FormData with
+    // the right multipart boundary - do NOT override it here.
+    const sessionConfig = this.buildSessionConfig();
+    const form = new FormData();
+    form.append("sdp", offerSdp);
+    form.append("session", JSON.stringify(sessionConfig));
+
+    const response = await fetch(REALTIME_BASE_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.options.apiKey}`,
-        "Content-Type": "application/sdp",
       },
-      body: offerSdp,
+      body: form,
     });
 
     if (!response.ok) {
@@ -295,10 +285,85 @@ export class OpenaiRealtimeClient {
       throw new Error(`OpenAI Realtime handshake failed (${response.status}): ${text}`);
     }
 
+    // GA still returns the SDP answer as plain text (not JSON). The
+    // SIP `/accept` subresource returns JSON; the WebRTC entrypoint
+    // doesn't.
     const rawAnswer = await response.text();
     // Patch the answer too so our *decoder* honours the same FEC knobs.
     const answerSdp = patchOpusFmtp(rawAnswer);
     await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+  }
+
+  /**
+   * Build the GA-shaped session config payload for the handshake's
+   * `session` FormData field. Notable shape changes vs the Beta
+   * `session.update` event:
+   *
+   *   - `model` lives **inside** the session object now (was a query
+   *     param `?model=...` on the Beta endpoint).
+   *   - `voice` moved from `session.voice` to
+   *     `session.audio.output.voice`.
+   *   - `input_audio_format` / `output_audio_format` (string `"pcm16"`)
+   *     moved to `session.audio.{input,output}.format` (object with
+   *     `type` + `rate`). 24 kHz `audio/pcm` is the only PCM rate
+   *     supported in GA.
+   *   - `input_audio_transcription` → `session.audio.input.transcription`.
+   *   - `turn_detection` → `session.audio.input.turn_detection`.
+   *   - `modalities: ["audio", "text"]` → `output_modalities: ["audio"]`
+   *     (audio responses always include a transcript; the legacy "text"
+   *     entry is no longer accepted alongside audio).
+   *   - `temperature` is removed entirely.
+   *   - `reasoning.effort` is now meaningful (only the
+   *     reasoning-capable snapshots like `gpt-realtime-2` honour it;
+   *     the others ignore it silently).
+   *   - `tools` / `tool_choice` stay at the top level of the session.
+   */
+  private buildSessionConfig(): Record<string, unknown> {
+    const tools = (this.options.tools ?? []).map((t) => ({
+      type: "function" as const,
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }));
+    const session: Record<string, unknown> = {
+      type: "realtime",
+      model: this.options.model,
+      output_modalities: ["audio"],
+      instructions: this.options.instructions,
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 24000 },
+          transcription: { model: "whisper-1" },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+            create_response: true,
+            interrupt_response: true,
+          },
+        },
+        output: {
+          format: { type: "audio/pcm", rate: 24000 },
+          voice: this.options.voice,
+        },
+      },
+      // Reasoning effort knob, only meaningful for the reasoning-
+      // capable Realtime models (`gpt-realtime-2`, future snapshots).
+      // Older snapshots (`gpt-realtime`) silently ignore it. `low` is
+      // OpenAI's recommended setting for production voice agents -
+      // it keeps the time-to-first-audio comparable to non-reasoning
+      // models, while still letting the model think briefly when a
+      // complex instruction lands. Bump to `medium` / `high` only
+      // if a specific workflow needs deeper reasoning AND can
+      // tolerate a perceptible response-start delay.
+      reasoning: { effort: "low" },
+    };
+    if (tools.length) {
+      session.tools = tools;
+      session.tool_choice = "auto";
+    }
+    return session;
   }
 
   private clearIceGrace(): void {

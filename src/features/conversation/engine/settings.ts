@@ -24,21 +24,30 @@
  * actually has two viable sources.
  */
 
-// `gpt-realtime` is the GA snapshot of OpenAI's voice realtime
-// model: production-ready, ~$8 / $24 per M audio in/out, low
-// time-to-first-audio (no chain-of-thought), works on both the
-// Beta WebRTC handshake (`POST /v1/realtime?model=...`) and the
-// new GA handshake (`POST /v1/realtime/calls`).
+// `gpt-realtime-2` is OpenAI's reasoning-capable Realtime model
+// (released late 2025 / early 2026). vs the earlier `gpt-realtime`
+// snapshot it brings stronger instruction following, more reliable
+// tool use, a 128k context window, and higher tolerance for long /
+// nested system prompts - at the cost of higher latency (the model
+// can briefly "think" before speaking) and ~4x audio token pricing
+// (~$32 / $64 per M in/out vs ~$8 / $24 for `gpt-realtime`).
 //
-// We tried briefly upgrading to `gpt-realtime-2` (reasoning-
-// capable, ~4x audio token pricing, stronger instruction
-// following) but it is **GA-only** - i.e. it returns
-// `400 invalid_model "Model gpt-realtime-2 is only available on
-// the GA API."` against our current Beta handshake. Rolling
-// back here unblocks the runtime; the GA migration is tracked
-// separately and will land before the Beta deprecation
-// (April 30, 2026).
-export const DEFAULT_MODEL = 'gpt-realtime';
+// The latency cost is mitigated by pinning `reasoning.effort: "low"`
+// in `buildSessionConfig()` (`openai-realtime.ts`), which is OpenAI's
+// recommended setting for production voice agents - any higher and
+// the time-to-first-audio becomes perceptible mid-conversation.
+//
+// IMPORTANT: this model is **GA-only**, i.e. it requires the new
+// `POST /v1/realtime/calls` handshake (FormData body with
+// `sdp` + `session`). The legacy Beta endpoint
+// (`POST /v1/realtime?model=...`, raw SDP) returns
+// `400 invalid_model "Model gpt-realtime-2 is only available on the
+// GA API."`. The handshake migration is done in `openai-realtime.ts`.
+//
+// Rollback path (if the GA handshake misbehaves on a specific
+// device or network): set this back to `'gpt-realtime'`. The GA
+// handshake also accepts that snapshot.
+export const DEFAULT_MODEL = 'gpt-realtime-2';
 export const DEFAULT_VOICE = 'cedar';
 
 export const DEFAULT_INSTRUCTIONS =
