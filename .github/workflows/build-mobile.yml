@@ -228,6 +228,17 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
+          # Background-audio capability: needed so the OpenAI Realtime
+          # WebRTC session + WKWebView keep running when the user
+          # locks the screen / backgrounds the app mid-conversation.
+          # See `src-tauri/Info.plist` + the runtime keepalive in
+          # `src/features/conversation/background-audio-keeper.ts`
+          # for the full rationale. `-replace` with -xml is the
+          # idempotent way to write an array key whether or not it
+          # already exists in the plist.
+          plutil -replace UIBackgroundModes \
+            -xml "<array><string>audio</string></array>" \
+            "$INFO_PLIST"
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
@@ -727,6 +738,17 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
+          # Background-audio capability: needed so the OpenAI Realtime
+          # WebRTC session + WKWebView keep running when the user
+          # locks the screen / backgrounds the app mid-conversation.
+          # See `src-tauri/Info.plist` + the runtime keepalive in
+          # `src/features/conversation/background-audio-keeper.ts`
+          # for the full rationale. `-replace` with -xml is the
+          # idempotent way to write an array key whether or not it
+          # already exists in the plist.
+          plutil -replace UIBackgroundModes \
+            -xml "<array><string>audio</string></array>" \
+            "$INFO_PLIST"
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 

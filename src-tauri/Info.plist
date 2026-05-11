@@ -95,5 +95,28 @@
     <true/>
     <key>UIStatusBarStyle</key>
     <string>UIStatusBarStyleDefault</string>
+
+    <!--
+        Background-audio capability for the OpenAI Realtime
+        conversation pipeline. Without `audio` in
+        `UIBackgroundModes`, iOS suspends the WKWebView process a
+        few seconds after the user locks the screen or switches
+        apps, killing the WebRTC peer connection AND the JS
+        runtime. With it (combined with the runtime keepalive in
+        `src/features/conversation/background-audio-keeper.ts` that
+        keeps a non-zero AudioContext output alive while a conv is
+        running), iOS keeps us scheduled and the user can put the
+        phone in their pocket / lock the screen / look at another
+        app and the conversation keeps going.
+
+        App Store rationale: this is a voice-conversation app, the
+        "audio" background mode matches actual audio playback +
+        recording behaviour. Mirrors the entitlement set used by
+        Siri, Discord, Slack call panels, Google Assistant, etc.
+    -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
 </dict>
 </plist>

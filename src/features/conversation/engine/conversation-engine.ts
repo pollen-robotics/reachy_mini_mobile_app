@@ -92,6 +92,10 @@ import "@/features/robot-session/sdk-bootstrap";
 import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
+import {
+  createBackgroundAudioKeeper,
+  type BackgroundAudioKeeper,
+} from "../background-audio-keeper";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
 import {
   TransportMonitor,
@@ -871,6 +875,11 @@ async function runConversationParts(): Promise<void> {
   // here too with the dispatcher already running, no harm done.
   poseDispatcher.start();
   antennasControl.start();
+  // Spin up the silent keepalive AudioContext so iOS treats us as
+  // an actively-playing audio app and grants background time when
+  // the user locks the screen / switches apps mid-conversation.
+  // Idempotent (no-op if already running on a re-acquire path).
+  backgroundAudioKeeper.start();
   if (robot._pc) startTransportMonitor(robot._pc, onTransportChange);
 
   // Keep the device awake for the whole conversation so timers and the
@@ -1082,6 +1091,15 @@ const antennasControl = createAntennasControl({
   poseDispatcher,
 });
 
+// Background-audio keepalive. Started alongside the conversation
+// pipeline so iOS keeps the WKWebView scheduled when the user puts
+// the phone in their pocket / locks the screen mid-conversation.
+// See `../background-audio-keeper.ts` for the rationale + the
+// matching `UIBackgroundModes = audio` declaration in the iOS
+// Info.plist (without which this runtime piece does nothing).
+const backgroundAudioKeeper: BackgroundAudioKeeper =
+  createBackgroundAudioKeeper();
+
 // ─── OpenAI bridge ─────────────────────────────────────────────────────
 //
 // `bridge/openai-bridge.ts` owns the entire OpenAI Realtime session:
@@ -1232,6 +1250,10 @@ async function teardown(): Promise<void> {
 
   stopMicLevelMonitor();
   stopAiLevelMonitor();
+  // Drop the keepalive AudioContext so iOS lets the audio session
+  // revert to `Ambient` and we go back to plain foreground-only
+  // behaviour. Safe to call when not running.
+  backgroundAudioKeeper.stop();
   stopTransportMonitor();
   void releaseWakeLock();
 
@@ -1726,6 +1748,7 @@ const handle: ConversationEngineHandle = {
     openaiBridge?.resetReconnectCounter();
     stopMicLevelMonitor();
     stopAiLevelMonitor();
+    backgroundAudioKeeper.stop();
     stopTransportMonitor();
     void releaseWakeLock();
     // Mute the robot mic so any in-flight audio frames don't leak
@@ -1839,6 +1862,7 @@ const handle: ConversationEngineHandle = {
       openaiBridge?.resetReconnectCounter();
       stopMicLevelMonitor();
       stopAiLevelMonitor();
+      backgroundAudioKeeper.stop();
       stopTransportMonitor();
       void releaseWakeLock();
       try {
