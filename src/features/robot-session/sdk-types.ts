@@ -108,6 +108,22 @@ export interface ReachyMiniInstance extends EventTarget {
    * daemon predates the `get_version` Cmd.
    */
   getVersion(): Promise<string | null>;
+
+  /**
+   * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
+   * stream over the WebRTC data channel. One daemon-side subprocess
+   * is shared across local subscribers (first add sends
+   * `subscribe_logs`, last removal sends `unsubscribe_logs`).
+   *
+   * Returns an `unsubscribe()` function that's safe to call more
+   * than once. `onError` is invoked when the daemon reports a
+   * `log_stream_error` (e.g. `journalctl` not available on
+   * dev/macOS).
+   */
+  subscribeLogs(options: {
+    onLine: (entry: { timestamp: string; line: string }) => void;
+    onError?: (error: string) => void;
+  }): () => void;
 }
 
 export type ReachyMiniConstructor = new (

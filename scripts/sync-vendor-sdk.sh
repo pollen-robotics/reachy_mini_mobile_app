@@ -43,9 +43,20 @@ LOCAL_PATH="src/vendor/reachy-mini.js"
 # upstream we just pulled is too old or has regressed, and the script bails
 # before overwriting the local copy with something broken.
 REQUIRED_MARKERS=(
-    "_silentMicFallback"   # silent mic fallback on getUserMedia rejection
-    "_pendingRemoteIce"    # buffer ICE candidates before setRemoteDescription
-    "msg.ice.candidate"    # skip empty ICE candidate (Safari/iOS marker)
+    "_silentMicFallback"           # silent mic fallback on getUserMedia rejection
+    "_pendingRemoteIce"            # buffer ICE candidates before setRemoteDescription
+    "msg.ice.candidate"            # skip empty ICE candidate (Safari/iOS marker)
+    # Awaitable wake_up / goto_sleep. Without these, `robot.wakeUp()` /
+    # `robot.gotoSleep()` are fire-and-forget (return boolean), the
+    # `await` in `physical.ts` is a no-op, and the engine ends up:
+    #   - flipping FSM to `ready` BEFORE the wake animation finishes
+    #     (the connecting view's "Wake-up" step is invisible);
+    #   - calling `setMotorMode('disabled')` BEFORE the goto-sleep
+    #     trajectory has landed (the head drops mid-animation).
+    # See physical.ts + ConnectingView.tsx for the consumers, and the
+    # PR #1098 thread upstream for the full plumbing rationale.
+    "_pendingMotionCompletions"    # queue of pending wake_up / goto_sleep awaiters
+    "_sendCommandAwaitCompletion"  # internal Promise wrapper for motion commands
 )
 
 # ─── Locate the script + repo root ─────────────────────────────────────────

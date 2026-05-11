@@ -140,6 +140,26 @@ export class ReachyMini extends EventTarget {
   /** Set the microphone input volume (0-100). Persists across
    *  sessions. Resolves with the applied value. */
   setMicrophoneVolume(volume: number): Promise<number | null>;
+
+  // ─── Daemon log streaming (DataChannel) ───────────────────────────
+  //
+  // Subscribe to the `journalctl -u reachy-mini-daemon` stream over
+  // the WebRTC data channel. One daemon-side subprocess is shared
+  // across all local subscribers: the first call sends
+  // `subscribe_logs`, removing the last subscriber sends
+  // `unsubscribe_logs`. Calling the returned `unsubscribe()` more
+  // than once is a no-op.
+
+  /**
+   * One log line as forwarded by the daemon. `timestamp` is an ISO
+   * string from `journalctl --output short-iso`; `line` is the raw
+   * formatted log line (Python logger's `levelname` is embedded in
+   * the text, so consumers parse it client-side).
+   */
+  subscribeLogs(options: {
+    onLine: (entry: { timestamp: string; line: string }) => void;
+    onError?: (error: string) => void;
+  }): () => void;
 }
 
 export default ReachyMini;

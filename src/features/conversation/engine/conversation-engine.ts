@@ -101,6 +101,7 @@ import { WakeLockHandle } from "@/features/robot-session/wake-lock";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
 import { memoryStore } from "./memory";
+import { getActivePersonality } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
@@ -426,6 +427,9 @@ const wakeLock = new WakeLockHandle();
 
 function setState(next: AppState): void {
   const wasError = currentState === "error";
+  console.log(
+    `[DIAG] setState: ${currentState} -> ${next} (sessionEstablished=${session.isEstablished()})`,
+  );
   currentState = next;
   // Fan the transition out to the host. The React UI maps this to a
   // visual orb state + caption; tests / loggers may also subscribe.
@@ -729,10 +733,23 @@ async function doStart(): Promise<void> {
   // `expectedStop` semantics are baked in through the session's
   // composed guard, so internal stopSession bailouts on timeout
   // don't trigger the engine's unsolicited-drop recovery path.
+  const tDoStart0 = performance.now();
+  console.log(`[DIAG] doStart: calling session.start() at t=0`);
   const result = await session.start({
-    onAttempt: emitConnectionAttempt,
+    onAttempt: (info) => {
+      console.log(
+        `[DIAG] doStart: emitConnectionAttempt(${JSON.stringify(info)}) at ` +
+          `t+${Math.round(performance.now() - tDoStart0)}ms`,
+      );
+      emitConnectionAttempt(info);
+    },
     isCancelled: () => !session.getRobot() || !session.getSelectedRobotId(),
   });
+  console.log(
+    `[DIAG] doStart: session.start() resolved ok=${result.ok} at t+${Math.round(
+      performance.now() - tDoStart0,
+    )}ms`,
+  );
 
   if (!result.ok) {
     if (result.cancelled) return;
@@ -749,7 +766,14 @@ async function doStart(): Promise<void> {
   // ("ready" means physically online, not just "WebRTC handshake
   // complete"). `session.wakeUp()` enforces a JS-side hard timeout
   // so a stuck daemon never blocks our progress to `ready`.
+  const tBeforeWake = performance.now();
+  console.log(`[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`);
   await session.wakeUp();
+  console.log(
+    `[DIAG] doStart: session.wakeUp() resolved in ${Math.round(
+      performance.now() - tBeforeWake,
+    )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
+  );
 
   // Mark the SDK / DataChannel as ready BEFORE deciding whether to
   // continue with the conversation parts. The mobile app gates the
@@ -768,6 +792,9 @@ async function doStart(): Promise<void> {
     // the orb routes through `handleOrbClick("ready")` which
     // calls `runConversationParts()` to bring up OpenAI Realtime
     // + the audio pumps + motion modules.
+    console.log(
+      `[DIAG] doStart: setState("ready") at t+${Math.round(performance.now() - tDoStart0)}ms`,
+    );
     setState("ready");
     return;
   }
@@ -1073,7 +1100,17 @@ openaiBridge = createOpenaiBridge({
   getRobot: () => robot,
   apiKey: settings.apiKey,
   model: settings.model,
-  voice: settings.voice,
+  // Resolve the voice lazily (re-read on every `buildClient()` so
+  // a personality switch picks up the new voice on the next
+  // reconnect, without needing to rebuild the bridge). Falls back
+  // to the engine's `DEFAULT_VOICE` when the active personality
+  // doesn't override it.
+  voice: () => {
+    const personality = getActivePersonality();
+    return personality.voice && personality.voice.length > 0
+      ? personality.voice
+      : settings.voice;
+  },
   composeInstructions: () => {
     // Snapshot the user's long-term memory ONCE per connection. We
     // intentionally don't push live updates to the OpenAI session: a
@@ -1082,10 +1119,20 @@ openaiBridge = createOpenaiBridge({
     // without needing the prompt to be re-pushed. The next session
     // start (or an explicit reconnect) is when stale memories get
     // refreshed.
+    //
+    // The base instructions come from the active personality (the
+    // built-in default when the user hasn't picked one) so a
+    // personality switch propagates here on the next reconnect
+    // without any explicit wiring beyond reading the store.
+    const personality = getActivePersonality();
+    const baseInstructions =
+      personality.instructions && personality.instructions.length > 0
+        ? personality.instructions
+        : settings.instructions;
     const memoryFragment = memoryStore.formatForPrompt();
     return memoryFragment
-      ? `${settings.instructions}\n\n${memoryFragment}`
-      : settings.instructions;
+      ? `${baseInstructions}\n\n${memoryFragment}`
+      : baseInstructions;
   },
   onStatus: (status) => {
     switch (status) {
@@ -1221,7 +1268,14 @@ async function teardown(): Promise<void> {
     // run BEFORE `stopSession()` below so they land while the
     // WebRTC DataChannel is still up. The result is recorded in
     // the session's motor-mode dedup cache automatically.
+    const tSleep0 = performance.now();
+    console.log(`[DIAG] teardown: about to await session.sleepAndDisable()`);
     await session.sleepAndDisable();
+    console.log(
+      `[DIAG] teardown: session.sleepAndDisable() resolved in ${Math.round(
+        performance.now() - tSleep0,
+      )}ms — about to stopSession`,
+    );
   }
 
   if (robot) {
@@ -1553,7 +1607,7 @@ const disposeBackgroundResilience = installBackgroundResilience({
   },
 });
 
-return {
+const handle: ConversationEngineHandle = {
   unmount: async () => {
     if (unmounted) return;
     unmounted = true;
@@ -1692,6 +1746,27 @@ return {
     // silences the Dynamixel idle buzz now that we've landed on
     // a known neutral pose just above.
     if (session.isEstablished()) setState("ready");
+  },
+
+  restartConversation: async () => {
+    if (unmounted) return;
+    // Mid-session personality switch: the active personality is read
+    // lazily by both `composeInstructions` and the `voice` getter
+    // (see `createOpenaiBridge` deps above), so the next reconnect
+    // automatically picks up the new instructions + voice. We just
+    // need to drop the live OpenAI client and bring it back.
+    //
+    // No-op when the conversation isn't running: a future
+    // `startConversation()` will already pull the fresh personality
+    // values, so there's nothing to reload here.
+    if (!conversationStarted && !convoActiveRequested) return;
+    try {
+      await handle.stopConversation();
+      if (unmounted) return;
+      await handle.startConversation();
+    } catch (err) {
+      console.warn("[conversation-engine] restartConversation failed:", err);
+    }
   },
 
   setMicMuted: (muted: boolean) => {
@@ -1851,14 +1926,23 @@ return {
   // call them at any time (including before the DC opens or after
   // unmount) without having to special-case the lifecycle.
 
+  // Volume getters/setters keep the same `Promise<number | null>`
+  // contract as before; logging is intentionally quiet:
+  //   - `null` returns are the expected race when the DataChannel
+  //     hasn't opened yet (or just torn down for a release). The
+  //     `useDaemonState` provider retries once on null, so flooding
+  //     the console with "→ null" on every bring-up was just noise.
+  //     We keep them at `console.debug` so devs who need them can
+  //     filter the level up; the default browser console hides
+  //     debug.
+  //   - Successful round-trips and writes still log at `info` so
+  //     a user-visible action is traceable in the console.
   getSpeakerVolume: async () => {
-    if (unmounted || !robot) {
-      console.warn("[volume] getSpeakerVolume: engine not ready");
-      return null;
-    }
+    if (unmounted || !robot) return null;
     try {
       const v = await robot.getVolume();
-      console.info("[volume] getSpeakerVolume →", v);
+      if (typeof v === "number") console.info("[volume] getSpeakerVolume →", v);
+      else console.debug("[volume] getSpeakerVolume → null (DC not ready)");
       return v;
     } catch (err) {
       console.warn("[volume] getSpeakerVolume failed:", err);
@@ -1867,18 +1951,23 @@ return {
   },
 
   setSpeakerVolume: async (volume: number) => {
-    if (unmounted || !robot) {
-      console.warn("[volume] setSpeakerVolume: engine not ready");
-      return null;
-    }
+    if (unmounted || !robot) return null;
     try {
       const applied = await robot.setVolume(volume);
-      console.info(
-        "[volume] setSpeakerVolume requested",
-        volume,
-        "→ applied",
-        applied,
-      );
+      if (typeof applied === "number") {
+        console.info(
+          "[volume] setSpeakerVolume",
+          volume,
+          "→ applied",
+          applied,
+        );
+      } else {
+        console.debug(
+          "[volume] setSpeakerVolume",
+          volume,
+          "→ null (DC not ready)",
+        );
+      }
       return applied;
     } catch (err) {
       console.warn("[volume] setSpeakerVolume failed:", err);
@@ -1887,13 +1976,11 @@ return {
   },
 
   getMicrophoneVolume: async () => {
-    if (unmounted || !robot) {
-      console.warn("[volume] getMicrophoneVolume: engine not ready");
-      return null;
-    }
+    if (unmounted || !robot) return null;
     try {
       const v = await robot.getMicrophoneVolume();
-      console.info("[volume] getMicrophoneVolume →", v);
+      if (typeof v === "number") console.info("[volume] getMicrophoneVolume →", v);
+      else console.debug("[volume] getMicrophoneVolume → null (DC not ready)");
       return v;
     } catch (err) {
       console.warn("[volume] getMicrophoneVolume failed:", err);
@@ -1902,18 +1989,23 @@ return {
   },
 
   setMicrophoneVolume: async (volume: number) => {
-    if (unmounted || !robot) {
-      console.warn("[volume] setMicrophoneVolume: engine not ready");
-      return null;
-    }
+    if (unmounted || !robot) return null;
     try {
       const applied = await robot.setMicrophoneVolume(volume);
-      console.info(
-        "[volume] setMicrophoneVolume requested",
-        volume,
-        "→ applied",
-        applied,
-      );
+      if (typeof applied === "number") {
+        console.info(
+          "[volume] setMicrophoneVolume",
+          volume,
+          "→ applied",
+          applied,
+        );
+      } else {
+        console.debug(
+          "[volume] setMicrophoneVolume",
+          volume,
+          "→ null (DC not ready)",
+        );
+      }
       return applied;
     } catch (err) {
       console.warn("[volume] setMicrophoneVolume failed:", err);
@@ -1969,5 +2061,25 @@ return {
       return false;
     }
   },
+
+  subscribeLogs: (options) => {
+    // Older SDK builds (pre `feat/subscribe-logs-cmd`) ship without
+    // `subscribeLogs`; degrade gracefully to a noop so the consumer's
+    // hook stays mountable without runtime guards.
+    if (
+      unmounted ||
+      !robot ||
+      typeof (robot as { subscribeLogs?: unknown }).subscribeLogs !== "function"
+    ) {
+      return () => {};
+    }
+    try {
+      return robot.subscribeLogs(options);
+    } catch (err) {
+      console.warn("[engine] subscribeLogs failed:", err);
+      return () => {};
+    }
+  },
 };
+return handle;
 } // end of mountConversation

@@ -158,6 +158,23 @@ export interface ConversationEngineHandle {
    */
   stopConversation: () => Promise<void>;
   /**
+   * Restart the conversation parts in place: stop the current OpenAI
+   * Realtime client + motion controllers, then bring them back up
+   * with the latest settings. No-op when no conversation is running.
+   *
+   * The engine reads the active personality lazily (via
+   * `composeInstructions` + the `voice` getter in `createOpenaiBridge`),
+   * so a personality switch picks up the new instructions + voice
+   * automatically on the next reconnect. The host calls this method
+   * after mutating the personality store mid-session so the running
+   * conversation reflects the new persona without the user having to
+   * manually stop + start.
+   *
+   * The SDK / WebRTC tunnel stays up across the restart, so the
+   * robot does not go to sleep and the daemon proxy keeps working.
+   */
+  restartConversation: () => Promise<void>;
+  /**
    * Toggle the robot microphone gate from the host UI (the React orb's
    * "mute" side button). Mirrors what the engine's own DOM mute button
    * used to do: flips the SDK's `setMicMuted()` and notifies anyone
@@ -293,6 +310,27 @@ export interface ConversationEngineHandle {
    * is offered to the user.
    */
   setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
+
+  /**
+   * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
+   * stream over the WebRTC data channel. Thin pass-through to the
+   * SDK's `subscribeLogs`. Returns an `unsubscribe()` callback that
+   * is safe to call more than once.
+   *
+   * No-op (returns a noop unsubscribe) if the engine isn't mounted
+   * or the DataChannel isn't open: the next viable engine boot will
+   * NOT auto-resubscribe; consumers wire this to a hook that
+   * re-runs whenever the session reaches `ready` again.
+   *
+   * The daemon batches lines aggressively - expect bursts of 5-50
+   * lines at a time during noisy windows (app boot, motor PID
+   * gains, etc). Consumers should append to a ring buffer rather
+   * than replace state per call.
+   */
+  subscribeLogs: (options: {
+    onLine: (entry: { timestamp: string; line: string }) => void;
+    onError?: (error: string) => void;
+  }) => () => void;
 }
 
 export interface ConversationEngineOptions {

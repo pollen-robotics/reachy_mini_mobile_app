@@ -88,6 +88,13 @@ export interface RobotSessionHandle {
    *  transition). */
   startConversation: () => Promise<void>;
   stopConversation: () => Promise<void>;
+  /**
+   * Restart the conversation parts in place. Used after a
+   * personality switch so the running OpenAI client picks up the
+   * new instructions + voice without the user having to stop and
+   * start again manually. No-op when no conversation is active.
+   */
+  restartConversation: () => Promise<void>;
 
   /** Forward a tap on the orb. The engine decides what to do based
    *  on the current FSM state. */
@@ -170,6 +177,22 @@ export interface RobotSessionHandle {
    * engine isn't ready or the DC is down. Non-throwing.
    */
   setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
+
+  /**
+   * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
+   * stream over the WebRTC data channel. Returns an `unsubscribe()`
+   * callback that's safe to call more than once.
+   *
+   * Pass-through to the engine (which itself wraps the SDK's
+   * `subscribeLogs`). When the engine isn't mounted yet, returns a
+   * noop unsubscribe; consumers are expected to re-call this every
+   * time the session reaches `ready` (typically inside a
+   * `useEffect` keyed on `hasReachedReady`).
+   */
+  subscribeLogs: (options: {
+    onLine: (entry: { timestamp: string; line: string }) => void;
+    onError?: (error: string) => void;
+  }) => () => void;
 }
 
 interface UseRobotSessionOptions {
@@ -351,6 +374,12 @@ export function useRobotSession({
     await handle.stopConversation();
   }, []);
 
+  const restartConversation = useCallback(async (): Promise<void> => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    await handle.restartConversation();
+  }, []);
+
   const triggerOrbAction = useCallback(async (): Promise<void> => {
     const handle = handleRef.current;
     if (!handle) return;
@@ -474,6 +503,15 @@ export function useRobotSession({
     [],
   );
 
+  const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
+    (options) => {
+      const handle = handleRef.current;
+      if (!handle) return () => {};
+      return handle.subscribeLogs(options);
+    },
+    [],
+  );
+
   const phase = derivePhase(engineState, phaseHint);
 
   return {
@@ -486,6 +524,7 @@ export function useRobotSession({
     connectionAttempt,
     startConversation,
     stopConversation,
+    restartConversation,
     triggerOrbAction,
     setMicMuted: setMicMutedCmd,
     requestStop,
@@ -501,5 +540,6 @@ export function useRobotSession({
     getMicLevel,
     playSound,
     setHeadRpyDeg,
+    subscribeLogs,
   };
 }
