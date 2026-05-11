@@ -76,6 +76,7 @@ import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 // conversations too (the underlying `VideoFeed` already supports
 // release/reacquire and concurrent mounts on the same SDK track).
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
@@ -174,22 +175,12 @@ function ConnectedSession({
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
 
-  // Daemon version, fetched once per session over the WebRTC data
-  // channel after `hasReachedReady` flips. Stays null when the daemon
-  // predates the `get_version` Cmd. Mirrors the webrtc_example pattern.
-  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
-  useEffect(() => {
-    if (!session.hasReachedReady) return;
-    if (daemonVersion !== null) return;
-    let cancelled = false;
-    void (async () => {
-      const v = await session.getDaemonVersion();
-      if (!cancelled && v) setDaemonVersion(v);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [session, session.hasReachedReady, daemonVersion]);
+  // Daemon version is fetched (with retry-on-null) by the
+  // `<DaemonStateProvider>` further down and read by
+  // `<IdentityChipBar>` via `useDaemonState()`. Centralising it
+  // there means the same value is shared across every consumer
+  // (the chip bar, future settings panels, etc.) without any
+  // component having to fetch it locally.
 
   // Power-off / back: drives `session.tearDown()` (gotoSleep + motors
   // disabled + stopSession + disconnect) before navigating away. The
@@ -302,6 +293,16 @@ function ConnectedSession({
     !leaving && !isError && session.phase === 'reacquiring';
 
   return (
+    /* `DaemonStateProvider` is the single source of truth for
+       what the daemon currently reports (volumes, version, future
+       motor mode, etc.). It mounts here so every tab body and the
+       top toolbar share the same fetched values - no double
+       round-trips, no race-on-null artefacts where one tab sees
+       a stale `null` while another already fetched. The provider
+       gates its own fetch lifecycle on `enabled`; we wire it to
+       `session.hasReachedReady` so we only round-trip once the
+       engine is past bring-up. */
+    <DaemonStateProvider session={session} enabled={session.hasReachedReady}>
     <Stack
       sx={{
         height: '100%',
@@ -371,8 +372,8 @@ function ConnectedSession({
         <IdentityChipBar
           robotName={robotName}
           hardwareId={robotHardwareId}
+          fallbackId={robotId}
           transport={robotTransport}
-          daemonVersion={daemonVersion}
         />
         <IconButton
           aria-label="End session"
@@ -585,6 +586,7 @@ function ConnectedSession({
         </FullScreenTransition>
       )}
     </Stack>
+    </DaemonStateProvider>
   );
 }
 
