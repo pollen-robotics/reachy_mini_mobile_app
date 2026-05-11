@@ -73,6 +73,7 @@ import {
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import LockIcon from '@mui/icons-material/Lock';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
@@ -80,6 +81,8 @@ import type { ReachyBleDevice } from '@/features/ble/useBleSession';
 import reachyBusteSvg from '@/assets/reachy-buste.svg';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import {
+  extractRobotActiveApp,
+  extractRobotBusy,
   extractRobotHardwareId,
   extractRobotId,
   extractRobotName,
@@ -204,11 +207,20 @@ export default function ScanScreen({
             >
               {robots.map((robot: CentralRobotEntry) => {
                 const id = extractRobotId(robot);
+                // Gate the tap on `busy` as well as `!id`: a busy
+                // robot would just round-trip to a `sessionRejected`
+                // error after the user spent ~3 s on the connecting
+                // overlay. Surfacing it BEFORE the tap is a better
+                // user experience than reactively explaining the
+                // failure. Pre-feature centrals don't emit `busy`,
+                // so `extractRobotBusy()` defaults to `false` and
+                // the row stays tappable on legacy deploys.
+                const busy = extractRobotBusy(robot);
                 return (
                   <RemoteRobotCard
                     key={id ?? Math.random()}
                     robot={robot}
-                    disabled={!id}
+                    disabled={!id || busy}
                     onTap={() => onRemotePicked(robot)}
                   />
                 );
@@ -580,6 +592,13 @@ function RemoteRobotCard({
   const hardwareId = extractRobotHardwareId(robot);
   const idTag = (hardwareId ?? id ?? '').slice(0, 5);
   const idLabel = idTag ? `#${idTag}` : '—';
+  // Central reports an active session in flight on this producer.
+  // We gate `disabled` on this from the parent and surface the
+  // state on-card here so the user knows BEFORE tapping that the
+  // session would be rejected. `activeApp` is best-effort and may
+  // be null if the consumer never advertised a meta.name.
+  const busy = extractRobotBusy(robot);
+  const activeApp = extractRobotActiveApp(robot);
 
   return (
     <ListItemButton
@@ -673,9 +692,40 @@ function RemoteRobotCard({
             {idLabel}
           </Typography>
         </Stack>
-        <ChevronRightIcon
-          sx={{ color: 'primary.main', flexShrink: 0, fontSize: 22 }}
-        />
+        {/* Trailing affordance: chevron when the row is tappable,
+            lock when the robot already has an active session on the
+            central. The icon swap is the *only* on-card busy signal -
+            no extra row, no chip - so the layout stays calm and the
+            disabled fade carries the rest of the meaning. The lock
+            tooltip surfaces `activeApp` when the consumer
+            advertised a meta.name, so a curious user can still read
+            "who's holding it" without us blowing up the card height
+            with a chip. */}
+        {busy ? (
+          <Tooltip
+            title={activeApp ? `In use · ${activeApp}` : 'In use'}
+            placement="left"
+          >
+            <LockIcon
+              aria-label={
+                activeApp ? `In use - ${activeApp}` : 'In use'
+              }
+              sx={{
+                color: 'text.disabled',
+                flexShrink: 0,
+                fontSize: 20,
+              }}
+            />
+          </Tooltip>
+        ) : (
+          <ChevronRightIcon
+            sx={{
+              color: 'primary.main',
+              flexShrink: 0,
+              fontSize: 22,
+            }}
+          />
+        )}
       </Stack>
     </ListItemButton>
   );

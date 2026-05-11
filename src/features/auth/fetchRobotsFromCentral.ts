@@ -67,6 +67,26 @@ export interface CentralRobotEntry {
    * sweeper. Older centrals don't emit this field.
    */
   last_seen_age_seconds?: number;
+  /**
+   * True when the producer currently has an active session with
+   * another consumer (a different desktop / mobile / web client is
+   * connected). Set by central based on `producer.session_id !=
+   * null`. Mirrors the same gate central uses to reject a competing
+   * `startSession` with `sessionRejected{reason: "robot_busy"}`, so
+   * a UI that disables the row when `busy === true` is consistent
+   * with what the user would experience after attempting to
+   * connect. Older centrals may not emit this field; callers MUST
+   * default to `false` (assume free) so we don't block users on
+   * pre-feature deploys.
+   */
+  busy?: boolean;
+  /**
+   * Friendly name of the app currently holding the session
+   * (`peers[partner_id].meta.name`), or `null` when busy is false /
+   * the consumer never advertised a name. Pure UX hint - never
+   * trust this for security decisions. Read together with `busy`.
+   */
+  activeApp?: string | null;
   meta?: {
     name?: string;
     transport?: RobotTransport;
@@ -172,6 +192,36 @@ export function extractRobotId(entry: CentralRobotEntry | undefined): string | n
 export function extractRobotName(entry: CentralRobotEntry | undefined): string {
   if (!entry) return 'Unknown robot';
   return entry.meta?.name ?? entry.name ?? extractRobotId(entry) ?? 'Unknown robot';
+}
+
+/**
+ * Whether central reports an active session in flight on this
+ * robot (`producer.session_id != null`). Defaults to `false` so a
+ * pre-feature central or a malformed listing keeps the row tappable
+ * - same-philosophy fallback as `extractRobotTransport()`. UI should
+ * grey the card and disable the tap when this returns `true`,
+ * letting the user know the session would be rejected before they
+ * spend a roundtrip discovering it.
+ */
+export function extractRobotBusy(
+  entry: CentralRobotEntry | undefined,
+): boolean {
+  return entry?.busy === true;
+}
+
+/**
+ * Friendly name of the consumer currently holding the session
+ * ("Reachy Mini · Minimal …", "Hand Tracker Live App Demo", …) or
+ * `null` if central didn't supply one. Always pair with
+ * `extractRobotBusy()`: the value is meaningful only when busy is
+ * true. Returns `null` rather than an empty string so call sites
+ * can branch on truthiness without trimming.
+ */
+export function extractRobotActiveApp(
+  entry: CentralRobotEntry | undefined,
+): string | null {
+  const raw = entry?.activeApp;
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw : null;
 }
 
 export async function fetchRobotsFromCentral(
