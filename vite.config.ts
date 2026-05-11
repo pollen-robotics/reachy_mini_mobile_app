@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
+import svgr from 'vite-plugin-svgr';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 
@@ -17,7 +18,42 @@ const APP_VERSION = pkg.version;
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react()],
+  // `vite-plugin-svgr` lets us import any SVG asset as a React
+  // component via the `?react` query suffix (e.g.
+  // `import RobotSvg from '@/assets/robot--icon.svg?react'`).
+  // The component renders the SVG inline, so consumers can style
+  // it with CSS / `currentColor` / `sx`. SVGs imported without
+  // the suffix still resolve to a URL string (legacy `*.svg`
+  // module declaration in `vite-env.d.ts`).
+  //
+  // `svgrOptions`
+  // ─────────────
+  // - `icon: true` : render the SVG component at `1em × 1em` with
+  //   a viewBox derived from the source `width/height`. Matches
+  //   MUI's `SvgIcon` sizing convention, so consumers drive the
+  //   size with `font-size` (no per-call-site `width/height`
+  //   plumbing needed).
+  // - `replaceAttrValues` : at build time, normalise any black
+  //   ink (`#000`, `#000000`) to `currentColor` on every imported
+  //   SVG. This means a designer can re-export the asset from
+  //   Figma / Sketch (which always emit hex colours) and the
+  //   icon will keep inheriting the host's CSS `color` (selected
+  //   nav state, hover, etc.) without anyone having to hand-edit
+  //   the file. Add more entries here when you onboard new
+  //   palettes.
+  plugins: [
+    react(),
+    svgr({
+      svgrOptions: {
+        icon: true,
+        replaceAttrValues: {
+          '#000': 'currentColor',
+          '#000000': 'currentColor',
+          black: 'currentColor',
+        },
+      },
+    }),
+  ],
   resolve: {
     alias: {
       '@': path.resolve(process.cwd(), 'src'),
