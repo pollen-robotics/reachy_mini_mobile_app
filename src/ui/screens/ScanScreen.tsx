@@ -88,7 +88,6 @@ import {
 } from '@/features/auth/fetchRobotsFromCentral';
 import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
-import { ShortId } from '@/ui/design/ShortId';
 import { TransportChip } from '@/ui/design/TransportChip';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
@@ -195,7 +194,12 @@ export default function ScanScreen({
                 width: '100%',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 1.25,
+                // Doubled from the previous 1.25 (10 px) to give
+                // each Reachy card more breathing room - the
+                // earlier tighter rhythm made the list read as a
+                // dense settings menu rather than a small fleet
+                // of distinct devices.
+                gap: 2.5,
               }}
             >
               {robots.map((robot: CentralRobotEntry) => {
@@ -575,6 +579,7 @@ function RemoteRobotCard({
   const transport = extractRobotTransport(robot);
   const hardwareId = extractRobotHardwareId(robot);
   const idTag = (hardwareId ?? id ?? '').slice(0, 5);
+  const idLabel = idTag ? `#${idTag}` : '—';
 
   return (
     <ListItemButton
@@ -585,17 +590,13 @@ function RemoteRobotCard({
         pr: 2.5,
         borderRadius: '14px',
         bgcolor: 'background.paper',
-        // Primary-tinted border at rest. We use an alpha so the
-        // card reads as "warm chrome" instead of a saturated CTA -
-        // the tap target is the whole row, not a button. No hover
-        // override: this is a mobile app first, hover only ever
-        // fires for users plugged into a pointer device on the
-        // desktop wrapper, and inflating the card under the
-        // cursor was creating an inconsistency vs the touch
-        // path. The press-feedback (`scale(0.99)` on `:active`)
-        // still fires on tap and is what mobile users expect.
-        border: theme =>
-          `1px solid ${alpha(theme.palette.primary.main, 1)}`,
+        // Light, neutral border + soft shadow. The card reads as a
+        // discreet container; the call-to-action signal moves to
+        // the trailing primary-coloured chevron, which is what
+        // mobile users actually scan when looking for "tap here to
+        // enter". Earlier saturated-primary border made every card
+        // shout for attention even before the user picked one.
+        border: theme => `1px solid ${theme.palette.divider}`,
         boxShadow: theme =>
           theme.palette.mode === 'dark'
             ? '0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.35)'
@@ -604,6 +605,8 @@ function RemoteRobotCard({
           theme.transitions.create(['transform'], {
             duration: theme.transitions.duration.shortest,
           }),
+        // No hover override: mobile-first; the press feedback
+        // (`scale(0.99)` on `:active`) is what users expect.
         '&:hover': {
           bgcolor: 'background.paper',
         },
@@ -619,51 +622,59 @@ function RemoteRobotCard({
         sx={{ width: '100%' }}
       >
         <CardAvatar />
-        <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.5}>
-          <Typography
-            variant="body1"
-            sx={{
-              fontSize: TYPO.lg,
-              fontWeight: FONT_WEIGHT.bold,
-              color: 'text.primary',
-              letterSpacing: '-0.1px',
-              minWidth: 0,
-            }}
-            noWrap
-          >
-            {extractRobotName(robot)}
-            {idTag ? (
-              <Box
-                component="span"
-                sx={{
-                  ml: 1,
-                  fontFamily: 'monospace',
-                  fontWeight: FONT_WEIGHT.regular,
-                  color: theme =>
-                    theme.palette.mode === 'dark'
-                      ? 'rgba(255,255,255,0.40)'
-                      : 'rgba(0,0,0,0.36)',
-                  letterSpacing: 0,
-                }}
-              >
-                {`#${idTag}`}
-              </Box>
-            ) : null}
-          </Typography>
+        {/* Two-row identity grid, both rows left-aligned hugging
+            the avatar. Mirrors the post-connect `<IdentityChipBar>`
+            so a user who picked a robot keeps recognising the same
+            visual taxonomy in the toolbar afterwards. The version
+            cell from the toolbar is omitted here: we don't have a
+            DataChannel before the user picks the robot, so
+            `daemonVersion` is always unknown at this stage. */}
+        <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.25}>
           <Stack
             direction="row"
             alignItems="center"
             spacing={1}
             sx={{ minWidth: 0 }}
           >
-            <TransportChip transport={transport} height={20} />
-            {!idTag ? (
-              <ShortId hardwareId={hardwareId} fallbackId={id} />
-            ) : null}
+            <Typography
+              sx={{
+                minWidth: 0,
+                fontSize: TYPO.lg,
+                fontWeight: FONT_WEIGHT.bold,
+                color: 'text.primary',
+                letterSpacing: '-0.1px',
+                lineHeight: 1.2,
+                flexShrink: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              noWrap
+            >
+              {extractRobotName(robot)}
+            </Typography>
+            <Box sx={{ flexShrink: 0 }}>
+              <TransportChip transport={transport} height={20} />
+            </Box>
           </Stack>
+          <Typography
+            component="span"
+            title="Hardware id"
+            sx={{
+              fontSize: TYPO.xs,
+              fontFamily: 'monospace',
+              color: theme =>
+                theme.palette.mode === 'dark'
+                  ? 'rgba(255,255,255,0.40)'
+                  : 'rgba(0,0,0,0.36)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {idLabel}
+          </Typography>
         </Stack>
         <ChevronRightIcon
-          sx={{ color: 'text.secondary', flexShrink: 0, fontSize: 22 }}
+          sx={{ color: 'primary.main', flexShrink: 0, fontSize: 22 }}
         />
       </Stack>
     </ListItemButton>
