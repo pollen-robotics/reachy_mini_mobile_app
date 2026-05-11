@@ -60,14 +60,24 @@ export async function wakeRobot(
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
   const hardTimeoutMs = opts.hardTimeoutMs ?? DEFAULT_WAKE_HARD_TIMEOUT_MS;
+  const t0 = performance.now();
+  console.log(`[DIAG] wakeRobot: ENTER timeoutMs=${timeoutMs} hardTimeoutMs=${hardTimeoutMs}`);
   try {
+    const wakeRet = robot.wakeUp({ timeoutMs });
+    const isThenable = wakeRet && typeof (wakeRet as { then?: unknown }).then === 'function';
+    console.log(
+      `[DIAG] wakeRobot: robot.wakeUp() returned typeof=${typeof wakeRet} ` +
+        `value=${JSON.stringify(wakeRet)} isThenable=${isThenable}`,
+    );
     await Promise.race([
-      robot.wakeUp({ timeoutMs }),
+      wakeRet,
       new Promise<void>((resolve) => setTimeout(resolve, hardTimeoutMs)),
     ]);
+    console.log(`[DIAG] wakeRobot: Promise.race resolved after ${Math.round(performance.now() - t0)}ms`);
   } catch (err) {
-    console.warn('[physical] wakeUp failed (ignored):', err);
+    console.warn(`[DIAG][physical] wakeUp failed after ${Math.round(performance.now() - t0)}ms (ignored):`, err);
   }
+  console.log(`[DIAG] wakeRobot: EXIT total=${Math.round(performance.now() - t0)}ms`);
 }
 
 export interface SleepAndDisableOptions {
@@ -107,21 +117,51 @@ export async function sleepAndDisableRobot(
 ): Promise<{ motorMode: 'disabled' | null }> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_SLEEP_TIMEOUT_MS;
   const hardTimeoutMs = opts.hardTimeoutMs ?? DEFAULT_SLEEP_HARD_TIMEOUT_MS;
+  const t0 = performance.now();
+  console.log(
+    `[DIAG] sleepAndDisableRobot: ENTER timeoutMs=${timeoutMs} hardTimeoutMs=${hardTimeoutMs}`,
+  );
 
   try {
+    const sleepRet = robot.gotoSleep({ timeoutMs });
+    const isThenable = sleepRet && typeof (sleepRet as { then?: unknown }).then === 'function';
+    console.log(
+      `[DIAG] sleepAndDisableRobot: robot.gotoSleep() returned typeof=${typeof sleepRet} ` +
+        `value=${JSON.stringify(sleepRet)} isThenable=${isThenable}`,
+    );
     await Promise.race([
-      robot.gotoSleep({ timeoutMs }),
+      sleepRet,
       new Promise<void>((resolve) => setTimeout(resolve, hardTimeoutMs)),
     ]);
+    console.log(
+      `[DIAG] sleepAndDisableRobot: Promise.race resolved after ${Math.round(performance.now() - t0)}ms`,
+    );
   } catch (err) {
-    console.warn('[physical] gotoSleep failed (ignored):', err);
+    console.warn(
+      `[DIAG][physical] gotoSleep failed after ${Math.round(performance.now() - t0)}ms (ignored):`,
+      err,
+    );
   }
 
+  const tBeforeDisable = performance.now();
+  console.log(
+    `[DIAG] sleepAndDisableRobot: about to call setMotorMode('disabled') ` +
+      `at t+${Math.round(tBeforeDisable - t0)}ms`,
+  );
   try {
     robot.setMotorMode('disabled');
+    console.log(
+      `[DIAG] sleepAndDisableRobot: setMotorMode('disabled') sent at ` +
+        `t+${Math.round(performance.now() - t0)}ms — EXIT`,
+    );
     return { motorMode: 'disabled' };
   } catch (err) {
-    console.warn('[physical] setMotorMode("disabled") failed (ignored):', err);
+    console.warn(
+      `[DIAG][physical] setMotorMode("disabled") failed after ${Math.round(
+        performance.now() - t0,
+      )}ms (ignored):`,
+      err,
+    );
     return { motorMode: null };
   }
 }

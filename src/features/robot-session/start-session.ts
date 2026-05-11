@@ -156,6 +156,9 @@ export async function startRobotSession(
       attemptTimeoutMs,
     );
     if (result.ok) {
+      console.log(
+        `[DIAG][start-session] ATTEMPT ${attempt} SUCCESS — about to emit(null) (boundary Session→Wake-up)`,
+      );
       emit(null);
       return { ok: true };
     }

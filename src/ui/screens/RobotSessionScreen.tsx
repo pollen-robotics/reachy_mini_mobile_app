@@ -399,7 +399,15 @@ function ConnectedSession({
           width: '100%',
           maxWidth: LAYOUT.contentMaxWidth,
           mx: 'auto',
-          pt: 2,
+          // No `pt` here on purpose: each tab's body owns its own
+          // top spacing. The conv tab's persona sub-header needs
+          // to sit FLUSH against the top toolbar's bottom divider
+          // so the two bands read as one continuous chrome strip;
+          // any `pt` here would push it down with a stray gap.
+          // The apps + robot tabs already apply their own `pt: 1`
+          // inside their content stacks (see AppsTabView /
+          // RobotTabView), so the visual rhythm stays the same
+          // for them.
           position: 'relative',
         }}
       >

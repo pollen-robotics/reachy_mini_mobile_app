@@ -57,12 +57,22 @@ export interface OpenaiBridgeDeps {
   // ─── Construction settings ──────────────────────────────────────────
   apiKey: string;
   model: string;
-  voice: string;
+  /**
+   * OpenAI voice id. Accepts either a static string OR a getter
+   * function. The getter form lets the host swap the voice between
+   * reconnects (e.g. when the user picks a different personality
+   * with a different voice profile) without rebuilding the whole
+   * bridge: the next `buildClient()` simply re-reads the value.
+   */
+  voice: string | (() => string);
   /**
    * Compose the system prompt at connect time. We resolve it lazily
    * (rather than passing a static string) so the engine can fold a
    * fresh memory-store digest into the instructions on every
    * reconnect, without the bridge having to know about memory.
+   *
+   * Same lazy-resolution lets the host swap personalities live: the
+   * next reconnect will pick up the new instructions automatically.
    */
   composeInstructions: () => string;
   /** Tool descriptors handed to the model. The default is the
@@ -142,7 +152,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     const next = new OpenaiRealtimeClient({
       apiKey: deps.apiKey,
       model: deps.model,
-      voice: deps.voice,
+      voice: typeof deps.voice === 'function' ? deps.voice() : deps.voice,
       instructions: deps.composeInstructions(),
       inputTrack: robotMicTrack,
       tools,

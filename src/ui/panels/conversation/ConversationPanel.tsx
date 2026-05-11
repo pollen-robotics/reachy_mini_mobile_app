@@ -36,7 +36,7 @@
  * `audioLevelsTargetRef` on the host side.
  */
 import { Box, Stack } from '@mui/material';
-import { type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
@@ -47,6 +47,8 @@ import {
 import { ConversationToolToast } from './orb/ConversationToolToast';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import { useActivePersonality } from '@/features/personalities';
+import { PersonalityGrid, PersonalityPill } from '@/ui/widgets/personality-pill';
 
 export interface ConversationPanelProps {
   /**
@@ -75,6 +77,59 @@ export function ConversationPanel({
     session.engineState === 'user-speaking' ||
     session.engineState === 'processing' ||
     session.engineState === 'ai-speaking';
+
+  // Active personality is consumed for its `id` only: when the user
+  // picks a new persona via the grid, the engine reads the active
+  // personality lazily on every reconnect (see `composeInstructions`
+  // and the `voice` getter in `conversation-engine.ts`), so all we
+  // need to do here is restart the conversation parts when a switch
+  // happens mid-call.
+  const activePersonalityId = useActivePersonality().id;
+
+  // Personality picker open / closed. When open, the body slot
+  // below the sub-header swaps from the orb area to a grid of
+  // persona cards (see PersonalityGrid). The hero band's chevron
+  // mirrors this state via its `open` prop.
+  //
+  // We deliberately auto-close the picker when a conversation
+  // becomes live: an OpenAI session firing while the user is still
+  // browsing the picker would feel like the app skipped a beat.
+  // Same idea on engine errors - the user needs to see the orb's
+  // error state, not a stale picker.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    if (live || session.engineState === 'error') setPickerOpen(false);
+  }, [pickerOpen, live, session.engineState]);
+
+  const togglePicker = useCallback(() => {
+    setPickerOpen((prev) => !prev);
+  }, []);
+  const closePicker = useCallback(() => {
+    setPickerOpen(false);
+  }, []);
+
+  // Mid-conversation personality switch: when the user picks a new
+  // personality while the OpenAI client is live, restart the
+  // conversation parts so the new instructions + voice take effect.
+  //
+  // We skip the restart on the very first render (the store ALWAYS
+  // emits the bootstrap value as a first effect run, otherwise we'd
+  // restart on every fresh mount). We also skip it when the engine
+  // is not live: the next `startConversation()` will already pull
+  // the up-to-date personality on its own.
+  const previousPersonalityIdRef = useRef<string | null>(null);
+  const { restartConversation } = session;
+  useEffect(() => {
+    const previous = previousPersonalityIdRef.current;
+    previousPersonalityIdRef.current = activePersonalityId;
+    if (previous === null) return; // first render, nothing to restart
+    if (previous === activePersonalityId) return; // no actual change
+    if (!live) return; // not in conversation, will be picked up on next start
+    void restartConversation().catch((err) => {
+      console.warn('[conversation-panel] restartConversation threw:', err);
+    });
+  }, [activePersonalityId, live, restartConversation]);
 
   const handleToggleMute = (): void => {
     session.setMicMuted(!session.micMuted);
@@ -110,36 +165,114 @@ export function ConversationPanel({
     <Stack
       alignItems="center"
       justifyContent="center"
-      spacing={2}
+      spacing={0}
       sx={{
         flex: 1,
         minHeight: 0,
         width: '100%',
         position: 'relative',
-        py: 4,
       }}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="center"
-        spacing={1.25}
+      {/* SUB-HEADER: full-bleed band that hosts the personality
+          hero. The band itself is pure structure - full-bleed
+          escape (RobotTabView pattern) + border-bottom divider +
+          canvas background. The actual identity (avatar, name,
+          tagline, tap target) is owned by the PersonalityPill
+          component, which spans the band edge-to-edge so the
+          entire row is one big tappable affordance. */}
+      <Box
+        sx={{
+          width: '100vw',
+          mx: 'calc(50% - 50vw)',
+          flexShrink: 0,
+          bgcolor: 'background.default',
+          borderBottom: t => `1px solid ${t.palette.divider}`,
+        }}
       >
-        <MuteSideButton
-          live={live}
-          micMuted={session.micMuted}
-          onToggleMute={handleToggleMute}
-        />
-        <ConversationOrb
-          state={orbState}
-          audioRef={orbRef}
-          ariaLabel="Conversation"
-          onClick={handleOrbClick}
-        />
-        <StopSideButton live={live} onStop={handleStop} />
-      </Stack>
-      <ConversationCaption state={orbState} message={session.errorMessage} />
-      <ConversationToolToast label={session.toolToastLabel} />
+        <Box sx={{ maxWidth: 720, mx: 'auto' }}>
+          {/* Disable the persona switcher while a conversation is
+              live: changing the active persona mid-call would
+              force a stop+start of the OpenAI client and audibly
+              cut Reachy off mid-sentence. The pill stays mounted
+              and keeps showing the current persona, but loses its
+              hover / chevron + carries an aria hint explaining
+              why it's locked. The user can stop the conversation
+              from the orb's stop button (or finish naturally) to
+              re-enable the picker. */}
+          <PersonalityPill
+            open={pickerOpen}
+            onToggle={togglePicker}
+            disabled={live}
+          />
+        </Box>
+      </Box>
+
+      {/* BODY SLOT: either the orb area or the persona picker grid.
+          They share the same flex slot below the sub-header so the
+          grid takes EXACTLY the same vertical real estate the orb
+          area normally occupies - no overlay, no shifting layout.
+          The orb sub-tree is kept mounted (display: none when the
+          picker is open) so the engine's audio level monitors keep
+          their `orbRef` target across the swap and don't have to
+          re-attach when the user closes the picker. */}
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'relative',
+        }}
+      >
+        <Stack
+          alignItems="center"
+          justifyContent="center"
+          spacing={2}
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            width: '100%',
+            // Asymmetric padding: small `pt` so the orb sits close
+            // to the persona sub-header (no awkward gap once the
+            // user has selected who's talking), but a generous
+            // `pb` so the caption / tool-toast under the orb don't
+            // crowd the bottom navigation.
+            pt: 1.5,
+            pb: 3,
+            // Hide the orb area while the picker is open. Mount is
+            // preserved so the orb's `<button>` keeps providing
+            // `audioLevelsTarget` to the engine - flipping `display`
+            // is much cheaper (and safer) than unmounting + re-
+            // mounting the whole orb chrome on every picker toggle.
+            display: pickerOpen ? 'none' : 'flex',
+          }}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="center"
+            spacing={1.25}
+          >
+            <MuteSideButton
+              live={live}
+              micMuted={session.micMuted}
+              onToggleMute={handleToggleMute}
+            />
+            <ConversationOrb
+              state={orbState}
+              audioRef={orbRef}
+              ariaLabel="Conversation"
+              onClick={handleOrbClick}
+            />
+            <StopSideButton live={live} onStop={handleStop} />
+          </Stack>
+          <ConversationCaption state={orbState} message={session.errorMessage} />
+          <ConversationToolToast label={session.toolToastLabel} />
+        </Stack>
+
+        {pickerOpen && <PersonalityGrid onClose={closePicker} />}
+      </Box>
 
       {/* The engine-host inert div used to live here for legacy
           API compat with `mountConversation(root, opts)`. The hook

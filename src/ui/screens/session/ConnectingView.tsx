@@ -100,6 +100,19 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
 
   const currentStep = stepIndexFor(state, inWakePhase);
 
+  useEffect(() => {
+    console.log(
+      `[DIAG][ConnectingView] render state=${state} attempt=${
+        attempt ? `${attempt.attempt}/${attempt.maxAttempts}` : 'null'
+      } inWakePhase=${inWakePhase} currentStep=${currentStep}`,
+    );
+  }, [state, attempt, inWakePhase, currentStep]);
+
+  useEffect(() => {
+    console.log('[DIAG][ConnectingView] MOUNT');
+    return () => console.log('[DIAG][ConnectingView] UNMOUNT');
+  }, []);
+
   return (
     <Stack
       alignItems="center"
