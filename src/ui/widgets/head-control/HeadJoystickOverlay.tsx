@@ -24,9 +24,10 @@
  * `enabled`), unmounting triggers the recenter animation. Toggling
  * `enabled` does not recenter - that's reserved for navigation away.
  */
-import { Box } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 import Joystick from './Joystick';
 import { useHeadVelocityControl } from './useHeadVelocityControl';
 import { useJoystickPointer } from './useJoystickPointer';
@@ -87,6 +88,15 @@ export default function HeadJoystickOverlay({
         // Sit above the LIVE pip / camera fallback so the joystick
         // is always reachable even on a black-frame state.
         zIndex: 3,
+        // Vertical stack: ring on top, "Head" affordance label
+        // below, both centred. The label sits OUTSIDE the ring so
+        // it doesn't compete with the moving thumb / OpenWith
+        // glyph - and it gives the user a one-word answer to
+        // "what does this drag?".
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 0.5,
         // Pointer events flow through to the ring's container;
         // the disabled fade is handled inside `<Joystick>` via
         // `pointerEvents: none` on its root when disabled.
@@ -98,6 +108,33 @@ export default function HeadJoystickOverlay({
         isActive={pointer.isActive}
         disabled={!enabled}
       />
+      <Typography
+        aria-hidden
+        sx={{
+          fontSize: TYPO.micro,
+          fontWeight: FONT_WEIGHT.semibold,
+          letterSpacing: '0.5px',
+          textTransform: 'uppercase',
+          // White-ish text with a subtle dark text-shadow so it
+          // stays legible on whatever the camera shows behind
+          // (bright window, dark wall, busy desk). Doesn't lean
+          // on the theme palette because this label sits on top
+          // of a video stream, not a card surface.
+          color: 'rgba(255, 255, 255, 0.95)',
+          textShadow:
+            '0 1px 3px rgba(0, 0, 0, 0.7), 0 0 1px rgba(0, 0, 0, 0.6)',
+          opacity: enabled ? 1 : 0.4,
+          transition: 'opacity 200ms ease',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          // Don't intercept pointer events: the joystick ring
+          // owns interaction; the label is purely decorative.
+          pointerEvents: 'none',
+          lineHeight: 1,
+        }}
+      >
+        Head
+      </Typography>
     </Box>
   );
 }

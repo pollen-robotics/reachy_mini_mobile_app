@@ -81,7 +81,19 @@ export default function VideoFeed({ session }: VideoFeedProps) {
         position: 'relative',
         width: '100%',
         height: '100%',
-        borderRadius: '14px',
+        // Top corners square: the video sits flush under the
+        // RobotPanel's header strip (separated by a 1 px divider),
+        // so a top radius would carve a paper-coloured notch into
+        // the corners. The bottom radius matches the parent
+        // `<RobotPanel>` so the video's own bg follows the card's
+        // bottom curve cleanly. The parent's `overflow: hidden`
+        // clips anything we'd over-shoot, but rendering a matching
+        // radius here avoids the dark video painting outside its
+        // own visible bounds during transforms.
+        borderTopLeftRadius: 0,
+        borderTopRightRadius: 0,
+        borderBottomLeftRadius: '12px',
+        borderBottomRightRadius: '12px',
         overflow: 'hidden',
         bgcolor:
           theme.palette.mode === 'dark'
@@ -106,13 +118,21 @@ export default function VideoFeed({ session }: VideoFeedProps) {
         }}
       />
       {!streaming && <CameraOfflineFallback />}
-      {streaming && <LivePip />}
+      <CameraBadge />
     </Box>
   );
 }
 
-/** `● LIVE` badge anchored top-left while a frame is playing. */
-function LivePip() {
+/**
+ * Small "Camera · View from Reachy" pip anchored top-left over
+ * the video. Replaces the earlier `● LIVE` badge: the parent
+ * panel has no header strip (see `<RobotPanel>` usage in
+ * `RobotTabView`), so this overlay carries the section's label
+ * in-frame instead. Always rendered, regardless of streaming
+ * state, so the user knows what they're looking at even during
+ * the camera's offline / pre-stream interval.
+ */
+function CameraBadge() {
   return (
     <Box
       sx={{
@@ -120,8 +140,8 @@ function LivePip() {
         top: 10,
         left: 10,
         display: 'flex',
-        alignItems: 'center',
-        gap: 0.625,
+        alignItems: 'baseline',
+        gap: 0.875,
         bgcolor: 'rgba(0, 0, 0, 0.45)',
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
@@ -131,19 +151,6 @@ function LivePip() {
         pointerEvents: 'none',
       }}
     >
-      <Box
-        sx={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          bgcolor: '#ef4444',
-          animation: 'cameraLivePulse 1.6s ease-in-out infinite',
-          '@keyframes cameraLivePulse': {
-            '0%, 100%': { opacity: 0.55 },
-            '50%': { opacity: 1 },
-          },
-        }}
-      />
       <Typography
         component="span"
         sx={{
@@ -155,7 +162,18 @@ function LivePip() {
           lineHeight: 1,
         }}
       >
-        Live
+        Camera
+      </Typography>
+      <Typography
+        component="span"
+        sx={{
+          fontSize: TYPO.tiny,
+          fontWeight: FONT_WEIGHT.medium,
+          color: 'rgba(255, 255, 255, 0.7)',
+          lineHeight: 1,
+        }}
+      >
+        View from Reachy
       </Typography>
     </Box>
   );

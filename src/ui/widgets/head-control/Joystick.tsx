@@ -29,6 +29,8 @@
  */
 import { Box } from '@mui/material';
 
+import MoveIcon from '@/ui/design/icons/MoveIcon';
+
 import {
   JOYSTICK_RING_DIAMETER_PX,
   JOYSTICK_THUMB_DIAMETER_PX,
@@ -129,7 +131,18 @@ export default function Joystick({
       {/* Thumb. Always rendered at the geometric centre via the
           base `translate(-50%, -50%)` baked into the home
           transform; the hook adds an offset via direct
-          `style.transform` mutation on every pointer move. */}
+          `style.transform` mutation on every pointer move.
+          Hosts a small 4-arrow glyph (`MoveIcon`, the bespoke
+          outlined version of MUI's `OpenWith`) so the thumb
+          reads unambiguously as a "drag in any direction"
+          control - without it, the puck looked like a static
+          dot, easy to mistake for a watermark on top of the
+          camera. The custom outlined glyph matches the design
+          language of the rest of the app (`MicIcon`, `AppsIcon`,
+          `RobotIcon`) so the joystick doesn't read as imported
+          from another design system. The icon scales with the
+          thumb size and tracks the finger via the same parent
+          transform. */}
       <Box
         ref={thumbRef}
         sx={(theme) => ({
@@ -147,21 +160,24 @@ export default function Joystick({
               ? 'rgba(255, 255, 255, 0.85)'
               : 'rgba(255, 255, 255, 0.95)',
           boxShadow: '0 2px 6px rgba(0, 0, 0, 0.35)',
-          // Slightly grow on active to reinforce the feedback
-          // already given by the ring opacity. The base transform
-          // (centring + deflection) is set imperatively by the
-          // hook, so this `scale` lives ONLY in the active class -
-          // we layer it via `willChange` + a separate CSS variable
-          // would be ideal but the hook would need to know about
-          // it. Simpler: skip scale on active, the opacity ramp is
-          // already enough feedback. Kept here as a comment in
-          // case we want to revisit.
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           transition: theme.transitions.create(['background-color'], {
             duration: theme.transitions.duration.shortest,
           }),
           pointerEvents: 'none',
         })}
-      />
+      >
+        <MoveIcon
+          sx={{
+            // Sized at ~55% of the thumb diameter so the glyph
+            // sits comfortably with breathing room on either side.
+            fontSize: JOYSTICK_THUMB_DIAMETER_PX * 0.55,
+            color: 'rgba(0, 0, 0, 0.55)',
+          }}
+        />
+      </Box>
     </Box>
   );
 }

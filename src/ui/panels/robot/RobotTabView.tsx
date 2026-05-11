@@ -1,96 +1,111 @@
 /**
  * Robot tab body.
  *
- *   ┌──────────────────────────────────┐
- *   │                                  │
- *   │  CAMERA                          │
- *   │  ┌────────────────────────────┐  │  ← 4:3 video feed, full width
- *   │  │  ● LIVE                    │  │
- *   │  │     <video>                │  │
- *   │  │                       ╭──╮ │  │  ← head joystick overlay,
- *   │  │                       │··│ │  │     bottom-right (cf.
- *   │  │                       ╰──╯ │  │     `head-control/`)
- *   │  └────────────────────────────┘  │
- *   │                                  │
- *   │  Speaker      Microphone         │  ← cards' own labels are
- *   │  ┌──────────┐ ┌─────────────┐    │     enough; no umbrella
- *   │  │ [🔊]●─●  │ │ [🎤]●─●     │    │     "Audio" section header
- *   │  └──────────┘ └─────────────┘    │
- *   │                                  │
- *   │  LOGS                            │
- *   │  ┌────────────────────────────┐  │  ← placeholder for the upcoming
- *   │  │                            │  │     `subscribe_logs` UI (see
- *   │  │       Coming soon          │  │     `docs/WEBRTC_LOGS.md`).
- *   │  │                            │  │     Grows to fill the rest of
- *   │  └────────────────────────────┘  │     the available vertical space.
- *   │                                  │
- *   └──────────────────────────────────┘
+ *   ┌──────────────────────────────────────┐
+ *   │                                      │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ CAMERA   view from Reachy      │  │  ← uniform header strip
+ *   │  ├────────────────────────────────┤  │     (label · subtitle · actions)
+ *   │  │ ● LIVE                         │  │
+ *   │  │      <video, 4:3>      ╭──╮    │  │  ← head joystick overlay,
+ *   │  │                        │··│    │  │     bottom-right of the
+ *   │  │                        ╰──╯    │  │     camera body
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ AUDIO   speaker · microphone   │  │
+ *   │  ├────────────────────────────────┤  │
+ *   │  │ [🔊]●─●  100   [🎤]●─●  100   │  │  ← single row, side-by-side
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ LOGS   live journal       [⧉] │  │  ← copy lives in the panel
+ *   │  ├────────────────────────────────┤  │     header's actions slot
+ *   │  │ Daemon started …  12:35:34     │  │
+ *   │  │ ...                            │  │
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   └──────────────────────────────────────┘
+ *
+ * Uniform card system
+ * ───────────────────
+ * Each section is a `<RobotPanel>` with the same anatomy: tiny
+ * uppercase title + optional descriptive subtitle + optional
+ * actions slot (icons), divider, then content. The point is
+ * consistency: a glance at the tab tells the user "I'm seeing
+ * three labelled sections, each with one job"; new sections
+ * (battery, settings, shortcuts) drop in without re-deciding
+ * the chrome.
+ *
+ * Per-section content
+ * ───────────────────
+ *   - Camera  : 4:3 video frame + head joystick overlay. Body
+ *               opts out of the panel's default padding because
+ *               the video paints edge-to-edge.
+ *   - Audio   : speaker + microphone sliders side-by-side in one
+ *               row inside the panel body (a single AUDIO panel,
+ *               NOT two). State is read / written via the shared
+ *               `useDaemonState()` context (mounted upstream by
+ *               `RobotSessionScreen`).
+ *   - Logs    : the daemon's WebRTC log tail (see
+ *               `docs/WEBRTC_LOGS.md`). Body opts out of padding
+ *               because the console paints its own terminal-ish
+ *               surface; the copy button lives in the panel's
+ *               actions slot.
  *
  * Pure consumer of the session handle: takes only the slice of
- * `RobotSessionHandle` it needs (`Pick`) so the same view can be
- * lifted out of the screen and unit-tested with a fake. Mirrors the
- * desktop's "left column" feature set (camera + audio devices) plus
- * a mobile-native joystick for manual head steering, minus the bits
- * that don't translate to mobile (3D viewer, gamepad sliders, daemon
- * log console).
- *
- * No sub-header by design: the screen-level top bar already carries
- * the robot identity (name, hardware id, transport, version) via
- * `<IdentityChipBar>`, and the bottom-nav already labels the active
- * tab. Repeating "Robot · Camera and audio controls" inside the tab
- * body would be pure chrome with no informational gain - the user
- * landed here intentionally and the section labels below are enough
- * to anchor what each block is.
+ * `RobotSessionHandle` it needs (`Pick`). Mirrors the desktop's
+ * "left column" feature set (camera + audio + log tail) plus a
+ * mobile-native joystick for manual head steering.
  *
  * Layout convention is shared with the Apps tab:
  *   - parent `Stack` escapes the host column constraints via the
  *     `100vw` + `calc(50% - 50vw)` trick so the scrollable body
  *     spans flush to the viewport edges,
- *   - inside, every row re-applies `COLUMN_SX` so titles and content
- *     stay on a single centred column.
+ *   - inside, every row re-applies `COLUMN_SX` so cards stay on
+ *     a single centred column.
  */
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, IconButton, Stack, Tooltip } from '@mui/material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { useCallback } from 'react';
 
 import VideoFeed from '@/ui/widgets/video-feed/VideoFeed';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
-import { useAudioVolumes } from '@/ui/widgets/audio-controls/useAudioVolumes';
 import { HeadJoystickOverlay } from '@/ui/widgets/head-control';
+import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
+import { RobotPanel } from '@/ui/widgets/robot-panel';
+import {
+  formatEntriesForCopy,
+  useDaemonLogs,
+} from '@/features/daemon-logs';
+import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
+import { LAYOUT } from '@/ui/design/tokens';
 
 interface RobotTabViewProps {
   /**
    * Slice of the session the tab needs. Typed via `Pick` so the
    * dependency surface is explicit at the call site and the view
-   * can be unit-tested with a fake handle. `playSound` is still
-   * required because `useAudioVolumes` plays an audible chime as
-   * feedback when the user settles on a new volume.
+   * can be unit-tested with a fake handle. The daemon-touching
+   * methods (volumes, sound playback, version) are read / written
+   * via the shared `useDaemonState()` context (mounted in
+   * `RobotSessionScreen`), so we only need the camera + joystick
+   * + log subscription on the session here.
    */
   session: Pick<
     RobotSessionHandle,
-    | 'attachVideo'
-    | 'getSpeakerVolume'
-    | 'setSpeakerVolume'
-    | 'getMicrophoneVolume'
-    | 'setMicrophoneVolume'
-    | 'playSound'
-    | 'setHeadRpyDeg'
+    'attachVideo' | 'setHeadRpyDeg' | 'subscribeLogs'
   >;
   /**
    * Becomes `true` once the engine has reached `ready` for the
-   * first time (mirrors `AudioControlsBar.isLive`). Drives the
-   * volume hook's initial fetch and the disabled state of the
-   * audio cards. The camera feed itself decides its own offline
+   * first time. Used to disable the audio cards while the daemon
+   * round-trip can't yet land, and to gate the daemon log
+   * subscription. The camera feed itself decides its own offline
    * state from the SDK's track, so it doesn't need this gate.
    */
   isLive: boolean;
 }
 
-/**
- * Shared `sx` that re-constrains a row to the centred content
- * column. Same pattern as the Apps tab so the two surfaces feel
- * built by the same hand.
- */
 const COLUMN_SX = {
   width: '100%',
   maxWidth: LAYOUT.contentMaxWidth,
@@ -98,8 +113,42 @@ const COLUMN_SX = {
   px: 3,
 } as const;
 
+/**
+ * Floor for the LOGS panel height. The panel is sized via `flex: 1`
+ * so it eats whatever vertical space is left after the camera +
+ * audio + paddings, but on very tall content (or weird viewport
+ * proportions) we still want to guarantee a few visible log rows
+ * - landing on a 1-row-tall logs panel after a short camera frame
+ * would defeat the "you can glance at the logs" promise of the
+ * tab. 120 px = roughly 4 rows of LogLineRow, which is enough to
+ * read a typical burst.
+ */
+const LOGS_MIN_HEIGHT_PX = 120;
+
 export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
-  const volumes = useAudioVolumes({ session, enabled: isLive });
+  // Volumes + version live in the shared daemon-state context.
+  // While the engine isn't live yet (`isLive=false`), every
+  // readable field is `null`; the audio cards fall back to the
+  // slider's default of 50 (handled below via `?? 50`) and stay
+  // disabled, so the user can't drag a slider against a daemon
+  // that won't answer.
+  const daemon = useDaemonState();
+
+  // Daemon log buffer. Lives in the host (not in
+  // `<DaemonLogConsole>`) so the copy button can sit in the
+  // RobotPanel's actions slot without us having to subscribe twice
+  // or thread callbacks down through props.
+  const logs = useDaemonLogs({ session, enabled: isLive });
+
+  const handleCopyLogs = useCallback(async () => {
+    const text = formatEntriesForCopy(logs.entries);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.warn('[robot-tab] clipboard.writeText failed:', err);
+    }
+  }, [logs.entries]);
 
   return (
     <Stack
@@ -109,185 +158,140 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
         // Full-bleed escape hatch (see AppsTabView for the
         // long-form rationale): the host column is `maxWidth: 420`
         // inside a `Stack px: 3`, this pair pulls us back out to
-        // the viewport edges so the scroll container can host
-        // future full-bleed UI (e.g. a fullscreen camera lightbox).
+        // the viewport edges.
         width: '100vw',
         mx: 'calc(50% - 50vw)',
         overflow: 'hidden',
       }}
     >
+      {/* No outer scroll on this tab: the camera + audio + logs
+          stack is sized to fit the viewport via flex column, with
+          the LOGS panel eating the leftover space (`flex: 1`).
+          The user's mental model is "this is a dashboard, not a
+          long page" — they shouldn't need to scroll the page to
+          see all three sections. The logs panel itself scrolls
+          internally for older entries (cap 100). */}
       <Box
         sx={{
           flex: 1,
           minHeight: 0,
-          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
-        {/* The vertical layout (flex column) + the top/bottom
-            paddings live INSIDE this Stack, NOT on the scroll
-            container above. This is deliberate:
-              1. iOS WebKit drops `padding-bottom` on a flex container
-                 that also has `overflow: auto` when a child uses
-                 `flex: 1` — the padding is computed away during the
-                 flex pass and the bottom gap silently disappears,
-                 no matter how big the value is.
-              2. Putting flex + padding inside the inner Stack keeps
-                 the scroll Box a plain block container, which lets
-                 padding render predictably across browsers.
-              3. `minHeight: '100%'` ensures the Stack still fills the
-                 visible viewport when content is short, so the
-                 trailing Logs section's `flex: 1` has somewhere to
-                 grow into. */}
         <Stack
           spacing={3}
           sx={{
             ...COLUMN_SX,
+            flex: 1,
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            minHeight: '100%',
-            pt: 1,
-            pb: 3,
+            pt: 4,
+            pb: 4,
           }}
         >
-          <Section label="Camera">
+          {/* CAMERA panel. No header strip: the `<CameraBadge>`
+              overlay rendered by `<VideoFeed>` already labels
+              the section in-frame ("Camera · View from Reachy"
+              pip), so an outer header would just duplicate the
+              label. Body has no padding so the 4:3 video can
+              paint edge-to-edge; the joystick is anchored
+              absolute within the body for the bottom-right
+              corner. */}
+          <RobotPanel noBodyChrome>
             <Box
-              sx={(theme) => ({
+              sx={{
                 position: 'relative',
                 width: '100%',
                 aspectRatio: '4 / 3',
-                borderRadius: `${RADIUS.lg}px`,
-                overflow: 'hidden',
-                border: `1px solid ${theme.palette.divider}`,
-                boxShadow:
-                  theme.palette.mode === 'dark'
-                    ? '0 6px 18px rgba(0, 0, 0, 0.45)'
-                    : '0 6px 18px rgba(0, 0, 0, 0.10)',
-              })}
+              }}
             >
               <VideoFeed session={session} />
               {/* Head joystick anchored bottom-right of the camera
                   frame. Mounting starts the velocity controller;
                   unmounting (e.g. user navigates away from this
                   tab) triggers a smooth recenter back to (0, 0).
-                  We gate `enabled` on `isLive` so the joystick is
-                  faded down + non-interactive until the engine
-                  has reached `ready` for the first time. */}
+                  Gated on `isLive` so the joystick is faded and
+                  non-interactive until the engine has reached
+                  `ready` for the first time. */}
               <HeadJoystickOverlay session={session} enabled={isLive} />
             </Box>
-          </Section>
+          </RobotPanel>
 
-          {/* Audio cards rendered without the section label: the
-              two cards already carry their own "Speaker" /
-              "Microphone" headers (the AudioControlCard renders
-              them outside the card chrome), so an extra "AUDIO"
-              umbrella above would be redundant labelling. */}
-          <Stack direction="row" spacing={1.25} sx={{ width: '100%' }}>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <AudioControlCard
-                kind="speaker"
-                value={volumes.speakerVolume}
-                onChange={volumes.setSpeakerVolume}
-                onToggleMute={volumes.toggleSpeakerMute}
-                disabled={!isLive}
-              />
+          {/* SPEAKER + MICROPHONE panels. The earlier draft
+              wrapped both cards in a single "Audio" panel, but
+              the umbrella header just duplicated what each
+              card's icon already says. We now ship one panel
+              per device, side-by-side in a flex row, so each
+              column carries its own header and the device name
+              lives in chrome (consistent with `<RobotPanel>`'s
+              "title + content" rhythm) instead of being implicit
+              in an icon. */}
+          <Stack direction="row" spacing={2.5} sx={{ width: '100%' }}>
+            <Box sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <RobotPanel title="Speaker" sx={{ flex: 1 }}>
+                <AudioControlCard
+                  kind="speaker"
+                  value={daemon.speakerVolume ?? 50}
+                  onChange={daemon.setSpeakerVolume}
+                  onToggleMute={daemon.toggleSpeakerMute}
+                  disabled={!isLive}
+                />
+              </RobotPanel>
             </Box>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <AudioControlCard
-                kind="microphone"
-                value={volumes.microphoneVolume}
-                onChange={volumes.setMicrophoneVolume}
-                onToggleMute={volumes.toggleMicrophoneMute}
-                disabled={!isLive}
-              />
+            <Box sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <RobotPanel title="Microphone" sx={{ flex: 1 }}>
+                <AudioControlCard
+                  kind="microphone"
+                  value={daemon.microphoneVolume ?? 50}
+                  onChange={daemon.setMicrophoneVolume}
+                  onToggleMute={daemon.toggleMicrophoneMute}
+                  disabled={!isLive}
+                />
+              </RobotPanel>
             </Box>
           </Stack>
 
-          {/* Logs section. Placeholder card pinned to the bottom of
-              the tab, eating the rest of the vertical space so the
-              scrollable area never has dead empty grey at the
-              bottom. Wired up to `subscribe_logs` once the daemon
-              PR lands (see `docs/WEBRTC_LOGS.md`); until then we
-              render a discreet "Coming soon" so the slot is
-              visible and intentional. */}
-          {/* `minHeight: 80` rather than 160 so the placeholder can
-              shrink on small phones (iPhone SE-class viewports) and
-              keep the camera + audio + logs trio scrollbar-free at
-              the default zoom. When the real `LogsConsole` lands
-              we'll bump this back up since virtualised log lists
-              actually need the room. */}
-          <Section label="Logs" fill>
-            <Box
-              sx={(theme) => ({
-                flex: 1,
-                minHeight: 80,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: `${RADIUS.lg}px`,
-                border: `1px solid ${theme.palette.divider}`,
-                bgcolor: theme.palette.background.paper,
-              })}
-            >
-              <Typography
-                sx={{
-                  fontSize: TYPO.sm,
-                  color: 'text.secondary',
-                }}
-              >
-                Coming soon
-              </Typography>
-            </Box>
-          </Section>
+          {/* LOGS panel. Eats the leftover vertical space via
+              `flex: 1, minHeight: 0` so the page never scrolls:
+              camera (4:3) + audio (compact) + logs (the rest)
+              tile the viewport exactly. Floor of 120 px protects
+              against pathological viewports where the logs panel
+              would collapse to a couple of pixels.
+              Body has no padding so the terminal-style console
+              paints its own dim bg edge-to-edge; the copy button
+              lives in the panel's actions slot. */}
+          <RobotPanel
+            title="Logs"
+            subtitle="Live daemon journal"
+            actions={
+              <Tooltip title="Copy all lines to clipboard" arrow>
+                <span>
+                  <IconButton
+                    onClick={handleCopyLogs}
+                    disabled={logs.entries.length === 0}
+                    size="small"
+                    sx={{ width: 24, height: 24, p: 0.25 }}
+                  >
+                    <ContentCopyIcon sx={{ fontSize: 12 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            }
+            noBodyChrome
+            sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
+          >
+            <DaemonLogConsole
+              entries={logs.entries}
+              status={logs.status}
+              errorMessage={logs.errorMessage}
+              enabled={isLive}
+            />
+          </RobotPanel>
         </Stack>
       </Box>
-    </Stack>
-  );
-}
-
-/**
- * Section block: tiny uppercase label above its child(ren). Mirrors
- * the AudioControlCard's outside-label convention so the camera and
- * audio sections feel typographically aligned.
- *
- * `fill`: when true the section grows to consume any leftover
- * vertical space inside its parent flex column, and wraps `children`
- * in a `flex: 1` container so a single child Box can stretch with
- * `flex: 1` of its own. Used by the trailing Logs placeholder so it
- * pins to the bottom and fills the gap below the audio cards
- * regardless of viewport height.
- */
-function Section({
-  label,
-  children,
-  fill = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  fill?: boolean;
-}) {
-  return (
-    <Stack
-      spacing={1}
-      sx={fill ? { flex: 1, minHeight: 0 } : undefined}
-    >
-      <Typography
-        sx={{
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.secondary',
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-          lineHeight: 1.1,
-          ml: 0.25,
-        }}
-      >
-        {label}
-      </Typography>
-      {fill ? (
-        <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>{children}</Box>
-      ) : (
-        children
-      )}
     </Stack>
   );
 }
