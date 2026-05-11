@@ -494,41 +494,49 @@ function ConnectedSession({
         sx={(theme) => ({
           flexShrink: 0,
           mx: -3,
-          // The bar has two concentric "rows":
-          //   1. The interactive row that holds the action buttons,
-          //      sized for thumb comfort (68px - bumped vs the 56px
-          //      MUI default).
-          //   2. A safe-area "shoe" below it that paints the bar's
-          //      background into the iOS home-indicator zone so the
-          //      grey canvas continues edge-to-edge under the
-          //      indicator's pill. The shoe lives on the
-          //      BottomNavigation itself (`paddingBottom`) rather
-          //      than inside the actions: putting it inside the
-          //      actions would inflate each button to ~100px on
-          //      iPhone X+ AND off-center the icon/label cluster
-          //      (paddingTop=6 vs paddingBottom=42 visually pushes
-          //      content up). With the safe area as parent padding
-          //      the actions stay a clean 68px, the bg still bleeds
-          //      under the indicator, and each action's content is
-          //      centered between symmetric inner paddings.
+          // BottomNavigation sizing on iPhone X+ : the bar must be
+          // tall enough to host BOTH the comfortable 68 px tap row
+          // AND the iOS home-indicator safe-area below it, AND each
+          // action button's `paper` selected fill must reach the
+          // physical bottom edge of the screen (Material convention:
+          // the active tab visually anchors the column down to the
+          // device edge, no orphan strip below).
           //
-          //   minHeight = 68 (interactive row) + env(safe-area-inset-bottom)
-          //               (home-indicator shoe). On platforms with no
-          //               safe area (macOS, Android stock,
-          //               desktop) the env() resolves to 0 and the
-          //               bar collapses back to a flush 68px.
+          // The previous attempt put the safe-area inset on the
+          // parent's `padding-bottom`. That left the actions a clean
+          // 68 px tall - good for centering - but the parent
+          // padding's grey "shoe" appeared underneath the active
+          // tab's paper fill, so the selected tab visibly stopped
+          // ~34 px above the bottom edge on iPhone X+. The user's
+          // expectation is the opposite: paper fill flush to the
+          // bottom edge.
+          //
+          // Fix: stretch the actions to the FULL bar height (68 +
+          // safe-area). The action is a flex child with `align-items:
+          // stretch` (MUI default) so it naturally fills the bar's
+          // cross-axis, including the home-indicator zone. With
+          // symmetric inner padding the icon + label cluster centers
+          // at the bar's true vertical middle - which on iPhone X+
+          // sits a touch above the home-indicator pill, leaving ~30
+          // px of breathing room below the label so the swipe-up
+          // gesture stays unambiguous.
+          //
+          // On platforms with no safe area (macOS Tauri, Android,
+          // desktop) `env()` resolves to 0 and the bar collapses
+          // back to a flush 68 px - same rendering as before.
           height: 'auto',
           minHeight: 'calc(68px + env(safe-area-inset-bottom, 0px))',
-          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
           borderTop: `1px solid ${theme.palette.divider}`,
           bgcolor: 'background.default',
           '& .MuiBottomNavigationAction-root': {
             minWidth: 0,
             // Symmetric inner padding so the icon + label cluster is
-            // truly centered in the 68px interactive row. The home
-            // indicator clearance lives on the parent (`paddingBottom`
-            // on BottomNavigation) so we don't have to compensate
-            // for it here.
+            // truly centered in the action's full visual height
+            // (68 + safe-area). The cluster ends up vertically
+            // centered between the top divider and the device's
+            // bottom edge, with the safe-area zone acting as
+            // breathing room below the label rather than as dead
+            // space outside the action.
             paddingTop: 0.75,
             paddingBottom: 0.75,
             gap: 0.5,
