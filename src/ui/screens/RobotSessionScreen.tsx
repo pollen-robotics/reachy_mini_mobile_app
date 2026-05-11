@@ -54,10 +54,11 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import AppsIcon from '@mui/icons-material/Apps';
-import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
-import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
+
+import AppsIcon from '@/ui/design/icons/AppsIcon';
+import MicIcon from '@/ui/design/icons/MicIcon';
+import RobotIcon from '@/ui/design/icons/RobotIcon';
 
 import {
   extractRobotHardwareId,
@@ -482,7 +483,7 @@ function ConnectedSession({
           if (leaving) return;
           setTab(value);
         }}
-        sx={{
+        sx={(theme) => ({
           flexShrink: 0,
           mx: -3,
           // Bumped vs the 56px default for a more comfortable
@@ -494,42 +495,114 @@ function ConnectedSession({
           // bar height (incl. safe area), so MUI's ripple
           // animation reaches the bar's true top and bottom
           // edges instead of stopping at an inner padding box.
-          borderTop: t => `1px solid ${t.palette.divider}`,
+          borderTop: `1px solid ${theme.palette.divider}`,
           bgcolor: 'background.default',
           '& .MuiBottomNavigationAction-root': {
             minWidth: 0,
             // Inner spacing: small visual padding above the icon,
             // safe-area + small gap below the label so the home
             // indicator on iPhone X+ never crowds the text.
-            paddingTop: 1,
+            paddingTop: 0.75,
             paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 8px)`,
             gap: 0.5,
+            backgroundColor: 'transparent',
+            transition: theme.transitions.create(
+              ['background-color', 'box-shadow'],
+              {
+                duration: 180,
+                easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+              },
+            ),
+            // Selected state. We keep MUI's default colour rules
+            // for the icon (`text.secondary` inactive,
+            // `primary.main` active) and swap the bg to
+            // `background.paper` so the active tab pops against
+            // the bar's `background.default` grey backdrop. Using
+            // a palette token (rather than a hard `#fff`) means
+            // the contrast holds in both modes: in light mode the
+            // active tab reads as a paper card on a grey bar; in
+            // dark mode it's a slightly lighter dark surface on a
+            // darker bar - same visual hierarchy, both palettes.
+            // No outline: the paper fill + the primary-tinted
+            // icon are enough to identify the active tab, and an
+            // outline added visual noise that competed with the
+            // divider lines between siblings.
+            '&.Mui-selected': {
+              backgroundColor: theme.palette.background.paper,
+            },
           },
+          // Light vertical divider between adjacent actions.
+          // Painted via `inset box-shadow` rather than `borderRight`
+          // so it doesn't add 1 px to the action's flex basis (each
+          // action stays exactly 1/N of the bar's width). Applied
+          // to every action except the last so the right edge of
+          // the bar stays clean.
+          '& .MuiBottomNavigationAction-root:not(:last-of-type)': {
+            boxShadow: `inset -1px 0 0 0 ${theme.palette.divider}`,
+          },
+          // Label colour. We deliberately keep the label in
+          // `text.secondary` (MUI's default) - the icon glyph
+          // carries the brand colour, the label stays neutral
+          // and supportive so the bar reads as a hierarchy
+          // (icon = identity, label = wayfinding) rather than
+          // a wall of primary text. The selected-state cue is
+          // the soft fill on the action button + the slight
+          // weight bump below.
           '& .MuiBottomNavigationAction-label': {
             fontSize: TYPO.xs,
             fontWeight: FONT_WEIGHT.medium,
-            // Keep the label size stable in the selected state -
-            // MUI defaults grow it which makes the bar feel
-            // jittery when switching tabs.
-            '&.Mui-selected': {
-              fontSize: TYPO.xs,
-            },
+            color: `${theme.palette.text.secondary} !important`,
           },
-          '& .MuiSvgIcon-root': {
+          // Selected = same colour, heavier weight. We pin the
+          // size so the bar doesn't twitch (MUI defaults bump
+          // the font size on selection).
+          '& .MuiBottomNavigationAction-label.Mui-selected': {
+            fontSize: TYPO.xs,
+            fontWeight: FONT_WEIGHT.semibold,
+            color: `${theme.palette.text.secondary} !important`,
+          },
+          // Sizing applies to both MUI icons (`MuiSvgIcon-root`)
+          // and native `<svg>` elements - the latter is what
+          // `vite-plugin-svgr` produces for our custom SVG icons
+          // (e.g. `RobotIcon`). Using `font-size` over a hard
+          // `width/height` keeps both kinds responsive: the SVG
+          // components are configured (`svgrOptions.icon: true`
+          // in vite.config.ts) to render at `1em × 1em`, so the
+          // parent's font-size drives their rendered size.
+          '& .MuiSvgIcon-root, & .MuiBottomNavigationAction-root > svg': {
             fontSize: 26,
           },
-        }}
+        })}
       >
+        {/* Conversation = "tap to talk to Reachy". We use the
+            shared `MicIcon` (a stroke-only outlined mic, the
+            same SVG that lives at the centre of the
+            `<ConversationOrb>`) so a glance at the bottom nav
+            tells the user "this tab is the mic at the centre of
+            the orb you'll see inside". */}
         <BottomNavigationAction
           value="conv"
           label="Conversation"
-          icon={<GraphicEqIcon />}
+          icon={<MicIcon />}
         />
-        <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
+        {/* Bespoke `AppsIcon` (4 hollow rounded squares in a 2×2
+            grid) so the glyph matches the visual rhythm of
+            `MicIcon` and `RobotIcon` - same `1.8 px` stroke
+            weight, same outline-only treatment, same 24×24
+            viewBox. */}
+        <BottomNavigationAction
+          value="apps"
+          label="Apps"
+          icon={<AppsIcon />}
+        />
+        {/* Robot tab uses the bespoke `RobotIcon` (lifted from
+            `assets/robot--icon.svg`). Same Reachy silhouette the
+            user sees on every robot avatar across the app
+            (discovery cards, identity bar). */}
         <BottomNavigationAction
           value="robot"
           label="Robot"
-          icon={<SmartToyOutlinedIcon />}
+          icon={<RobotIcon />}
         />
       </BottomNavigation>
 

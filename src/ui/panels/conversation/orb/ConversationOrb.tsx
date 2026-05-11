@@ -33,6 +33,8 @@
  * read the variables and drive the rings/core/bars. This keeps the
  * 60Hz audio loop entirely off the React reconciler.
  */
+import MicIcon from '@/ui/design/icons/MicIcon';
+
 import './orb.css';
 
 export type OrbState =
@@ -127,7 +129,9 @@ function renderIndicator(state: OrbState): React.ReactNode {
       // talk" - the conversation is voice-first, the mic is the
       // truth. Same icon as `idle` for consistency: both are
       // "waiting for the user to start speaking" states.
-      return <MicIcon />;
+      // Passing the orb's CSS class so `orb.css` rules (size,
+      // ink colour, opacity hooks) still bind to the inner SVG.
+      return <MicIcon className="convo-orb__mic-icon" />;
     case 'listening':
     case 'user-speaking':
       return <Bars />;
@@ -139,7 +143,7 @@ function renderIndicator(state: OrbState): React.ReactNode {
       return <ErrorIcon />;
     case 'idle':
     default:
-      return <MicIcon />;
+      return <MicIcon className="convo-orb__mic-icon" />;
   }
 }
 
@@ -188,29 +192,11 @@ function VoiceWave() {
   );
 }
 
-function MicIcon() {
-  return (
-    <svg
-      className="convo-orb__mic-icon"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {/* Outlined mic capsule (no fill) - matches the rest of
-          the orb iconography. Slightly thicker stroke (1.8 vs
-          1.6) so the silhouette stays legible at the orb's
-          small render size. */}
-      <rect x="9" y="2" width="6" height="12" rx="3" />
-      <path d="M5 10a7 7 0 0 0 14 0" />
-      <line x1="12" y1="19" x2="12" y2="22" />
-      <line x1="8" y1="22" x2="16" y2="22" />
-    </svg>
-  );
-}
+// `MicIcon` is now shared with the bottom-nav (and any future
+// voice surface) via `@/ui/design/icons/MicIcon`. It's a MUI
+// `SvgIcon` under the hood, so the orb's `convo-orb__mic-icon`
+// CSS rules in `orb.css` still bind via the className passed
+// through at the call sites below.
 
 function ErrorIcon() {
   return (
