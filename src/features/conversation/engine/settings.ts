@@ -24,6 +24,20 @@
  * actually has two viable sources.
  */
 
+// `gpt-realtime` is the GA snapshot of OpenAI's voice realtime
+// model: production-ready, ~$8 / $24 per M audio in/out, low
+// time-to-first-audio (no chain-of-thought), works on both the
+// Beta WebRTC handshake (`POST /v1/realtime?model=...`) and the
+// new GA handshake (`POST /v1/realtime/calls`).
+//
+// We tried briefly upgrading to `gpt-realtime-2` (reasoning-
+// capable, ~4x audio token pricing, stronger instruction
+// following) but it is **GA-only** - i.e. it returns
+// `400 invalid_model "Model gpt-realtime-2 is only available on
+// the GA API."` against our current Beta handshake. Rolling
+// back here unblocks the runtime; the GA migration is tracked
+// separately and will land before the Beta deprecation
+// (April 30, 2026).
 export const DEFAULT_MODEL = 'gpt-realtime';
 export const DEFAULT_VOICE = 'cedar';
 
