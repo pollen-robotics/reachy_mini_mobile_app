@@ -121,7 +121,11 @@ export default function ScanScreen({
   token,
   username,
 }: ScanScreenProps) {
-  const remote = useRemoteRobots(token, { pollMs: 30_000 });
+  // Poll cadence is the safety net for the SSE listener now that
+  // central pushes busy/free transitions in real time. Letting the
+  // hook own the default keeps the cadence consistent across the
+  // whole app.
+  const remote = useRemoteRobots(token);
   // Pull the avatar URL (and a freshly-confirmed username) from
   // /api/whoami-v2. Falls back gracefully to the gate-issued
   // username + initial-letter avatar while the request is in
