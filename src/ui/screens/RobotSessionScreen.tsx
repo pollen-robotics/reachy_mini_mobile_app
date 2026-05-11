@@ -494,24 +494,43 @@ function ConnectedSession({
         sx={(theme) => ({
           flexShrink: 0,
           mx: -3,
-          // Bumped vs the 56px default for a more comfortable
-          // thumb target on mobile + a bit more visual presence.
+          // The bar has two concentric "rows":
+          //   1. The interactive row that holds the action buttons,
+          //      sized for thumb comfort (68px - bumped vs the 56px
+          //      MUI default).
+          //   2. A safe-area "shoe" below it that paints the bar's
+          //      background into the iOS home-indicator zone so the
+          //      grey canvas continues edge-to-edge under the
+          //      indicator's pill. The shoe lives on the
+          //      BottomNavigation itself (`paddingBottom`) rather
+          //      than inside the actions: putting it inside the
+          //      actions would inflate each button to ~100px on
+          //      iPhone X+ AND off-center the icon/label cluster
+          //      (paddingTop=6 vs paddingBottom=42 visually pushes
+          //      content up). With the safe area as parent padding
+          //      the actions stay a clean 68px, the bg still bleeds
+          //      under the indicator, and each action's content is
+          //      centered between symmetric inner paddings.
+          //
+          //   minHeight = 68 (interactive row) + env(safe-area-inset-bottom)
+          //               (home-indicator shoe). On platforms with no
+          //               safe area (macOS, Android stock,
+          //               desktop) the env() resolves to 0 and the
+          //               bar collapses back to a flush 68px.
           height: 'auto',
-          minHeight: 68,
-          // No padding on the parent: spacing lives INSIDE each
-          // action below. That way each action covers the full
-          // bar height (incl. safe area), so MUI's ripple
-          // animation reaches the bar's true top and bottom
-          // edges instead of stopping at an inner padding box.
+          minHeight: 'calc(68px + env(safe-area-inset-bottom, 0px))',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
           borderTop: `1px solid ${theme.palette.divider}`,
           bgcolor: 'background.default',
           '& .MuiBottomNavigationAction-root': {
             minWidth: 0,
-            // Inner spacing: small visual padding above the icon,
-            // safe-area + small gap below the label so the home
-            // indicator on iPhone X+ never crowds the text.
+            // Symmetric inner padding so the icon + label cluster is
+            // truly centered in the 68px interactive row. The home
+            // indicator clearance lives on the parent (`paddingBottom`
+            // on BottomNavigation) so we don't have to compensate
+            // for it here.
             paddingTop: 0.75,
-            paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 8px)`,
+            paddingBottom: 0.75,
             gap: 0.5,
             backgroundColor: 'transparent',
             transition: theme.transitions.create(

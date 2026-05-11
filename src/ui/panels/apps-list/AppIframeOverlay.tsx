@@ -70,7 +70,7 @@ import {
 import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
-import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 /**
  * Hard timeout for the iframe load step. If the embed hasn't fired
@@ -236,13 +236,28 @@ export default function AppIframeOverlay({
         zIndex: 1300,
       }}
     >
+      {/* Top toolbar.
+       *
+       * The overlay is `position: fixed; inset: 0`, so it paints
+       * INTO the iOS notch / Dynamic Island area. Without an
+       * explicit `safe-area-inset-top` padding the status-bar glyphs
+       * (carrier, time, battery) overlap the close button + app
+       * name and the toolbar reads as broken chrome. We pad the bar
+       * by the full inset + the same 8px breathing room we use
+       * below it, and let the toolbar's `background.paper` bg
+       * paint through the notch so the strip reads as a single
+       * continuous band rather than a floating pill below a
+       * transparent gap. Same convention as the
+       * `RobotSessionScreen` top toolbar.
+       */}
       <Stack
         direction="row"
         alignItems="center"
         spacing={1.25}
         sx={{
           px: 2,
-          py: 1,
+          pt: `calc(${LAYOUT.safeAreaTop} + 8px)`,
+          pb: 1,
           borderBottom: t => `1px solid ${t.palette.divider}`,
           bgcolor: 'background.paper',
           flexShrink: 0,
