@@ -1274,7 +1274,15 @@ jobs:
           packageName: com.pollenrobotics.reachymini
           releaseFiles: ${{ steps.pack.outputs.aab }}
           track: internal
-          status: completed
+          # `status: draft` is required while the Play app itself
+          # is still in draft state (i.e. has never been through
+          # review). Completing the Play Console listing and
+          # submitting one release for review moves the app out of
+          # draft and unlocks `status: completed` for auto-rollout.
+          # Until then each CI run uploads a draft you must roll out
+          # manually in Play Console → Internal testing → "Review
+          # release → Roll out to internal testing".
+          status: draft
           # No whatsNewDirectory: Play falls back to the previous
           # release's notes. Acceptable for internal testing; switch
           # to a per-tag changelog later if testers ask for it.
