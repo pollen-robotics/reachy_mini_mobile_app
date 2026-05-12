@@ -566,7 +566,15 @@ export class OpenaiRealtimeClient {
     }
   }
 
-  private sendEvent(event: Record<string, unknown>): void {
+  /**
+   * Send a raw client event to the OpenAI Realtime data channel. Made
+   * `public` so side-channel modules (vision, future memory/telemetry)
+   * can push `conversation.item.create` and similar events without
+   * having to extend this class. No-op when the data channel hasn't
+   * opened yet or has already closed (covers the transparent reconnect
+   * window where the bridge has no live client).
+   */
+  sendEvent(event: Record<string, unknown>): void {
     if (!this.dc || this.dc.readyState !== "open") return;
     this.dc.send(JSON.stringify(event));
   }

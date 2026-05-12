@@ -48,6 +48,30 @@ export interface OpenaiToolCallEvent {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * Generic side-channel port exposed to modules that need to interact
+ * with the OpenAI Realtime data channel without owning the client
+ * lifecycle (vision, future memory/telemetry, …).
+ *
+ * The port is **reconnect-survivable**: callers subscribe once and
+ * the bridge re-attaches the listeners on every fresh `buildClient()`
+ * (transparent reconnect, mid-session personality switch, etc.). On
+ * the send side, calling `sendEvent` while the bridge has no live
+ * client (between an error and the silent retry's handshake) is a
+ * silent no-op - which is the expected behaviour for passive
+ * side-channels (the next tick simply tries again).
+ */
+export interface RealtimePort {
+  /** Send a raw client event to the active OpenAI Realtime data
+   *  channel. No-op when no live client exists or the data channel
+   *  isn't open yet. */
+  sendEvent: (event: Record<string, unknown>) => void;
+  /** Subscribe to completed user-side STT transcripts. The callback
+   *  fires once per finalised user utterance with the full text.
+   *  Returns an unsubscribe function. */
+  onUserTranscript: (cb: (text: string) => void) => () => void;
+}
+
 export interface OpenaiBridgeDeps {
   /** Live SDK accessor. The bridge needs the robot's
    *  `RTCPeerConnection` to plug the AI output track into the
@@ -129,6 +153,12 @@ export interface OpenaiBridge {
    *  Pure helper kept here because mic ↔ AI plumbing is part of the
    *  bridge's responsibility. */
   getRobotMicTrack: (robotInstance: ReachyMiniInstance) => MediaStreamTrack | null;
+  /** Generic side-channel port for modules that need to interact
+   *  with the Realtime data channel without owning the client
+   *  lifecycle (vision, future memory/telemetry). The port survives
+   *  transparent reconnects: subscribe once at boot, the bridge
+   *  re-attaches listeners on every fresh client build. */
+  getRealtimePort: () => RealtimePort;
 }
 
 const RECONNECT_BACKOFF_MS = 500;
@@ -143,6 +173,13 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
   // path can rebuild a session against the same input without the
   // engine having to re-fetch it from the SDK.
   let lastMicTrack: MediaStreamTrack | null = null;
+
+  // ─── RealtimePort (side-channel) bookkeeping ──────────────────────
+  // Subscribers register once at boot. Each fresh client built below
+  // re-attaches its own `transcript` listener that fans out to this
+  // set, so a transparent reconnect doesn't drop side-channel
+  // observers (vision, future memory, etc.).
+  const userTranscriptSubs = new Set<(text: string) => void>();
 
   const tools = deps.tools ?? ROBOT_TOOLS;
 
@@ -218,6 +255,22 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
 
     next.on("error", ({ error }) => {
       console.error("[openai]", error);
+    });
+
+    // Side-channel: fan completed user transcripts out to anyone
+    // subscribed via the `RealtimePort`. We deliberately ignore
+    // partial deltas (false-positive risk on STT keyword matchers)
+    // and only forward final transcripts.
+    next.on("transcript", ({ role, text, partial }) => {
+      if (role !== "user" || partial) return;
+      if (!text) return;
+      for (const sub of userTranscriptSubs) {
+        try {
+          sub(text);
+        } catch (err) {
+          console.warn("[openai-bridge] user transcript subscriber threw:", err);
+        }
+      }
     });
 
     return next;
@@ -398,6 +451,27 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     openaiSink = null;
   };
 
+  // Single port instance shared by all side-channel modules. The
+  // closures resolve `client` and `userTranscriptSubs` lazily so the
+  // port stays valid across reconnects (a fresh client takes over;
+  // subscriptions persist).
+  const realtimePort: RealtimePort = {
+    sendEvent: (event) => {
+      if (!client) return;
+      try {
+        client.sendEvent(event);
+      } catch (err) {
+        console.warn("[openai-bridge] sendEvent via RealtimePort failed:", err);
+      }
+    },
+    onUserTranscript: (cb) => {
+      userTranscriptSubs.add(cb);
+      return () => userTranscriptSubs.delete(cb);
+    },
+  };
+
+  const getRealtimePort = (): RealtimePort => realtimePort;
+
   const getRobotMicTrack = (
     robotInstance: ReachyMiniInstance,
   ): MediaStreamTrack | null => {
@@ -418,6 +492,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     isReconnecting,
     resetReconnectCounter,
     getRobotMicTrack,
+    getRealtimePort,
   };
 }
 

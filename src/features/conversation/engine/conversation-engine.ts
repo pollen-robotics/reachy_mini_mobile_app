@@ -97,10 +97,6 @@ import {
   type BackgroundAudioKeeper,
 } from "../background-audio-keeper";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
-import {
-  TransportMonitor,
-  type TransportKind,
-} from "@/features/robot-session/transport-monitor";
 import { WakeLockHandle } from "@/features/robot-session/wake-lock";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
@@ -114,6 +110,7 @@ import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
 import { createPoseDispatcher } from "./motion-control/pose-dispatcher";
 import { createOpenaiBridge } from "./bridge/openai-bridge";
+import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import type {
   AppState,
   ConversationConnectionAttempt,
@@ -121,7 +118,7 @@ import type {
   ConversationEngineOptions,
   ConversationLevelEvent,
   ConversationToolToastEvent,
-  ConversationTransportKind,
+  ConversationTransportInfo,
 } from "./types";
 
 /**
@@ -145,6 +142,7 @@ export type {
   ConversationLevelEvent,
   ConversationState,
   ConversationToolToastEvent,
+  ConversationTransportInfo,
   ConversationTransportKind,
 } from "./types";
 
@@ -172,12 +170,16 @@ const preselectedRobotId: string | null =
 const onStateChange: ((state: AppState) => void) | null =
   typeof options.onStateChange === "function" ? options.onStateChange : null;
 
-// Optional external ICE-transport observer. Fired by `TransportMonitor`
-// every time the active candidate pair classification changes
-// (`checking` → `lan`/`direct`/`relay`). The mobile app feeds it into
-// `connectionSummary` so the structured log line carries the live
-// transport without needing to call `pc.getStats()` itself.
-const onTransportChange: ((kind: ConversationTransportKind) => void) | null =
+// Optional external observer for the live WebRTC transport (active ICE
+// candidate-pair classification + instantaneous bitrate). Fired by the
+// `TransportMonitor` owned by `RobotSession`. The mobile app renders a
+// "kind + bitrate" badge in the session topbar from this signal.
+//
+// Lifecycle-wise the monitor follows the SESSION PC (layer C), NOT the
+// conversation pipeline (layer D): the badge is therefore active any
+// time the SDK pc is up, regardless of whether the OpenAI Realtime
+// conversation has been started.
+const onTransportChange: ((info: ConversationTransportInfo) => void) | null =
   typeof options.onTransportChange === "function" ? options.onTransportChange : null;
 
 // ─── Headless UI hooks ──────────────────────────────────────────────────
@@ -411,6 +413,12 @@ const session = new RobotSession();
 const sessionGuard = session.guard;
 const expectedStop = sessionGuard.expectedStop;
 const videoCache = session.videoCache;
+// Wire the host's transport listener once. The class owns all the
+// start/stop bookkeeping internally so the monitor follows the
+// session pc lifecycle (`start` / `reacquire` / `stop` / `release` /
+// `detachRobot`) without the conversation engine having to know
+// anything about candidate pairs.
+session.setTransportListener(onTransportChange);
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
@@ -880,7 +888,6 @@ async function runConversationParts(): Promise<void> {
   // the user locks the screen / switches apps mid-conversation.
   // Idempotent (no-op if already running on a re-acquire path).
   backgroundAudioKeeper.start();
-  if (robot._pc) startTransportMonitor(robot._pc, onTransportChange);
 
   // Keep the device awake for the whole conversation so timers and the
   // media stack don't get throttled on mobile / laptop-on-battery.
@@ -896,6 +903,13 @@ async function runConversationParts(): Promise<void> {
     onFatalError(err);
     return;
   }
+
+  // Conversation is now fully active (handshake done, output track
+  // routed, data channel open). Start the passive scene-awareness
+  // module: it'll grab a first frame in ~1.5 s, then every 30 s,
+  // plus immediately on any STT keyword trigger. Idempotent; survives
+  // transparent reconnects through the bridge's `RealtimePort`.
+  vision?.start();
 
   // Make sure the robot actually sends what OpenAI produces by unmuting the
   // mic path. Our sender now carries the OpenAI audio track, not the local
@@ -1036,24 +1050,6 @@ function startAiLevelMonitor(track: MediaStreamTrack): void {
 
 function stopAiLevelMonitor(): void {
   aiLevel?.stop();
-}
-
-// ─── Transport path monitor ────────────────────────────────────────────
-// `TransportMonitor` + `selectedTransportKind` live in
-// `./transportMonitor.ts`. Self-contained class - the `listener` is
-// passed to `start()` per session, no closure capture needed.
-let transportMonitor: TransportMonitor | null = null;
-
-function startTransportMonitor(
-  pc: RTCPeerConnection,
-  listener: ((kind: TransportKind) => void) | null = null,
-): void {
-  transportMonitor ??= new TransportMonitor();
-  transportMonitor.start(pc, listener);
-}
-
-function stopTransportMonitor(): void {
-  transportMonitor?.stop();
 }
 
 // ─── Background-tab resilience ──────────────────────────────────────────
@@ -1206,9 +1202,11 @@ openaiBridge = createOpenaiBridge({
         ? personality.instructions
         : settings.instructions;
     const memoryFragment = memoryStore.formatForPrompt();
-    return memoryFragment
-      ? `${baseInstructions}\n\n${memoryFragment}`
-      : baseInstructions;
+    const visionAppendix = getVisionPromptAppendix();
+    const parts = [baseInstructions];
+    if (memoryFragment) parts.push(memoryFragment);
+    if (visionAppendix) parts.push(visionAppendix);
+    return parts.join("\n\n");
   },
   onStatus: (status) => {
     switch (status) {
@@ -1280,7 +1278,41 @@ openaiBridge = createOpenaiBridge({
   },
 });
 
+// ─── Vision side-channel ───────────────────────────────────────────────
+//
+// Passive scene-awareness module (see `docs/VISION.md`). Polls the
+// robot's camera every 30 s + on STT keywords ("regarde", "look", …)
+// and injects short `<scene_observation>` blocks into the Realtime
+// context. The handle is null when no OpenAI key is configured -
+// `attachVision` returns `null` and every call site below stays a
+// no-op via optional chaining.
+//
+// Lifecycle:
+//   - `start()` after a successful Realtime handshake (in
+//     `runConversationParts`, post `openaiBridge.connect`).
+//   - `stop()` whenever the conversation pipeline goes down but the
+//     engine may bring it back (`teardown`, `stopConversation`,
+//     `releaseSessionKeepAwake`). `stop()` is idempotent.
+//   - `dispose()` only in the `unmount` handle (terminal release;
+//     after this the handle is dead and `start()` is a no-op).
+// The poller survives transparent reconnects naturally: the
+// `RealtimePort` it talks to keeps its subscriptions and re-attaches
+// listeners on every fresh `buildClient()` inside the bridge.
+const vision: VisionHandle | null = openaiBridge
+  ? attachVision({
+      realtime: openaiBridge.getRealtimePort(),
+      getVideoStream: () => videoCache.get(),
+      openaiApiKey: settings.apiKey,
+    })
+  : null;
+
 async function teardown(): Promise<void> {
+  // Stop the vision poller early: its `start()` was paired with the
+  // OpenAI handshake in `runConversationParts`, so the matching
+  // shutdown belongs at the top of the teardown. Idempotent; the
+  // handle stays alive (we only `dispose()` on `unmount`).
+  vision?.stop();
+
   // Cancel any in-flight tool-call choreography + pose-restore timer
   // before we let the wobbler / antennas tear down. The handler stops
   // the `MovePlayer` it owns; we still flip our local `movePlaying`
@@ -1312,7 +1344,6 @@ async function teardown(): Promise<void> {
   // revert to `Ambient` and we go back to plain foreground-only
   // behaviour. Safe to call when not running.
   backgroundAudioKeeper.stop();
-  stopTransportMonitor();
   void releaseWakeLock();
 
   // Capture the session flag BEFORE resetting it - we need it to
@@ -1725,6 +1756,11 @@ const handle: ConversationEngineHandle = {
     } catch (err) {
       console.warn("[conversation-engine] teardown on unmount failed:", err);
     }
+    // Terminal release of the vision side-channel. `teardown()` above
+    // already stopped its timers; `dispose()` drops the in-memory
+    // state so a hypothetical late `start()` after unmount is a
+    // guaranteed no-op.
+    vision?.dispose();
     // The React layer decides whether to keep the robot instance alive
     // (e.g. to reuse the HF auth). For now we disconnect so subsequent
     // mounts get a fresh state.
@@ -1788,6 +1824,7 @@ const handle: ConversationEngineHandle = {
     //      the motor mode to `gravity_compensation` via
     //      `syncMotorModeForState`. Servos hold the neutral pose
     //      passively, no PID buzz.
+    vision?.stop();
     toolCallHandler.stop();
     movePlaying = false;
     wobblerControl.stop();
@@ -1807,7 +1844,6 @@ const handle: ConversationEngineHandle = {
     stopMicLevelMonitor();
     stopAiLevelMonitor();
     backgroundAudioKeeper.stop();
-    stopTransportMonitor();
     void releaseWakeLock();
     // Mute the robot mic so any in-flight audio frames don't leak
     // through to the speakers while the OpenAI client is gone.
@@ -1896,6 +1932,7 @@ const handle: ConversationEngineHandle = {
     // the bridge close and can race the trajectory gate.
     if (conversationStarted) {
       convoActiveRequested = false;
+      vision?.stop();
       toolCallHandler.stop();
       // Same landing sequence as the host-facing `stopConversation`:
       // sync `movePlaying = false`, drop the controls' tick timers
@@ -1921,7 +1958,6 @@ const handle: ConversationEngineHandle = {
       stopMicLevelMonitor();
       stopAiLevelMonitor();
       backgroundAudioKeeper.stop();
-      stopTransportMonitor();
       void releaseWakeLock();
       try {
         robot.setMicMuted(true);
