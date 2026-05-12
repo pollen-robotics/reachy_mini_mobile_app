@@ -58,6 +58,27 @@ const OPUS_FMTP_OVERRIDES: Record<string, string> = {
 // WiFi blips often self-heal within ~2 s; we budget a bit more than that.
 const ICE_DISCONNECT_GRACE_MS = 5_000;
 
+// ─── Whisper STT vocabulary hint ────────────────────────────────────────
+// `whisper-1` accepts an `input_audio_transcription.prompt` field that
+// behaves like the regular Whisper API `prompt` parameter: a short string
+// of "previously transcribed context" used to bias the decoder toward the
+// surface forms we want. We use it purely for proper nouns the model
+// would otherwise mis-spell (heard as "richy mini", "polenrobotics", …).
+//
+// Why only these four:
+//   - "Reachy" / "Reachy Mini" - product name, said often enough that a
+//     bad transcript breaks our keyword-based vision trigger downstream.
+//   - "Pollen Robotics" / "Hugging Face" - org names that show up in
+//     intro chit-chat and on-boarding flows.
+//
+// The prompt explicitly stays language-agnostic: it MUST NOT carry any
+// language hint (the user is in control of the conversation language
+// via the system prompt; biasing Whisper would fight that flow). It is
+// also intentionally short - Whisper takes only the trailing ~224
+// tokens into account, so the shorter the prompt the more weight each
+// term carries.
+const WHISPER_VOCAB_PROMPT = "Reachy, Reachy Mini, Pollen Robotics, Hugging Face";
+
 export type RealtimeStatus =
   | "idle"
   | "connecting"
@@ -333,7 +354,12 @@ export class OpenaiRealtimeClient {
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24000 },
-          transcription: { model: "whisper-1" },
+          transcription: {
+            model: "whisper-1",
+            // Vocabulary nudge, NOT a language hint. See
+            // WHISPER_VOCAB_PROMPT comment above.
+            prompt: WHISPER_VOCAB_PROMPT,
+          },
           turn_detection: {
             type: "server_vad",
             threshold: 0.5,

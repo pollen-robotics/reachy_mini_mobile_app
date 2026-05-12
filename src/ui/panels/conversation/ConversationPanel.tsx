@@ -35,7 +35,7 @@
  * THIS panel via a ref forwarded back to the session through
  * `audioLevelsTargetRef` on the host side.
  */
-import { Box, Stack } from '@mui/material';
+import { Box, Divider, Stack } from '@mui/material';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
@@ -46,8 +46,12 @@ import {
 } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
+import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { useActivePersonality } from '@/features/personalities';
+import { useActiveLanguageId } from '@/features/conversation-language';
+import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
+import { LanguageFlagPicker } from '@/ui/widgets/language-picker';
 import { PersonalityGrid, PersonalityPill } from '@/ui/widgets/personality-pill';
 
 export interface ConversationPanelProps {
@@ -77,6 +81,16 @@ export function ConversationPanel({
     session.engineState === 'user-speaking' ||
     session.engineState === 'processing' ||
     session.engineState === 'ai-speaking';
+
+  // Daemon-side audio state (volumes + mute toggles). Read here so
+  // the bottom audio strip stays in lockstep with the daemon
+  // without round-tripping props down through the orb subtree.
+  // While the engine hasn't reached `ready` for the first time the
+  // values are `null`; the sliders fall back to 50 (the daemon's
+  // own default) and the strip is disabled so the user can't drag
+  // against an unreachable daemon.
+  const daemon = useDaemonState();
+  const audioReady = session.hasReachedReady;
 
   // Active personality is consumed for its `id` only: when the user
   // picks a new persona via the grid, the engine reads the active
@@ -130,6 +144,36 @@ export function ConversationPanel({
       console.warn('[conversation-panel] restartConversation threw:', err);
     });
   }, [activePersonalityId, live, restartConversation]);
+
+  // Mid-conversation language switch. Same shape as the personality
+  // restart effect above: `composeInstructions()` (in the engine)
+  // reads the active language lazily from the store, so the only
+  // thing this panel needs to do on a language change is drop the
+  // live OpenAI client and bring it back. The next handshake then
+  // picks up the new prompt fragment automatically.
+  //
+  // Skip rules:
+  //   - first render: the store emits its bootstrap value before any
+  //     real user action, restarting on it would tear down a freshly
+  //     established session for nothing.
+  //   - no actual change: the store fires for every mutation, but
+  //     `setActiveLanguageId` is itself a no-op when the id matches,
+  //     so this guard is purely a belt-and-braces.
+  //   - engine not live: a future `startConversation()` will pull
+  //     the fresh language on its own, no need to restart from
+  //     `released` / `idle`.
+  const activeLanguageId = useActiveLanguageId();
+  const previousLanguageIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousLanguageIdRef.current;
+    previousLanguageIdRef.current = activeLanguageId;
+    if (previous === null) return;
+    if (previous === activeLanguageId) return;
+    if (!live) return;
+    void restartConversation().catch((err) => {
+      console.warn('[conversation-panel] restartConversation (language) threw:', err);
+    });
+  }, [activeLanguageId, live, restartConversation]);
 
   const handleToggleMute = (): void => {
     session.setMicMuted(!session.micMuted);
@@ -271,6 +315,85 @@ export function ConversationPanel({
           <ConversationToolToast label={session.toolToastLabel} />
         </Stack>
 
+        {/* Bottom audio strip: speaker + microphone sliders. Lives
+            inside the body box as a sibling of the orb's centered
+            stack, so the column flow anchors it to the bottom of
+            the conv area while the orb stays centered in the
+            remaining space above. Used to live in the Robot tab
+            but the user is more likely to want to nudge their
+            volume while looking at the orb (mid-conversation)
+            than from the diagnostics tab.
+
+            Hidden while the personality picker is open: the user
+            is browsing personas, sliders below the grid would
+            split attention. Re-rendering on toggle is cheap (no
+            heavy state - the sliders just read `daemon`). */}
+        {!pickerOpen && (
+          <Box
+            sx={{
+              flexShrink: 0,
+              width: '100%',
+              maxWidth: 420,
+              mx: 'auto',
+              px: 3,
+              pt: 1.75,
+              pb: 2,
+              // Top border detaches the strip from the orb / caption
+              // area above. Using the theme's divider keeps the line
+              // consistent with the persona sub-header divider at the
+              // top of the panel - the conv area now sits between two
+              // matching hairlines, which reads as a properly framed
+              // body slot rather than a free-floating orb.
+              borderTop: t => `1px solid ${t.palette.divider}`,
+            }}
+          >
+            {/* Bottom utility strip. Three tools in a single row,
+                each cell visually separated by a thin vertical
+                "tick" divider:
+                  [🇫🇷] │ [🔊 ──●──] │ [🎤 ──●──]
+                The dividers reinforce that each cell is its own
+                control - language preference is independent from
+                speaker volume which is independent from mic
+                volume - and give the strip a "toolbar" rhythm in
+                line with the borderTop hairline above. The audio
+                cards keep a 50/50 split of the remaining width;
+                the picker takes its intrinsic width (32×32
+                anchor) and never compresses on small screens. */}
+            <Stack
+              direction="row"
+              spacing={1.75}
+              alignItems="center"
+              sx={{ width: '100%' }}
+            >
+              <Box sx={{ flexShrink: 0, display: 'flex' }}>
+                <LanguageFlagPicker
+                  disabled={session.engineState === 'error'}
+                />
+              </Box>
+              <StripDivider />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <AudioControlCard
+                  kind="speaker"
+                  value={daemon.speakerVolume ?? 50}
+                  onChange={daemon.setSpeakerVolume}
+                  onToggleMute={daemon.toggleSpeakerMute}
+                  disabled={!audioReady}
+                />
+              </Box>
+              <StripDivider />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <AudioControlCard
+                  kind="microphone"
+                  value={daemon.microphoneVolume ?? 50}
+                  onChange={daemon.setMicrophoneVolume}
+                  onToggleMute={daemon.toggleMicrophoneMute}
+                  disabled={!audioReady}
+                />
+              </Box>
+            </Stack>
+          </Box>
+        )}
+
         {pickerOpen && <PersonalityGrid onClose={closePicker} />}
       </Box>
 
@@ -283,6 +406,30 @@ export function ConversationPanel({
         sx={{ display: 'none' }}
       />
     </Stack>
+  );
+}
+
+/**
+ * Vertical "tick" divider used between the three cells of the
+ * bottom utility strip (language picker, speaker, microphone).
+ *
+ * Local component because we render it twice and want both
+ * occurrences to stay byte-identical: future tweaks (height,
+ * colour, opacity) propagate in one place instead of drifting
+ * between the two call sites. Kept private to the file - this is
+ * panel-internal styling chrome, not something to expose.
+ *
+ * Visual posture: shorter than the row (`my: 0.5`) so the line
+ * feels like a punctuation mark between tools rather than a hard
+ * split, in line with the macOS / iOS toolbar idiom.
+ */
+function StripDivider() {
+  return (
+    <Divider
+      orientation="vertical"
+      flexItem
+      sx={{ my: 0.5, borderColor: 'divider' }}
+    />
   );
 }
 

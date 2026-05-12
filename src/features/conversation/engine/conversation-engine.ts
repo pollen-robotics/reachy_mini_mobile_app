@@ -111,6 +111,10 @@ import { createAntennasControl } from "./motion-control/antennas-control";
 import { createPoseDispatcher } from "./motion-control/pose-dispatcher";
 import { createOpenaiBridge } from "./bridge/openai-bridge";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
+import {
+  getActiveLanguageId,
+  getLanguagePromptAppendix,
+} from "../../conversation-language";
 import type {
   AppState,
   ConversationConnectionAttempt,
@@ -1203,9 +1207,18 @@ openaiBridge = createOpenaiBridge({
         : settings.instructions;
     const memoryFragment = memoryStore.formatForPrompt();
     const visionAppendix = getVisionPromptAppendix();
+    // Language nudge. Read lazily from the conversation-language
+    // store on every reconnect so a mid-session switch (user taps
+    // the flag picker -> ConversationPanel restarts the conv)
+    // propagates without any extra wiring. The fragment instructs
+    // the model to default to the selected language AND honour an
+    // explicit user request to switch, so the voice-driven
+    // "parle-moi en français" path keeps working on top of it.
+    const languageAppendix = getLanguagePromptAppendix(getActiveLanguageId());
     const parts = [baseInstructions];
     if (memoryFragment) parts.push(memoryFragment);
     if (visionAppendix) parts.push(visionAppendix);
+    parts.push(languageAppendix);
     return parts.join("\n\n");
   },
   onStatus: (status) => {
