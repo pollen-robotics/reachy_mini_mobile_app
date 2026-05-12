@@ -464,6 +464,38 @@ jobs:
           # with the Reachy brand icon. Idempotent.
           yarn tauri icon src-tauri/icons/icon.png || true
 
+      - name: Pad Android adaptive-icon foregrounds (safe-zone fix)
+        # `tauri icon` generates `ic_launcher_foreground.png` by simply
+        # rescaling `icon.png` to each mipmap size with no extra
+        # padding. Android adaptive icons (`mipmap-anydpi-v26/ic_launcher.xml`)
+        # only guarantee the central 66dp out of 108dp foreground is
+        # visible after the launcher mask (circle/squircle/teardrop)
+        # is applied, so any brand icon whose design fills its canvas
+        # ends up clipped on the home screen (Reachy's antennas were
+        # being shaved off). This step shrinks each foreground PNG so
+        # its content sits inside the safe zone. Idempotent and
+        # forward-compatible with future `tauri icon` regenerations.
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          python3 scripts/pad-android-foreground.py \
+            --icons-dir src-tauri/icons/android
+          # Re-sync the patched foregrounds from src-tauri/icons/android/
+          # into the generated gen/android/app/src/main/res/ tree, in
+          # case `tauri android init` already copied the unpadded
+          # versions before this step ran.
+          GEN_RES="src-tauri/gen/android/app/src/main/res"
+          if [ -d "$GEN_RES" ]; then
+            for d in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+              src="src-tauri/icons/android/$d/ic_launcher_foreground.png"
+              dst="$GEN_RES/$d/ic_launcher_foreground.png"
+              if [ -f "$src" ] && [ -d "$GEN_RES/$d" ]; then
+                cp -f "$src" "$dst"
+                echo "  synced: $dst"
+              fi
+            done
+          fi
+
       - name: Bump minSdk to 26 (tauri-plugin-blec requirement)
         # `tauri-plugin-blec` ships a manifest with `minSdk 26`; the
         # generated Tauri Android project defaults to `minSdk 24`,
@@ -1123,6 +1155,29 @@ jobs:
             yarn tauri android init
           fi
           yarn tauri icon src-tauri/icons/icon.png || true
+
+      - name: Pad Android adaptive-icon foregrounds (safe-zone fix)
+        # See the matching step in the debug job for the full
+        # rationale. Without this, the Reachy logo's antennas get
+        # shaved off by the launcher mask on Pixel/Samsung/MIUI
+        # devices because `tauri icon` doesn't apply the 66/108dp
+        # safe-zone padding the Android adaptive-icon spec requires.
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check Pillow
+          python3 scripts/pad-android-foreground.py \
+            --icons-dir src-tauri/icons/android
+          GEN_RES="src-tauri/gen/android/app/src/main/res"
+          if [ -d "$GEN_RES" ]; then
+            for d in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+              src="src-tauri/icons/android/$d/ic_launcher_foreground.png"
+              dst="$GEN_RES/$d/ic_launcher_foreground.png"
+              if [ -f "$src" ] && [ -d "$GEN_RES/$d" ]; then
+                cp -f "$src" "$dst"
+                echo "  synced: $dst"
+              fi
+            done
+          fi
 
       - name: Patch Android Gradle config (minSdk, applicationId, versionCode, signing)
         # The debug job only patches minSdk. Release adds three more:
