@@ -73,6 +73,20 @@ export function useDaemonLogs({
   session,
   enabled,
 }: UseDaemonLogsOptions): UseDaemonLogsResult {
+  // Pull the subscription function out of the session handle so we
+  // can depend on the *function reference* (stable across renders
+  // via the host's `useCallback`) instead of the *handle object*
+  // (recreated on every `useRobotSession` setState - engineState,
+  // webrtcTransport, etc. churn many times per second mid-call).
+  //
+  // Before this destructure the effect below saw `session` change
+  // identity on every parent re-render, which made it tear down
+  // and re-subscribe constantly; combined with the `setEntries([])`
+  // inside the effect's enable branch, the user saw the log column
+  // flicker-clear-refill instead of a smooth append. Stabilising
+  // the dep restores incremental append semantics.
+  const { subscribeLogs } = session;
+
   const [entries, setEntries] = useState<DaemonLogEntry[]>([]);
   const [status, setStatus] = useState<DaemonLogStreamStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -134,7 +148,7 @@ export function useDaemonLogs({
     // Wrap through refs so the SDK's subscription survives parent
     // re-renders without us having to re-subscribe (which would
     // momentarily drop lines).
-    const unsubscribe = session.subscribeLogs({
+    const unsubscribe = subscribeLogs({
       onLine: (entry) => onLineRef.current?.(entry),
       onError: (error) => onErrorRef.current?.(error),
     });
@@ -146,7 +160,7 @@ export function useDaemonLogs({
         console.warn("[daemon-logs] unsubscribe failed:", err);
       }
     };
-  }, [enabled, session]);
+  }, [enabled, subscribeLogs]);
 
   return { entries, status, errorMessage };
 }

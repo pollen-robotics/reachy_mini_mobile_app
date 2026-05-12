@@ -1,11 +1,12 @@
 /**
  * Daemon log console — pure presentational, no chrome of its own.
  *
- *   ╭ Daemon started successfully.       13:30:24 ╮
- *   │ [Central Relay] State transition…  13:30:25 │
- *   │ [app] starting hand_tracker …      13:30:27 │
- *   │ ...                                         │
- *   ╰─────────────────────────────────────────────╯
+ *   ╭─────────────────────────────────────────╮
+ *   │ Daemon started successfully.            │
+ *   │ [Central Relay] State transition…       │
+ *   │ [app] starting hand_tracker …           │
+ *   │ ...                                     │
+ *   ╰─────────────────────────────────────────╯
  *
  * Lives inside a parent surface (today: a `<RobotPanel>` on the
  * Robot tab) which provides the title strip, the sub-text, and any
@@ -152,8 +153,8 @@ export default function DaemonLogConsole({
         // No border / radius here — the parent `<RobotPanel>` owns
         // the card chrome. We paint a flat bg + handle our own
         // scroll inside.
-        // Single mono font across the whole console so the right-
-        // edge timestamp column reads as a column.
+        // Single mono font across the whole console so log lines
+        // read as terminal output, not as body copy.
         fontFamily:
           'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       }}

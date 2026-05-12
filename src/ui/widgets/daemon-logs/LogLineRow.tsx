@@ -1,10 +1,10 @@
 /**
  * Single log row inside the DaemonLogConsole.
  *
- * Layout (single line, badge-free):
+ * Layout (single line, badge-free, no timestamp):
  *
  *   ┌──────────────────────────────────────────┐
- *   │ Daemon started successfully.    13:30:24 │
+ *   │ Daemon started successfully.             │
  *   └──────────────────────────────────────────┘
  *
  * The leading category badge was dropped on the second iteration:
@@ -15,10 +15,15 @@
  * orange, debug muted), which is the only category-vs-other piece
  * of information a user actually scans for.
  *
- * The timestamp is a bare `HH:MM:SS` (no milliseconds) on the
- * right edge. Milliseconds were noise at this granularity: log
- * lines are roughly 1 Hz on a quiet daemon, the second-precision
- * column is enough to correlate with what the user just did.
+ * The right-edge `HH:MM:SS` clock used to live here too but was
+ * dropped on user feedback: at this granularity (lines arrive
+ * mostly second-by-second, the buffer caps at 100) the visible
+ * column is a fully accurate timeline by itself, and the
+ * timestamps added a chunk of monospace noise next to every
+ * line. The wall-clock value is still kept on each
+ * `DaemonLogEntry` (`clockTime`) so the "Copy all" affordance
+ * exports something useful when the user is forensically
+ * correlating against another tool.
  *
  * Wrapped in `React.memo` because the parent re-renders on every
  * incoming line: every existing row receives identical props and
@@ -42,22 +47,13 @@ interface LogLineRowProps {
 
 function LogLineRowImpl({ entry, isDark }: LogLineRowProps) {
   const messageColor = levelColor(entry.level, isDark);
-  const timestampColor = isDark
-    ? "rgba(255, 255, 255, 0.4)"
-    : "rgba(0, 0, 0, 0.45)";
-
-  // Trim the trailing `.mmm` off the cached clock-time so the
-  // displayed value stays HH:MM:SS even though the underlying entry
-  // was built with millisecond precision (we keep it on the entry
-  // for "Copy all", which benefits from sub-second ordering).
-  const shortTime = entry.clockTime.slice(0, 8);
 
   return (
     <Box
       sx={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 0.75,
+        // Single full-width column now that the timestamp is gone.
+        // No flex needed - a plain block with horizontal padding
+        // does the job and lets long lines wrap naturally.
         px: 1,
         py: 0.4,
       }}
@@ -65,8 +61,6 @@ function LogLineRowImpl({ entry, isDark }: LogLineRowProps) {
       <Typography
         component="div"
         sx={{
-          flex: 1,
-          minWidth: 0,
           fontSize: TYPO.tiny,
           fontFamily: "inherit",
           color: messageColor,
@@ -80,23 +74,6 @@ function LogLineRowImpl({ entry, isDark }: LogLineRowProps) {
       >
         {entry.line}
       </Typography>
-
-      <Box
-        component="span"
-        sx={{
-          flexShrink: 0,
-          fontSize: TYPO.micro,
-          fontFamily: "inherit",
-          color: timestampColor,
-          // Match the message's first-line line-height so the
-          // timestamp aligns with the start of the line, not its
-          // mid-baseline (which `flex-start` + a smaller font
-          // would otherwise cause to look slightly low).
-          lineHeight: 1.7,
-        }}
-      >
-        {shortTime}
-      </Box>
     </Box>
   );
 }
