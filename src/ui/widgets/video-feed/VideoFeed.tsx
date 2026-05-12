@@ -124,58 +124,56 @@ export default function VideoFeed({ session }: VideoFeedProps) {
 }
 
 /**
- * Small "Camera · View from Reachy" pip anchored top-left over
- * the video. Replaces the earlier `● LIVE` badge: the parent
- * panel has no header strip (see `<RobotPanel>` usage in
- * `RobotTabView`), so this overlay carries the section's label
- * in-frame instead. Always rendered, regardless of streaming
- * state, so the user knows what they're looking at even during
- * the camera's offline / pre-stream interval.
+ * Tiny "camera" label anchored top-left over the video.
+ *
+ *   camera
+ *   <video>
+ *
+ * Earlier iterations rendered a bold uppercase pill with its own
+ * background scrim and backdrop blur. On the new layout (debug
+ * overlay bottom-left, joystick bottom-right, camera frame
+ * everywhere else) it read as a third heavy element competing
+ * with the video for attention.
+ *
+ * Now the label is text-only: lowercase, micro size, monospace,
+ * low-alpha white. A subtle text-shadow handles legibility on
+ * bright frames (snow, white walls) without needing a scrim. The
+ * goal is "the eye finds it if it's looking for it, otherwise it
+ * disappears into the picture" - much closer to a film slate
+ * timecode than to a broadcast watermark.
+ *
+ * Same lowercase + monospace vocabulary as the debug overlay
+ * (`<CameraDebugOverlay>`) on the opposite corner, so the two
+ * corner overlays read as a coherent micro-typography system
+ * rather than two unrelated UI nags.
+ *
+ * Always rendered, regardless of streaming state, so the user
+ * knows what they're looking at even during the camera's offline
+ * / pre-stream interval.
  */
 function CameraBadge() {
   return (
-    <Box
+    <Typography
+      component="span"
+      aria-hidden
       sx={{
         position: 'absolute',
-        top: 10,
+        top: 8,
         left: 10,
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: 0.875,
-        bgcolor: 'rgba(0, 0, 0, 0.45)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        px: 1,
-        py: 0.375,
-        borderRadius: 999,
+        fontSize: TYPO.micro,
+        fontFamily: 'monospace',
+        fontWeight: FONT_WEIGHT.medium,
+        letterSpacing: '0.4px',
+        color: 'rgba(255, 255, 255, 1)',
+        backgroundColor: 'rgba(0, 0, 0, 0.55)',
+        padding: '6px 8px',
+        borderRadius: '4px',
+        lineHeight: 1,
         pointerEvents: 'none',
       }}
     >
-      <Typography
-        component="span"
-        sx={{
-          fontSize: TYPO.xs,
-          fontWeight: FONT_WEIGHT.bold,
-          letterSpacing: '0.6px',
-          color: '#fff',
-          textTransform: 'uppercase',
-          lineHeight: 1,
-        }}
-      >
-        Camera
-      </Typography>
-      <Typography
-        component="span"
-        sx={{
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.medium,
-          color: 'rgba(255, 255, 255, 0.7)',
-          lineHeight: 1,
-        }}
-      >
-        View from Reachy
-      </Typography>
-    </Box>
+      CAMERA
+    </Typography>
   );
 }
 

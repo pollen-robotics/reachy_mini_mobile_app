@@ -32,8 +32,8 @@
  * ─────
  *   - `title`    : short uppercase label, e.g. "CAMERA" / "AUDIO"
  *   - `subtitle` : optional descriptive line beside the title
- *                  (e.g. "view from Reachy + head joystick"). Truncates
- *                  with ellipsis on narrow screens.
+ *                  (e.g. "live daemon journal"). Truncates with
+ *                  ellipsis on narrow screens.
  *   - `actions`  : optional ReactNode for the right edge of the
  *                  header (typically `IconButton`s for per-section
  *                  actions).

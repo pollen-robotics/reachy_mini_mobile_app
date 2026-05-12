@@ -81,6 +81,34 @@ export type ConversationTransportKind =
   | "relay";
 
 /**
+ * Live snapshot of the WebRTC transport used by the audio peer
+ * connection. Bundled together so the host can render a single chip
+ * (kind + bitrate + remote address) without having to wire three
+ * separate callbacks.
+ *
+ * `bps` is the instantaneous bidirectional bitrate (bits per second).
+ * It is `null` while ICE is still gathering or until we have two
+ * samples to diff against; once the link is up the engine emits a
+ * fresh value roughly every 1.5 s.
+ *
+ * `remoteIp` is the address of the selected remote ICE candidate -
+ * effectively the robot's reachable address from this peer's point of
+ * view. Useful in the session topbar for ad-hoc debug (SSH, `curl`,
+ * …). Set to `null` when:
+ *   - ICE hasn't nominated a pair yet (`kind === 'checking'`);
+ *   - the transport is `relay` (the remote candidate is the TURN
+ *     server, not the robot - misleading to expose);
+ *   - the platform doesn't expose the candidate address (Safari).
+ * It can also be a `*.local` mDNS hostname when host-candidate
+ * privacy strips the literal IP (Chrome / Firefox default).
+ */
+export interface ConversationTransportInfo {
+  kind: ConversationTransportKind;
+  bps: number | null;
+  remoteIp: string | null;
+}
+
+/**
  * Single-frame audio-reactivity snapshot. Either side can be `null`
  * on a given event because the two analysers run on independent rAF
  * loops; consumers should merge by side as they arrive.
@@ -398,16 +426,16 @@ export interface ConversationEngineOptions {
 
   /**
    * Fires whenever the active ICE candidate pair classification changes
-   * (`checking` → `lan` / `direct` / `relay`). The mobile app uses it to
-   * feed `connectionSummary` so the connection log line carries the
-   * actual transport in use, without having to peek at internal stats.
+   * OR the measured bitrate moves by more than ~100 bps. The mobile
+   * app uses it to render a live "kind + bitrate" badge in the session
+   * topbar (e.g. `LAN  32 kbps`) without having to peek at internal
+   * stats itself.
    *
-   * Called once on every distinct kind, including the initial
-   * `checking` while ICE is still gathering. The engine itself owns
-   * the dedup, so the callback won't fire twice for the same kind in
-   * a row. Cleared on `unmount()`.
+   * Called once on session start with `{ kind: 'checking', bps: null }`,
+   * then again on every distinct (kind, bitrate) tuple. The engine
+   * itself owns the dedup. Cleared on `unmount()`.
    */
-  onTransportChange?: (kind: ConversationTransportKind) => void;
+  onTransportChange?: (info: ConversationTransportInfo) => void;
 
   /**
    * Where to write the audio-reactive CSS custom properties

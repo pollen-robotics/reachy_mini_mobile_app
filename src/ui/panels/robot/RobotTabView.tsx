@@ -4,18 +4,13 @@
  *   ┌──────────────────────────────────────┐
  *   │                                      │
  *   │  ┌────────────────────────────────┐  │
- *   │  │ CAMERA   view from Reachy      │  │  ← uniform header strip
- *   │  ├────────────────────────────────┤  │     (label · subtitle · actions)
- *   │  │ ● LIVE                         │  │
  *   │  │      <video, 4:3>      ╭──╮    │  │  ← head joystick overlay,
- *   │  │                        │··│    │  │     bottom-right of the
- *   │  │                        ╰──╯    │  │     camera body
- *   │  └────────────────────────────────┘  │
- *   │                                      │
- *   │  ┌────────────────────────────────┐  │
- *   │  │ AUDIO   speaker · microphone   │  │
- *   │  ├────────────────────────────────┤  │
- *   │  │ [🔊]●─●  100   [🎤]●─●  100   │  │  ← single row, side-by-side
+ *   │  │ ┌──────┐               │··│    │  │     bottom-right of the
+ *   │  │ │v1.7.1│               ╰──╯    │  │     camera body; debug
+ *   │  │ │● LAN │                       │  │     overlay bottom-left
+ *   │  │ │1.2.3 │                       │  │
+ *   │  │ │32kbps│                       │  │
+ *   │  │ └──────┘                       │  │
  *   │  └────────────────────────────────┘  │
  *   │                                      │
  *   │  ┌────────────────────────────────┐  │
@@ -27,35 +22,29 @@
  *   │                                      │
  *   └──────────────────────────────────────┘
  *
- * Uniform card system
- * ───────────────────
- * Each section is a `<RobotPanel>` with the same anatomy: tiny
- * uppercase title + optional descriptive subtitle + optional
- * actions slot (icons), divider, then content. The point is
- * consistency: a glance at the tab tells the user "I'm seeing
- * three labelled sections, each with one job"; new sections
- * (battery, settings, shortcuts) drop in without re-deciding
- * the chrome.
- *
  * Per-section content
  * ───────────────────
- *   - Camera  : 4:3 video frame + head joystick overlay. Body
- *               opts out of the panel's default padding because
- *               the video paints edge-to-edge.
- *   - Audio   : speaker + microphone sliders side-by-side in one
- *               row inside the panel body (a single AUDIO panel,
- *               NOT two). State is read / written via the shared
- *               `useDaemonState()` context (mounted upstream by
- *               `RobotSessionScreen`).
+ *   - Camera  : 4:3 video frame + head joystick overlay
+ *               (bottom-right) + WebRTC debug overlay
+ *               (bottom-left). Body opts out of the panel's
+ *               default padding because the video paints
+ *               edge-to-edge.
  *   - Logs    : the daemon's WebRTC log tail (see
  *               `docs/WEBRTC_LOGS.md`). Body opts out of padding
  *               because the console paints its own terminal-ish
  *               surface; the copy button lives in the panel's
  *               actions slot.
  *
+ * Speaker / microphone volume controls used to live here too,
+ * sandwiched between the camera and the logs. They are now mounted
+ * under the orb in `<ConversationPanel>` so the user can adjust
+ * them in the same view where they hear / talk to Reachy - the
+ * Robot tab is reserved for "what is the robot doing right now"
+ * signals (live image + live logs + transport diagnostics).
+ *
  * Pure consumer of the session handle: takes only the slice of
  * `RobotSessionHandle` it needs (`Pick`). Mirrors the desktop's
- * "left column" feature set (camera + audio + log tail) plus a
+ * "left column" feature set (camera + log tail) plus a
  * mobile-native joystick for manual head steering.
  *
  * Layout convention is shared with the Apps tab:
@@ -70,7 +59,6 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useCallback } from 'react';
 
 import VideoFeed from '@/ui/widgets/video-feed/VideoFeed';
-import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { HeadJoystickOverlay } from '@/ui/widgets/head-control';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
@@ -78,30 +66,28 @@ import {
   formatEntriesForCopy,
   useDaemonLogs,
 } from '@/features/daemon-logs';
-import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { LAYOUT } from '@/ui/design/tokens';
+import CameraDebugOverlay from './CameraDebugOverlay';
 
 interface RobotTabViewProps {
   /**
    * Slice of the session the tab needs. Typed via `Pick` so the
    * dependency surface is explicit at the call site and the view
-   * can be unit-tested with a fake handle. The daemon-touching
-   * methods (volumes, sound playback, version) are read / written
-   * via the shared `useDaemonState()` context (mounted in
-   * `RobotSessionScreen`), so we only need the camera + joystick
-   * + log subscription on the session here.
+   * can be unit-tested with a fake handle. The audio-related
+   * methods (volumes, mute) used to be consumed here too; they
+   * now live in `<ConversationPanel>` under the orb, so the Robot
+   * tab is back to "video + joystick + logs + WebRTC overlay".
    */
   session: Pick<
     RobotSessionHandle,
-    'attachVideo' | 'setHeadRpyDeg' | 'subscribeLogs'
+    'attachVideo' | 'setHeadRpyDeg' | 'subscribeLogs' | 'webrtcTransport'
   >;
   /**
    * Becomes `true` once the engine has reached `ready` for the
-   * first time. Used to disable the audio cards while the daemon
-   * round-trip can't yet land, and to gate the daemon log
-   * subscription. The camera feed itself decides its own offline
-   * state from the SDK's track, so it doesn't need this gate.
+   * first time. Used to gate the daemon log subscription. The
+   * camera feed itself decides its own offline state from the
+   * SDK's track, so it doesn't need this gate.
    */
   isLive: boolean;
 }
@@ -125,15 +111,10 @@ const COLUMN_SX = {
  */
 const LOGS_MIN_HEIGHT_PX = 120;
 
-export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
-  // Volumes + version live in the shared daemon-state context.
-  // While the engine isn't live yet (`isLive=false`), every
-  // readable field is `null`; the audio cards fall back to the
-  // slider's default of 50 (handled below via `?? 50`) and stay
-  // disabled, so the user can't drag a slider against a daemon
-  // that won't answer.
-  const daemon = useDaemonState();
-
+export default function RobotTabView({
+  session,
+  isLive,
+}: RobotTabViewProps) {
   // Daemon log buffer. Lives in the host (not in
   // `<DaemonLogConsole>`) so the copy button can sit in the
   // RobotPanel's actions slot without us having to subscribe twice
@@ -164,13 +145,13 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
         overflow: 'hidden',
       }}
     >
-      {/* No outer scroll on this tab: the camera + audio + logs
-          stack is sized to fit the viewport via flex column, with
-          the LOGS panel eating the leftover space (`flex: 1`).
-          The user's mental model is "this is a dashboard, not a
-          long page" — they shouldn't need to scroll the page to
-          see all three sections. The logs panel itself scrolls
-          internally for older entries (cap 100). */}
+      {/* No outer scroll on this tab: the camera + logs stack is
+          sized to fit the viewport via flex column, with the LOGS
+          panel eating the leftover space (`flex: 1`). The user's
+          mental model is "this is a dashboard, not a long page" -
+          they shouldn't need to scroll the page to see both
+          sections. The logs panel itself scrolls internally for
+          older entries (cap 100). */}
       <Box
         sx={{
           flex: 1,
@@ -194,12 +175,11 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
         >
           {/* CAMERA panel. No header strip: the `<CameraBadge>`
               overlay rendered by `<VideoFeed>` already labels
-              the section in-frame ("Camera · View from Reachy"
-              pip), so an outer header would just duplicate the
-              label. Body has no padding so the 4:3 video can
-              paint edge-to-edge; the joystick is anchored
-              absolute within the body for the bottom-right
-              corner. */}
+              the section in-frame, so an outer header would
+              just duplicate it. Body has no padding so the 4:3
+              video can paint edge-to-edge; the joystick is
+              anchored absolute within the body for the
+              bottom-right corner. */}
           <RobotPanel noBodyChrome>
             <Box
               sx={{
@@ -209,6 +189,17 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
               }}
             >
               <VideoFeed session={session} />
+              {/* Debug overlay anchored bottom-LEFT of the camera
+                  frame. Used to live in the topbar's identity
+                  chip stack but the three signals it surfaces
+                  (daemon version, physical transport, WebRTC
+                  classification + IP + bitrate) are debug-grade
+                  and were crowding the identity area on small
+                  phones. Anchored opposite to the joystick so
+                  the two never collide. */}
+              <CameraDebugOverlay
+                webrtcTransport={session.webrtcTransport}
+              />
               {/* Head joystick anchored bottom-right of the camera
                   frame. Mounting starts the velocity controller;
                   unmounting (e.g. user navigates away from this
@@ -220,46 +211,12 @@ export default function RobotTabView({ session, isLive }: RobotTabViewProps) {
             </Box>
           </RobotPanel>
 
-          {/* SPEAKER + MICROPHONE panels. The earlier draft
-              wrapped both cards in a single "Audio" panel, but
-              the umbrella header just duplicated what each
-              card's icon already says. We now ship one panel
-              per device, side-by-side in a flex row, so each
-              column carries its own header and the device name
-              lives in chrome (consistent with `<RobotPanel>`'s
-              "title + content" rhythm) instead of being implicit
-              in an icon. */}
-          <Stack direction="row" spacing={2.5} sx={{ width: '100%' }}>
-            <Box sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
-              <RobotPanel title="Speaker" sx={{ flex: 1 }}>
-                <AudioControlCard
-                  kind="speaker"
-                  value={daemon.speakerVolume ?? 50}
-                  onChange={daemon.setSpeakerVolume}
-                  onToggleMute={daemon.toggleSpeakerMute}
-                  disabled={!isLive}
-                />
-              </RobotPanel>
-            </Box>
-            <Box sx={{ flex: 1, minWidth: 0, display: 'flex' }}>
-              <RobotPanel title="Microphone" sx={{ flex: 1 }}>
-                <AudioControlCard
-                  kind="microphone"
-                  value={daemon.microphoneVolume ?? 50}
-                  onChange={daemon.setMicrophoneVolume}
-                  onToggleMute={daemon.toggleMicrophoneMute}
-                  disabled={!isLive}
-                />
-              </RobotPanel>
-            </Box>
-          </Stack>
-
           {/* LOGS panel. Eats the leftover vertical space via
               `flex: 1, minHeight: 0` so the page never scrolls:
-              camera (4:3) + audio (compact) + logs (the rest)
-              tile the viewport exactly. Floor of 120 px protects
-              against pathological viewports where the logs panel
-              would collapse to a couple of pixels.
+              camera (4:3) + logs (the rest) tile the viewport
+              exactly. Floor of 120 px protects against
+              pathological viewports where the logs panel would
+              collapse to a couple of pixels.
               Body has no padding so the terminal-style console
               paints its own dim bg edge-to-edge; the copy button
               lives in the panel's actions slot. */}

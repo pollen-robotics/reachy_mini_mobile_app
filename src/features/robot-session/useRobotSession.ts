@@ -43,6 +43,7 @@ import {
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
+  type ConversationTransportInfo,
 } from '@/features/conversation/engine/conversation-engine';
 
 import { derivePhase, type SessionPhase } from './phase';
@@ -81,6 +82,23 @@ export interface RobotSessionHandle {
    * so it never bleeds across session attempts.
    */
   connectionAttempt: ConversationConnectionAttempt | null;
+  /**
+   * Live snapshot of the WebRTC transport used by the audio peer
+   * connection: ICE candidate-pair classification (`lan` / `direct`
+   * / `relay`) + instantaneous bitrate in bits per second.
+   *
+   * `null` when no value has been observed yet (engine still
+   * booting / SDK pc not up yet). Updates roughly every 1.5 s while
+   * the session pc is alive; freezes (stays at its last value) when
+   * the conversation stops but the session is still up - and clears
+   * back to `null` only when the session itself is torn down or
+   * released.
+   *
+   * Lifecycle is owned by `RobotSession` (the monitor follows the
+   * session pc, not the conversation pipeline) - the host just
+   * renders whatever lands in this state.
+   */
+  webrtcTransport: ConversationTransportInfo | null;
 
   /** Conversation parts (D layer): start / stop the OpenAI Realtime
    *  pipeline, antennas, head wobbler. No-op if the engine isn't
@@ -229,6 +247,8 @@ export function useRobotSession({
   const [hasReachedReady, setHasReachedReady] = useState(false);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
+  const [webrtcTransport, setWebrtcTransport] =
+    useState<ConversationTransportInfo | null>(null);
   /**
    * `phaseHint` captures the in-flight handoff transitions that the
    * engine doesn't model itself: `releasing`, `reacquiring`,
@@ -324,6 +344,10 @@ export function useRobotSession({
         onConnectionAttempt: (info) => {
           if (cancelToken.cancelled) return;
           setConnectionAttempt(info);
+        },
+        onTransportChange: (info) => {
+          if (cancelToken.cancelled) return;
+          setWebrtcTransport(info);
         },
       });
       if (cancelToken.cancelled) {
@@ -441,6 +465,10 @@ export function useRobotSession({
       handleRef.current = null;
       setPhaseHint('idle');
       setHasReachedReady(false);
+      // The next session starts with a fresh transport readout; if
+      // we kept the stale one the badge would show a confusing
+      // "previous run" value during the connecting overlay.
+      setWebrtcTransport(null);
     }
   }, []);
 
@@ -522,6 +550,7 @@ export function useRobotSession({
     toolToastLabel,
     hasReachedReady,
     connectionAttempt,
+    webrtcTransport,
     startConversation,
     stopConversation,
     restartConversation,

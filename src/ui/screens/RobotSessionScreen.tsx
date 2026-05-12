@@ -177,11 +177,12 @@ function ConnectedSession({
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
 
   // Daemon version is fetched (with retry-on-null) by the
-  // `<DaemonStateProvider>` further down and read by
-  // `<IdentityChipBar>` via `useDaemonState()`. Centralising it
-  // there means the same value is shared across every consumer
-  // (the chip bar, future settings panels, etc.) without any
-  // component having to fetch it locally.
+  // `<DaemonStateProvider>` further down and read by the camera
+  // debug overlay (`<CameraDebugOverlay>` inside `<RobotTabView>`)
+  // via `useDaemonState()`. Centralising it there means the same
+  // value is shared across every consumer (overlay, audio cards,
+  // future settings panels, etc.) without any component having to
+  // fetch it locally.
 
   // Power-off / back: drives `session.tearDown()` (gotoSleep + motors
   // disabled + stopSession + disconnect) before navigating away. The
@@ -346,9 +347,14 @@ function ConnectedSession({
        *     with the body content edges.
        *
        * Identity (`IdentityChipBar`) takes the left flex column and
-       * mirrors the discovery-card taxonomy (name + short id on
-       * top, transport chip below). Power-off is the rightmost
-       * glyph, large enough to be a comfortable thumb target -
+       * carries the everyday-grade identity: robot name + physical
+       * transport chip (Wi-Fi / USB) + short hardware id. The
+       * debug-grade signals (daemon version, live WebRTC kind +
+       * IP + bitrate) relocated to a `<CameraDebugOverlay>` inside
+       * the Robot tab's video frame - they were crowding the
+       * topbar on small phones and competing with the power-off
+       * button for thumb space. Power-off is the rightmost glyph,
+       * large enough to be a comfortable thumb target -
        * tapping it is destructive (gotoSleep + motors disabled +
        * stopSession + disconnect) so we want it deliberate but
        * easy to reach. We dropped the `@username` chip: the user

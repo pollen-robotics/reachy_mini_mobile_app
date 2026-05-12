@@ -10,6 +10,10 @@
  *     dedup cache.
  *   - The stop-intent counter (via composed `SessionGuard`).
  *   - The video stream cache (via composed `VideoStreamCache`).
+ *   - The WebRTC transport monitor (via composed `TransportMonitor`).
+ *     Started/stopped automatically by the lifecycle methods so the
+ *     monitor follows the session pc instead of the conversation
+ *     pipeline. See `setTransportListener()` for the host hook.
  *
  * Exposes
  * ───────
@@ -17,6 +21,10 @@
  * sibling modules with the right preconditions and bookkeeping:
  *
  *   - `attachRobot` / `detachRobot`  — bind/unbind the SDK instance.
+ *   - `setTransportListener`         — observe live transport kind +
+ *                                       bitrate. Started/stopped at
+ *                                       the session-pc lifecycle
+ *                                       boundaries below.
  *   - `start`                        — run `startRobotSession()`
  *                                       with retry + expectedStop wrap.
  *   - `wakeUp` / `sleepAndDisable`   — physical robot operations,
@@ -55,6 +63,7 @@ import { createSessionGuard, type SessionGuard } from './session-guard';
 import { createVideoStreamCache, type VideoStreamCache } from './video-cache';
 import { startRobotSession, type StartRobotSessionResult } from './start-session';
 import { wakeRobot, sleepAndDisableRobot } from './physical';
+import { TransportMonitor, type TransportInfo } from './transport-monitor';
 import type { ConversationConnectionAttempt } from '@/features/conversation/engine/types';
 
 export type MotorMode = 'enabled' | 'disabled' | 'gravity_compensation';
@@ -82,6 +91,22 @@ export class RobotSession {
    */
   readonly videoCache: VideoStreamCache = createVideoStreamCache();
 
+  /**
+   * WebRTC transport monitor. Lifecycle-coupled to the session pc:
+   *   - started inside `start()` / `reacquire()` once the SDK pc is
+   *     up (post-`startRobotSession` ok),
+   *   - stopped inside `stop()` / `release()` / `detachRobot()` BEFORE
+   *     the pc gets closed, so the next `getStats()` tick doesn't fire
+   *     against a dead handle.
+   *
+   * The host wires a listener once via `setTransportListener()`; the
+   * class owns all the start/stop bookkeeping internally so the
+   * conversation engine doesn't have to know about session-pc
+   * lifecycle events.
+   */
+  private readonly transportMonitor: TransportMonitor = new TransportMonitor();
+  private transportListener: ((info: TransportInfo) => void) | null = null;
+
   private robot: ReachyMiniInstance | null = null;
   private selectedRobotId: string | null = null;
   private knownRobots: RobotInfo[] = [];
@@ -95,12 +120,45 @@ export class RobotSession {
   }
 
   detachRobot(): void {
+    // Tear down the monitor BEFORE we drop the SDK ref. The SDK's
+    // `disconnect()` (called by the engine right before detachRobot)
+    // closes `_pc` and nulls it - if the monitor's next tick lands
+    // after that we'd hit a `getStats()` on a dead handle.
+    this.stopTransportMonitor();
     this.robot = null;
     this.knownRobots = [];
     this.selectedRobotId = null;
     this.established = false;
     this.lastMotorMode = null;
     this.videoCache.clear();
+  }
+
+  // ─── Transport monitor wiring ───────────────────────────────────
+
+  /**
+   * Register (or clear, by passing `null`) the listener that receives
+   * live transport classification + bitrate updates. The listener is
+   * captured here and replayed to the underlying `TransportMonitor`
+   * every time the session pc lifecycle re-arms the monitor
+   * (`start()` / `reacquire()`).
+   *
+   * Wired once by the engine at boot - we deliberately don't try to
+   * multiplex multiple listeners: there's a single consumer (the
+   * React hook). If we ever need fan-out we'll bolt a tiny emitter
+   * on top of this setter, but YAGNI for now.
+   */
+  setTransportListener(listener: ((info: TransportInfo) => void) | null): void {
+    this.transportListener = listener;
+  }
+
+  private startTransportMonitor(): void {
+    const pc = this.robot?._pc;
+    if (!pc) return;
+    this.transportMonitor.start(pc, this.transportListener);
+  }
+
+  private stopTransportMonitor(): void {
+    this.transportMonitor.stop();
   }
 
   getRobot(): ReachyMiniInstance | null {
@@ -185,6 +243,10 @@ export class RobotSession {
    * `startRobotSession()` (which handles the libnice retry loop +
    * per-attempt timeout). Caller is responsible for any FSM
    * transition (`starting` / `ready` / error reset).
+   *
+   * On success, arms the transport monitor against the freshly-up
+   * `_pc` so the host's listener starts receiving updates as soon as
+   * ICE settles. On failure the monitor stays idle.
    */
   async start(opts: SessionStartOptions = {}): Promise<StartRobotSessionResult> {
     if (!this.robot || !this.selectedRobotId) {
@@ -193,13 +255,15 @@ export class RobotSession {
         reason: new Error('Robot or peer id missing'),
       };
     }
-    return startRobotSession({
+    const result = await startRobotSession({
       robot: this.robot,
       peerId: this.selectedRobotId,
       expectedStop: this.guard.expectedStop,
       onAttempt: opts.onAttempt,
       isCancelled: opts.isCancelled,
     });
+    if (result.ok) this.startTransportMonitor();
+    return result;
   }
 
   /**
@@ -226,9 +290,15 @@ export class RobotSession {
    * `expectedStop`-wrapped `robot.stopSession()`. Marks the stop as
    * intentional so the engine's `sessionStopped` listener doesn't
    * run its unsolicited-drop recovery path on top.
+   *
+   * Stops the transport monitor first: `stopSession()` doesn't itself
+   * close `_pc` (only `disconnect()` does), but the candidate pair
+   * goes away with the session so polling `getStats()` after this
+   * would only emit `checking` forever - cleaner to just freeze it.
    */
   async stop(): Promise<void> {
     if (!this.robot) return;
+    this.stopTransportMonitor();
     await this.guard.expectedStop(() => this.robot!.stopSession());
   }
 
@@ -247,15 +317,17 @@ export class RobotSession {
    * `'released'` after the conversation cleanup it does on its side.
    *
    * Sequence:
-   *   1. Mark established=false so re-entries see "no live session".
-   *   2. Reset motor mode cache (the iframe consumer may flip it).
-   *   3. Stop the session via expectedStop wrap.
-   *   4. Disconnect to free central's producer subscription.
+   *   1. Stop the transport monitor (the pc is about to die).
+   *   2. Mark established=false so re-entries see "no live session".
+   *   3. Reset motor mode cache (the iframe consumer may flip it).
+   *   4. Stop the session via expectedStop wrap.
+   *   5. Disconnect to free central's producer subscription.
    *
    * No-op if there is no established session.
    */
   async release(): Promise<void> {
     if (!this.robot || !this.established) return;
+    this.stopTransportMonitor();
     this.established = false;
     this.lastMotorMode = null;
     const t0 = performance.now();

@@ -51,6 +51,20 @@
  * We send the token in a 3-message burst (immediate / +100ms /
  * +500ms) to handle the race where the iframe's `onLoad` fires
  * before its `main.js` has installed the listener.
+ *
+ * Theme handover via postMessage
+ * ──────────────────────────────
+ * The iframe URL carries `?theme=dark|light` at mount time, but
+ * that only handles the initial paint. If the user toggles the
+ * phone's system theme while the iframe is still open, the shell
+ * re-renders (MUI's `useTheme()` reflects the change), and we push
+ * the new mode to the iframe via:
+ *
+ *     { source: 'reachy-mini-shell', kind: 'theme', theme: 'dark'|'light' }
+ *
+ * Apps that opt-in install a listener mirroring the token one and
+ * flip `data-theme` on `<html>`. Apps that don't simply stay on
+ * the theme they got from the query param at load - no regression.
  */
 import {
   Box,
@@ -200,6 +214,44 @@ export default function AppIframeOverlay({
     }
   }, [hfToken, targetOrigin]);
 
+  /**
+   * Push the shell's current theme to the iframe so apps that
+   * opt-in can flip their palette live when the user toggles the
+   * system theme. See the file-level "Theme handover via
+   * postMessage" comment for the receiving convention.
+   */
+  const sendThemeToIframe = useCallback(
+    (mode: 'dark' | 'light'): void => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        win.postMessage(
+          {
+            source: 'reachy-mini-shell',
+            kind: 'theme',
+            theme: mode,
+          },
+          targetOrigin,
+        );
+      } catch (err) {
+        // Failing to ship a theme update is purely cosmetic - the
+        // iframe stays on whatever palette it had. Log + move on.
+        console.warn('[apps] theme postMessage failed:', err);
+      }
+    },
+    [targetOrigin],
+  );
+
+  // Propagate runtime theme changes to the iframe (the user toggled
+  // the phone's system theme while the iframe was already open).
+  // The initial paint is already covered by the `?theme=` query
+  // param baked into the URL + the burst sent on iframe `onLoad`,
+  // so this effect only matters AFTER the iframe is ready.
+  useEffect(() => {
+    if (loadPhase !== 'ready') return;
+    sendThemeToIframe(isDark ? 'dark' : 'light');
+  }, [isDark, loadPhase, sendThemeToIframe]);
+
   // Clean up any pending burst timers on unmount or when the embed
   // URL changes (which would invalidate the iframe contentWindow).
   useEffect(() => {
@@ -324,9 +376,19 @@ export default function AppIframeOverlay({
               // re-sends close that race. Apps that aren't
               // listening simply ignore the messages.
               sendTokenToIframe();
+              // Same race exists for the theme message. The
+              // `?theme=` query param already gave the iframe its
+              // initial palette at boot, but we re-assert it here
+              // so apps that flip on `data-theme` get the value
+              // even if their bootstrap script reads the URL
+              // before our theme params resolve.
+              const currentTheme: 'dark' | 'light' = isDark ? 'dark' : 'light';
+              sendThemeToIframe(currentTheme);
               burstTimersRef.current.push(
                 window.setTimeout(sendTokenToIframe, 100),
                 window.setTimeout(sendTokenToIframe, 500),
+                window.setTimeout(() => sendThemeToIframe(currentTheme), 100),
+                window.setTimeout(() => sendThemeToIframe(currentTheme), 500),
               );
             }}
             style={{
