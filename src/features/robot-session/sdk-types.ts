@@ -1,6 +1,38 @@
 /**
  * Type declarations for the ReachyMini SDK loaded from a CDN script tag in
  * index.html. We only expose what we actually consume here.
+ *
+ * The SDK is an `EventTarget`; listeners are wired via `addEventListener`.
+ * The events the mobile shell consumes are:
+ *
+ *   - `robotsChanged`    { robots: RobotInfo[] }
+ *   - `sessionStopped`   { reason: string }
+ *   - `videoTrack`       { track: MediaStreamTrack; stream: MediaStream }
+ *   - `disconnected`     { reason: string }
+ *   - `error`            { source: 'signaling' | 'webrtc' | 'robot'; error: Error | string }
+ *
+ * Resilience events (added in the SDK's grace + network awareness pass —
+ * see `vendor/reachy-mini.js` for the full payloads):
+ *
+ *   - `iceStateChange`   { state: RTCIceConnectionState }
+ *                          Fires on every PC ICE transition. `disconnected`
+ *                          and `failed` are debounced internally before
+ *                          escalating to `error`.
+ *   - `networkOnline`    {}    forwarded from `window.online`
+ *   - `networkOffline`   {}    forwarded from `window.offline`
+ *   - `networkChange`    { effectiveType?: string; downlink?: number;
+ *                          rtt?: number; saveData?: boolean }
+ *                          forwarded from `navigator.connection.change`
+ *                          on engines that ship NetworkInformation
+ *                          (Chrome / Android WebView; absent on Safari /
+ *                          iOS WKWebView, which is why we *also* listen
+ *                          to `online`/`offline`).
+ *
+ * We intentionally don't strong-type these via `addEventListener`
+ * overloads: the SDK is a runtime-loaded vendored bundle, and the
+ * `CustomEvent<…>` casts at call sites stay readable without an
+ * extra layer of declaration merging. If/when the SDK is published
+ * as a typed package, this is the natural place to upgrade.
  */
 
 export interface RobotInfo {

@@ -1446,12 +1446,21 @@ function wireRobot(): void {
   // effects. Same probe set as the embedded conversation Space's
   // [doStart][probe] block - using the same vocabulary so a single
   // grep across both consoles shows the full handoff trace.
+  //
+  // Includes the resilience-pass events (`iceStateChange`,
+  // `networkOnline`, `networkOffline`, `networkChange`) so a single
+  // grep for `[shell-webrtc][probe]` surfaces both signaling-level
+  // and transport-level transitions in causal order.
   for (const name of [
     "stateChanged",
     "sessionStarted",
     "sessionStopped",
     "sessionRejected",
     "peerStatusChanged",
+    "iceStateChange",
+    "networkOnline",
+    "networkOffline",
+    "networkChange",
     "error",
   ] as const) {
     robot.addEventListener(name, (event) => {
@@ -1555,6 +1564,76 @@ function wireRobot(): void {
   robot.addEventListener("error", (event) => {
     const detail = (event as CustomEvent<{ source: string; error: Error | string }>).detail;
     console.error(`[robot:${detail.source}]`, detail.error);
+  });
+
+  // ─── Resilience hooks ────────────────────────────────────────────────
+  //
+  // The SDK debounces `iceConnectionState === 'disconnected'` / `'failed'`
+  // internally before surfacing an `error` event, and forwards platform
+  // network signals as scoped events. We don't drive the FSM from any of
+  // these: a real teardown still arrives as `error` / `sessionStopped`,
+  // which the listeners above already route to `onFatalError`. What we
+  // DO is probe the data channel on signals that suggest the transport
+  // just changed underfoot (Wi-Fi → 4G, AP roam, network coming back),
+  // because ICE on its own can stay nominally "connected" while the new
+  // path silently blackholes packets. The probe is the same one the
+  // background-resilience tab uses on visibility return - it sends a
+  // single neutral-antenna write and lets `dc-health` escalate to a
+  // fatal session error if the channel is actually dead.
+
+  // Probe the link only when there's a conversation in flight. Outside
+  // those states (idle, error, bringing up) probing is either pointless
+  // or actively wrong (e.g. would race the boot chain).
+  const isConversationActive = (): boolean =>
+    currentState === "listening" ||
+    currentState === "user-speaking" ||
+    currentState === "processing" ||
+    currentState === "ai-speaking";
+
+  // ICE transitions are observed for debugging only - the SDK's
+  // grace window already absorbs spurious blips, and a sustained
+  // failure surfaces as a separate `error` event (handled above).
+  robot.addEventListener("iceStateChange", (event) => {
+    const detail = (event as CustomEvent<{ state: RTCIceConnectionState }>).detail;
+    console.info(`[conversation-engine] ice=${detail.state}`);
+  });
+
+  // `offline` doesn't need a side effect: ICE will follow within
+  // seconds and the SDK's `error` flow will take it from there. We
+  // log so the timeline shows whether the OS / browser thinks we're
+  // online at the moment ICE drops.
+  robot.addEventListener("networkOffline", () => {
+    console.info("[conversation-engine] network=offline");
+  });
+
+  // `online` is the cheap "are we back?" signal. Probe the DC so we
+  // discover a dead path in ~3 s (via dc-health's failure counter)
+  // instead of waiting for the next motion write to fail.
+  robot.addEventListener("networkOnline", () => {
+    console.info("[conversation-engine] network=online");
+    if (isConversationActive()) {
+      void probeRobotLink();
+    }
+  });
+
+  // `change` fires on transport-class swaps (Wi-Fi → 4G, 4G → Wi-Fi,
+  // captive-portal sign-in). `online` typically does NOT fire in
+  // those cases because the navigator never went fully offline -
+  // hence the dedicated probe here.
+  robot.addEventListener("networkChange", (event) => {
+    const detail = (event as CustomEvent<{
+      effectiveType?: string;
+      downlink?: number;
+      rtt?: number;
+    }>).detail;
+    console.info(
+      `[conversation-engine] network=change ` +
+        `effective=${detail.effectiveType ?? "?"} ` +
+        `downlink=${detail.downlink ?? "?"} rtt=${detail.rtt ?? "?"}`,
+    );
+    if (isConversationActive()) {
+      void probeRobotLink();
+    }
   });
 }
 

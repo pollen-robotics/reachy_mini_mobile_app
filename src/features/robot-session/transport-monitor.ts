@@ -119,6 +119,16 @@ export class TransportMonitor {
   private async tick(): Promise<void> {
     const pc = this.pc;
     if (!pc) return;
+    // `getStats()` on a closed PC rejects with `InvalidStateError` on
+    // some engines (Safari, older Chromium) and resolves with empty
+    // stats on others. Either way it's noise: the host always calls
+    // `stop()` on teardown, but ticks already queued before that can
+    // still fire one last time - and now that the SDK retains the
+    // PC briefly across the ICE grace window, the race is slightly
+    // wider. Bail early when we know the underlying PC is dead.
+    if (pc.connectionState === 'closed' || pc.signalingState === 'closed') {
+      return;
+    }
     try {
       const stats = await pc.getStats();
       const bps = this.sampleBitrate(stats);
