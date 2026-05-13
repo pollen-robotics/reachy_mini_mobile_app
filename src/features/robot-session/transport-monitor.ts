@@ -116,6 +116,45 @@ export class TransportMonitor {
     this.prevSampleTs = 0;
   }
 
+  /**
+   * Force the published transport kind back to `'checking'` without
+   * waiting for the next `getStats()` tick to confirm it. Intended
+   * for the engine to call when it observes an external degradation
+   * signal (`iceStateChange === 'disconnected' | 'failed'`,
+   * `networkOffline`) - those signals are deterministic, whereas
+   * `getStats()` behaviour during a degrading link is browser-
+   * specific (some keep the candidate-pair as `succeeded` for a
+   * while, some drop it immediately, Safari sometimes returns
+   * empty stats). Forcing `checking` gives the UI a stable
+   * "we're not actually streaming right now" signal.
+   *
+   * Side-effects:
+   *   - Resets `lastBps` so the next published value isn't
+   *     "stuck at 4 Mbps" while the link is dying.
+   *   - Resets the byte-counter snapshot so the bitrate measurement
+   *     restarts cleanly from the next tick (otherwise we'd diff
+   *     against stale, pre-degradation counters).
+   *   - Bypasses the dedup so the listener fires even if we were
+   *     already on `'checking'`.
+   *
+   * Safe to call when not started (no listener / no pc) - it's a
+   * no-op in that case. Idempotent.
+   */
+  markChecking(): void {
+    if (!this.listener) return;
+    this.lastKind = 'checking';
+    this.lastBps = null;
+    this.lastRemoteIp = null;
+    this.prevBytesSent = -1;
+    this.prevBytesRecv = -1;
+    this.prevSampleTs = 0;
+    try {
+      this.listener({ kind: 'checking', bps: null, remoteIp: null });
+    } catch (err) {
+      console.warn('[transport] onTransportChange listener threw:', err);
+    }
+  }
+
   private async tick(): Promise<void> {
     const pc = this.pc;
     if (!pc) return;

@@ -1570,19 +1570,28 @@ function wireRobot(): void {
   //
   // The SDK debounces `iceConnectionState === 'disconnected'` / `'failed'`
   // internally before surfacing an `error` event, and forwards platform
-  // network signals as scoped events. We don't drive the FSM from any of
-  // these: a real teardown still arrives as `error` / `sessionStopped`,
-  // which the listeners above already route to `onFatalError`. What we
-  // DO is probe the data channel on signals that suggest the transport
-  // just changed underfoot (Wi-Fi → 4G, AP roam, network coming back),
-  // because ICE on its own can stay nominally "connected" while the new
-  // path silently blackholes packets. The probe is the same one the
-  // background-resilience tab uses on visibility return - it sends a
-  // single neutral-antenna write and lets `dc-health` escalate to a
-  // fatal session error if the channel is actually dead.
+  // network signals as scoped events. A *real* teardown still arrives as
+  // `error` / `sessionStopped`, which the listeners above already route
+  // to `onFatalError`. What we DO from these resilience signals is:
+  //
+  //   1. **Gate the pose dispatcher** while the link is degraded so
+  //      the wobbler's 30 Hz writes don't pile up in the SCTP send
+  //      buffer (which produces a jerk when the link comes back).
+  //      Re-uses the dispatcher's existing backpressure plumbing -
+  //      same shape, just an external trigger.
+  //   2. **Mark the transport monitor as `checking`** so the UI's
+  //      "we're streaming" indicator dégrades immediately, without
+  //      waiting for the next `getStats()` tick (which can stay
+  //      stuck on stale, pre-degradation data for up to 1.5 s).
+  //   3. **Probe the data channel** when the transport just changed
+  //      underfoot (Wi-Fi → 4G, AP roam, network coming back) - ICE
+  //      can stay nominally "connected" while the new path silently
+  //      blackholes packets, so the probe (one neutral-antenna
+  //      write) lets `dc-health` escalate to a fatal error in ~3 s
+  //      instead of waiting for the next motion write to fail.
 
-  // Probe the link only when there's a conversation in flight. Outside
-  // those states (idle, error, bringing up) probing is either pointless
+  // Probe / gate only when there's a conversation in flight. Outside
+  // those states (idle, error, bringing up) gating is either pointless
   // or actively wrong (e.g. would race the boot chain).
   const isConversationActive = (): boolean =>
     currentState === "listening" ||
@@ -1590,36 +1599,62 @@ function wireRobot(): void {
     currentState === "processing" ||
     currentState === "ai-speaking";
 
-  // ICE transitions are observed for debugging only - the SDK's
-  // grace window already absorbs spurious blips, and a sustained
-  // failure surfaces as a separate `error` event (handled above).
+  // Idempotent helpers so the four listeners below stay declarative.
+  // The dispatcher / monitor methods are themselves idempotent, but
+  // wrapping makes the call sites read as a single intent.
+  const enterDegraded = (cause: string): void => {
+    poseDispatcher.setSendGate(true);
+    session.markTransportChecking();
+    console.info(`[conversation-engine] transport-degraded cause=${cause}`);
+  };
+  const exitDegraded = (cause: string): void => {
+    if (!poseDispatcher.isGated()) return;
+    poseDispatcher.setSendGate(false);
+    console.info(`[conversation-engine] transport-recovered cause=${cause}`);
+  };
+
+  // ICE transitions drive degraded mode deterministically. The SDK's
+  // grace window already absorbs the *escalation to fatal*; this
+  // listener is about the user-visible "we're not actually streaming
+  // right now" state during the grace window, not about teardown.
   robot.addEventListener("iceStateChange", (event) => {
     const detail = (event as CustomEvent<{ state: RTCIceConnectionState }>).detail;
     console.info(`[conversation-engine] ice=${detail.state}`);
+    if (detail.state === "disconnected" || detail.state === "failed") {
+      if (isConversationActive()) enterDegraded(`ice=${detail.state}`);
+      return;
+    }
+    if (detail.state === "connected" || detail.state === "completed") {
+      exitDegraded(`ice=${detail.state}`);
+    }
   });
 
-  // `offline` doesn't need a side effect: ICE will follow within
-  // seconds and the SDK's `error` flow will take it from there. We
-  // log so the timeline shows whether the OS / browser thinks we're
-  // online at the moment ICE drops.
+  // `offline` is deterministic - the OS / browser just told us the
+  // network is gone. Gate writes immediately; ICE will follow within
+  // seconds and the SDK's debounce takes over for the fatal escalation.
   robot.addEventListener("networkOffline", () => {
     console.info("[conversation-engine] network=offline");
+    if (isConversationActive()) enterDegraded("network=offline");
   });
 
-  // `online` is the cheap "are we back?" signal. Probe the DC so we
-  // discover a dead path in ~3 s (via dc-health's failure counter)
-  // instead of waiting for the next motion write to fail.
+  // `online` is the cheap "are we back?" signal. Ungate writes
+  // optimistically (if the path is still dead, dc-health will catch
+  // it via the probe below) and verify the DC is reachable.
   robot.addEventListener("networkOnline", () => {
     console.info("[conversation-engine] network=online");
+    exitDegraded("network=online");
     if (isConversationActive()) {
       void probeRobotLink();
     }
   });
 
   // `change` fires on transport-class swaps (Wi-Fi → 4G, 4G → Wi-Fi,
-  // captive-portal sign-in). `online` typically does NOT fire in
-  // those cases because the navigator never went fully offline -
-  // hence the dedicated probe here.
+  // captive-portal sign-in). `online` typically does NOT fire in those
+  // cases because the navigator never went fully offline - hence the
+  // dedicated probe. We do NOT gate writes here: the transport changed
+  // but it didn't *go away*, and gating would needlessly mute the
+  // robot during a brief roam. The probe still gives us a ~3 s
+  // escalation if the new path is actually dead.
   robot.addEventListener("networkChange", (event) => {
     const detail = (event as CustomEvent<{
       effectiveType?: string;
