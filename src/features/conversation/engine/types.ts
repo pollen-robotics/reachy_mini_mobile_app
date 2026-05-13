@@ -340,6 +340,23 @@ export interface ConversationEngineHandle {
   setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
 
   /**
+   * Push a body yaw target (degrees, absolute) to the robot. Thin
+   * pass-through to the SDK's `setBodyYawDeg` - non-blocking, no
+   * completion event. Returns `true` when the command was queued
+   * onto the DataChannel, `false` if the engine isn't ready or the
+   * DC is down. Non-throwing.
+   *
+   * Used by the camera-tab joystick when the head reaches its yaw
+   * limit and the user keeps pushing in the same direction: at that
+   * point the velocity controller spills over into the base so the
+   * user can keep scanning the room past the head's hard stop. Like
+   * `setHeadRpyDeg`, the conversation pipeline does NOT use this
+   * path - it routes body_yaw targets through the pose dispatcher
+   * so the two surfaces can't fight.
+   */
+  setBodyYawDeg: (yawDeg: number) => boolean;
+
+  /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
    * stream over the WebRTC data channel. Thin pass-through to the
    * SDK's `subscribeLogs`. Returns an `unsubscribe()` callback that

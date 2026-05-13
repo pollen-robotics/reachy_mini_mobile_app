@@ -64,10 +64,11 @@ export class ReachyMini extends EventTarget {
     head?: number[];
     antennas?: [number, number];
     body_yaw?: number;
-  }): void;
-  setHeadOrientation(rollDeg: number, pitchDeg: number, yawDeg: number): void;
-  setAntennasDeg(rightDeg: number, leftDeg: number): void;
-  setBodyYawDeg(yawDeg: number): void;
+  }): boolean;
+  setHeadOrientation(rollDeg: number, pitchDeg: number, yawDeg: number): boolean;
+  setHeadRpyDeg(rollDeg: number, pitchDeg: number, yawDeg: number): boolean;
+  setAntennasDeg(rightDeg: number, leftDeg: number): boolean;
+  setBodyYawDeg(yawDeg: number): boolean;
 
   setMotorMode(mode: MotorMode): void;
 

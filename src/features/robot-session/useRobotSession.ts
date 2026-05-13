@@ -197,6 +197,29 @@ export interface RobotSessionHandle {
   setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
 
   /**
+   * Push an absolute body yaw target (degrees) to the robot. Thin
+   * pass-through to the engine's `setBodyYawDeg`. Used by the
+   * camera-tab joystick when the head saturates and the user keeps
+   * pushing - the velocity controller spills overflow yaw demand
+   * into the base so the user can scan the room past the head's
+   * hard stop. Never used while a conversation is active (the
+   * dispatcher owns body_yaw too).
+   *
+   * IMPORTANT: the daemon's safe-IK clamps any body_yaw we send to
+   * keep `|head_yaw_world - body_yaw| ≤ 65°`. The joystick controller
+   * stays under that envelope by tracking the head yaw RELATIVE to the
+   * base (`headYawRel`) and clamping it inside the constants, then
+   * composing the world-frame head command as `headYawRel + bodyYaw`
+   * - so the relative twist is constant by construction and the
+   * IK never has to rewrite our target. See
+   * `useHeadVelocityControl.ts` for the full picture.
+   *
+   * Returns `true` when the command was queued, `false` if the
+   * engine isn't ready or the DC is down. Non-throwing.
+   */
+  setBodyYawDeg: (yawDeg: number) => boolean;
+
+  /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
    * stream over the WebRTC data channel. Returns an `unsubscribe()`
    * callback that's safe to call more than once.
@@ -531,6 +554,10 @@ export function useRobotSession({
     [],
   );
 
+  const setBodyYawDeg = useCallback((yawDeg: number): boolean => {
+    return handleRef.current?.setBodyYawDeg(yawDeg) ?? false;
+  }, []);
+
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
       const handle = handleRef.current;
@@ -569,6 +596,7 @@ export function useRobotSession({
     getMicLevel,
     playSound,
     setHeadRpyDeg,
+    setBodyYawDeg,
     subscribeLogs,
   };
 }
