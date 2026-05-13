@@ -18,6 +18,20 @@
  * demo (`huggingface.co/spaces/cduss/webrtc_example`) for the canonical
  * pattern this hook implements.
  *
+ * `atan2` wrap caveat
+ * ───────────────────
+ * `head_yaw_world` is shipped as one of the RPY components of a
+ * rotation matrix. The daemon recovers it with `atan2`, which
+ * returns angles in `[-π, +π]`. If we ever command an absolute
+ * world yaw above 180°, the daemon decodes a value wrapped by ±360°
+ * and its safe-IK uses the wrapped value for the `|head - body|`
+ * comparison - producing a spurious "out of envelope" rewrite of
+ * `body_yaw` to the opposite side of the range. The user perceives
+ * this as the base flipping right before it hits the requested
+ * extreme. To avoid it we cap `HEAD_YAW_LIMIT_DEG + BODY_YAW_LIMIT_DEG`
+ * under 180° in `constants.ts`; the world yaw we send is guaranteed
+ * to stay strictly inside the `atan2` codomain.
+ *
  * The wire-level command is:
  *
  *     head_yaw_world = headYawRel + bodyYaw

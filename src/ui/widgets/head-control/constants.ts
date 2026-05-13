@@ -72,18 +72,37 @@ export const HEAD_PITCH_MAX_DEG = 45.84; // 0.8 rad
 export const HEAD_PITCH_MIN_DEG = -45.84; // -0.8 rad
 
 /**
- * Soft clamp on the integrated body yaw. Reachy Mini's analytical
- * kinematics caps `max_body_yaw` at 160° (`np.deg2rad(160)`), and
- * the desktop controller tab uses the same ±160° envelope. We
- * mirror it verbatim: any tighter cap on the mobile side would just
- * surface as a confusing "the joystick stops here but the desktop
- * can keep going" inconsistency.
+ * Soft clamp on the integrated body yaw. The robot's analytical
+ * kinematics caps `max_body_yaw` at 160° mechanically, but we cap
+ * tighter HERE because of an `atan2` quirk in the daemon's matrix
+ * decode path:
  *
- * Combined with the head's ±68.75° yaw, the user gets ±228° of
- * combined scan range on a single thumb - more than enough to look
- * directly behind the robot in either direction.
+ * In tank-style mode we send `head_yaw_world = headYawRel + bodyYaw`
+ * as one of the RPY components of a rotation matrix. The daemon
+ * recovers the yaw from that matrix with `atan2`, which by
+ * definition only returns angles in `[-π, +π]` (i.e. ±180°). So if
+ * we ever command `|head_yaw_world| > 180°`, the daemon decodes a
+ * yaw that's wrapped by ±360° relative to what we sent. Its safe-IK
+ * pass then compares this wrapped yaw to `bodyYaw` for the relative-
+ * twist check; the brute subtraction sees a ±300° delta where the
+ * geometric relative is actually ±60°, exceeds the 65° clamp, and
+ * silently rewrites our `body_yaw` to a value far from what we
+ * asked - which the user perceives as the base flipping to the
+ * opposite side just before it hits the requested extreme.
+ *
+ * Cap: `HEAD_YAW_LIMIT_DEG + BODY_YAW_LIMIT_DEG ≤ 180°` (with a
+ * 5° margin for safety). With `HEAD_YAW_LIMIT_DEG = 60°` this gives
+ * `BODY_YAW_LIMIT_DEG ≤ 115°`. The combined head + body reach in
+ * each direction stays at ±175°, plenty for full room scanning,
+ * and the `atan2` wrap is impossible to hit by construction.
+ *
+ * If we ever want to push the base past ±115° we'll need to either
+ * shrink `HEAD_YAW_LIMIT_DEG` further, or send the head pose as a
+ * raw 4×4 matrix via `setTarget` and have the daemon use the matrix
+ * directly (without an intermediate `atan2` decode) for the safe-IK
+ * comparison. Neither is needed for the joystick UX today.
  */
-export const BODY_YAW_LIMIT_DEG = 160;
+export const BODY_YAW_LIMIT_DEG = 115;
 
 /**
  * Maximum angular velocity at full joystick deflection (after the
@@ -108,9 +127,9 @@ export const MAX_PITCH_DEG_PER_SEC = 40;
  *     not by raw angular velocity - a calmer sweep reads as
  *     "the robot is scanning" rather than "the robot is panicking".
  *
- * 50 °/s sweeps the ±150° range in ~6 s of held maximum push, which
- * matches the natural "look around the room" cadence of a human
- * head turn.
+ * 50 °/s sweeps the ±115° range in ~4.6 s of held maximum push,
+ * which matches the natural "look around the room" cadence of a
+ * human head turn.
  */
 export const MAX_BODY_YAW_DEG_PER_SEC = 50;
 
