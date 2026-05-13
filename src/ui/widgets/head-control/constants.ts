@@ -38,15 +38,22 @@
  */
 
 /**
- * Soft clamps applied to the integrated yaw / pitch state. The
- * daemon also clamps to its own physical limits, but doing it here
- * means the visual feedback of the joystick reflects "I'm at the
- * edge" instead of silently sending unreachable targets.
+ * Soft clamps applied to the integrated yaw / pitch / body-yaw
+ * state. The daemon also clamps to its own physical limits, but
+ * doing it here means the visual feedback of the joystick reflects
+ * "I'm at the edge" instead of silently sending unreachable targets.
  *
- * Conservative values pending HW characterisation: the actual head
- * mechanism on Reachy Mini has a wider yaw range, but capping at
- * ±50° keeps the user in a region where the head IK is comfortable
- * and we don't wash through the antennas.
+ * Values aligned with the desktop app's controller tab
+ * (`reachy_mini_desktop_app/src/utils/inputConstants.ts ::
+ *  ROBOT_POSITION_RANGES`) so both surfaces agree on what's
+ * reachable. The desktop has been driving real hardware since v0
+ * with these bounds; mirroring them here means the mobile joystick
+ * inherits the same ground-truth envelope:
+ *
+ *   - head yaw   : ±1.2 rad → ±68.75°
+ *   - head pitch : ±0.8 rad → ±45.84°  (symmetric, unlike our
+ *                                       prior conservative asymmetric clamp)
+ *   - body yaw   : ±(160° in rad) → ±160°
  *
  * Pitch bounds reflect the robot-frame sign convention documented
  * above (`pitch > 0` = chin down). `MAX` is the most-negative value
@@ -55,21 +62,23 @@
  * than UP/DOWN labels, which would just push the convention
  * confusion one level deeper.
  */
-export const HEAD_YAW_LIMIT_DEG = 50;
-export const HEAD_PITCH_MAX_DEG = 25;
-export const HEAD_PITCH_MIN_DEG = -20;
+export const HEAD_YAW_LIMIT_DEG = 68.75; // 1.2 rad, matches desktop ROBOT_POSITION_RANGES.YAW
+export const HEAD_PITCH_MAX_DEG = 45.84; // 0.8 rad
+export const HEAD_PITCH_MIN_DEG = -45.84; // -0.8 rad
 
 /**
- * Soft clamp on the integrated body yaw. The Reachy Mini base can
- * mechanically reach ±160° (per the analytical kinematics
- * `max_body_yaw=np.deg2rad(160)`); we leave a 10° safety margin so
- * a fast push followed by inertia / network latency doesn't slam
- * into the absolute mechanical stop or stretch the internal cable
- * runs. Combined with the head's ±50° yaw, the user gets ±200° of
- * combined scan range - enough to look behind the robot in either
- * direction.
+ * Soft clamp on the integrated body yaw. Reachy Mini's analytical
+ * kinematics caps `max_body_yaw` at 160° (`np.deg2rad(160)`), and
+ * the desktop controller tab uses the same ±160° envelope. We
+ * mirror it verbatim: any tighter cap on the mobile side would just
+ * surface as a confusing "the joystick stops here but the desktop
+ * can keep going" inconsistency.
+ *
+ * Combined with the head's ±68.75° yaw, the user gets ±228° of
+ * combined scan range on a single thumb - more than enough to look
+ * directly behind the robot in either direction.
  */
-export const BODY_YAW_LIMIT_DEG = 150;
+export const BODY_YAW_LIMIT_DEG = 160;
 
 /**
  * Maximum angular velocity at full joystick deflection (after the
