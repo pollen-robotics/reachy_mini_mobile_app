@@ -243,12 +243,20 @@ export function useHeadVelocityControl({
     // the user just sees the head clamp and nothing else move,
     // which is the bug this whole feature is supposed to fix.
     //
-    // We fire the command unconditionally on every enable transition
-    // (cheap one-shot DataChannel message). The cleanup below restores
-    // the default so any auto-motion that takes over after the joystick
-    // (wobbler, dances, voice tools) keeps the safe relative-twist
-    // clamp.
-    setAutomaticBodyYawEnabledRef.current(false);
+    // We retry with a short exponential backoff (50/100/200/400/800 ms)
+    // because the DataChannel might still be in a transient "opening"
+    // state when this effect first fires - even though `enabled` only
+    // flips true on `hasReachedReady`, the SDK's `_dc.readyState ===
+    // 'open'` test can briefly disagree right after a session
+    // re-acquire. The retry caps at ~1.5 s of total backoff, which
+    // is well below any realistic moment the user could start dragging.
+    const sendAutoOff = (attempt: number): void => {
+      const ok = setAutomaticBodyYawEnabledRef.current(false);
+      if (ok || attempt >= 5) return;
+      const delay = 50 * Math.pow(2, attempt);
+      window.setTimeout(() => sendAutoOff(attempt + 1), delay);
+    };
+    sendAutoOff(0);
 
     const dtSec = CONTROL_TICK_MS / 1000;
 
@@ -355,8 +363,17 @@ export function useHeadVelocityControl({
       // any transition out of the enabled state (tab change, engine
       // pause, unmount). The cleanup fires BEFORE the unmount recenter
       // - that's fine: the recenter still commands `body_yaw=0`, which
-      // is well inside the relative-twist envelope anyway.
-      setAutomaticBodyYawEnabledRef.current(true);
+      // is well inside the relative-twist envelope anyway. Same retry
+      // logic as the take-over above, in case the DC is mid-teardown
+      // when the cleanup fires (we still want the daemon to land in
+      // its default safe mode for whatever runs after).
+      const sendAutoOn = (attempt: number): void => {
+        const ok = setAutomaticBodyYawEnabledRef.current(true);
+        if (ok || attempt >= 5) return;
+        const delay = 50 * Math.pow(2, attempt);
+        window.setTimeout(() => sendAutoOn(attempt + 1), delay);
+      };
+      sendAutoOn(0);
     };
   }, [enabled, deflectionRef]);
 
