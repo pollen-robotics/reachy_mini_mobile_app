@@ -81,7 +81,11 @@ interface RobotTabViewProps {
    */
   session: Pick<
     RobotSessionHandle,
-    'attachVideo' | 'setHeadRpyDeg' | 'subscribeLogs' | 'webrtcTransport'
+    | 'attachVideo'
+    | 'setHeadRpyDeg'
+    | 'setBodyYawDeg'
+    | 'subscribeLogs'
+    | 'webrtcTransport'
   >;
   /**
    * Becomes `true` once the engine has reached `ready` for the

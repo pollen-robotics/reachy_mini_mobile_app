@@ -1,9 +1,10 @@
 /**
- * Head velocity controller.
+ * Head + body velocity controller.
  *
  * Translates a normalised joystick deflection (`[-1, 1]^2`) into a
- * stream of `setHeadRpyDeg` commands at a bounded rate, integrating
- * the deflection into a yaw/pitch state clamped to soft limits.
+ * stream of `setHeadRpyDeg` + `setBodyYawDeg` commands at a bounded
+ * rate, integrating the deflection into a yaw/pitch state for the
+ * head and a yaw state for the base, each clamped to soft limits.
  *
  * Architecture
  * ────────────
@@ -14,10 +15,14 @@
  *   quadratic curve  + sign mapping  +  scale by MAX *_DEG_PER_SEC
  *           │
  *           ▼
- *   integrate over 50 ms  →  clamp to soft limits  →  yaw/pitch state
+ *   integrate head yaw/pitch  →  clamp to head soft limits
  *           │
  *           ▼
- *   send `setHeadRpyDeg` if delta exceeds threshold
+ *   if head yaw is saturated AND joystick still pushes that way:
+ *     integrate body yaw  →  clamp to body soft limit
+ *           │
+ *           ▼
+ *   send `setHeadRpyDeg`  / `setBodyYawDeg` when delta exceeds threshold
  *
  * Why velocity-based (not position-based)
  * ───────────────────────────────────────
@@ -30,32 +35,56 @@
  * integrated state stops the head at the physical edge without
  * locking the joystick. Standard FPS / drone idiom.
  *
+ * Body-yaw overflow
+ * ─────────────────
+ * The head only debattes ±50° in yaw - not enough to scan a whole
+ * room without losing what's behind the robot. Rather than expose a
+ * second control surface for the base, we treat the joystick as a
+ * single "rotate the gaze" command and let the demand spill over:
+ *
+ *   - small / medium deflection → head moves, base idle
+ *   - full deflection + held    → head saturates fast at its limit,
+ *                                 base starts rotating in the same
+ *                                 direction
+ *
+ * Concretely we check whether the head yaw integration just landed
+ * on its clamp AND the joystick is still pushing toward the saturated
+ * side; if so, we apply a separate `MAX_BODY_YAW_DEG_PER_SEC` curve
+ * to the base. This keeps the natural pattern "head turns first, body
+ * turns when head can't turn any further" that humans use when scanning.
+ *
  * Quadratic curve
  * ───────────────
  * `velocity ∝ deflection²` (sign preserved). At the centre of the
  * stick the head barely moves (precision); near the edge it
  * sweeps fast (coverage). Same maths the desktop's `useMouseDrift`
- * would use for camera control.
+ * would use for camera control. Body-yaw overflow uses the same
+ * curve on the X axis - no need to bias toward "near max" because
+ * the saturation gate already implies the user is at high deflection.
  *
  * Recenter on unmount
  * ───────────────────
  * When the host unmounts the controller (typically because the
  * user navigated away from the Robot tab), the hook spawns a
  * fire-and-forget rAF loop that interpolates the last commanded
- * yaw/pitch back to `(0, 0)` over `RECENTER_DURATION_MS`. The
- * loop survives the React unmount: it captures the session
- * setter and the initial state into local closures, then runs to
- * completion independently. This is the v1 implementation of "head
- * recenters as you leave the tab" - cheap, no extra plumbing
- * needed in `useRobotSession`.
+ * head yaw/pitch AND body yaw back to `(0, 0)` over
+ * `RECENTER_DURATION_MS`. The loop survives the React unmount: it
+ * captures the session setters and the initial state into local
+ * closures, then runs to completion independently. Recentering
+ * the body too matches the "leave the robot in a neutral pose for
+ * the next tab" promise - otherwise the conversation tab would
+ * inherit whatever azimut the user happened to leave the base on.
  */
 import { useEffect, useRef } from 'react';
 
 import {
+  BODY_YAW_LIMIT_DEG,
   CONTROL_TICK_MS,
   HEAD_PITCH_MAX_DEG,
   HEAD_PITCH_MIN_DEG,
   HEAD_YAW_LIMIT_DEG,
+  HEAD_YAW_SATURATION_MARGIN_DEG,
+  MAX_BODY_YAW_DEG_PER_SEC,
   MAX_PITCH_DEG_PER_SEC,
   MAX_YAW_DEG_PER_SEC,
   RECENTER_DURATION_MS,
@@ -68,6 +97,8 @@ export type HeadCommand = (
   pitchDeg: number,
   yawDeg: number,
 ) => boolean;
+
+export type BodyYawCommand = (yawDeg: number) => boolean;
 
 export interface UseHeadVelocityControlOptions {
   /**
@@ -84,6 +115,15 @@ export interface UseHeadVelocityControlOptions {
    * keeps working visually, the next successful tick catches up).
    */
   setHeadRpyDeg: HeadCommand;
+  /**
+   * Pass-through to the SDK's `setBodyYawDeg`. Receives degrees,
+   * returns whether the command was queued onto the DataChannel.
+   * Same swallow-failures contract as `setHeadRpyDeg`. Called only
+   * during head-yaw-saturated ticks and during the recenter on
+   * unmount - never on every tick, so DataChannel pressure stays
+   * bounded.
+   */
+  setBodyYawDeg: BodyYawCommand;
   /**
    * When `false`, the controller stops the tick timer and the
    * integrated state is reset to zero. Used by the host to gate
@@ -118,6 +158,7 @@ function clamp(value: number, min: number, max: number): number {
 export function useHeadVelocityControl({
   deflectionRef,
   setHeadRpyDeg,
+  setBodyYawDeg,
   enabled,
 }: UseHeadVelocityControlOptions): void {
   /**
@@ -129,6 +170,12 @@ export function useHeadVelocityControl({
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
   /**
+   * Integrated body yaw state. Kept separately so the saturation
+   * gate doesn't have to share state with the head, and so the
+   * recenter on unmount can interpolate both axes in parallel.
+   */
+  const bodyYawRef = useRef(0);
+  /**
    * Last commanded values, used by the threshold gate to skip
    * redundant `setHeadRpyDeg` calls when the integration produced
    * a sub-threshold delta (typically while the joystick sits in
@@ -136,15 +183,20 @@ export function useHeadVelocityControl({
    */
   const lastCommandedYawRef = useRef(Number.POSITIVE_INFINITY);
   const lastCommandedPitchRef = useRef(Number.POSITIVE_INFINITY);
+  const lastCommandedBodyYawRef = useRef(Number.POSITIVE_INFINITY);
   /**
-   * Pinned reference to the latest setter so the recenter loop on
+   * Pinned reference to the latest setters so the recenter loop on
    * unmount can keep firing commands after the React closure that
    * created it has been disposed.
    */
   const setHeadRpyDegRef = useRef(setHeadRpyDeg);
+  const setBodyYawDegRef = useRef(setBodyYawDeg);
   useEffect(() => {
     setHeadRpyDegRef.current = setHeadRpyDeg;
   }, [setHeadRpyDeg]);
+  useEffect(() => {
+    setBodyYawDegRef.current = setBodyYawDeg;
+  }, [setBodyYawDeg]);
 
   // Active control loop. Runs only while `enabled === true`.
   useEffect(() => {
@@ -152,8 +204,10 @@ export function useHeadVelocityControl({
       // Hard reset so a re-enable doesn't carry over stale state.
       yawRef.current = 0;
       pitchRef.current = 0;
+      bodyYawRef.current = 0;
       lastCommandedYawRef.current = Number.POSITIVE_INFINITY;
       lastCommandedPitchRef.current = Number.POSITIVE_INFINITY;
+      lastCommandedBodyYawRef.current = Number.POSITIVE_INFINITY;
       return undefined;
     }
 
@@ -192,25 +246,67 @@ export function useHeadVelocityControl({
       yawRef.current = nextYaw;
       pitchRef.current = nextPitch;
 
+      // Body-yaw overflow gate. Two conditions both have to hold:
+      //
+      //   1. the joystick is still pushing in some direction on X
+      //      (curveX !== 0 after the deadzone),
+      //   2. the head yaw is at (or within a small margin of) its
+      //      hard stop ON THE SIDE THE USER IS PUSHING TOWARD - we
+      //      don't want a still-centred-but-zero-velocity head to
+      //      spuriously trigger a base rotation just because the
+      //      stick happens to be off-centre on Y.
+      //
+      // The sign matches the head's: pushing the stick right makes
+      // both the head yaw target and the body yaw target decrease
+      // (right-hand Z-up convention, see constants.ts header).
+      let nextBodyYaw = bodyYawRef.current;
+      const pushingRight = curveX > 0;
+      const pushingLeft = curveX < 0;
+      const headSaturatedRight =
+        pushingRight &&
+        nextYaw <= -HEAD_YAW_LIMIT_DEG + HEAD_YAW_SATURATION_MARGIN_DEG;
+      const headSaturatedLeft =
+        pushingLeft &&
+        nextYaw >= HEAD_YAW_LIMIT_DEG - HEAD_YAW_SATURATION_MARGIN_DEG;
+      if (headSaturatedLeft || headSaturatedRight) {
+        const bodyYawDelta = -curveX * MAX_BODY_YAW_DEG_PER_SEC * dtSec;
+        nextBodyYaw = clamp(
+          bodyYawRef.current + bodyYawDelta,
+          -BODY_YAW_LIMIT_DEG,
+          BODY_YAW_LIMIT_DEG,
+        );
+      }
+      bodyYawRef.current = nextBodyYaw;
+
       // Threshold gate: avoid spamming the DataChannel with
       // identical commands when the joystick is in the deadzone
       // and the integration produced no meaningful change. We
       // STILL fire if the user just released after a non-zero
       // displacement (the threshold is on the *delta*, so the
       // first tick after a release goes through and lands the
-      // head on the final position).
+      // head on the final position). Head and body are gated
+      // separately so a body-only update (head fully saturated
+      // and held) doesn't get rate-limited by an unchanged head
+      // state, and vice-versa.
       const yawDiff = Math.abs(nextYaw - lastCommandedYawRef.current);
       const pitchDiff = Math.abs(nextPitch - lastCommandedPitchRef.current);
+      const bodyYawDiff = Math.abs(
+        nextBodyYaw - lastCommandedBodyYawRef.current,
+      );
+
       if (
-        yawDiff < TARGET_DELTA_THRESHOLD_DEG &&
-        pitchDiff < TARGET_DELTA_THRESHOLD_DEG
+        yawDiff >= TARGET_DELTA_THRESHOLD_DEG ||
+        pitchDiff >= TARGET_DELTA_THRESHOLD_DEG
       ) {
-        return;
+        lastCommandedYawRef.current = nextYaw;
+        lastCommandedPitchRef.current = nextPitch;
+        setHeadRpyDegRef.current(0, nextPitch, nextYaw);
       }
 
-      lastCommandedYawRef.current = nextYaw;
-      lastCommandedPitchRef.current = nextPitch;
-      setHeadRpyDegRef.current(0, nextPitch, nextYaw);
+      if (bodyYawDiff >= TARGET_DELTA_THRESHOLD_DEG) {
+        lastCommandedBodyYawRef.current = nextBodyYaw;
+        setBodyYawDegRef.current(nextBodyYaw);
+      }
     };
 
     const interval = window.setInterval(tick, CONTROL_TICK_MS);
@@ -225,12 +321,20 @@ export function useHeadVelocityControl({
     return () => {
       const startYaw = yawRef.current;
       const startPitch = pitchRef.current;
+      const startBodyYaw = bodyYawRef.current;
       // Skip the recenter when nothing to recenter from. Avoids
       // a useless burst of `setHeadRpyDeg(0, 0, 0)` calls on a
       // mount/unmount with no user interaction.
-      if (Math.abs(startYaw) < 0.5 && Math.abs(startPitch) < 0.5) return;
+      if (
+        Math.abs(startYaw) < 0.5 &&
+        Math.abs(startPitch) < 0.5 &&
+        Math.abs(startBodyYaw) < 0.5
+      ) {
+        return;
+      }
 
-      const setter = setHeadRpyDegRef.current;
+      const headSetter = setHeadRpyDegRef.current;
+      const bodySetter = setBodyYawDegRef.current;
       const startTime = performance.now();
       const frameInterval = 1000 / RECENTER_FRAMES_PER_SEC;
       let lastFrameTime = 0;
@@ -250,7 +354,15 @@ export function useHeadVelocityControl({
         const eased = 1 - Math.pow(1 - t, 3);
         const yaw = startYaw * (1 - eased);
         const pitch = startPitch * (1 - eased);
-        setter(0, pitch, yaw);
+        const bodyYaw = startBodyYaw * (1 - eased);
+        headSetter(0, pitch, yaw);
+        // Only fire body commands when there's something to return -
+        // skipping the no-op call keeps the DataChannel quiet for
+        // the common case where the user never pushed past the head
+        // saturation point.
+        if (Math.abs(startBodyYaw) >= 0.5) {
+          bodySetter(bodyYaw);
+        }
 
         if (t < 1) {
           window.requestAnimationFrame(raf);
@@ -263,6 +375,8 @@ export function useHeadVelocityControl({
     // change would either tear down a still-in-flight recenter
     // (bad - the head jumps mid-animation) or create overlapping
     // recenters. Mount-once / unmount-once is the right scope.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // All dynamic state goes through refs (`yawRef`, `bodyYawRef`,
+    // `setHeadRpyDegRef`, `setBodyYawDegRef`) so the cleanup
+    // closure stays correct without listing them as deps.
   }, []);
 }

@@ -2193,6 +2193,23 @@ const handle: ConversationEngineHandle = {
     }
   },
 
+  setBodyYawDeg: (yawDeg: number) => {
+    if (unmounted || !robot) {
+      // Same rationale as `setHeadRpyDeg`: the joystick's velocity
+      // controller calls this on every tick when the head saturates
+      // and the user keeps pushing. Stay silent before the engine
+      // is mounted; the next viable tick will land.
+      return false;
+    }
+    try {
+      const ok = robot.setBodyYawDeg(yawDeg);
+      return ok !== false; // SDK returns undefined on older builds
+    } catch (err) {
+      console.warn("[engine] setBodyYawDeg failed:", err);
+      return false;
+    }
+  },
+
   subscribeLogs: (options) => {
     // Older SDK builds (pre `feat/subscribe-logs-cmd`) ship without
     // `subscribeLogs`; degrade gracefully to a noop so the consumer's

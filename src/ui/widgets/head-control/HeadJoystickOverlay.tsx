@@ -36,9 +36,10 @@ export interface HeadJoystickOverlayProps {
   /**
    * Slice of the session the overlay needs. Typed via `Pick` so
    * the dependency surface is explicit at the call site - the
-   * overlay only needs the head setter.
+   * overlay drives both the head (always) and the base (when the
+   * head saturates and the user keeps pushing in the same direction).
    */
-  session: Pick<RobotSessionHandle, 'setHeadRpyDeg'>;
+  session: Pick<RobotSessionHandle, 'setHeadRpyDeg' | 'setBodyYawDeg'>;
   /**
    * When `true`, the joystick is interactive and the velocity
    * controller's tick timer is running. When `false`, the visual
@@ -76,6 +77,7 @@ export default function HeadJoystickOverlay({
   useHeadVelocityControl({
     deflectionRef: pointer.deflectionRef,
     setHeadRpyDeg: session.setHeadRpyDeg,
+    setBodyYawDeg: session.setBodyYawDeg,
     enabled,
   });
 

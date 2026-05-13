@@ -51,6 +51,14 @@ export interface ReachyMiniInstance extends EventTarget {
   setHeadRpyDeg(roll: number, pitch: number, yaw: number): boolean;
   /** Set antennas from right/left positions in degrees. */
   setAntennasDeg(right: number, left: number): boolean;
+  /**
+   * Set the body yaw target in degrees (absolute, around the
+   * vertical axis). The daemon's analytical kinematics caps body
+   * yaw at ±160° mechanically; callers should clamp client-side
+   * to stay within a safe margin (the camera-tab joystick uses
+   * ±150°).
+   */
+  setBodyYawDeg(yawDeg: number): boolean;
   playSound(file: string): boolean;
 
   /**

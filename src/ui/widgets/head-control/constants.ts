@@ -60,6 +60,18 @@ export const HEAD_PITCH_MAX_DEG = 25;
 export const HEAD_PITCH_MIN_DEG = -20;
 
 /**
+ * Soft clamp on the integrated body yaw. The Reachy Mini base can
+ * mechanically reach ±160° (per the analytical kinematics
+ * `max_body_yaw=np.deg2rad(160)`); we leave a 10° safety margin so
+ * a fast push followed by inertia / network latency doesn't slam
+ * into the absolute mechanical stop or stretch the internal cable
+ * runs. Combined with the head's ±50° yaw, the user gets ±200° of
+ * combined scan range - enough to look behind the robot in either
+ * direction.
+ */
+export const BODY_YAW_LIMIT_DEG = 150;
+
+/**
  * Maximum angular velocity at full joystick deflection (after the
  * quadratic curve). Tuned so a held push sweeps the full yaw range
  * in roughly 1.5 s - fast enough to feel responsive, slow enough
@@ -68,6 +80,35 @@ export const HEAD_PITCH_MIN_DEG = -20;
  */
 export const MAX_YAW_DEG_PER_SEC = 60;
 export const MAX_PITCH_DEG_PER_SEC = 40;
+
+/**
+ * Maximum body-yaw angular velocity at full joystick deflection
+ * (after the quadratic curve), applied only once the head yaw has
+ * saturated and the user is still pushing in the same direction.
+ *
+ * Tuned slower than the head (60 °/s) because:
+ *   - the base carries the whole robot, so a too-aggressive slew
+ *     looks twitchy and amplifies any video latency in the user's
+ *     feedback loop;
+ *   - the perceptual scan rate is gated by the camera feed framing,
+ *     not by raw angular velocity - a calmer sweep reads as
+ *     "the robot is scanning" rather than "the robot is panicking".
+ *
+ * 50 °/s sweeps the ±150° range in ~6 s of held maximum push, which
+ * matches the natural "look around the room" cadence of a human
+ * head turn.
+ */
+export const MAX_BODY_YAW_DEG_PER_SEC = 50;
+
+/**
+ * Hysteresis margin used to decide whether the head yaw is "saturated"
+ * and ready to spill demand into the body yaw. We compare against
+ * `HEAD_YAW_LIMIT_DEG - HEAD_YAW_SATURATION_MARGIN_DEG` so the
+ * body starts engaging just before the head reaches its hard edge,
+ * which hides the per-axis clamp behind a smooth visual transition
+ * (no perceptible "head stops then base starts" gap).
+ */
+export const HEAD_YAW_SATURATION_MARGIN_DEG = 0.5;
 
 /**
  * Joystick deadzone. Anything below this magnitude in the
