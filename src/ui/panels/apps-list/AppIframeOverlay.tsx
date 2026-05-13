@@ -85,6 +85,7 @@ import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import AppActionsMenu from './AppActionsMenu';
 
 /**
  * Hard timeout for the iframe load step. If the embed hasn't fired
@@ -348,6 +349,28 @@ export default function AppIframeOverlay({
         >
           {app.name}
         </Typography>
+        {/* Per-app actions kebab. Apple guideline 1.2 (UGC) wants
+            a Report affordance on every surface where the user
+            consumes UGC; this is the surface for active use, the
+            tile-side counterpart lives in `AppCompactTile`. We
+            place the kebab to the left of the close button so the
+            primary "exit" action stays in the thumb-reach corner
+            (iOS sheet convention) and the kebab is a deliberate
+            tap, not the one a user reaching for "Close" hits by
+            accident.
+
+            `onAfterHideAuthor` closes this overlay on the spot:
+            once the user has hidden the author of the running
+            app, leaving them looking at that author's iframe
+            would defeat the affordance. Closing also triggers
+            the host's `session.reacquire()` upstream so the
+            conversation slot comes back. */}
+        <AppActionsMenu
+          app={app}
+          ariaLabel={`Actions for ${app.name}`}
+          buttonSx={{ p: 0.5 }}
+          onAfterHideAuthor={onClose}
+        />
         <IconButton
           aria-label="Close app"
           onClick={onClose}
