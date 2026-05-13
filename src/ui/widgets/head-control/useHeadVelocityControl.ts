@@ -100,6 +100,8 @@ export type HeadCommand = (
 
 export type BodyYawCommand = (yawDeg: number) => boolean;
 
+export type AutomaticBodyYawCommand = (enabled: boolean) => boolean;
+
 export interface UseHeadVelocityControlOptions {
   /**
    * Reference to the joystick's normalised deflection. The
@@ -124,6 +126,24 @@ export interface UseHeadVelocityControlOptions {
    * bounded.
    */
   setBodyYawDeg: BodyYawCommand;
+  /**
+   * Pass-through to the engine's `setAutomaticBodyYawEnabled`.
+   *
+   * The daemon defaults to `automatic_body_yaw=True`, which makes
+   * the IK silently rewrite any body_yaw target we send to keep
+   * `|head_yaw - body_yaw| ≤ 65°`. That clamp is exactly what we
+   * want to opt out of while the joystick is live: the user is
+   * deliberately spinning the base independently of the head.
+   *
+   * The hook calls `setAutomaticBodyYawEnabled(false)` on every
+   * transition into the enabled state and `true` on every transition
+   * back out (cleanup of the same effect + a final call at the end
+   * of the recenter on unmount). That keeps the daemon back in its
+   * default mode for anything that runs after the joystick - dances,
+   * wobblers, voice tools - all of which expect the relative-twist
+   * clamp to be active.
+   */
+  setAutomaticBodyYawEnabled: AutomaticBodyYawCommand;
   /**
    * When `false`, the controller stops the tick timer and the
    * integrated state is reset to zero. Used by the host to gate
@@ -159,6 +179,7 @@ export function useHeadVelocityControl({
   deflectionRef,
   setHeadRpyDeg,
   setBodyYawDeg,
+  setAutomaticBodyYawEnabled,
   enabled,
 }: UseHeadVelocityControlOptions): void {
   /**
@@ -191,12 +212,16 @@ export function useHeadVelocityControl({
    */
   const setHeadRpyDegRef = useRef(setHeadRpyDeg);
   const setBodyYawDegRef = useRef(setBodyYawDeg);
+  const setAutomaticBodyYawEnabledRef = useRef(setAutomaticBodyYawEnabled);
   useEffect(() => {
     setHeadRpyDegRef.current = setHeadRpyDeg;
   }, [setHeadRpyDeg]);
   useEffect(() => {
     setBodyYawDegRef.current = setBodyYawDeg;
   }, [setBodyYawDeg]);
+  useEffect(() => {
+    setAutomaticBodyYawEnabledRef.current = setAutomaticBodyYawEnabled;
+  }, [setAutomaticBodyYawEnabled]);
 
   // Active control loop. Runs only while `enabled === true`.
   useEffect(() => {
@@ -210,6 +235,20 @@ export function useHeadVelocityControl({
       lastCommandedBodyYawRef.current = Number.POSITIVE_INFINITY;
       return undefined;
     }
+
+    // Take over from the daemon's automatic body-yaw IK. Without this,
+    // the IK clamps every `setBodyYawDeg` command we send to keep
+    // `|head_yaw - body_yaw| ≤ 65°`, so pushing the joystick all the
+    // way left/right does NOT spin the base past that envelope -
+    // the user just sees the head clamp and nothing else move,
+    // which is the bug this whole feature is supposed to fix.
+    //
+    // We fire the command unconditionally on every enable transition
+    // (cheap one-shot DataChannel message). The cleanup below restores
+    // the default so any auto-motion that takes over after the joystick
+    // (wobbler, dances, voice tools) keeps the safe relative-twist
+    // clamp.
+    setAutomaticBodyYawEnabledRef.current(false);
 
     const dtSec = CONTROL_TICK_MS / 1000;
 
@@ -312,6 +351,12 @@ export function useHeadVelocityControl({
     const interval = window.setInterval(tick, CONTROL_TICK_MS);
     return () => {
       window.clearInterval(interval);
+      // Restore the daemon's default automatic body-yaw clamp on
+      // any transition out of the enabled state (tab change, engine
+      // pause, unmount). The cleanup fires BEFORE the unmount recenter
+      // - that's fine: the recenter still commands `body_yaw=0`, which
+      // is well inside the relative-twist envelope anyway.
+      setAutomaticBodyYawEnabledRef.current(true);
     };
   }, [enabled, deflectionRef]);
 

@@ -39,7 +39,10 @@ export interface HeadJoystickOverlayProps {
    * overlay drives both the head (always) and the base (when the
    * head saturates and the user keeps pushing in the same direction).
    */
-  session: Pick<RobotSessionHandle, 'setHeadRpyDeg' | 'setBodyYawDeg'>;
+  session: Pick<
+    RobotSessionHandle,
+    'setHeadRpyDeg' | 'setBodyYawDeg' | 'setAutomaticBodyYawEnabled'
+  >;
   /**
    * When `true`, the joystick is interactive and the velocity
    * controller's tick timer is running. When `false`, the visual
@@ -78,6 +81,7 @@ export default function HeadJoystickOverlay({
     deflectionRef: pointer.deflectionRef,
     setHeadRpyDeg: session.setHeadRpyDeg,
     setBodyYawDeg: session.setBodyYawDeg,
+    setAutomaticBodyYawEnabled: session.setAutomaticBodyYawEnabled,
     enabled,
   });
 

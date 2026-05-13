@@ -205,10 +205,31 @@ export interface RobotSessionHandle {
    * hard stop. Never used while a conversation is active (the
    * dispatcher owns body_yaw too).
    *
+   * IMPORTANT: by default the daemon runs in `automatic_body_yaw`
+   * mode, which clamps any body_yaw target we send to keep the
+   * head/base relative twist under ±65°. Callers that want true
+   * manual control of the base (joystick) MUST first call
+   * `setAutomaticBodyYawEnabled(false)`, otherwise our body_yaw
+   * commands are silently rewritten by the IK.
+   *
    * Returns `true` when the command was queued, `false` if the
    * engine isn't ready or the DC is down. Non-throwing.
    */
   setBodyYawDeg: (yawDeg: number) => boolean;
+
+  /**
+   * Enable / disable the daemon's automatic body-yaw IK mode.
+   *
+   * Toggle off while a manual control surface (e.g. the camera-tab
+   * joystick) is driving the base directly; toggle back on when the
+   * surface releases, so any later auto-motion (wobbler, dances) gets
+   * the safe relative-twist clamp back. See `setBodyYawDeg`'s
+   * doc-comment for the underlying IK constraints.
+   *
+   * Returns `true` when the command was queued, `false` if the
+   * engine isn't ready or the DC is down. Non-throwing.
+   */
+  setAutomaticBodyYawEnabled: (enabled: boolean) => boolean;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
@@ -549,6 +570,13 @@ export function useRobotSession({
     return handleRef.current?.setBodyYawDeg(yawDeg) ?? false;
   }, []);
 
+  const setAutomaticBodyYawEnabled = useCallback(
+    (enabled: boolean): boolean => {
+      return handleRef.current?.setAutomaticBodyYawEnabled(enabled) ?? false;
+    },
+    [],
+  );
+
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
       const handle = handleRef.current;
@@ -588,6 +616,7 @@ export function useRobotSession({
     playSound,
     setHeadRpyDeg,
     setBodyYawDeg,
+    setAutomaticBodyYawEnabled,
     subscribeLogs,
   };
 }

@@ -357,6 +357,33 @@ export interface ConversationEngineHandle {
   setBodyYawDeg: (yawDeg: number) => boolean;
 
   /**
+   * Toggle the daemon's automatic body-yaw IK mode.
+   *
+   * When automatic body-yaw is enabled (default on daemon boot), the
+   * IK pass that resolves the head pose to motor joints CLAMPS our
+   * commanded body-yaw inside two constraints to stay mechanically
+   * safe:
+   *
+   *   - `|body_yaw|        ≤ 160°`  (overall mechanical stop)
+   *   - `|head_yaw - body_yaw| ≤  65°`  (max relative twist between
+   *                                       head plate and base ring)
+   *
+   * That relative-twist clamp is what stops the camera-tab joystick
+   * from being able to rotate the base independently of the head:
+   * once you push past head ±65° demand, the daemon silently rewrites
+   * your body_yaw to stay within the safe envelope.
+   *
+   * For manual joystick control we want the user to be able to spin
+   * the base AS FAR AS the user pushes, regardless of where the head
+   * happens to point - so we toggle the mode OFF on take-over and back
+   * ON when we release. Implemented over the DataChannel via
+   * `sendRaw({ type: "set_automatic_body_yaw", enabled })`; returns
+   * `true` when the command was queued, `false` if the engine isn't
+   * ready or the DC is down. Non-throwing.
+   */
+  setAutomaticBodyYawEnabled: (enabled: boolean) => boolean;
+
+  /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
    * stream over the WebRTC data channel. Thin pass-through to the
    * SDK's `subscribeLogs`. Returns an `unsubscribe()` callback that

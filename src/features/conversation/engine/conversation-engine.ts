@@ -2210,6 +2210,26 @@ const handle: ConversationEngineHandle = {
     }
   },
 
+  setAutomaticBodyYawEnabled: (enabled: boolean) => {
+    if (unmounted || !robot) {
+      return false;
+    }
+    try {
+      // No dedicated wrapper in the JS SDK - we send the raw daemon
+      // command directly. Mirrors the daemon's protocol
+      // `SetAutomaticBodyYawCmd` (`reachy_mini/io/protocol.py`):
+      //   { type: "set_automatic_body_yaw", enabled: bool }
+      const ok = robot.sendRaw({
+        type: "set_automatic_body_yaw",
+        enabled,
+      });
+      return ok !== false;
+    } catch (err) {
+      console.warn("[engine] setAutomaticBodyYawEnabled failed:", err);
+      return false;
+    }
+  },
+
   subscribeLogs: (options) => {
     // Older SDK builds (pre `feat/subscribe-logs-cmd`) ship without
     // `subscribeLogs`; degrade gracefully to a noop so the consumer's
