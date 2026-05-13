@@ -43,17 +43,22 @@
  * doing it here means the visual feedback of the joystick reflects
  * "I'm at the edge" instead of silently sending unreachable targets.
  *
- * Values aligned with the desktop app's controller tab
- * (`reachy_mini_desktop_app/src/utils/inputConstants.ts ::
- *  ROBOT_POSITION_RANGES`) so both surfaces agree on what's
- * reachable. The desktop has been driving real hardware since v0
- * with these bounds; mirroring them here means the mobile joystick
- * inherits the same ground-truth envelope:
+ * Pitch + body-yaw values aligned with the desktop app's controller
+ * tab (`reachy_mini_desktop_app/src/utils/inputConstants.ts ::
+ *  ROBOT_POSITION_RANGES`) since those have been driving real
+ * hardware since v0:
  *
- *   - head yaw   : ±1.2 rad → ±68.75°
- *   - head pitch : ±0.8 rad → ±45.84°  (symmetric, unlike our
- *                                       prior conservative asymmetric clamp)
+ *   - head pitch : ±0.8 rad → ±45.84°
  *   - body yaw   : ±(160° in rad) → ±160°
+ *
+ * Head yaw deliberately uses a TIGHTER limit (±60°) than the desktop's
+ * ±68.75°. Reason: in this hook the head-yaw clamp is the head-yaw
+ * RELATIVE to the base (we use tank-style command composition - see
+ * useHeadVelocityControl.ts header), and the daemon's safe-IK enforces
+ * `|head_yaw_world - body_yaw| ≤ 65°` when `automatic_body_yaw` is
+ * enabled (its default). Keeping the relative clamp at 60° leaves a
+ * comfortable 5° margin, so the IK never has to silently rewrite our
+ * body_yaw target near the edge of the range.
  *
  * Pitch bounds reflect the robot-frame sign convention documented
  * above (`pitch > 0` = chin down). `MAX` is the most-negative value
@@ -62,7 +67,7 @@
  * than UP/DOWN labels, which would just push the convention
  * confusion one level deeper.
  */
-export const HEAD_YAW_LIMIT_DEG = 68.75; // 1.2 rad, matches desktop ROBOT_POSITION_RANGES.YAW
+export const HEAD_YAW_LIMIT_DEG = 60; // relative to base, safe under daemon's 65° IK clamp
 export const HEAD_PITCH_MAX_DEG = 45.84; // 0.8 rad
 export const HEAD_PITCH_MIN_DEG = -45.84; // -0.8 rad
 

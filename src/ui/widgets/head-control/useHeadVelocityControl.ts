@@ -1,10 +1,31 @@
 /**
- * Head + body velocity controller.
+ * Head + body velocity controller (tank-style).
  *
  * Translates a normalised joystick deflection (`[-1, 1]^2`) into a
  * stream of `setHeadRpyDeg` + `setBodyYawDeg` commands at a bounded
- * rate, integrating the deflection into a yaw/pitch state for the
- * head and a yaw state for the base, each clamped to soft limits.
+ * rate. Two integrated state variables drive the robot:
+ *
+ *   - `headYawRel`  : head yaw RELATIVE to the base, ∈ [-LIMIT, +LIMIT]
+ *   - `bodyYaw`     : base orientation, ∈ [-BODY_LIMIT, +BODY_LIMIT]
+ *
+ * Critical: the daemon's `setHeadRpyDeg` consumes a head pose in
+ * WORLD frame (the IK splits the requested world yaw between body
+ * rotation and the Stewart platform). The relative head/body yaw
+ * is mechanically capped by the IK at ~65° (`|head_world - body| ≤ 65°`).
+ * So once the base starts rotating, the WORLD yaw we command the
+ * head MUST follow the base, otherwise the relative yaw drifts and
+ * the IK clamps body_yaw aggressively. See the cdussieux reference
+ * demo (`huggingface.co/spaces/cduss/webrtc_example`) for the canonical
+ * pattern this hook implements.
+ *
+ * The wire-level command is:
+ *
+ *     head_yaw_world = headYawRel + bodyYaw
+ *
+ * Sending head and body separately is fine in practice because the
+ * data channel is ordered; we send `setBodyYawDeg` first and then
+ * `setHeadRpyDeg` so the daemon sees the new body before re-evaluating
+ * the head IK.
  *
  * Architecture
  * ────────────
@@ -12,17 +33,18 @@
  *   joystick deflection (ref)  ←  pointer events (read at 20 Hz)
  *           │
  *           ▼
- *   quadratic curve  + sign mapping  +  scale by MAX *_DEG_PER_SEC
+ *   quadratic curve + sign mapping + scale by MAX *_DEG_PER_SEC
  *           │
  *           ▼
- *   integrate head yaw/pitch  →  clamp to head soft limits
+ *   integrate headYawRel/pitch  →  clamp to head soft limits
  *           │
  *           ▼
- *   if head yaw is saturated AND joystick still pushes that way:
- *     integrate body yaw  →  clamp to body soft limit
+ *   if headYawRel is saturated AND joystick still pushes that way:
+ *     integrate bodyYaw  →  clamp to body soft limit
  *           │
  *           ▼
- *   send `setHeadRpyDeg`  / `setBodyYawDeg` when delta exceeds threshold
+ *   send `setBodyYawDeg(bodyYaw)` then
+ *        `setHeadRpyDeg(0, pitch, headYawRel + bodyYaw)`
  *
  * Why velocity-based (not position-based)
  * ───────────────────────────────────────
@@ -37,43 +59,29 @@
  *
  * Body-yaw overflow
  * ─────────────────
- * The head only debattes ±50° in yaw - not enough to scan a whole
- * room without losing what's behind the robot. Rather than expose a
- * second control surface for the base, we treat the joystick as a
- * single "rotate the gaze" command and let the demand spill over:
+ * The head only debattes ±60° in yaw relative to the base - not
+ * enough to scan a whole room. Rather than expose a second control
+ * surface for the base, we treat the joystick as a single "rotate
+ * the gaze" command and let the demand spill over once the head has
+ * reached its mechanical edge relative to the base:
  *
  *   - small / medium deflection → head moves, base idle
  *   - full deflection + held    → head saturates fast at its limit,
  *                                 base starts rotating in the same
- *                                 direction
- *
- * Concretely we check whether the head yaw integration just landed
- * on its clamp AND the joystick is still pushing toward the saturated
- * side; if so, we apply a separate `MAX_BODY_YAW_DEG_PER_SEC` curve
- * to the base. This keeps the natural pattern "head turns first, body
- * turns when head can't turn any further" that humans use when scanning.
- *
- * Quadratic curve
- * ───────────────
- * `velocity ∝ deflection²` (sign preserved). At the centre of the
- * stick the head barely moves (precision); near the edge it
- * sweeps fast (coverage). Same maths the desktop's `useMouseDrift`
- * would use for camera control. Body-yaw overflow uses the same
- * curve on the X axis - no need to bias toward "near max" because
- * the saturation gate already implies the user is at high deflection.
+ *                                 direction WHILE the head world yaw
+ *                                 keeps tracking the base (so the
+ *                                 head stays at its max relative yaw,
+ *                                 i.e. the user keeps "looking in the
+ *                                 same direction relative to the base")
  *
  * Recenter on unmount
  * ───────────────────
  * When the host unmounts the controller (typically because the
  * user navigated away from the Robot tab), the hook spawns a
- * fire-and-forget rAF loop that interpolates the last commanded
- * head yaw/pitch AND body yaw back to `(0, 0)` over
- * `RECENTER_DURATION_MS`. The loop survives the React unmount: it
- * captures the session setters and the initial state into local
- * closures, then runs to completion independently. Recentering
- * the body too matches the "leave the robot in a neutral pose for
- * the next tab" promise - otherwise the conversation tab would
- * inherit whatever azimut the user happened to leave the base on.
+ * fire-and-forget rAF loop that interpolates BOTH `headYawRel` and
+ * `bodyYaw` back to 0 over `RECENTER_DURATION_MS`. The loop survives
+ * the React unmount: it captures the session setters and the initial
+ * state into local closures, then runs to completion independently.
  */
 import { useEffect, useRef } from 'react';
 
@@ -100,8 +108,6 @@ export type HeadCommand = (
 
 export type BodyYawCommand = (yawDeg: number) => boolean;
 
-export type AutomaticBodyYawCommand = (enabled: boolean) => boolean;
-
 export interface UseHeadVelocityControlOptions {
   /**
    * Reference to the joystick's normalised deflection. The
@@ -126,24 +132,6 @@ export interface UseHeadVelocityControlOptions {
    * bounded.
    */
   setBodyYawDeg: BodyYawCommand;
-  /**
-   * Pass-through to the engine's `setAutomaticBodyYawEnabled`.
-   *
-   * The daemon defaults to `automatic_body_yaw=True`, which makes
-   * the IK silently rewrite any body_yaw target we send to keep
-   * `|head_yaw - body_yaw| ≤ 65°`. That clamp is exactly what we
-   * want to opt out of while the joystick is live: the user is
-   * deliberately spinning the base independently of the head.
-   *
-   * The hook calls `setAutomaticBodyYawEnabled(false)` on every
-   * transition into the enabled state and `true` on every transition
-   * back out (cleanup of the same effect + a final call at the end
-   * of the recenter on unmount). That keeps the daemon back in its
-   * default mode for anything that runs after the joystick - dances,
-   * wobblers, voice tools - all of which expect the relative-twist
-   * clamp to be active.
-   */
-  setAutomaticBodyYawEnabled: AutomaticBodyYawCommand;
   /**
    * When `false`, the controller stops the tick timer and the
    * integrated state is reset to zero. Used by the host to gate
@@ -179,30 +167,34 @@ export function useHeadVelocityControl({
   deflectionRef,
   setHeadRpyDeg,
   setBodyYawDeg,
-  setAutomaticBodyYawEnabled,
   enabled,
 }: UseHeadVelocityControlOptions): void {
   /**
-   * Integrated head state. Refs (not state) because we don't want
-   * to re-render React on every tick - the joystick visual is
-   * driven by the deflection directly, the head state lives only
-   * to be sent to the robot.
+   * Head yaw RELATIVE to the base, ∈ [-HEAD_YAW_LIMIT_DEG, +HEAD_YAW_LIMIT_DEG].
+   * The wire-level head yaw we send is the WORLD yaw, computed as
+   * `headYawRel + bodyYaw`. Keeping the state in relative coordinates
+   * means the saturation gate works on the relative angle (= the
+   * angle that's actually mechanically capped by the IK at ~65°), and
+   * the recenter loop interpolates the same quantity the user feels.
    */
-  const yawRef = useRef(0);
+  const headYawRelRef = useRef(0);
   const pitchRef = useRef(0);
   /**
-   * Integrated body yaw state. Kept separately so the saturation
+   * Base orientation, absolute. Kept separately so the saturation
    * gate doesn't have to share state with the head, and so the
    * recenter on unmount can interpolate both axes in parallel.
    */
   const bodyYawRef = useRef(0);
   /**
-   * Last commanded values, used by the threshold gate to skip
-   * redundant `setHeadRpyDeg` calls when the integration produced
-   * a sub-threshold delta (typically while the joystick sits in
-   * the deadzone).
+   * Last commanded WORLD-frame yaw / pitch and body yaw, used by
+   * the threshold gate to skip redundant commands when the
+   * integration produced a sub-threshold delta. Compared against
+   * the WORLD yaw we just computed (`headYawRel + bodyYaw`), not
+   * the relative yaw - otherwise a moving base wouldn't trigger
+   * an updated head command even though the wire-level world yaw
+   * IS changing.
    */
-  const lastCommandedYawRef = useRef(Number.POSITIVE_INFINITY);
+  const lastCommandedHeadYawWorldRef = useRef(Number.POSITIVE_INFINITY);
   const lastCommandedPitchRef = useRef(Number.POSITIVE_INFINITY);
   const lastCommandedBodyYawRef = useRef(Number.POSITIVE_INFINITY);
   /**
@@ -212,51 +204,25 @@ export function useHeadVelocityControl({
    */
   const setHeadRpyDegRef = useRef(setHeadRpyDeg);
   const setBodyYawDegRef = useRef(setBodyYawDeg);
-  const setAutomaticBodyYawEnabledRef = useRef(setAutomaticBodyYawEnabled);
   useEffect(() => {
     setHeadRpyDegRef.current = setHeadRpyDeg;
   }, [setHeadRpyDeg]);
   useEffect(() => {
     setBodyYawDegRef.current = setBodyYawDeg;
   }, [setBodyYawDeg]);
-  useEffect(() => {
-    setAutomaticBodyYawEnabledRef.current = setAutomaticBodyYawEnabled;
-  }, [setAutomaticBodyYawEnabled]);
 
   // Active control loop. Runs only while `enabled === true`.
   useEffect(() => {
     if (!enabled) {
       // Hard reset so a re-enable doesn't carry over stale state.
-      yawRef.current = 0;
+      headYawRelRef.current = 0;
       pitchRef.current = 0;
       bodyYawRef.current = 0;
-      lastCommandedYawRef.current = Number.POSITIVE_INFINITY;
+      lastCommandedHeadYawWorldRef.current = Number.POSITIVE_INFINITY;
       lastCommandedPitchRef.current = Number.POSITIVE_INFINITY;
       lastCommandedBodyYawRef.current = Number.POSITIVE_INFINITY;
       return undefined;
     }
-
-    // Take over from the daemon's automatic body-yaw IK. Without this,
-    // the IK clamps every `setBodyYawDeg` command we send to keep
-    // `|head_yaw - body_yaw| ≤ 65°`, so pushing the joystick all the
-    // way left/right does NOT spin the base past that envelope -
-    // the user just sees the head clamp and nothing else move,
-    // which is the bug this whole feature is supposed to fix.
-    //
-    // We retry with a short exponential backoff (50/100/200/400/800 ms)
-    // because the DataChannel might still be in a transient "opening"
-    // state when this effect first fires - even though `enabled` only
-    // flips true on `hasReachedReady`, the SDK's `_dc.readyState ===
-    // 'open'` test can briefly disagree right after a session
-    // re-acquire. The retry caps at ~1.5 s of total backoff, which
-    // is well below any realistic moment the user could start dragging.
-    const sendAutoOff = (attempt: number): void => {
-      const ok = setAutomaticBodyYawEnabledRef.current(false);
-      if (ok || attempt >= 5) return;
-      const delay = 50 * Math.pow(2, attempt);
-      window.setTimeout(() => sendAutoOff(attempt + 1), delay);
-    };
-    sendAutoOff(0);
 
     const dtSec = CONTROL_TICK_MS / 1000;
 
@@ -276,11 +242,11 @@ export function useHeadVelocityControl({
       //                                     means pitch decreases
       //                                     because `pitch > 0` is
       //                                     chin DOWN on Reachy Mini.
-      const yawDelta = -curveX * MAX_YAW_DEG_PER_SEC * dtSec;
+      const headYawRelDelta = -curveX * MAX_YAW_DEG_PER_SEC * dtSec;
       const pitchDelta = curveY * MAX_PITCH_DEG_PER_SEC * dtSec;
 
-      const nextYaw = clamp(
-        yawRef.current + yawDelta,
+      const nextHeadYawRel = clamp(
+        headYawRelRef.current + headYawRelDelta,
         -HEAD_YAW_LIMIT_DEG,
         HEAD_YAW_LIMIT_DEG,
       );
@@ -290,16 +256,16 @@ export function useHeadVelocityControl({
         HEAD_PITCH_MAX_DEG,
       );
 
-      yawRef.current = nextYaw;
+      headYawRelRef.current = nextHeadYawRel;
       pitchRef.current = nextPitch;
 
       // Body-yaw overflow gate. Two conditions both have to hold:
       //
       //   1. the joystick is still pushing in some direction on X
       //      (curveX !== 0 after the deadzone),
-      //   2. the head yaw is at (or within a small margin of) its
-      //      hard stop ON THE SIDE THE USER IS PUSHING TOWARD - we
-      //      don't want a still-centred-but-zero-velocity head to
+      //   2. the head RELATIVE yaw is at (or within a small margin of)
+      //      its hard stop ON THE SIDE THE USER IS PUSHING TOWARD -
+      //      we don't want a still-centred-but-zero-velocity head to
       //      spuriously trigger a base rotation just because the
       //      stick happens to be off-centre on Y.
       //
@@ -311,10 +277,10 @@ export function useHeadVelocityControl({
       const pushingLeft = curveX < 0;
       const headSaturatedRight =
         pushingRight &&
-        nextYaw <= -HEAD_YAW_LIMIT_DEG + HEAD_YAW_SATURATION_MARGIN_DEG;
+        nextHeadYawRel <= -HEAD_YAW_LIMIT_DEG + HEAD_YAW_SATURATION_MARGIN_DEG;
       const headSaturatedLeft =
         pushingLeft &&
-        nextYaw >= HEAD_YAW_LIMIT_DEG - HEAD_YAW_SATURATION_MARGIN_DEG;
+        nextHeadYawRel >= HEAD_YAW_LIMIT_DEG - HEAD_YAW_SATURATION_MARGIN_DEG;
       if (headSaturatedLeft || headSaturatedRight) {
         const bodyYawDelta = -curveX * MAX_BODY_YAW_DEG_PER_SEC * dtSec;
         nextBodyYaw = clamp(
@@ -325,55 +291,57 @@ export function useHeadVelocityControl({
       }
       bodyYawRef.current = nextBodyYaw;
 
+      // Tank-style: the daemon interprets the head yaw in WORLD
+      // frame, so we compose head + body before sending. Keeping
+      // headYawRel constant while body rotates yields a fixed
+      // head/body relative angle - the head "follows" the base in
+      // world frame instead of being left behind (which would cause
+      // the IK to clamp body_yaw at ±65° relative). See cdussieux's
+      // webrtc_example demo for the canonical pattern.
+      const nextHeadYawWorld = nextHeadYawRel + nextBodyYaw;
+
       // Threshold gate: avoid spamming the DataChannel with
       // identical commands when the joystick is in the deadzone
-      // and the integration produced no meaningful change. We
-      // STILL fire if the user just released after a non-zero
-      // displacement (the threshold is on the *delta*, so the
-      // first tick after a release goes through and lands the
-      // head on the final position). Head and body are gated
-      // separately so a body-only update (head fully saturated
-      // and held) doesn't get rate-limited by an unchanged head
-      // state, and vice-versa.
-      const yawDiff = Math.abs(nextYaw - lastCommandedYawRef.current);
+      // and the integration produced no meaningful change. Head
+      // and body are gated separately so a body-only update
+      // (head fully saturated and held) doesn't get rate-limited
+      // by an unchanged head state - except that in our tank
+      // setup head world ALWAYS changes when body changes, so in
+      // practice the gates are synchronized once we cross into
+      // overflow.
+      const headYawWorldDiff = Math.abs(
+        nextHeadYawWorld - lastCommandedHeadYawWorldRef.current,
+      );
       const pitchDiff = Math.abs(nextPitch - lastCommandedPitchRef.current);
       const bodyYawDiff = Math.abs(
         nextBodyYaw - lastCommandedBodyYawRef.current,
       );
 
-      if (
-        yawDiff >= TARGET_DELTA_THRESHOLD_DEG ||
-        pitchDiff >= TARGET_DELTA_THRESHOLD_DEG
-      ) {
-        lastCommandedYawRef.current = nextYaw;
-        lastCommandedPitchRef.current = nextPitch;
-        setHeadRpyDegRef.current(0, nextPitch, nextYaw);
-      }
+      const bodyChanged = bodyYawDiff >= TARGET_DELTA_THRESHOLD_DEG;
+      const headChanged =
+        headYawWorldDiff >= TARGET_DELTA_THRESHOLD_DEG ||
+        pitchDiff >= TARGET_DELTA_THRESHOLD_DEG;
 
-      if (bodyYawDiff >= TARGET_DELTA_THRESHOLD_DEG) {
+      // Send body BEFORE head so the daemon sees the new base
+      // orientation when it re-evaluates the head IK. The
+      // DataChannel is ordered, so successive sends arrive in
+      // order on the daemon side; this avoids a transient frame
+      // where the IK would clamp head against the previous body.
+      if (bodyChanged) {
         lastCommandedBodyYawRef.current = nextBodyYaw;
         setBodyYawDegRef.current(nextBodyYaw);
+      }
+
+      if (headChanged) {
+        lastCommandedHeadYawWorldRef.current = nextHeadYawWorld;
+        lastCommandedPitchRef.current = nextPitch;
+        setHeadRpyDegRef.current(0, nextPitch, nextHeadYawWorld);
       }
     };
 
     const interval = window.setInterval(tick, CONTROL_TICK_MS);
     return () => {
       window.clearInterval(interval);
-      // Restore the daemon's default automatic body-yaw clamp on
-      // any transition out of the enabled state (tab change, engine
-      // pause, unmount). The cleanup fires BEFORE the unmount recenter
-      // - that's fine: the recenter still commands `body_yaw=0`, which
-      // is well inside the relative-twist envelope anyway. Same retry
-      // logic as the take-over above, in case the DC is mid-teardown
-      // when the cleanup fires (we still want the daemon to land in
-      // its default safe mode for whatever runs after).
-      const sendAutoOn = (attempt: number): void => {
-        const ok = setAutomaticBodyYawEnabledRef.current(true);
-        if (ok || attempt >= 5) return;
-        const delay = 50 * Math.pow(2, attempt);
-        window.setTimeout(() => sendAutoOn(attempt + 1), delay);
-      };
-      sendAutoOn(0);
     };
   }, [enabled, deflectionRef]);
 
@@ -381,14 +349,14 @@ export function useHeadVelocityControl({
   // animation can outlive the component.
   useEffect(() => {
     return () => {
-      const startYaw = yawRef.current;
+      const startHeadYawRel = headYawRelRef.current;
       const startPitch = pitchRef.current;
       const startBodyYaw = bodyYawRef.current;
       // Skip the recenter when nothing to recenter from. Avoids
       // a useless burst of `setHeadRpyDeg(0, 0, 0)` calls on a
       // mount/unmount with no user interaction.
       if (
-        Math.abs(startYaw) < 0.5 &&
+        Math.abs(startHeadYawRel) < 0.5 &&
         Math.abs(startPitch) < 0.5 &&
         Math.abs(startBodyYaw) < 0.5
       ) {
@@ -414,17 +382,17 @@ export function useHeadVelocityControl({
         // gentle landing - reads smoother than linear without
         // looking sluggish at the start.
         const eased = 1 - Math.pow(1 - t, 3);
-        const yaw = startYaw * (1 - eased);
+        const headYawRel = startHeadYawRel * (1 - eased);
         const pitch = startPitch * (1 - eased);
         const bodyYaw = startBodyYaw * (1 - eased);
-        headSetter(0, pitch, yaw);
-        // Only fire body commands when there's something to return -
-        // skipping the no-op call keeps the DataChannel quiet for
-        // the common case where the user never pushed past the head
-        // saturation point.
+        const headYawWorld = headYawRel + bodyYaw;
+        // Same ordering invariant as the tick loop: body first,
+        // then head world, so the IK never sees a head pose against
+        // a stale body.
         if (Math.abs(startBodyYaw) >= 0.5) {
           bodySetter(bodyYaw);
         }
+        headSetter(0, pitch, headYawWorld);
 
         if (t < 1) {
           window.requestAnimationFrame(raf);
@@ -437,8 +405,8 @@ export function useHeadVelocityControl({
     // change would either tear down a still-in-flight recenter
     // (bad - the head jumps mid-animation) or create overlapping
     // recenters. Mount-once / unmount-once is the right scope.
-    // All dynamic state goes through refs (`yawRef`, `bodyYawRef`,
-    // `setHeadRpyDegRef`, `setBodyYawDegRef`) so the cleanup
-    // closure stays correct without listing them as deps.
+    // All dynamic state goes through refs (`headYawRelRef`,
+    // `bodyYawRef`, `setHeadRpyDegRef`, `setBodyYawDegRef`) so the
+    // cleanup closure stays correct without listing them as deps.
   }, []);
 }
