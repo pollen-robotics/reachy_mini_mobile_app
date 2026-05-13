@@ -1310,30 +1310,39 @@ export class ReachyMini extends EventTarget {
      * main state handler, so a healed blip never fires anything.
      */
     _scheduleIceGrace(ms, reason) {
-        this._clearIceGrace();
+        // Coalesce: if a grace is already pending and the reason hasn't
+        // changed, keep the original timer so a flurry of identical
+        // transitions doesn't reset the clock. If the reason changed
+        // (typically `disconnected` → `failed`, but also the reverse on
+        // some Android WebViews), replace the timer with the new
+        // (reason, ms) pair — the latest signal wins.
+        if (this._iceGraceTimer !== null) {
+            if (this._iceGraceReason === reason) return;
+            clearTimeout(this._iceGraceTimer);
+        }
         this._iceGraceReason = reason;
         this._iceGraceTimer = setTimeout(() => {
             this._iceGraceTimer = null;
-            const finalState = this._pc?.iceConnectionState;
-            // Healed during grace — `oniceconnectionstatechange` will
-            // have already called `_clearIceGrace()` and we won't be
-            // here, but double-check defensively in case the browser
-            // fired the state change after the timer was queued.
-            if (finalState === 'connected' || finalState === 'completed') {
-                this._iceGraceReason = null;
+            const r = this._iceGraceReason;
+            this._iceGraceReason = null;
+            const s = this._pc?.iceConnectionState;
+            if (s === 'connected' || s === 'completed') return; // healed
+            if (r === 'disconnected' && s === 'disconnected') {
+                this._emit('error', {
+                    source: 'webrtc',
+                    error: new Error(`ICE stuck in 'disconnected' for > ${ms}ms`),
+                });
                 return;
             }
-            const message = this._iceGraceReason === 'failed'
-                ? 'ICE connection failed'
-                : 'ICE disconnected';
-            this._iceGraceReason = null;
-            const err = new Error(message);
-            if (this._sessionReject) {
-                this._sessionReject(err);
-                this._sessionResolve = null;
-                this._sessionReject = null;
+            if (r === 'failed' || s === 'failed') {
+                const err = new Error('ICE connection failed');
+                if (this._sessionReject) {
+                    this._sessionReject(err);
+                    this._sessionResolve = null;
+                    this._sessionReject = null;
+                }
+                this._emit('error', { source: 'webrtc', error: err });
             }
-            this._emit('error', { source: 'webrtc', error: err });
         }, ms);
     }
 
@@ -1346,8 +1355,8 @@ export class ReachyMini extends EventTarget {
         this._iceGraceReason = null;
         if (this._pendingVisibilityHandler && typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', this._pendingVisibilityHandler);
-            this._pendingVisibilityHandler = null;
         }
+        this._pendingVisibilityHandler = null;
     }
 
     /**
@@ -1359,29 +1368,24 @@ export class ReachyMini extends EventTarget {
      * AND the ICE agent has had a moment to re-probe.
      */
     _armIceGraceOnVisibility() {
-        if (typeof document === 'undefined') {
-            this._scheduleIceGrace(ICE_DISCONNECT_GRACE_MS, 'disconnected');
-            return;
-        }
-        // Idempotent: a second `disconnected` event while still hidden
-        // shouldn't queue a second handler.
         if (this._pendingVisibilityHandler) return;
         const handler = () => {
-            if (document.hidden) return;
+            if (typeof document !== 'undefined' && document.hidden) return;
             document.removeEventListener('visibilitychange', handler);
             this._pendingVisibilityHandler = null;
-            // We're foreground again. Bail if ICE has already healed
-            // (very common pattern: hide → wake → reconnect happens
-            // instantly), otherwise start the grace window now.
-            const s = this._pc?.iceConnectionState;
-            if (s === 'connected' || s === 'completed') return;
-            if (s === 'disconnected' || s === 'failed') {
-                const ms = s === 'failed' ? ICE_FAILED_GRACE_MS : ICE_DISCONNECT_GRACE_MS;
-                this._scheduleIceGrace(ms, s);
+            if (!this._pc) return;
+            const s = this._pc.iceConnectionState;
+            if (s === 'connected' || s === 'completed') return; // healed in bg
+            if (s === 'failed') {
+                this._scheduleIceGrace(ICE_FAILED_GRACE_MS, 'failed');
+                return;
             }
+            // Still disconnected when we came back — give it a normal
+            // foreground grace window now that timers fire reliably.
+            this._scheduleIceGrace(ICE_DISCONNECT_GRACE_MS, 'disconnected');
         };
-        this._pendingVisibilityHandler = handler;
         document.addEventListener('visibilitychange', handler);
+        this._pendingVisibilityHandler = handler;
     }
 
     /**
@@ -1396,33 +1400,28 @@ export class ReachyMini extends EventTarget {
      *   apart a Wi-Fi → 4G swap (worth probing) from a no-op tick.
      *
      * Installed by `startSession()` and removed by `stopSession()` /
-     *  `disconnect()`. Idempotent: a second install while listeners are
+     * `disconnect()`. Idempotent: a second install while listeners are
      * already wired is a no-op.
      */
     _installNetworkListeners() {
-        if (typeof window === 'undefined') return;
-        if (this._onlineHandler) return;
-        this._onlineHandler = () => this._emit('networkOnline', {});
-        this._offlineHandler = () => this._emit('networkOffline', {});
-        window.addEventListener('online', this._onlineHandler);
-        window.addEventListener('offline', this._offlineHandler);
-        // NetworkInformation is Chromium / Android-only — Safari and
-        // iOS WKWebView don't ship it. Feature-detect rather than
-        // guess; the `connection` property can also be `undefined` in
-        // older builds (e.g. Firefox under some flags).
-        const conn = typeof navigator !== 'undefined'
-            ? navigator.connection
-            : null;
+        if (this._onlineHandler || typeof window === 'undefined') return;
+        const onOnline = () => this._emit('networkOnline', {});
+        const onOffline = () => this._emit('networkOffline', {});
+        window.addEventListener('online', onOnline);
+        window.addEventListener('offline', onOffline);
+        this._onlineHandler = onOnline;
+        this._offlineHandler = onOffline;
+
+        const conn = /** @type {any} */ (navigator).connection;
         if (conn && typeof conn.addEventListener === 'function') {
-            this._connectionChangeHandler = () => {
-                this._emit('networkChange', {
-                    effectiveType: conn.effectiveType,
-                    downlink: conn.downlink,
-                    rtt: conn.rtt,
-                    saveData: conn.saveData,
-                });
-            };
-            conn.addEventListener('change', this._connectionChangeHandler);
+            const onChange = () => this._emit('networkChange', {
+                effectiveType: conn.effectiveType,
+                downlink: conn.downlink,
+                rtt: conn.rtt,
+                saveData: conn.saveData,
+            });
+            conn.addEventListener('change', onChange);
+            this._connectionChangeHandler = onChange;
         }
     }
 
@@ -1430,19 +1429,17 @@ export class ReachyMini extends EventTarget {
         if (typeof window !== 'undefined') {
             if (this._onlineHandler) {
                 window.removeEventListener('online', this._onlineHandler);
-                this._onlineHandler = null;
             }
             if (this._offlineHandler) {
                 window.removeEventListener('offline', this._offlineHandler);
-                this._offlineHandler = null;
             }
         }
-        const conn = typeof navigator !== 'undefined'
-            ? navigator.connection
-            : null;
-        if (conn && this._connectionChangeHandler) {
+        const conn = /** @type {any} */ (navigator).connection;
+        if (conn && this._connectionChangeHandler && typeof conn.removeEventListener === 'function') {
             conn.removeEventListener('change', this._connectionChangeHandler);
         }
+        this._onlineHandler = null;
+        this._offlineHandler = null;
         this._connectionChangeHandler = null;
     }
 
