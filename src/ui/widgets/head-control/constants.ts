@@ -55,10 +55,9 @@
  * ±68.75°. Reason: in this hook the head-yaw clamp is the head-yaw
  * RELATIVE to the base (we use tank-style command composition - see
  * useHeadVelocityControl.ts header), and the daemon's safe-IK enforces
- * `|head_yaw_world - body_yaw| ≤ 65°` when `automatic_body_yaw` is
- * enabled (its default). Keeping the relative clamp at 60° leaves a
- * comfortable 5° margin, so the IK never has to silently rewrite our
- * body_yaw target near the edge of the range.
+ * `|head_yaw_world - body_yaw| ≤ 65°`. Keeping the relative clamp at
+ * 60° leaves a comfortable 5° margin, so the IK never has to silently
+ * rewrite our body_yaw target near the edge of the range.
  *
  * Pitch bounds reflect the robot-frame sign convention documented
  * above (`pitch > 0` = chin down). `MAX` is the most-negative value

@@ -2210,41 +2210,6 @@ const handle: ConversationEngineHandle = {
     }
   },
 
-  setAutomaticBodyYawEnabled: (enabled: boolean) => {
-    if (unmounted || !robot) {
-      console.warn(
-        `[engine] setAutomaticBodyYawEnabled(${enabled}): engine not ready`,
-      );
-      return false;
-    }
-    try {
-      // No dedicated wrapper in the JS SDK - we send the raw daemon
-      // command directly. Mirrors the daemon's protocol
-      // `SetAutomaticBodyYawCmd` (`reachy_mini/io/protocol.py`):
-      //   { type: "set_automatic_body_yaw", enabled: bool }
-      const ok = robot.sendRaw({
-        type: "set_automatic_body_yaw",
-        enabled,
-      });
-      // Loud success/failure logging because the daemon swallows this
-      // command silently (no completion ack) - the only signal we have
-      // is the SDK's return value, which is `false` iff the
-      // DataChannel isn't open. Without a log here, a closed-DC drop
-      // is invisible in the field.
-      if (ok === false) {
-        console.warn(
-          `[engine] setAutomaticBodyYawEnabled(${enabled}): DC not open`,
-        );
-      } else {
-        console.info(`[engine] setAutomaticBodyYawEnabled(${enabled}): sent`);
-      }
-      return ok !== false;
-    } catch (err) {
-      console.warn("[engine] setAutomaticBodyYawEnabled failed:", err);
-      return false;
-    }
-  },
-
   subscribeLogs: (options) => {
     // Older SDK builds (pre `feat/subscribe-logs-cmd`) ship without
     // `subscribeLogs`; degrade gracefully to a noop so the consumer's

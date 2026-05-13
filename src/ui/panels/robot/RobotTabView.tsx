@@ -84,7 +84,6 @@ interface RobotTabViewProps {
     | 'attachVideo'
     | 'setHeadRpyDeg'
     | 'setBodyYawDeg'
-    | 'setAutomaticBodyYawEnabled'
     | 'subscribeLogs'
     | 'webrtcTransport'
   >;
