@@ -65,6 +65,26 @@
  * Apps that opt-in install a listener mirroring the token one and
  * flip `data-theme` on `<html>`. Apps that don't simply stay on
  * the theme they got from the query param at load - no regression.
+ *
+ * Embed-config handover via postMessage
+ * ─────────────────────────────────────
+ * The query string already carries `embedded=1`, which is enough
+ * for an app to know it's running inside our shell. We also send
+ * an `embed-config` message after `onLoad` so apps can pick up
+ * richer host metadata (host identifier, chrome-provided hint)
+ * without us having to bloat the URL:
+ *
+ *     {
+ *       source: 'reachy-mini-shell',
+ *       kind: 'embed-config',
+ *       host: 'reachy-mini-mobile-app',
+ *       chrome: 'host-provided',  // we paint a top toolbar + close
+ *     }
+ *
+ * Apps that opt in (e.g. `reachy_mini_telepresence`) read this to
+ * suppress their own TopBar / chrome so the user sees a single,
+ * coherent toolbar (ours). Apps that ignore the message keep
+ * rendering whatever they already rendered - graceful degradation.
  */
 import {
   Box,
@@ -213,6 +233,41 @@ export default function AppIframeOverlay({
       console.warn('[apps] hf-token postMessage failed:', err);
     }
   }, [hfToken, targetOrigin]);
+
+  /**
+   * Tell the iframe it's running inside us so it can suppress its
+   * own toolbar / chrome. See the file-level "Embed-config
+   * handover via postMessage" comment for the receiving
+   * convention. Sent in the same `onLoad` burst as the token + the
+   * theme so a slow `message` listener still catches it.
+   *
+   * The shape is intentionally extensible: today it carries the
+   * host identifier and a `chrome: 'host-provided'` hint; future
+   * fields (host version, dismissable flag, top-bar offset) can
+   * ride on the same payload without touching the URL contract.
+   */
+  const sendEmbedConfigToIframe = useCallback((): void => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        {
+          source: 'reachy-mini-shell',
+          kind: 'embed-config',
+          host: 'reachy-mini-mobile-app',
+          // We always paint our own top toolbar (emoji + app name
+          // + close button), so apps should hide theirs to avoid
+          // a stacked-chrome look.
+          chrome: 'host-provided',
+        },
+        targetOrigin,
+      );
+    } catch (err) {
+      // A failed embed-config is purely cosmetic (the embedded
+      // app keeps its own chrome), so log and move on.
+      console.warn('[apps] embed-config postMessage failed:', err);
+    }
+  }, [targetOrigin]);
 
   /**
    * Push the shell's current theme to the iframe so apps that
@@ -384,11 +439,18 @@ export default function AppIframeOverlay({
               // before our theme params resolve.
               const currentTheme: 'dark' | 'light' = isDark ? 'dark' : 'light';
               sendThemeToIframe(currentTheme);
+              // Embed-config: same race, same 3-burst mitigation.
+              // Apps that opt-in (e.g. telepresence) read this to
+              // suppress their own chrome so we don't end up with
+              // two stacked toolbars.
+              sendEmbedConfigToIframe();
               burstTimersRef.current.push(
                 window.setTimeout(sendTokenToIframe, 100),
                 window.setTimeout(sendTokenToIframe, 500),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 100),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 500),
+                window.setTimeout(sendEmbedConfigToIframe, 100),
+                window.setTimeout(sendEmbedConfigToIframe, 500),
               );
             }}
             style={{
