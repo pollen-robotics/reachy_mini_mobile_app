@@ -35,6 +35,7 @@
     "motion": "^12.38.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "tauri-plugin-auth-session-api": "^0.2.2",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

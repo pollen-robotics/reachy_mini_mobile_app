@@ -1,57 +1,70 @@
 /**
- * RFC 8252 ("OAuth 2.0 for Native Apps") loopback flow against
- * Hugging Face for the remote-mode sign-in.
+ * In-app OAuth sign-in against Hugging Face.
  *
  * High-level dance
  * ────────────────
  *   1. Generate PKCE pair (code_verifier + code_challenge SHA-256).
- *   2. Start the Rust loopback HTTP server on `127.0.0.1:8000` that
- *      waits for `GET /api/hf-auth/oauth/callback?code=…`. We use
- *      this exact path because it's already registered with HF for
- *      the Pollen Reachy Mini OAuth client (`71146982-…`); reusing
- *      it means we don't need to register anything new on HF's side.
- *   3. Open the system browser at HF's `/oauth/authorize` with our
- *      `client_id`, `code_challenge`, `state`, and the matching
- *      `redirect_uri`. The user signs in, HF redirects back to our
- *      loopback server, the Rust task captures `code` + `state`.
- *   4. Exchange the code for a token via POST `/oauth/token` (no
- *      client secret because PKCE; HF accepts public clients).
- *   5. Hand the token to `useRemoteHfToken` for persistence.
+ *   2. Bind the Rust loopback bridge on `127.0.0.1:8000` (it waits
+ *      for HF to call back and rewrites the response as a 302 to
+ *      `reachymini://oauth/callback`).
+ *   3. Open `ASWebAuthenticationSession` (iOS/macOS) or Chrome Custom
+ *      Tabs (Android) pointing at HF's `/oauth/authorize`. The plugin
+ *      keeps the user inside our app and listens for the
+ *      `reachymini://` scheme.
+ *   4. User signs in -> HF redirects to `http://localhost:8000/...`
+ *      -> our loopback emits 302 to `reachymini://oauth/callback?...`
+ *      -> the auth session intercepts the scheme and resolves with
+ *      the full URL.
+ *   5. Parse `code`+`state`, verify `state`, exchange the code for an
+ *      access token via POST `/oauth/token` (PKCE, no client secret).
+ *   6. Resolve the token (and the username we fetch from
+ *      `/oauth/userinfo`) so `useRemoteHfToken` can persist it.
+ *
+ * Why an in-app session and not the system browser
+ * ────────────────────────────────────────────────
+ * Apple App Review (and increasingly Google) rejects flows that bounce
+ * the user out to Safari for sign-in. `ASWebAuthenticationSession` is
+ * the API Apple explicitly recommends: a system-managed sheet anchored
+ * to the app's key window, sharing Safari cookies (so the user gets
+ * SSO if they're already signed into HF in Safari) and the redirect
+ * captured cryptographically via a custom URL scheme.
+ *
+ * Why a loopback bridge instead of a direct `reachymini://` redirect
+ * ────────────────────────────────────────────────────────────────
+ * HF's OAuth client `71146982-...` is registered with exactly one
+ * redirect URI (`http://localhost:8000/api/hf-auth/oauth/callback`,
+ * shared with the daemon's "lite" flow). Adding a second redirect URI
+ * would need an HF-side config change. To avoid that, we keep the
+ * registered URI as-is and let the Rust loopback rewrite it onto our
+ * custom scheme. HF never sees the `reachymini://` URL.
  *
  * Why we don't re-use a Tauri webview for this
  * ────────────────────────────────────────────
  * `huggingface.co/login` ships `X-Frame-Options: SAMEORIGIN` which
- * blocks any iframe / WebView embed of the login page. That's why
- * the daemon-mediated flow already opens the system browser; we keep
- * the same trade-off here.
- *
- * Mobile note
- * ───────────
- * On iOS/Android the same loopback server pattern works (apps can
- * bind 127.0.0.1), provided the OS keeps the app alive in the
- * background while the system browser is foregrounded. Most OS
- * versions do for at least the few seconds the OAuth round-trip
- * takes; if it ever becomes a problem we'll add a deep-link
- * fallback (`reachymini://oauth/callback`).
+ * blocks any iframe / WebView embed. ASWebAuthenticationSession
+ * sidesteps that because it's a top-level webview, not an iframe.
  */
 import { invoke } from '@tauri-apps/api/core';
-
-import { openExternalUrl } from '@/shared/tauri/openUrl';
+import { start as startAuthSession } from 'tauri-plugin-auth-session-api';
 
 const HF_OAUTH_CLIENT_ID = '71146982-8184-45a2-b05a-d561b3cd701d';
 const HF_OAUTH_REDIRECT_URI = 'http://localhost:8000/api/hf-auth/oauth/callback';
 const HF_OAUTH_AUTHORIZE_URL = 'https://huggingface.co/oauth/authorize';
 const HF_OAUTH_TOKEN_URL = 'https://huggingface.co/oauth/token';
 
+/**
+ * Custom URL scheme `ASWebAuthenticationSession` (and the matching
+ * Chrome Custom Tabs intent filter on Android) intercepts. Mirrors the
+ * `SCHEME_REDIRECT_PREFIX` constant in `src-tauri/src/oauth.rs`. If you
+ * change one, change the other and update the Android intent filter in
+ * `AndroidManifest.xml`.
+ */
+const CALLBACK_URL_SCHEME = 'reachymini';
+
 // Mirrors the daemon's default scopes (see hf_auth.py). Kept in sync
 // so the token we get is interchangeable with one obtained on LAN.
 const HF_OAUTH_SCOPES =
   'openid profile read-repos write-repos manage-repos inference-api';
-
-interface OAuthCallbackResult {
-  code: string;
-  state: string | null;
-}
 
 interface PkcePair {
   verifier: string;
@@ -70,41 +83,82 @@ export async function loginWithHuggingFace(): Promise<{
   const pkce = await generatePkcePair();
   const state = randomUrlSafe(32);
 
-  // Kick off the loopback listener BEFORE opening the browser, so
-  // there's no race where HF redirects faster than we can bind.
-  const callbackPromise = invoke<OAuthCallbackResult>('start_oauth_callback', {
-    expectedState: state,
-  });
+  // Bind 127.0.0.1:8000 BEFORE opening the session so the redirect
+  // can't race the bind. Bridge cleans up after one callback or on
+  // FLOW_TIMEOUT, but we also cancel explicitly in `finally` below
+  // in case the user dismisses the session before HF ever redirects.
+  await invoke('start_oauth_bridge');
 
-  // Best-effort: if the user closes the browser without completing,
-  // we surface that to the UI as a Cancelled error from the Rust
-  // side after FLOW_TIMEOUT (10 min). For tighter UX we expose a
-  // `cancel()` helper below.
-  const authorizeUrl = buildAuthorizeUrl({
-    state,
-    codeChallenge: pkce.challenge,
-  });
-  await openExternalUrl(authorizeUrl);
+  try {
+    const authorizeUrl = buildAuthorizeUrl({
+      state,
+      codeChallenge: pkce.challenge,
+    });
 
-  const callback = await callbackPromise;
+    // The plugin throws a *string* (not an Error) per its docs:
+    //   - "user_cancelled" when the user dismisses the sheet
+    //   - "Auth session error: ..." for platform-level failures
+    //   - "In-app auth sessions are only available on Apple and Android
+    //     platforms" on Linux/Windows
+    // We re-throw as Error so `friendlyAuthError` can pattern-match.
+    let callbackUrl: string;
+    try {
+      callbackUrl = await startAuthSession(authorizeUrl, CALLBACK_URL_SCHEME);
+    } catch (raw) {
+      throw mapAuthSessionError(raw);
+    }
 
-  const tokenPayload = await exchangeCodeForToken({
-    code: callback.code,
-    codeVerifier: pkce.verifier,
-  });
+    const url = new URL(callbackUrl);
+    const callbackError = url.searchParams.get('error');
+    if (callbackError) {
+      const description = url.searchParams.get('error_description') ?? '';
+      throw new Error(
+        `Provider error: HF returned ${callbackError}${
+          description ? ` (${description})` : ''
+        }`,
+      );
+    }
 
-  const username = await fetchUsername(tokenPayload.access_token);
+    const code = url.searchParams.get('code');
+    const returnedState = url.searchParams.get('state');
+    if (!code) {
+      throw new Error('OAuth callback missing `code` parameter');
+    }
+    if (returnedState !== state) {
+      throw new Error(
+        `StateMismatch: expected ${state}, got ${returnedState ?? 'null'}`,
+      );
+    }
 
-  return { token: tokenPayload.access_token, username };
+    const tokenPayload = await exchangeCodeForToken({
+      code,
+      codeVerifier: pkce.verifier,
+    });
+
+    const username = await fetchUsername(tokenPayload.access_token);
+    return { token: tokenPayload.access_token, username };
+  } finally {
+    // Always release the loopback. If `startAuthSession` resolved, the
+    // bridge already exited after sending its 302 (no-op). If the user
+    // cancelled or an error fired before HF hit the loopback, this
+    // releases port 8000 immediately so a retry can rebind without
+    // waiting for FLOW_TIMEOUT.
+    try {
+      await invoke('cancel_oauth_bridge');
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 /**
- * Aborts an in-flight loopback listener. Safe to call when no flow
- * is running (no-op on the Rust side).
+ * Aborts an in-flight bridge listener. Safe to call when no flow is
+ * running (no-op on the Rust side). Wired to the "Back" / "Cancel"
+ * button on the sign-in screen.
  */
 export async function cancelLoginFlow(): Promise<void> {
   try {
-    await invoke('cancel_oauth_callback');
+    await invoke('cancel_oauth_bridge');
   } catch {
     // Cancellation is a best-effort hint, never a hard failure.
   }
@@ -118,6 +172,9 @@ function buildAuthorizeUrl(opts: {
 }): string {
   const params = new URLSearchParams({
     client_id: HF_OAUTH_CLIENT_ID,
+    // Stay on the HF-registered redirect URI: HF only knows about the
+    // loopback URL, the `reachymini://` scheme is invented locally by
+    // our bridge (see `src-tauri/src/oauth.rs`).
     redirect_uri: HF_OAUTH_REDIRECT_URI,
     response_type: 'code',
     scope: HF_OAUTH_SCOPES,
@@ -141,7 +198,9 @@ async function exchangeCodeForToken(opts: {
   codeVerifier: string;
 }): Promise<TokenResponse> {
   // Public PKCE client: send `client_id` in the body, no secret.
-  // Content-Type must be x-www-form-urlencoded per RFC 6749.
+  // Content-Type must be x-www-form-urlencoded per RFC 6749. The
+  // `redirect_uri` MUST match the value we sent in `/authorize` (the
+  // loopback URL, not the custom scheme).
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code: opts.code,
@@ -181,11 +240,36 @@ async function fetchUsername(token: string): Promise<string | null> {
       },
     });
     if (!resp.ok) return null;
-    const data = (await resp.json()) as { name?: string; preferred_username?: string };
+    const data = (await resp.json()) as {
+      name?: string;
+      preferred_username?: string;
+    };
     return data.preferred_username ?? data.name ?? null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Convert the plugin's string-style errors into `Error` instances whose
+ * `message` plays nicely with `friendlyAuthError` on the UI side. We
+ * keep the existing token vocabulary (Cancelled / Bind / Timeout / ...)
+ * so the same regex mapper used by the old loopback flow still works.
+ */
+function mapAuthSessionError(raw: unknown): Error {
+  const message = typeof raw === 'string' ? raw : String(raw);
+  if (message === 'user_cancelled') {
+    return new Error('Cancelled: user dismissed the sign-in sheet');
+  }
+  if (message.includes('only available on Apple and Android')) {
+    return new Error(
+      'In-app sign-in is not supported on this platform; build for iOS or Android to test.',
+    );
+  }
+  if (message.startsWith('Auth session error:')) {
+    return new Error(`Provider error: ${message}`);
+  }
+  return new Error(message);
 }
 
 /* --- PKCE primitives -------------------------------------------------- */

@@ -2305,6 +2305,11 @@ svg-parser@^2.0.4:
   resolved "https://registry.yarnpkg.com/svg-parser/-/svg-parser-2.0.4.tgz#fdc2e29e13951736140b76cb122c8ee6630eb6b5"
   integrity sha512-e4hG1hRwoOdRb37cIMSgzNsxyzKfayW6VOflrwvR+/bzrkyxY/31WkbgnQpgtrNp1SdpJvpUAGTa/ZoiPNDuRQ==
 
+tauri-plugin-auth-session-api@^0.2.2:
+  version "0.2.2"
+  resolved "https://registry.yarnpkg.com/tauri-plugin-auth-session-api/-/tauri-plugin-auth-session-api-0.2.2.tgz#cd52aee5c47ca9de964d1bd731aa078a7f778680"
+  integrity sha512-4kqQ4XZo0z3F8pW88/ckz5tUk3TX/sI8MJMgMNRC+7hrlasYIxweLalgI8h5cayk2/WEDHb4zyLQaCU84eUUbw==
+
 tinybench@^2.9.0:
   version "2.9.0"
   resolved "https://registry.npmjs.org/tinybench/-/tinybench-2.9.0.tgz"

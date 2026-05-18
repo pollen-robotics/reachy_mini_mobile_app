@@ -10,6 +10,7 @@
     "os:allow-version",
     "os:allow-os-type",
     "blec:default",
+    "auth-session:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

@@ -28,14 +28,27 @@ tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-os = "2"
 tauri-plugin-http = "2"
 
-# Opens a URL in the user's default browser. We use it for two things:
-#   1. Launching the HuggingFace OAuth flow in the system browser (so the
-#      WKWebView / Android WebView never sees `huggingface.co/login`, which
-#      sends `X-Frame-Options: SAMEORIGIN`).
-#   2. Opening the conversation Space (`*.hf.space`) in the system browser
-#      since its own OAuth flow hits the same SAMEORIGIN wall when iframed.
-# Same plugin the desktop app relies on for `openUrl`.
+# Opens a URL in the user's default browser. Used for non-auth flows
+# (e.g. opening the conversation Space `*.hf.space` directly in Safari
+# when the user explicitly asks to leave the app, or surfacing support
+# links from the settings panel). The HuggingFace OAuth flow no longer
+# uses this plugin: Apple App Review rejects flows that bounce out to
+# Safari for sign-in, so OAuth now goes through ASWebAuthenticationSession
+# (see `tauri-plugin-auth-session` below).
 tauri-plugin-opener = "2"
+
+# In-app OAuth via ASWebAuthenticationSession (iOS/macOS) and Chrome
+# Custom Tabs (Android). Keeps the user inside the app for the entire
+# sign-in dance, which is what Apple's App Store Review wants to see
+# (any flow that hands off to Safari gets rejected as "poor UX").
+#
+# We pair the plugin with our existing loopback bridge (`oauth.rs`):
+# HF still redirects to `http://localhost:8000/...` (its registered
+# redirect URI, unchanged), our loopback emits a 302 to
+# `reachymini://oauth/callback?<query>`, and the auth session
+# intercepts the custom scheme to return the URL to the frontend.
+# That way HF-side configuration stays untouched.
+tauri-plugin-auth-session = "0.2"
 
 # BLE client plugin - exact same dependency the desktop app uses. The
 # plugin gives us a single-connection model that naturally fits the

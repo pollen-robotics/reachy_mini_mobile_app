@@ -7,14 +7,13 @@ import { openUrl as tauriOpenUrl } from '@tauri-apps/plugin-opener';
  * default browser), on Android it fires an ACTION_VIEW Intent, and on
  * desktop it uses the same plugin as the desktop app.
  *
- * We always go through the system browser for HuggingFace-hosted pages
- * because:
- *   * `huggingface.co/login` sets `X-Frame-Options: SAMEORIGIN`, so any
- *     iframe we hand it lands on a blank page.
- *   * `*.hf.space` Spaces with `hf_oauth: true` (our conversation demo is
- *     one) trigger that login redirect as soon as the page boots.
- *   * Using the system browser gives the user access to their existing
- *     HF cookies and to saved passwords / 2FA flows.
+ * NOTE: this helper is NOT used for the HuggingFace OAuth sign-in flow
+ * anymore. Apple App Review rejects flows that hand the user off to
+ * Safari for sign-in, so OAuth now runs inside the app via
+ * `ASWebAuthenticationSession` (see `src/features/auth/oauthLoopback.ts`).
+ * Keep this helper for other non-auth use cases: opening a Space in the
+ * system browser when the user explicitly chooses to leave the app,
+ * surfacing support / docs links, etc.
  */
 export async function openExternalUrl(url: string): Promise<void> {
   await tauriOpenUrl(url);

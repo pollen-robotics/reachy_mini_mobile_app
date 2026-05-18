@@ -188,30 +188,56 @@ Without a token, neither the remote section nor the conversation
 engine can do anything useful, so we refuse to render the rest of the
 app until we have one.
 
-### 5.2. Flow (RFC 8252 PKCE loopback)
+### 5.2. Flow (in-app ASWebAuthenticationSession + loopback bridge)
+
+Apple App Review rejects flows that hand the user off to Safari for
+sign-in ("poor UX" per their guidelines, see [`docs/APP_STORE_COMPLIANCE.md`](APP_STORE_COMPLIANCE.md#27-sign-in-must-stay-in-app)).
+The flow below keeps the user inside the app via
+`ASWebAuthenticationSession` (iOS/macOS) or Chrome Custom Tabs (Android)
+while reusing HF's existing loopback redirect URI so no HF-side config
+change is needed.
 
 1. User taps **Sign in with Hugging Face** in `RemoteSignInScreen`.
 2. Frontend calls `loginWithHuggingFace()`:
    1. Generate a PKCE pair (verifier 64 bytes, challenge SHA-256 +
       base64url).
-   2. `invoke('start_oauth_callback', { expectedState })` boots the
-      Rust loopback HTTP server on `127.0.0.1:8000`.
-   3. `openExternalUrl(authorizeUrl)` opens the system browser at
+   2. `invoke('start_oauth_bridge')` binds `127.0.0.1:8000` and spawns
+      a tokio listener that waits for ONE HTTP request matching
+      `/api/hf-auth/oauth/callback`.
+   3. `startAuthSession(authorizeUrl, 'reachymini')`
+      (from `tauri-plugin-auth-session`) opens an
+      `ASWebAuthenticationSession` modal anchored on the app's key
+      window, pointed at
       `https://huggingface.co/oauth/authorize?...&redirect_uri=
       http://localhost:8000/api/hf-auth/oauth/callback&...`.
-3. User signs in on `huggingface.co` in the system browser.
-4. HF redirects to `http://localhost:8000/api/hf-auth/oauth/callback?
-   code=...&state=...`.
-5. Rust loopback validates `state` and resolves the pending invoke
-   with `{ code, state }`.
-6. Frontend exchanges `code` for an access token via
+3. User signs in on `huggingface.co` inside the in-app auth sheet.
+4. HF redirects the embedded WebView to
+   `http://localhost:8000/api/hf-auth/oauth/callback?code=...&state=...`.
+5. The Rust loopback bridge responds with
+   `HTTP/1.1 302 Found` and
+   `Location: reachymini://oauth/callback?<same query>` (blind
+   passthrough, no parsing).
+6. The WebView attempts the `reachymini://` navigation;
+   `ASWebAuthenticationSession` intercepts the scheme, closes the
+   modal, and resolves the plugin promise with the full URL.
+7. Frontend parses `code`+`state`, verifies `state` matches the value
+   generated in step 2.1, then exchanges `code` for an access token via
    `POST https://huggingface.co/oauth/token` (PKCE: `client_id`
-   in body, no secret).
-7. Frontend calls `https://huggingface.co/oauth/userinfo` for the
+   in body, no secret, `redirect_uri` = the loopback URL HF saw).
+8. Frontend calls `https://huggingface.co/oauth/userinfo` for the
    username.
-8. `useRemoteHfToken.setToken(token, username)` persists into
+9. `useRemoteHfToken.setToken(token, username)` persists into
    `localStorage` and seeds `sessionStorage.hf_token` so the SDK can
    read it.
+10. `invoke('cancel_oauth_bridge')` runs unconditionally in `finally`
+    so port 8000 is released even if the user dismissed the auth sheet
+    before HF redirected.
+
+Why the bridge rather than a direct `reachymini://` redirect: HF's
+OAuth client `71146982-...` is registered with exactly one redirect URI
+(`http://localhost:8000/api/hf-auth/oauth/callback`, shared with the
+daemon's "lite" flow). Adding a second one would need an HF-side
+change; rewriting it locally with our loopback avoids that entirely.
 
 ### 5.3. Persistence
 
@@ -833,7 +859,7 @@ Sequence (all over the persistent BLE session):
 
 | Situation | Outcome |
 |-----------|---------|
-| Sign-in browser closed without completing | After 10 min, Rust loopback rejects with `Timeout` → friendly French-or-English error in `RemoteSignInScreen`. Cancel button issues `cancel_oauth_callback`. |
+| Sign-in sheet closed without completing | The auth-session plugin rejects with `user_cancelled` -> mapped to a `Cancelled` error and `friendlyAuthError` surfaces "Sign-in cancelled." The `finally` block in `loginWithHuggingFace` calls `cancel_oauth_bridge` so port 8000 frees up immediately. If the user never opens the sheet at all, the Rust bridge releases itself after `FLOW_TIMEOUT` (10 min). |
 | BLE adapter off | `ScanScreen` Bluetooth section shows "Bluetooth is off" empty state. Adapter monitor hooked via `useInitBleListeners`. |
 | HF central temporarily unavailable | Remote section shows "Couldn't reach Hugging Face" + last cached list (no flash of empty). |
 | Token rejected (401/403) | Remote section error + Retry; user usually needs to sign out and back in. |

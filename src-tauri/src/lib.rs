@@ -45,6 +45,13 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
+        // In-app OAuth via ASWebAuthenticationSession (iOS/macOS) and
+        // Chrome Custom Tabs (Android). Replaces the old "open Safari +
+        // wait on loopback" flow that Apple App Review now rejects.
+        // See `oauth.rs` for the loopback bridge that ferries HF's
+        // localhost callback to the `reachymini://` scheme this plugin
+        // intercepts.
+        .plugin(tauri_plugin_auth_session::init())
         // BLE: the plugin init panics when Bluetooth is unavailable on
         // the host (no adapter in some macOS headless setups). Catch
         // the panic so the app still boots in daemon-less dev modes,
@@ -79,8 +86,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::daemon_fetch,
             commands::local_ips,
-            oauth::start_oauth_callback,
-            oauth::cancel_oauth_callback,
+            oauth::start_oauth_bridge,
+            oauth::cancel_oauth_bridge,
         ]);
 
     builder

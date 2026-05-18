@@ -208,7 +208,38 @@ available", emoji `🎒` etc.). "Apps" is fine; "App Store" is not.
 Search the source for any forbidden term before submission. See
 section 6.4.
 
-### 2.6 Privacy (5.1.x)
+### 2.6 Sign-in must stay in-app (poor-UX rejection)
+
+Separate from the UGC blocker, Apple has tightened its review on flows
+that hand the user off to Safari for OAuth. The typical rejection
+wording is:
+
+> "We noticed that the user is taken to the default web browser to
+> sign in or register for an account, which provides a poor user
+> experience."
+
+This applies even when the external Safari flow is functionally
+correct. The fix is to use [`ASWebAuthenticationSession`](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession)
+(Apple's recommended API since iOS 13) so the user stays inside the
+app. We do this via [`tauri-plugin-auth-session`](https://github.com/yanqianglu/tauri-plugin-auth-session)
+which wraps `ASWebAuthenticationSession` on iOS/macOS and Chrome Custom
+Tabs on Android.
+
+Because Hugging Face's OAuth client `71146982-...` is registered with
+only a loopback redirect URI (`http://localhost:8000/api/hf-auth/oauth/callback`),
+and we did not want to ask HF to add a custom scheme, we keep the
+loopback alive as a *bridge*: HF redirects to localhost, the Rust
+listener responds with `HTTP/1.1 302` to `reachymini://oauth/callback?<query>`,
+the auth session intercepts the custom scheme and resolves. See
+[`src-tauri/src/oauth.rs`](../src-tauri/src/oauth.rs) and
+[`src/features/auth/oauthLoopback.ts`](../src/features/auth/oauthLoopback.ts).
+
+**Verdict on 2.7**: in-app sign-in is in place on iOS and macOS. The
+Android intent filter for the `reachymini` scheme still needs to be
+declared in `AndroidManifest.xml` once `src-tauri/gen/android/` is
+generated (the plugin's README documents the snippet).
+
+### 2.7 Privacy (5.1.x)
 
 Standard work, but specific items to check:
 
@@ -231,7 +262,7 @@ Standard work, but specific items to check:
   open from the catalog operate independently and are subject to the
   privacy policy of their author".
 
-### 2.7 Age rating
+### 2.8 Age rating
 
 UGC catalogs typically receive **12+** at minimum from Apple's
 questionnaire because of "Infrequent/Mild Mature/Suggestive Themes"
@@ -448,6 +479,9 @@ Estimated effort: 0.5 day, mostly legal review.
 
 Before tagging the first App Store / Play Store build:
 
+- [x] In-app sign-in via `ASWebAuthenticationSession` (2.6)
+- [ ] Android intent filter for `reachymini` scheme added once
+      `gen/android/` is generated (2.6)
 - [ ] All four UGC pillars implemented (6.1.1 - 6.1.4)
 - [ ] Server-side kill switch live and tested (6.2.2)
 - [ ] Pre-publication moderation pipeline live (6.2.1)

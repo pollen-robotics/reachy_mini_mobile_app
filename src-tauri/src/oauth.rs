@@ -1,35 +1,48 @@
-//! Loopback OAuth callback receiver.
+//! Loopback OAuth bridge for in-app ASWebAuthenticationSession.
 //!
 //! Why this exists
 //! ───────────────
-//! The mobile app's "remote" mode needs to obtain a HuggingFace
-//! access token without going through the robot daemon (which is, by
-//! definition, unreachable in remote mode). RFC 8252 ("OAuth 2.0 for
-//! Native Apps") describes the canonical pattern: open the system
-//! browser, let it redirect back to a loopback HTTP server the app
-//! itself runs.
+//! Apple's App Store Review rejects OAuth flows that hand the user off
+//! to Safari for sign-in ("poor UX" per their guidelines). The approved
+//! pattern on iOS is `ASWebAuthenticationSession`, which intercepts a
+//! *custom URL scheme* (e.g. `reachymini://oauth/callback`) and keeps
+//! the user inside the app for the duration of the round-trip.
 //!
-//! HuggingFace already has a registered redirect URI we can reuse
-//! (`http://localhost:8000/api/hf-auth/oauth/callback`, registered
-//! against client `71146982-…` — Pollen's reachy-mini OAuth app).
-//! That redirect was originally meant for the daemon when it runs in
-//! "Lite" mode on a host machine; on a phone or laptop with no
-//! daemon running locally, port 8000 is free, so we hijack the same
-//! URL for the mobile app's OAuth flow. No HF-side change needed.
+//! HuggingFace's OAuth client `71146982-...` is registered with exactly
+//! one redirect URI (`http://localhost:8000/api/hf-auth/oauth/callback`,
+//! originally provisioned for the daemon's loopback flow). We don't want
+//! to ask HF to register an additional `reachymini://` redirect, so this
+//! module acts as a *bridge*:
+//!
+//!   1. Frontend calls [`start_oauth_bridge`] which binds `127.0.0.1:8000`
+//!      and spawns a tokio task that waits for ONE HTTP request matching
+//!      `/api/hf-auth/oauth/callback`.
+//!   2. Frontend opens `ASWebAuthenticationSession` (via
+//!      `tauri-plugin-auth-session`) pointing at HF's `/oauth/authorize`
+//!      with `redirect_uri=http://localhost:8000/...` and
+//!      `callbackUrlScheme=reachymini`. The user signs in.
+//!   3. HF redirects the embedded WebView to `http://localhost:8000/...`,
+//!      which lands on our loopback.
+//!   4. The loopback responds with `HTTP/1.1 302 Found` and
+//!      `Location: reachymini://oauth/callback?<same query>` -- a
+//!      blind passthrough of HF's query string.
+//!   5. The embedded WebView attempts to navigate to `reachymini://`,
+//!      `ASWebAuthenticationSession` intercepts the scheme and resolves
+//!      the plugin promise with the full URL.
+//!   6. Frontend parses `code`+`state` from that URL, validates `state`,
+//!      and exchanges the code for a token.
+//!
+//! Parsing & state validation happen entirely on the frontend now. This
+//! bridge is intentionally dumb: it doesn't read the params, it just
+//! mirrors them onto the scheme. That keeps the surface tiny and avoids
+//! the "validate twice, drift between languages" trap.
 //!
 //! Lifecycle
 //! ─────────
-//! Frontend calls `start_oauth_callback` → spawns a tokio task that:
-//!   1. Binds to `127.0.0.1:8000`.
-//!   2. Accepts ONE connection that targets the callback path.
-//!   3. Parses query params, returns a small HTML page to the
-//!      browser ("you can close this tab"), and closes.
-//!   4. Resolves with `{code, state}` so the frontend can finish
-//!      the PKCE exchange (token endpoint POST) itself.
-//!
-//! `cancel_oauth_callback` exists as an escape hatch when the user
-//! gives up: it drops the listener so the port frees up immediately
-//! and a future attempt won't fail with "Address already in use".
+//! `start_oauth_bridge` returns once the bind succeeded, then the
+//! listener task lives in the background. It exits after the first
+//! callback hit, on cancellation, or on [`FLOW_TIMEOUT`]. The slot
+//! is released in all three cases so a follow-up sign-in works.
 
 use std::io::Result as IoResult;
 use std::sync::Mutex;
@@ -45,69 +58,59 @@ use tokio::time::timeout;
 /// Loopback port we bind to. Must match the redirect URI HF has
 /// registered for the OAuth client we reuse. See module docs.
 const LOOPBACK_PORT: u16 = 8000;
-/// Path component the OAuth flow sends the browser to. Same caveat:
-/// matches the registered redirect URI exactly.
+/// Path component the OAuth flow sends the browser to. Must match the
+/// registered redirect URI exactly.
 const CALLBACK_PATH: &str = "/api/hf-auth/oauth/callback";
-/// Hard wall on how long we'll keep the listener alive waiting for
-/// the user to complete the browser flow. Anything longer almost
-/// certainly means the user closed the tab; surface an error so we
-/// can release the port instead of hogging it forever.
+/// Custom URL scheme `ASWebAuthenticationSession` (and the matching
+/// Chrome Custom Tabs intent filter on Android) listens for. The
+/// hostname (`oauth`) and path (`/callback`) are arbitrary and only
+/// chosen for readability in logs.
+const SCHEME_REDIRECT_PREFIX: &str = "reachymini://oauth/callback";
+/// Hard wall on how long we'll hold port 8000 waiting for the browser
+/// callback. Anything longer almost certainly means the user dropped
+/// the auth sheet; release the port so a retry can rebind.
 const FLOW_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Error, Serialize)]
 #[serde(tag = "kind", content = "message")]
 pub enum OAuthError {
-    #[error("oauth callback already in flight")]
+    #[error("oauth bridge already in flight")]
     AlreadyRunning,
     #[error("could not bind {addr}: {detail}")]
     Bind { addr: String, detail: String },
-    #[error("oauth flow timed out")]
-    Timeout,
-    #[error("oauth flow cancelled")]
-    Cancelled,
-    #[error("oauth provider returned error: {error} (description: {description:?})")]
-    Provider {
-        error: String,
-        description: Option<String>,
-    },
-    #[error("oauth callback missing 'code' parameter")]
-    MissingCode,
-    #[error("oauth callback state mismatch: expected {expected:?}, got {got:?}")]
-    StateMismatch {
-        expected: Option<String>,
-        got: Option<String>,
-    },
     #[error("internal error: {0}")]
     Internal(String),
 }
 
-/// Result handed back to the frontend when the loopback flow
-/// resolves successfully. `state` is opaque to us (we only verify
-/// it matches what the caller passed, never interpret it).
-#[derive(Debug, Serialize)]
-pub struct OAuthCallback {
-    pub code: String,
-    pub state: Option<String>,
-}
-
 /// Single in-flight slot. `Some(_)` means a listener task is alive
-/// somewhere and holding port 8000; subsequent calls bail with
-/// `AlreadyRunning` rather than racing two binds.
+/// somewhere and holding port 8000; subsequent `start_oauth_bridge`
+/// calls bail with `AlreadyRunning` instead of racing the bind.
+///
+/// The held value is a sender that, when dropped, signals the task
+/// to abort via its `oneshot::Receiver` arm. `cancel_oauth_bridge`
+/// just drops the slot's content for that effect.
 static IN_FLIGHT: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
-/// Returns one of:
-///   - the captured callback parameters,
-///   - `Cancelled` if `cancel_oauth_callback` was invoked,
-///   - `Timeout` if the user never finishes the browser flow.
+/// Bind the loopback bridge and spawn its listener task.
+///
+/// Returns synchronously after the bind succeeds so the caller can
+/// open the auth session immediately without racing on port 8000.
+/// The listener task lives in the background and exits on:
+///   - the first matching callback hit (302 sent, success),
+///   - drop of the in-flight sender (cancellation),
+///   - `FLOW_TIMEOUT` elapsing without a hit.
+///
+/// We don't surface the captured `code`/`state` to the frontend here:
+/// `ASWebAuthenticationSession` already delivers the full URL to the
+/// auth-session plugin once it sees the `reachymini://` redirect we
+/// emit in the 302. Letting that path be the single source of truth
+/// avoids parsing the same params twice in two languages.
 #[tauri::command]
-pub async fn start_oauth_callback(
-    expected_state: Option<String>,
-) -> Result<OAuthCallback, OAuthError> {
-    // Reserve the slot first. If we cannot, fail fast: trying to
-    // bind on a busy port would block until the previous listener
-    // drops, which obscures the real "user spammed Sign in" cause.
-    let cancel_tx = {
-        let mut slot = IN_FLIGHT.lock().map_err(|e| OAuthError::Internal(e.to_string()))?;
+pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
+    let cancel_rx = {
+        let mut slot = IN_FLIGHT
+            .lock()
+            .map_err(|e| OAuthError::Internal(e.to_string()))?;
         if slot.is_some() {
             return Err(OAuthError::AlreadyRunning);
         }
@@ -116,159 +119,120 @@ pub async fn start_oauth_callback(
         rx
     };
 
-    // From this point on we MUST clear the slot before returning,
-    // success or not, so a follow-up `start_oauth_callback` works.
-    let result = run_listener(expected_state, cancel_tx).await;
+    // Bind synchronously: callers want immediate feedback if port 8000
+    // is taken (another sign-in racing, or some other localhost service
+    // squatting the port). Doing this inside the spawned task would
+    // turn a deterministic failure into a silent hang from the JS
+    // side's point of view.
+    let addr = format!("127.0.0.1:{LOOPBACK_PORT}");
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            release_slot();
+            return Err(OAuthError::Bind {
+                addr,
+                detail: e.to_string(),
+            });
+        }
+    };
 
-    {
-        let mut slot = IN_FLIGHT.lock().map_err(|e| OAuthError::Internal(e.to_string()))?;
-        *slot = None;
-    }
+    tracing::info!(
+        target: "oauth",
+        "bridge bound on {addr}, waiting for HF callback to relay onto {SCHEME_REDIRECT_PREFIX}",
+    );
 
-    result
-}
+    tokio::spawn(async move {
+        let outcome = run_bridge(listener, cancel_rx).await;
+        match outcome {
+            Ok(()) => tracing::info!(
+                target: "oauth",
+                "bridge relayed callback to {SCHEME_REDIRECT_PREFIX}",
+            ),
+            Err(reason) => tracing::warn!(target: "oauth", "bridge exited: {reason}"),
+        }
+        release_slot();
+    });
 
-#[tauri::command]
-pub fn cancel_oauth_callback() -> Result<(), OAuthError> {
-    let mut slot = IN_FLIGHT
-        .lock()
-        .map_err(|e| OAuthError::Internal(e.to_string()))?;
-    // Dropping the sender closes the oneshot; the listener task's
-    // select! arm wakes up on the closed-channel signal and exits
-    // with `Cancelled`. We don't care if the receiver was already
-    // dropped (race with success) — that just means there's nothing
-    // to cancel any more.
-    *slot = None;
     Ok(())
 }
 
-async fn run_listener(
-    expected_state: Option<String>,
+/// Abort an in-flight bridge. Safe to call when no bridge is running
+/// (no-op). Used as both the user-pressed-cancel hook and as a finally
+/// cleanup from the frontend after the auth-session promise resolves
+/// (so we release port 8000 even if the user cancelled the auth sheet
+/// before HF ever fired the redirect).
+#[tauri::command]
+pub fn cancel_oauth_bridge() -> Result<(), OAuthError> {
+    release_slot();
+    Ok(())
+}
+
+fn release_slot() {
+    if let Ok(mut slot) = IN_FLIGHT.lock() {
+        // Dropping the sender closes the oneshot; the listener task's
+        // `select!` arm wakes up on the closed-channel signal and exits.
+        // If the slot was already empty (race between success and
+        // cancel) this is a no-op.
+        *slot = None;
+    }
+}
+
+async fn run_bridge(
+    listener: TcpListener,
     mut cancel_rx: oneshot::Receiver<()>,
-) -> Result<OAuthCallback, OAuthError> {
-    let addr = format!("127.0.0.1:{LOOPBACK_PORT}");
-    let listener = TcpListener::bind(&addr).await.map_err(|e| OAuthError::Bind {
-        addr: addr.clone(),
-        detail: e.to_string(),
-    })?;
-
-    tracing::info!(target: "oauth", "loopback bound on {addr}, waiting for browser callback");
-
+) -> Result<(), String> {
     // We accept multiple connections in case the browser hits
-    // favicon.ico or DevTools probes the page before the real
+    // `/favicon.ico` or DevTools probes the page before the real
     // callback lands. We only return for a request that targets
     // CALLBACK_PATH; everything else gets a 404 and we keep going.
-    let captured = loop {
+    loop {
         tokio::select! {
             _ = (&mut cancel_rx) => {
-                tracing::info!(target: "oauth", "loopback cancelled by app");
-                return Err(OAuthError::Cancelled);
+                return Err("cancelled".to_string());
             }
             res = timeout(FLOW_TIMEOUT, listener.accept()) => {
                 let accepted = match res {
-                    Err(_) => return Err(OAuthError::Timeout),
+                    Err(_) => return Err("timed out".to_string()),
                     Ok(Ok(c)) => c,
-                    Ok(Err(e)) => return Err(OAuthError::Internal(format!(
-                        "accept failed: {e}"
-                    ))),
+                    Ok(Err(e)) => return Err(format!("accept failed: {e}")),
                 };
                 let (mut socket, _peer) = accepted;
                 let request_line = match read_request_line(&mut socket).await {
                     Ok(line) => line,
                     Err(e) => {
-                        tracing::warn!(
-                            target: "oauth",
-                            "drop loopback conn: {e}"
-                        );
+                        tracing::warn!(target: "oauth", "drop bridge conn: {e}");
                         let _ = socket.shutdown().await;
                         continue;
                     }
                 };
 
                 let url_target = parse_request_target(&request_line);
-                if !url_target
-                    .as_deref()
-                    .map(|t| t.starts_with(CALLBACK_PATH))
-                    .unwrap_or(false)
-                {
-                    let _ = write_response(&mut socket, 404, "Not Found", "Not the OAuth callback path.").await;
-                    continue;
-                }
-
-                let target = url_target.unwrap();
-                let params = parse_query(&target);
-
-                if let Some(err) = params.iter().find(|(k, _)| k == "error") {
-                    let description = params
-                        .iter()
-                        .find(|(k, _)| k == "error_description")
-                        .map(|(_, v)| v.clone());
-                    let _ = write_response(
-                        &mut socket,
-                        400,
-                        "Bad Request",
-                        "Sign-in failed. You can close this tab and try again.",
-                    )
-                    .await;
-                    return Err(OAuthError::Provider {
-                        error: err.1.clone(),
-                        description,
-                    });
-                }
-
-                let code = params
-                    .iter()
-                    .find(|(k, _)| k == "code")
-                    .map(|(_, v)| v.clone());
-                let state = params
-                    .iter()
-                    .find(|(k, _)| k == "state")
-                    .map(|(_, v)| v.clone());
-
-                if let Some(expected) = expected_state.as_ref() {
-                    if state.as_deref() != Some(expected.as_str()) {
-                        let _ = write_response(
-                            &mut socket,
-                            400,
-                            "Bad Request",
-                            "Invalid OAuth state. You can close this tab.",
-                        )
-                        .await;
-                        return Err(OAuthError::StateMismatch {
-                            expected: Some(expected.clone()),
-                            got: state,
-                        });
-                    }
-                }
-
-                let code = match code {
-                    Some(c) => c,
-                    None => {
-                        let _ = write_response(
-                            &mut socket,
-                            400,
-                            "Bad Request",
-                            "Missing 'code' in OAuth callback.",
-                        )
-                        .await;
-                        return Err(OAuthError::MissingCode);
+                let target = match url_target {
+                    Some(t) if t.starts_with(CALLBACK_PATH) => t,
+                    _ => {
+                        let _ = write_404(&mut socket).await;
+                        let _ = socket.shutdown().await;
+                        continue;
                     }
                 };
 
-                let _ = write_response(
-                    &mut socket,
-                    200,
-                    "OK",
-                    "Sign-in complete. You can close this tab and return to Reachy Mini.",
-                )
-                .await;
+                // Mirror the original query (or empty) onto the scheme.
+                // We don't parse `code`/`state` here: the auth-session
+                // plugin delivers the full URL to JS, which validates
+                // state and exchanges the code in one place.
+                let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+                let location = if query.is_empty() {
+                    SCHEME_REDIRECT_PREFIX.to_string()
+                } else {
+                    format!("{SCHEME_REDIRECT_PREFIX}?{query}")
+                };
+
+                let _ = write_302(&mut socket, &location).await;
                 let _ = socket.shutdown().await;
-                break OAuthCallback { code, state };
+                return Ok(());
             }
         }
-    };
-
-    Ok(captured)
+    }
 }
 
 /// Pull the first line from the request (`GET /path?... HTTP/1.1`),
@@ -294,59 +258,23 @@ fn parse_request_target(request_line: &str) -> Option<String> {
     parts.next().map(|s| s.to_string())
 }
 
-fn parse_query(target: &str) -> Vec<(String, String)> {
-    let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
-    q.split('&')
-        .filter_map(|kv| {
-            let (k, v) = kv.split_once('=')?;
-            Some((url_decode(k), url_decode(v)))
-        })
-        .collect()
-}
-
-fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hi = (bytes[i + 1] as char).to_digit(16);
-                let lo = (bytes[i + 2] as char).to_digit(16);
-                if let (Some(h), Some(l)) = (hi, lo) {
-                    out.push(((h * 16 + l) as u8) as char);
-                    i += 3;
-                } else {
-                    out.push(bytes[i] as char);
-                    i += 1;
-                }
-            }
-            b => {
-                out.push(b as char);
-                i += 1;
-            }
-        }
-    }
-    out
-}
-
-async fn write_response(
-    socket: &mut tokio::net::TcpStream,
-    status: u16,
-    reason: &str,
-    body_text: &str,
-) -> IoResult<()> {
-    let body = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Reachy Mini sign-in</title>\
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:6rem auto;padding:2rem;text-align:center;color:#222}}h1{{font-size:1.25rem}}p{{color:#555;line-height:1.5}}</style></head>\
-<body><h1>Reachy Mini</h1><p>{body_text}</p></body></html>"
-    );
+async fn write_302(socket: &mut tokio::net::TcpStream, location: &str) -> IoResult<()> {
+    // No body: the WebView only needs the Location header to switch
+    // navigation to the custom scheme. We still include a tiny noscript
+    // fallback so a curious human hitting the URL manually sees what's
+    // going on instead of a blank page.
+    let body = "<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=reachymini://oauth/callback\"><p>Returning to Reachy Mini...</p>";
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        len = body.len()
+    );
+    socket.write_all(response.as_bytes()).await
+}
+
+async fn write_404(socket: &mut tokio::net::TcpStream) -> IoResult<()> {
+    let body = "Not the OAuth callback path.";
+    let response = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
         len = body.len()
     );
     socket.write_all(response.as_bytes()).await
