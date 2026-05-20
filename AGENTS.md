@@ -223,6 +223,43 @@ useful commands.
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
 | `docs/WEBRTC_LOGS.md` | PR plan for streaming daemon journalctl over WebRTC |
 
+## Notes for HF Space authors
+
+Your HF Space loads as an iframe inside Reachy Mini Mobile. The host
+delegates these capabilities to your iframe today: `microphone`, `camera`,
+`geolocation`, `autoplay`, `clipboard-read`, `clipboard-write`. Use the
+corresponding `navigator.*` API — nothing extra to request on your end.
+
+### Don't gate on the permission prompt — ask, and if it works, go
+
+In a regular browser, the first `getUserMedia` / `getCurrentPosition` call
+shows a permission dialog and only proceeds once the user clicks Allow.
+**Inside Reachy Mini, the dialog may never appear** — the mobile app
+typically already holds the OS-level grant (e.g. from the built-in
+conversation feature), so the iframe's call resolves silently. As a side
+effect, `navigator.permissions.query({name:'microphone'})` returns
+`'prompt'` inside the iframe even though capture works fine.
+
+Spaces that gate their UI on a visible dialog (or on the Permissions API
+returning `'granted'`) will look broken inside the app even though the
+capability is fully available. The fix is purely Space-side: **call the
+API and use whatever stream/position you get back. Don't condition UI on
+`permissions.query` state, and don't expect a dialog every time.**
+
+Diagnostic if your Space's mic / GPS feature works in a regular browser
+but seems broken inside Reachy Mini: open Chrome `chrome://inspect/#devices`
+on the dev machine, switch the DevTools console context to your
+`*.hf.space` frame, and run:
+
+```js
+navigator.mediaDevices.getUserMedia({audio: true})
+  .then(s => console.log('OK', s.getAudioTracks()))
+  .catch(e => console.log('FAIL', e.name, e.message));
+```
+
+If it logs `OK`, capture works — the bug is in the Space's UI logic, not
+the mobile host.
+
 ## Things to NOT do
 
 - Don't put React components in `features/`. The layer rule blocks
