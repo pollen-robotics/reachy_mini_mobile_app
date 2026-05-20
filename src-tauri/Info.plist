@@ -45,6 +45,28 @@
     <string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
 
     <!--
+        Location, when-in-use. The host app itself doesn't use the
+        coordinates; this key authorises iframe-hosted apps (HF Spaces)
+        to surface their own `navigator.geolocation` prompts. Without
+        the key, WKWebView returns POSITION_UNAVAILABLE without ever
+        asking the user.
+    -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Apps launched inside Reachy Mini may request your location to provide location-aware features (for example, a guided tour).</string>
+
+    <!--
+        Camera. Parallel to the location and microphone keys: the host
+        app itself doesn't capture video, but iframe-hosted HF Spaces
+        (vision demos, AR scenes, barcode scanners) may call
+        `getUserMedia({video: true})`. Without this key, recent iOS
+        versions HARD CRASH the WKWebView process when an iframe
+        requests camera — so this is not optional alongside the
+        `allow="camera"` token on the iframe.
+    -->
+    <key>NSCameraUsageDescription</key>
+    <string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
+
+    <!--
         Lock the iPhone build to portrait. The whole layout is built
         around a 420px-wide content column, a top bar that respects
         `safe-area-inset-top`, and a BottomNavigation that respects

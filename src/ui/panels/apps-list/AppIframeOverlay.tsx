@@ -365,7 +365,24 @@ export default function AppIframeOverlay({
             ref={iframeRef}
             src={loadPhase === 'waiting-release' ? 'about:blank' : url}
             title={app.name}
-            allow="microphone; camera; autoplay; clipboard-read; clipboard-write"
+            // Permissions Policy delegation for the iframe-hosted HF
+            // Space. Bare tokens scope each capability to the iframe's
+            // own origin (`'src'`, i.e. the `*.hf.space` subdomain),
+            // they do NOT broadcast to arbitrary origins.
+            // Token rationale:
+            //   - microphone  : voice / chat Spaces (`getUserMedia({audio})`)
+            //   - camera      : vision / AR Spaces (`getUserMedia({video})`)
+            //   - geolocation : tour-guide / location-aware Spaces
+            //   - autoplay    : media playback without prior user gesture
+            //   - clipboard-* : text / image copy-paste from inside the Space
+            // Each token needs a matching OS-side authorisation:
+            // `NSMicrophoneUsageDescription`, `NSCameraUsageDescription`,
+            // `NSLocationWhenInUseUsageDescription` in `src-tauri/Info.plist`
+            // for iOS, and `RECORD_AUDIO` / `CAMERA` / `ACCESS_FINE_LOCATION`
+            // in `AndroidManifest.xml` for Android. Missing the OS-side
+            // key while granting the iframe token can hard-crash the
+            // WebView process on iOS.
+            allow="microphone; camera; geolocation; autoplay; clipboard-read; clipboard-write"
             onLoad={() => {
               if (loadPhase === 'loading') setLoadPhase('ready');
               // Burst the HF token over postMessage. The first
