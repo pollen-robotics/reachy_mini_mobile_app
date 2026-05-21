@@ -44,6 +44,7 @@ import {
   Alert,
   Box,
   Button,
+  ButtonBase,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -678,27 +679,80 @@ function PinnedGrid({
   onOpen: (app: AppEntry) => void;
   onUnpin: (app: AppEntry) => void;
 }) {
+  // Edit mode toggles the iOS-style "jiggle" UX on every tile:
+  // each one sprouts a ✕ badge in its top-left corner and starts
+  // a subtle wiggle to signal "tap me to remove". Local state
+  // because the affordance has no meaning outside this panel,
+  // and we want it to auto-reset on tab switch (the grid
+  // unmounts and the next visit starts in the clean read mode).
+  const [editMode, setEditMode] = useState(false);
+
+  // Auto-exit when the grid empties out: with no tiles left,
+  // "Done" would dangle next to a 0-count header. We also leave
+  // edit mode the moment the cap hits 0, even if the user emptied
+  // it via the star toggles on compact tiles elsewhere (cross-panel
+  // unpins still trickle in via `useFilteredApps` → `apps`).
+  useEffect(() => {
+    if (apps.length === 0 && editMode) {
+      setEditMode(false);
+    }
+  }, [apps.length, editMode]);
+
   return (
     <Box sx={COLUMN_SX}>
-      <Typography
-        sx={{
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.secondary',
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-          lineHeight: 1.1,
-          mb: 1.5,
-        }}
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mb: 1.5, minHeight: 18 }}
       >
-        Pinned apps
-        <Box
-          component="span"
-          sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}
+        <Typography
+          sx={{
+            fontSize: TYPO.tiny,
+            fontWeight: FONT_WEIGHT.semibold,
+            color: 'text.secondary',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            lineHeight: 1.1,
+          }}
         >
-          · {apps.length}
-        </Box>
-      </Typography>
+          Pinned apps
+          <Box
+            component="span"
+            sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}
+          >
+            · {apps.length}
+          </Box>
+        </Typography>
+        {/* Edit / Done toggle. Sentence-case (not uppercase) so the
+            user's primary path "tap Edit" reads as a verb rather
+            than a label; it sits visually heavier than the
+            "PINNED APPS" header letterform so the eye finds it
+            quickly once the user is hunting for a way to remove
+            a pin. Mounted unconditionally - even with a single
+            pin, the user might want to remove it - so the
+            affordance is always there from pin #1 onward. */}
+        <ButtonBase
+          onClick={() => setEditMode((prev) => !prev)}
+          disableRipple
+          aria-pressed={editMode}
+          aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
+          sx={{
+            flexShrink: 0,
+            fontSize: TYPO.xs,
+            fontWeight: FONT_WEIGHT.semibold,
+            color: 'primary.main',
+            lineHeight: 1.1,
+            px: 0.5,
+            py: 0.25,
+            borderRadius: 0.5,
+            '&:hover': { opacity: 0.7 },
+            '&:active': { opacity: 0.6 },
+          }}
+        >
+          {editMode ? 'Done' : 'Edit'}
+        </ButtonBase>
+      </Stack>
       <Box
         sx={{
           display: 'grid',
@@ -722,8 +776,9 @@ function PinnedGrid({
             key={app.id}
             app={app}
             isNew={recentlyAddedId === app.id}
+            editMode={editMode}
             onOpen={onOpen}
-            onLongPress={onUnpin}
+            onUnpin={onUnpin}
           />
         ))}
       </Box>
