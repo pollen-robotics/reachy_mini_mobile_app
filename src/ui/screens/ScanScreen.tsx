@@ -136,18 +136,16 @@ export default function ScanScreen({
   const displayName = profile.username ?? username;
   const robots = remote.state.kind !== 'no-token' ? remote.state.robots : [];
   const hasRobots = robots.length > 0;
-  // Distinguish the very first fetch (no cached data yet, the body
-  // shows a spinner) from any subsequent refresh / poll (cached data
-  // is still on screen, only the refresh icon should hint at the
-  // in-flight request).
-  const isInitialLoading =
-    remote.state.kind === 'loading' && robots.length === 0;
-  const isRefreshing =
-    remote.state.kind === 'loading' && robots.length > 0;
-  // Keep the refresh bar mounted whenever we've moved past the very
-  // first load, so the layout never shifts under the user. The button
-  // itself disables + spins during in-flight fetches instead.
-  const showRefreshBar = !isInitialLoading;
+  // The refresh icon spins for ANY in-flight fetch (initial load
+  // included), and the bar is always mounted. Hiding the bar on
+  // the very first load used to make the body shift vertically
+  // the moment central returned the list - the bottom sticky
+  // changes the available height for the `m: 'auto'` centring
+  // trick above, so the content jumps. Keeping the bar
+  // permanently mounted (with the icon spinning while a fetch is
+  // pending) keeps the layout dimensions stable across every
+  // state (loading → empty → 1 robot → N robots → error).
+  const isRefreshing = remote.state.kind === 'loading';
 
   // Help & Support sheet is the contact-information surface required
   // by Apple guideline 1.2 (UGC) and Google Play's UGC policy. It's
@@ -250,28 +248,25 @@ export default function ScanScreen({
               subtitle={remote.state.reason}
             />
           ) : (
-            <CenteredMessageState
-              title="No Reachy online"
-              subtitle="Power one on and connect it to Wi-Fi - it'll show up here."
-            />
+            <CenteredMessageState title="No Reachy online" />
           )}
         </Stack>
       </Stack>
 
       {/* Sticky bottom action bar. Sits outside the scrollable area
           so the refresh stays one tap away regardless of how many
-          robots are listed. Mounted from the moment we have cached
-          data (or an error to retry from) so the layout never shifts
-          under the user during a refresh - the button just spins +
-          disables in place. Only the very first load hides it
-          entirely (the body shows its own loading state). */}
-      {showRefreshBar ? (
-        <StickyRefreshBar
-          onRefresh={() => void remote.refresh()}
-          isRefreshing={isRefreshing}
-        />
-      ) : null}
+          robots are listed. Always mounted, so the available
+          height of the centred content above never changes - the
+          button just spins + disables in place during any fetch
+          (initial load, refresh, poll). */}
+      <StickyRefreshBar
+        onRefresh={() => void remote.refresh()}
+        isRefreshing={isRefreshing}
+      />
 
+      {/* App-Store-1.2 compliance: Help & Support sheet reachable
+          from the HfAccountBar's "?" button, providing Apple- and
+          Google-mandated contact channels for UGC-bearing apps. */}
       <HelpAndSupportSheet
         open={helpOpen}
         onClose={() => setHelpOpen(false)}
@@ -607,6 +602,16 @@ function RobotsHeader({
           fontSize: TYPO.sm,
           color: 'text.secondary',
           textAlign: 'center',
+          // Reserve enough vertical space for the longest
+          // subtitle wrap (two lines on narrow phone widths,
+          // e.g. "None linked to your Hugging Face account are
+          // online"). Shorter strings just sit on a single line
+          // inside the reserved box. Without this, the header
+          // would visibly grow/shrink as the user transitions
+          // between states (loading → empty → has robots), and
+          // the body slot below would jitter accordingly.
+          lineHeight: 1.5,
+          minHeight: '3em',
         }}
       >
         {subtitle}
@@ -646,6 +651,15 @@ function RemoteRobotCard({
       sx={{
         p: 2,
         pr: 2.5,
+        // Pin the row height to the same value the loading /
+        // empty / error state cards use, so the "your Reachies"
+        // body slot doesn't snap to a different height as the
+        // user transitions between states (loading → 1 robot →
+        // 0 robots → error). The 72 px avatar would already
+        // give us ~104 px naturally, but stating it explicitly
+        // here keeps the contract visible if anyone tweaks
+        // `<CardAvatar />` later.
+        minHeight: STATE_CARD_MIN_HEIGHT,
         borderRadius: '14px',
         bgcolor: 'background.paper',
         // Light, neutral border + soft shadow. The card reads as a
@@ -781,21 +795,77 @@ function CardAvatar() {
 
 /* --- States: loading / empty / error ---------------------------------- */
 
-function LoadingState() {
+/**
+ * Shared minimum height for every "single-card" state (loading,
+ * empty, error). Tuned to match the natural height of a populated
+ * `RemoteRobotCard`: the 72×72 avatar + `p: 2` padding (16 px on
+ * each side) → 72 + 32 = 104 px.
+ *
+ * Pinning every state card to the same height keeps the layout
+ * dimensions stable as the user transitions between "loading →
+ * empty → 1 robot → N robots": the body slot under the
+ * `RobotsHeader` never resizes, so the hero illustration and the
+ * sticky refresh bar stay in the same place. Without this, the
+ * spinner (~32 px tall) would visibly snap to the much taller
+ * robot card the moment central returns the list.
+ */
+const STATE_CARD_MIN_HEIGHT = 104;
+
+/**
+ * Shared card chrome for the loading / empty / error states.
+ *
+ * Mirrors the surface used by `RemoteRobotCard` (paper bg,
+ * theme divider border, the same dual inset + drop shadow) so
+ * the three states form a coherent visual family with the
+ * actual robot rows below them. Centred content (both axes) so
+ * the spinner and the empty-state copy sit visually balanced
+ * within the 104 px box.
+ *
+ * Co-localised with `LoadingState` + `CenteredMessageState`
+ * rather than hoisted to a design tokens module because the
+ * sizing is intentionally married to the local RemoteRobotCard
+ * geometry above - changing one without the other would re-
+ * introduce the layout jitter this wrapper was built to fix.
+ */
+function StateCard({ children }: { children: React.ReactNode }) {
   return (
-    <Stack
-      alignItems="center"
-      spacing={1.5}
+    <Box
       sx={{
-        py: 4,
-        color: 'text.secondary',
+        width: '100%',
+        minHeight: STATE_CARD_MIN_HEIGHT,
+        px: 3,
+        py: 2,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: '14px',
+        bgcolor: 'background.paper',
+        border: theme => `1px solid ${theme.palette.divider}`,
+        boxShadow: theme =>
+          theme.palette.mode === 'dark'
+            ? '0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.35)'
+            : '0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(15,23,42,0.04), 0 2px 6px rgba(15,23,42,0.05)',
       }}
     >
-      <CircularProgress size={24} sx={{ color: 'text.secondary' }} />
-      <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
-        Asking Hugging Face for your robots…
-      </Typography>
-    </Stack>
+      {children}
+    </Box>
+  );
+}
+
+function LoadingState() {
+  return (
+    <StateCard>
+      <Stack
+        alignItems="center"
+        spacing={1.5}
+        sx={{ color: 'text.secondary' }}
+      >
+        <CircularProgress size={24} sx={{ color: 'text.secondary' }} />
+        <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
+          Asking Hugging Face for your robots…
+        </Typography>
+      </Stack>
+    </StateCard>
   );
 }
 
@@ -803,10 +873,10 @@ function LoadingState() {
  * Empty / error state rendered as a card.
  *
  * Visually matches the robot cards (same border, radius, soft
- * shadow) so the empty state slots into the same grid instead of
- * floating as a bare paragraph. Content is centred horizontally
- * inside the card; vertical centring on the screen is owned by
- * the outer scroll container's `m: 'auto'` trick.
+ * shadow) via the shared `StateCard` wrapper so the empty state
+ * slots into the same grid instead of floating as a bare
+ * paragraph. Content is centred on both axes by `StateCard`;
+ * the inner Stack just owns the typographic stack.
  */
 function CenteredMessageState({
   title,
@@ -816,32 +886,13 @@ function CenteredMessageState({
   subtitle?: string;
 }) {
   return (
-    <Box
-      sx={{
-        width: '100%',
-        py: 4,
-        px: 3,
-        borderRadius: '14px',
-        bgcolor: 'background.paper',
-        border: theme =>
-          `1px solid ${
-            theme.palette.mode === 'dark'
-              ? 'rgba(255,255,255,0.10)'
-              : 'rgba(0,0,0,0.06)'
-          }`,
-        boxShadow: theme =>
-          theme.palette.mode === 'dark'
-            ? '0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.35)'
-            : '0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(15,23,42,0.04), 0 2px 6px rgba(15,23,42,0.05)',
-      }}
-    >
+    <StateCard>
       <Stack
         alignItems="center"
         spacing={0.75}
         sx={{
           textAlign: 'center',
           maxWidth: 280,
-          mx: 'auto',
         }}
       >
         <Typography
@@ -865,6 +916,6 @@ function CenteredMessageState({
           </Typography>
         ) : null}
       </Stack>
-    </Box>
+    </StateCard>
   );
 }

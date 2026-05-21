@@ -58,6 +58,22 @@ export interface AppEntry {
    * present; consumers fall back to a generic icon when `null`.
    */
   emoji: string | null;
+  /**
+   * Absolute HF `resolve/main/` URL for a custom app icon, resolved
+   * server-side from the Space's `siblings` list (see catalog's
+   * `findIconUrl()`). Set when the author committed `icon.svg`
+   * (preferred) or `icon.png` at the repo root; `null` otherwise.
+   *
+   * When present, renderers MUST prefer this over `emoji` so app
+   * authors can ship a polished avatar without changing the
+   * mobile/desktop codebases. SVG → vector-clean at every size.
+   *
+   * Resolution lives on the server (`reachy-mini-website`) so we
+   * detect once per catalog refresh (5-min cache) for the whole
+   * fleet of clients, instead of every mobile shell hitting the
+   * Hub to probe two filenames per app on cold start.
+   */
+  iconUrl: string | null;
   /** Free-form tags (HF Space tags + cardData tags). */
   tags: string[];
   /** Engagement metrics from the HF Hub. Display-only. */

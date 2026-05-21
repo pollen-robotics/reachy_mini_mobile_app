@@ -45,6 +45,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { queryClient } from '@/queryClient';
 
+import { prefetchAppIcons } from './iconCache';
 import type { AppEntry, AppSdk, CategorizationMeta } from './types';
 
 const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/js-apps';
@@ -62,6 +63,14 @@ interface RawCatalogApp {
   org?: string;
   owner?: string;
   isOfficial?: boolean;
+  /**
+   * Server-resolved icon URL. Set by the catalog when the Space
+   * ships `icon.svg` / `icon.png` at the repo root; absent or
+   * `null` otherwise. We accept both spellings for forward
+   * compatibility with a possible `icon_url` snake-case variant.
+   */
+  iconUrl?: string | null;
+  icon_url?: string | null;
   tags?: string[];
   likes?: number;
   categories?: string[] | null;
@@ -213,6 +222,15 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   // null when missing so the renderer can fall back to a generic
   // icon without a sentinel string check.
   const emoji = pickFirstString([raw.extra?.cardData?.emoji])?.trim() || null;
+  // Server-resolved app icon URL (Space ships `icon.svg`/`icon.png`
+  // at repo root). Catalog publishes it as a top-level `iconUrl`;
+  // we also accept `icon_url` for forward compatibility. Trimmed
+  // and validated to a plausible HF resolve URL; anything else
+  // falls back to `null` so renderers reach for the emoji glyph
+  // instead of rendering a broken image.
+  const iconUrlRaw = pickFirstString([raw.iconUrl, raw.icon_url]);
+  const iconUrl =
+    iconUrlRaw && /^https?:\/\//i.test(iconUrlRaw) ? iconUrlRaw : null;
   // Categories: keep them as-is (multi-valued strings). Defensive:
   // some servers may emit `null`, an empty array, or even a single
   // string; we normalise to `string[] | null`.
@@ -237,6 +255,7 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
     isOfficial,
     sdk,
     emoji,
+    iconUrl,
     tags: Array.from(new Set(tags)),
     likes,
     categories,
@@ -285,7 +304,14 @@ async function fetchAppsCatalog(): Promise<CatalogPayload> {
   const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const payload = (await res.json()) as unknown;
-  return normalizeCatalog(payload);
+  const catalog = normalizeCatalog(payload);
+  // Warm the browser's image cache for every custom app icon as
+  // soon as the catalog lands. Uses `new Image()` (same loader
+  // path as the `<img>` element rendered later in the tile),
+  // which avoids the CORS race that would happen with `fetch()`.
+  // No-op for apps without a custom icon.
+  prefetchAppIcons(catalog.apps.map((a) => a.iconUrl));
+  return catalog;
 }
 
 // ===========================================================================

@@ -29,9 +29,9 @@
 import { memo, useEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
 
-import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
+import AppIcon from './AppIcon';
 
 interface AppPinnedTileProps {
   app: AppEntry;
@@ -65,8 +65,6 @@ function AppPinnedTileImpl({
   onOpen,
   onLongPress,
 }: AppPinnedTileProps) {
-  const emoji = readAppEmoji(app);
-
   // Long-press state lives in refs so it persists across renders
   // (a plain `let` at the component scope would reset and the
   // long-press would never fire).
@@ -189,29 +187,63 @@ function AppPinnedTileImpl({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          // Big-glyph treatment: the emoji IS the icon. Sized to
-          // a comfortable thumb-glance even on the smallest mobile
-          // viewports we target (~360 px width).
-          fontSize: 44,
-          lineHeight: 1,
           // Bracket the box: explicit `box-sizing: border-box`
           // so the 1 px border doesn't push the square off
           // its `aspectRatio` calculation in some Safari
           // versions.
           boxSizing: 'border-box',
+          // The custom icon is rendered LARGER than this plate on
+          // purpose (see `imageSize` below). Two CSS gotchas to
+          // neutralise so the plate stays a perfect square anyway:
+          //
+          //   - As a flex item in the outer column, our default
+          //     `min-height: auto` would expand the plate to fit
+          //     the icon's intrinsic size, overriding the
+          //     `aspectRatio` we just set. `min-height: 0` opts
+          //     out of that.
+          //
+          //   - `overflow: visible` (already the default) lets the
+          //     icon bleed past the plate's border; we keep it
+          //     explicit so nothing further down the cascade
+          //     accidentally clips it.
+          minHeight: 0,
+          overflow: 'visible',
           transition: theme.transitions.create('transform', {
             duration: theme.transitions.duration.shortest,
           }),
         })}
       >
-        {emoji}
+        {/* Big-glyph treatment: the icon (or emoji fallback) IS
+            the visual identity.
+              - Emoji stays at 44 px (the legacy baseline; a chunky
+                emoji at 88 px reads as cartoonish next to the
+                caption).
+              - A custom PNG icon renders at 117 px (≈ +1/3 vs the
+                previous 88) so it overflows the ~96 px tile by a
+                few pixels on each side. The bleed mirrors the
+                compact-tile treatment (`AppCompactTile`) and gives
+                the icon real "home-screen hero" presence. The
+                square plate itself does NOT grow - we keep the
+                grid layout stable and let the glyph extend past
+                the plate's border.
+              - SVG glyphs stay inside the plate at 72 px because
+                they typically ship edge-to-edge artwork with no
+                internal padding; the bleed treatment that flatters
+                a padded PNG reads as oversized on an SVG. */}
+        <AppIcon app={app} size={44} imageSize={117} svgImageSize={72} />
       </Box>
       <Typography
         sx={{
           mt: 0.75,
           width: '100%',
           fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.medium,
+          // Bold so the pinned-app caption reads as a label
+          // ("this is THE name of the app I chose") rather than a
+          // secondary descriptor. Mirrors the iOS home-screen
+          // pattern where the icon's caption is visually heavier
+          // than the surrounding chrome, so a glance lands on the
+          // app name first.
+          fontWeight: FONT_WEIGHT.bold,
           color: 'text.secondary',
           textAlign: 'center',
           overflow: 'hidden',
