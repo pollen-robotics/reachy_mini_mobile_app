@@ -62,6 +62,7 @@ import ReachiesCarousel from '@/ui/widgets/reachies-carousel/ReachiesCarousel';
 import type { AppEntry } from '@/features/apps/types';
 import { useApps } from '@/features/apps/useApps';
 import { useFilteredApps } from '@/features/apps/useFilteredApps';
+import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
@@ -117,7 +118,21 @@ const RAIL_PANEL_SX = {
 
 export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const { state, refresh } = useApps();
-  const apps = state.apps;
+  const hiddenAuthors = useHiddenAuthors();
+
+  // Strip apps whose author the user has hidden BEFORE any
+  // downstream pass (search, categorisation, pinned reconciliation,
+  // count/header strings). Doing it here means every consumer sees
+  // a coherent post-filter view; doing it inside `useFilteredApps`
+  // would still leave `state.apps.length` and the pinned reconciler
+  // peeking at hidden entries. The filter is identity-stable
+  // when the hidden set hasn't changed (memoized) so React's
+  // bail-out skips the deeper work on unrelated re-renders.
+  const apps = useMemo<AppEntry[]>(() => {
+    if (hiddenAuthors.set.size === 0) return state.apps;
+    return state.apps.filter((app) => !hiddenAuthors.isHidden(app.author));
+  }, [state.apps, hiddenAuthors]);
+
   const isLoading = state.kind === 'loading';
   const hasError = state.kind === 'error';
 

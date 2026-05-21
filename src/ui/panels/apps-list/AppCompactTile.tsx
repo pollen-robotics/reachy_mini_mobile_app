@@ -52,6 +52,7 @@ import VerifiedIcon from '@mui/icons-material/Verified';
 import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
+import AppActionsMenu from './AppActionsMenu';
 
 interface AppCompactTileProps {
   app: AppEntry;
@@ -226,18 +227,32 @@ function AppCompactTileImpl({
             </>
           )}
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-          <FavoriteBorderIcon sx={{ fontSize: TYPO.lg, color: 'text.secondary' }} />
-          <Typography
-            sx={{
-              fontSize: TYPO.sm,
-              fontWeight: FONT_WEIGHT.semibold,
-              color: 'text.secondary',
-              lineHeight: 1,
-            }}
-          >
-            {app.likes || 0}
-          </Typography>
+        {/* Right cluster of the header. The "..." kebab sits to the
+            LEFT of the likes badge so the user reads "actions, then
+            metric" - same convention as iOS app cards on the App
+            Store and Apple Music. The kebab opens the per-app
+            actions menu (Report this app + View on Hugging Face),
+            which is our App-Store-1.2-compliant UGC report
+            affordance; see `AppActionsMenu.tsx` for the rationale.
+            We keep a slightly larger gap (`gap: 1`) between the
+            kebab and the likes block than the gap inside the likes
+            block (`gap: 0.5`) so the kebab reads as a distinct
+            interaction surface rather than a third metadata glyph. */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+          <AppActionsMenu app={app} buttonSx={{ p: 0.25 }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <FavoriteBorderIcon sx={{ fontSize: TYPO.lg, color: 'text.secondary' }} />
+            <Typography
+              sx={{
+                fontSize: TYPO.sm,
+                fontWeight: FONT_WEIGHT.semibold,
+                color: 'text.secondary',
+                lineHeight: 1,
+              }}
+            >
+              {app.likes || 0}
+            </Typography>
+          </Box>
         </Box>
       </Box>
 

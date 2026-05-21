@@ -73,6 +73,7 @@ import {
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import LockIcon from '@mui/icons-material/Lock';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -93,6 +94,7 @@ import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { TransportChip } from '@/ui/design/TransportChip';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import HelpAndSupportSheet from './scan/HelpAndSupportSheet';
 
 interface ScanScreenProps {
   /**
@@ -147,6 +149,15 @@ export default function ScanScreen({
   // itself disables + spins during in-flight fetches instead.
   const showRefreshBar = !isInitialLoading;
 
+  // Help & Support sheet is the contact-information surface required
+  // by Apple guideline 1.2 (UGC) and Google Play's UGC policy. It's
+  // mounted from this screen because `ScanScreen` is the lobby the
+  // user lands on every time the app boots (no in-flight session to
+  // disrupt), and because the `HfAccountBar` already groups
+  // "account-level" affordances which is the natural place for
+  // settings / contact entries to live.
+  const [helpOpen, setHelpOpen] = useState(false);
+
   return (
     <Stack
       sx={{
@@ -159,6 +170,7 @@ export default function ScanScreen({
         username={displayName}
         avatarUrl={profile.avatarUrl}
         onSignOut={onSignOutRemote}
+        onOpenHelp={() => setHelpOpen(true)}
       />
 
       {/* Inner scroll container. `m: 'auto'` on the column distributes
@@ -259,6 +271,11 @@ export default function ScanScreen({
           isRefreshing={isRefreshing}
         />
       ) : null}
+
+      <HelpAndSupportSheet
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+      />
     </Stack>
   );
 }
@@ -269,10 +286,12 @@ function HfAccountBar({
   username,
   avatarUrl,
   onSignOut,
+  onOpenHelp,
 }: {
   username: string | null;
   avatarUrl: string | null;
   onSignOut: () => void;
+  onOpenHelp: () => void;
 }) {
   // First letter of the username for the fallback avatar (used
   // while the whoami-v2 request is in flight, when the user has
@@ -344,16 +363,32 @@ function HfAccountBar({
           </Typography>
         </Stack>
       </Stack>
-      <Tooltip title="Sign out">
-        <IconButton
-          aria-label="Sign out of Hugging Face"
-          onClick={onSignOut}
-          color="primary"
-          sx={{ p: 1 }}
-        >
-          <LogoutIcon sx={{ fontSize: 22 }} />
-        </IconButton>
-      </Tooltip>
+      {/* Account-level affordance cluster. Help is left of Logout
+          so the user reads "support" before "exit"; the order
+          matches macOS / iOS conventions where destructive /
+          terminal actions sit in the rightmost slot. */}
+      <Stack direction="row" alignItems="center" spacing={0.5}>
+        <Tooltip title="Help &amp; support">
+          <IconButton
+            aria-label="Open help and support"
+            onClick={onOpenHelp}
+            color="primary"
+            sx={{ p: 1 }}
+          >
+            <HelpOutlineIcon sx={{ fontSize: 22 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Sign out">
+          <IconButton
+            aria-label="Sign out of Hugging Face"
+            onClick={onSignOut}
+            color="primary"
+            sx={{ p: 1 }}
+          >
+            <LogoutIcon sx={{ fontSize: 22 }} />
+          </IconButton>
+        </Tooltip>
+      </Stack>
     </Stack>
   );
 }

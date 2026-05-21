@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Box } from '@mui/material';
 
+import EulaConsentModal from '@/ui/screens/EulaConsentModal';
 import ScanScreen from '@/ui/screens/ScanScreen';
 import SplashScreen from '@/ui/screens/SplashScreen';
 import WelcomeBackScreen from '@/ui/screens/WelcomeBackScreen';
@@ -16,6 +17,7 @@ import {
 } from '@/features/ble/useBleSession';
 import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
+import { useTosConsent } from '@/features/consent/useTosConsent';
 
 type Screen = 'scan' | 'session' | 'wifi-setup';
 
@@ -55,6 +57,11 @@ export default function App() {
   const [justSignedIn, setJustSignedIn] = useState(false);
   const { disconnectDevice, connectedAddress, selectDevice } = useBleSession();
   const { token, username, setToken, clear } = useRemoteHfToken();
+  // First-launch EULA / privacy disclosure required by Apple
+  // guideline 5.1.1 + Google Play UGC policy. The hook reads the
+  // accepted version synchronously from localStorage so the modal
+  // never flashes on subsequent launches.
+  const consent = useTosConsent();
 
   useInitBleListeners();
   // Warm the apps catalog cache as soon as the app boots so the
@@ -87,6 +94,15 @@ export default function App() {
   // first, never a flash of the sign-in form before the splash.
   if (!splashDone) {
     return <SplashScreen onDone={() => setSplashDone(true)} />;
+  }
+
+  // Consent gate: shown ONCE, on first launch (or any time the
+  // TOS version is bumped). Sits between splash and auth so the
+  // user is told what the app does before they hand over their HF
+  // credentials. Subsequent launches read `accepted = true`
+  // synchronously and this branch is skipped.
+  if (!consent.accepted) {
+    return <EulaConsentModal onAccept={consent.accept} />;
   }
 
   // Auth gate: no token → sign-in is the whole UI.
