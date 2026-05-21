@@ -67,6 +67,48 @@ const OFFICIAL_RAIL_DESCRIPTOR: CategoryDescriptor = {
  */
 const MIN_OFFICIAL_RAIL_SIZE = 1;
 
+/**
+ * Synthetic descriptor for the "Most liked" rail, slotted between
+ * the certified rail and the LLM-driven semantic rails. Like the
+ * certified facet, popularity is orthogonal to the semantic
+ * taxonomy (an app is `music` because of what it does, "most
+ * liked" because of how many ❤s it has on the Hub), so it lives
+ * outside `CATEGORY_TAXONOMY` and uses a distinct id namespace
+ * from any LLM category slug to avoid collisions in drill-down.
+ */
+export const MOST_LIKED_RAIL_ID = 'most-liked' as const;
+const MOST_LIKED_RAIL_DESCRIPTOR: CategoryDescriptor = {
+  id: MOST_LIKED_RAIL_ID,
+  label: 'Most liked',
+};
+
+/**
+ * Hard cap on the "Most liked" rail. The point of the rail is
+ * a focused top-of-charts strip, not an alternate paginated index
+ * over the whole catalog - 12 tiles is enough horizontal scroll
+ * for a flicked swipe to feel discoverable without turning the
+ * rail into a second long list. The drill-down ("See all") on
+ * this rail therefore shows the same top-N, ordered by likes.
+ */
+const MOST_LIKED_RAIL_CAP = 12;
+
+/**
+ * Likes floor for an app to be eligible for the "Most liked" rail.
+ * Apps with 0 likes don't communicate anything ("most liked of the
+ * unloved" reads as backhanded), so we keep them out. Anything
+ * with ≥ 1 like has at least one human nod and belongs in the
+ * popularity strip.
+ */
+const MOST_LIKED_MIN_LIKES = 1;
+
+/**
+ * Minimum bucket size for the "Most liked" rail to render. Matches
+ * the generic `MIN_RAIL_SIZE` so the rail only appears when the
+ * catalog has enough engagement to fill the "2 tiles + a peek of
+ * the third" arithmetic the compact-tile geometry assumes.
+ */
+const MIN_MOST_LIKED_RAIL_SIZE = MIN_RAIL_SIZE;
+
 interface UseFilteredAppsArgs {
   apps: AppEntry[];
   searchQuery: string;
@@ -164,6 +206,25 @@ export function useFilteredApps({
       .sort(sortByLikesDesc);
     if (officialBucket.length >= MIN_OFFICIAL_RAIL_SIZE) {
       rails.push({ descriptor: OFFICIAL_RAIL_DESCRIPTOR, apps: officialBucket });
+    }
+
+    // "Most liked" rail slots in right below the certified one and
+    // above the semantic taxonomy: certified is editorial ("Pollen
+    // says so"), popularity is community-driven ("the crowd says
+    // so"), and both deserve to sit above the topical buckets as
+    // discovery surfaces. We take the top N apps by like count
+    // (with a ≥ 1 floor so 0-like entries don't slip in), then cap
+    // to keep the rail focused. Overlap with certified / semantic
+    // rails is intentional, as it is for the certified rail above.
+    const mostLikedBucket = apps
+      .filter((app) => (app.likes || 0) >= MOST_LIKED_MIN_LIKES)
+      .sort(sortByLikesDesc)
+      .slice(0, MOST_LIKED_RAIL_CAP);
+    if (mostLikedBucket.length >= MIN_MOST_LIKED_RAIL_SIZE) {
+      rails.push({
+        descriptor: MOST_LIKED_RAIL_DESCRIPTOR,
+        apps: mostLikedBucket,
+      });
     }
 
     for (const descriptor of CATEGORY_TAXONOMY) {
