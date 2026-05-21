@@ -27,6 +27,7 @@
     "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^7.3.5",
     "@mui/material": "^7.3.5",
+    "@pollen-robotics/reachy-mini-sdk": "1.7.3-main.b44388c",
     "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.11.0",

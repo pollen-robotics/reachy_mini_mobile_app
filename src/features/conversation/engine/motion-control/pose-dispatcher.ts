@@ -188,8 +188,8 @@ export function createPoseDispatcher(
 }
 
 // ─── Wire-format helpers ────────────────────────────────────────────────
-// Mirror the SDK's `rpyToMatrix` + `degToRad` (vendored under
-// `src/vendor/reachy-mini.js`). Inlined here so the dispatcher can
+// Mirror the SDK's `rpyToMatrix` + `degToRad` (from
+// `@pollen-robotics/reachy-mini-sdk`). Inlined here so the dispatcher can
 // build the wire payload directly without going through the SDK's
 // per-axis `setHeadRpyDeg` / `setAntennasDeg` wrappers (which would
 // each emit their OWN `set_full_target`, defeating the whole point

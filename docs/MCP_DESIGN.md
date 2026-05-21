@@ -12,8 +12,8 @@ tools (motion, memory, camera, logs). Every new tool requires:
 
 1. A typed `Cmd` schema in `reachy_mini/io/protocol.py`
 2. A handler in `daemon/backend/abstract.py`
-3. An entry in the JS SDK's `vendor/reachy-mini.js`
-4. A vendored copy bumped in `reachy_mini_mobile_app/src/vendor/`
+3. An entry in the JS SDK's `js/reachy-mini-sdk.js`
+4. A version bump of `@pollen-robotics/reachy-mini-sdk` in the mobile app
 5. UI plumbing in `conversation/engine/tools/tool-call-handler.ts`
 
 That pipeline is fine for one tightly-coupled mobile client, but it
