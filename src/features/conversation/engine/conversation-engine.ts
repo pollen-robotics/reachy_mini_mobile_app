@@ -108,6 +108,7 @@ import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
 import { createPoseDispatcher } from "./motion-control/pose-dispatcher";
 import { createOpenaiBridge } from "./bridge/openai-bridge";
+import { applyAudioStartupConfig } from "../audio/startup-config";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import {
   getActiveLanguageId,
@@ -789,6 +790,21 @@ async function doStart(): Promise<void> {
       performance.now() - tBeforeWake,
     )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
   );
+
+  // Tune the XVF3800 audio board for conversation. Mirrors the Python
+  // `apply_audio_startup_config()` call right after `start_recording()`
+  // / `start_playing()` in `reachy_mini_conversation_app/console.py`:
+  // by now WebRTC audio is flowing both ways (handshake done in
+  // `startSession`) and the daemon's audio pipeline is hot, so the
+  // batched parameter write lands on a settled board.
+  //
+  // Fire-and-forget: a failure (older SDK without `applyAudioConfig`,
+  // missing audio board on a Lite running off-robot, DataChannel
+  // burp) is non-fatal - the helper logs and we keep going with the
+  // daemon's default tuning. The `void` makes the lack of await
+  // explicit so we don't block the user's "ready" transition on a
+  // multi-parameter verify roundtrip (~100 ms × N).
+  void applyAudioStartupConfig(robot);
 
   // Mark the SDK / DataChannel as ready BEFORE deciding whether to
   // continue with the conversation parts. The mobile app gates the

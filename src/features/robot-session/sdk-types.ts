@@ -118,6 +118,40 @@ export interface ReachyMiniInstance extends EventTarget {
   setMicrophoneVolume(volume: number): Promise<number | null>;
 
   /**
+   * Apply a batch of XVF3800 audio-board parameters via the
+   * daemon's `apply_audio_config` command. Same data-channel
+   * round-trip as the volume helpers, with optional verification
+   * read-back per parameter.
+   *
+   * Marked optional because the method was added in upstream
+   * Reachy Mini PR #1134; older bundled SDK builds don't expose
+   * it. Callers should feature-detect with
+   * `typeof robot.applyAudioConfig === 'function'` before invoking
+   * - see `features/conversation/audio/startup-config.ts` for the
+   * conversation-app helper that does exactly that.
+   *
+   * Resolves to `true` when every parameter was written (and,
+   * when `verify=true`, read back successfully), `false` when the
+   * audio board is unavailable, the daemon errored, or the data
+   * channel is down.
+   */
+  applyAudioConfig?(
+    config: readonly { name: string; values: readonly number[] }[],
+    options?: { verify?: boolean },
+  ): Promise<boolean>;
+
+  /**
+   * Read a single XVF3800 parameter by name. Counterpart of
+   * `applyAudioConfig`; same optional-method caveat (only present
+   * on the post-PR-1134 SDK).
+   *
+   * Resolves to the decoded numeric values, or `null` when the
+   * parameter is unknown / unreadable / the audio board is
+   * unavailable.
+   */
+  readAudioParameter?(name: string): Promise<readonly number[] | null>;
+
+  /**
    * Daemon version string (e.g. `"1.5.1"`), one-shot over the data
    * channel. Resolves to `null` when the channel isn't open or the
    * daemon predates the `get_version` Cmd.
