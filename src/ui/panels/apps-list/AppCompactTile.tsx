@@ -49,16 +49,13 @@
  * - The card stays focusable for keyboard users (focus ring on
  *   the card); pressing Enter targets the launch action.
  */
-import { memo, useCallback, useState, type MouseEvent } from 'react';
+import { memo, useState } from 'react';
 import {
   Box,
   Button,
-  ButtonBase,
   Typography,
   alpha,
 } from '@mui/material';
-import FavoriteIcon from '@mui/icons-material/Favorite';
-import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import StarOutlineIcon from '@mui/icons-material/StarOutline';
 import StarRoundedIcon from '@mui/icons-material/StarRounded';
@@ -69,6 +66,7 @@ import { useSpaceLike } from '@/features/apps/useSpaceLikes';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
+import LikeButton from './LikeButton';
 
 interface AppCompactTileProps {
   app: AppEntry;
@@ -98,11 +96,12 @@ function AppCompactTileImpl({
   // Like state (HF Hub). When the user isn't signed in `canToggle`
   // is false and we degrade the heart to a static read-only badge -
   // hidden entirely when the catalog count is 0 too, so we don't
-  // show a "0 ♡" badge with no affordance.
+  // show a "0 ♡" badge with no affordance. The visual heart + burst
+  // animation lives in `LikeButton` so the tile stays focused on
+  // layout concerns.
   const like = useSpaceLike(app);
   const showLikeBadge = like.canToggle || like.displayedCount > 0;
   const hasMeta = !!author || app.isOfficial || showLikeBadge;
-  const HeartIcon = like.isLiked ? FavoriteIcon : FavoriteBorderIcon;
 
   // Click counter for the star pulse: each toggle bumps it,
   // which forces the inner star icon to remount via `key` and
@@ -112,32 +111,11 @@ function AppCompactTileImpl({
   // tap, the new pinned tile pops 80 ms later (see
   // `AppPinnedTile`'s pop-in keyframe).
   const [pulseKey, setPulseKey] = useState(0);
-  // Same trick for the heart pulse: bump on every like toggle so
-  // the inner heart icon remounts (`key`) and replays the
-  // `heart-pulse` keyframe. Visually mirrors the star kick so the
-  // two action affordances feel consistent.
-  const [heartPulseKey, setHeartPulseKey] = useState(0);
 
   const handleTogglePin = () => {
     setPulseKey((k) => k + 1);
     onTogglePin(app);
   };
-
-  // The heart sits inside the meta line which is itself nested in
-  // the focusable card. We stop propagation so a tap on the heart
-  // doesn't bubble up to the card (no current `onClick` on the card
-  // but the keyboard `Enter` path would otherwise fire `onOpen` if
-  // a future refactor moves the card to a button).
-  const handleToggleLike = useCallback(
-    (e: MouseEvent<HTMLElement>) => {
-      e.stopPropagation();
-      e.preventDefault();
-      if (!like.canToggle) return;
-      setHeartPulseKey((k) => k + 1);
-      like.toggle();
-    },
-    [like],
-  );
 
   return (
     <Box
@@ -323,72 +301,19 @@ function AppCompactTileImpl({
                 </Typography>
               )}
               {showLikeBadge && (
-                <ButtonBase
-                  onClick={handleToggleLike}
-                  disabled={!like.canToggle}
-                  disableRipple
-                  aria-label={
+                <LikeButton
+                  isLiked={like.isLiked}
+                  canToggle={like.canToggle}
+                  count={like.displayedCount}
+                  onToggle={like.toggle}
+                  ariaLabel={
                     like.canToggle
                       ? like.isLiked
                         ? `Unlike ${app.name}`
                         : `Like ${app.name}`
                       : `${like.displayedCount} likes`
                   }
-                  aria-pressed={like.canToggle ? like.isLiked : undefined}
-                  sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.25,
-                    flexShrink: 0,
-                    // Tap target: grow the hit area a bit beyond
-                    // the visual footprint so a fat finger lands
-                    // reliably on the heart even on a phone.
-                    px: 0.5,
-                    py: 0.25,
-                    mx: -0.5,
-                    borderRadius: `${RADIUS.sm}px`,
-                    cursor: like.canToggle ? 'pointer' : 'default',
-                    color: like.isLiked
-                      ? 'error.main'
-                      : 'text.secondary',
-                    transition:
-                      'color 120ms ease, background-color 120ms ease',
-                    '&:hover': like.canToggle
-                      ? { bgcolor: 'action.hover' }
-                      : undefined,
-                    '&.Mui-disabled': {
-                      color: 'text.secondary',
-                      opacity: 1,
-                    },
-                  }}
-                >
-                  <HeartIcon
-                    key={`heart-${heartPulseKey}-${like.isLiked ? 'on' : 'off'}`}
-                    sx={{
-                      fontSize: TYPO.sm,
-                      animation:
-                        heartPulseKey > 0
-                          ? 'heart-pulse 250ms cubic-bezier(0.34, 1.56, 0.64, 1)'
-                          : 'none',
-                      '@keyframes heart-pulse': {
-                        '0%': { transform: 'scale(1)' },
-                        '40%': { transform: 'scale(1.4)' },
-                        '100%': { transform: 'scale(1)' },
-                      },
-                    }}
-                  />
-                  <Typography
-                    component="span"
-                    sx={{
-                      fontSize: TYPO.xs,
-                      fontWeight: FONT_WEIGHT.medium,
-                      color: 'inherit',
-                      lineHeight: 1,
-                    }}
-                  >
-                    {like.displayedCount}
-                  </Typography>
-                </ButtonBase>
+                />
               )}
             </Box>
           )}
