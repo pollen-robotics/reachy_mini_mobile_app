@@ -65,6 +65,26 @@
  * Apps that opt-in install a listener mirroring the token one and
  * flip `data-theme` on `<html>`. Apps that don't simply stay on
  * the theme they got from the query param at load - no regression.
+ *
+ * Embed-config handover via postMessage
+ * ─────────────────────────────────────
+ * The query string already carries `embedded=1`, which is enough
+ * for an app to know it's running inside our shell. We also send
+ * an `embed-config` message after `onLoad` so apps can pick up
+ * richer host metadata (host identifier, chrome-provided hint)
+ * without us having to bloat the URL:
+ *
+ *     {
+ *       source: 'reachy-mini-shell',
+ *       kind: 'embed-config',
+ *       host: 'reachy-mini-mobile-app',
+ *       chrome: 'host-provided',  // we paint a top toolbar + close
+ *     }
+ *
+ * Apps that opt in (e.g. `reachy_mini_telepresence`) read this to
+ * suppress their own TopBar / chrome so the user sees a single,
+ * coherent toolbar (ours). Apps that ignore the message keep
+ * rendering whatever they already rendered - graceful degradation.
  */
 import {
   Box,
@@ -81,10 +101,11 @@ import {
   buildAppEmbedUrl,
   type AppEmbedContext,
 } from '@/features/apps/buildEmbedUrl';
-import { readAppEmoji } from '@/features/apps/emoji';
 import type { AppEntry } from '@/features/apps/types';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import AppActionsMenu from './AppActionsMenu';
+import AppIcon from './AppIcon';
 
 /**
  * Hard timeout for the iframe load step. If the embed hasn't fired
@@ -215,6 +236,41 @@ export default function AppIframeOverlay({
   }, [hfToken, targetOrigin]);
 
   /**
+   * Tell the iframe it's running inside us so it can suppress its
+   * own toolbar / chrome. See the file-level "Embed-config
+   * handover via postMessage" comment for the receiving
+   * convention. Sent in the same `onLoad` burst as the token + the
+   * theme so a slow `message` listener still catches it.
+   *
+   * The shape is intentionally extensible: today it carries the
+   * host identifier and a `chrome: 'host-provided'` hint; future
+   * fields (host version, dismissable flag, top-bar offset) can
+   * ride on the same payload without touching the URL contract.
+   */
+  const sendEmbedConfigToIframe = useCallback((): void => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        {
+          source: 'reachy-mini-shell',
+          kind: 'embed-config',
+          host: 'reachy-mini-mobile-app',
+          // We always paint our own top toolbar (emoji + app name
+          // + close button), so apps should hide theirs to avoid
+          // a stacked-chrome look.
+          chrome: 'host-provided',
+        },
+        targetOrigin,
+      );
+    } catch (err) {
+      // A failed embed-config is purely cosmetic (the embedded
+      // app keeps its own chrome), so log and move on.
+      console.warn('[apps] embed-config postMessage failed:', err);
+    }
+  }, [targetOrigin]);
+
+  /**
    * Push the shell's current theme to the iframe so apps that
    * opt-in can flip their palette live when the user toggles the
    * system theme. See the file-level "Theme handover via
@@ -315,21 +371,14 @@ export default function AppIframeOverlay({
           flexShrink: 0,
         }}
       >
-        {/* Emoji glyph on the very left so the user gets the same
+        {/* App glyph on the very left so the user gets the same
             visual identifier they tapped from the apps list - same
-            `readAppEmoji()` accessor as the apps list tiles. Sized large enough
-            to register at a glance but inside the same vertical
-            footprint as the title so the bar doesn't grow taller. */}
-        <Typography
-          aria-hidden
-          sx={{
-            fontSize: '1.5rem',
-            lineHeight: 1,
-            flexShrink: 0,
-          }}
-        >
-          {readAppEmoji(app)}
-        </Typography>
+            `<AppIcon>` accessor as the apps list tiles. Sized large
+            enough to register at a glance but inside the same
+            vertical footprint as the title so the bar doesn't grow
+            taller. Renders the author's `icon.svg`/`icon.png` when
+            available, falls back to the front-matter emoji. */}
+        <AppIcon app={app} size={24} />
         {/* App name flush left, primary close button flush right.
             Mirrors native iOS/Android sheet conventions: identifier
             anchors the user, exit affordance is in the thumb-reach
@@ -348,6 +397,28 @@ export default function AppIframeOverlay({
         >
           {app.name}
         </Typography>
+        {/* Per-app actions kebab. Apple guideline 1.2 (UGC) wants
+            a Report affordance on every surface where the user
+            consumes UGC; this is the surface for active use, the
+            tile-side counterpart lives in `AppCompactTile`. We
+            place the kebab to the left of the close button so the
+            primary "exit" action stays in the thumb-reach corner
+            (iOS sheet convention) and the kebab is a deliberate
+            tap, not the one a user reaching for "Close" hits by
+            accident.
+
+            `onAfterHideAuthor` closes this overlay on the spot:
+            once the user has hidden the author of the running
+            app, leaving them looking at that author's iframe
+            would defeat the affordance. Closing also triggers
+            the host's `session.reacquire()` upstream so the
+            conversation slot comes back. */}
+        <AppActionsMenu
+          app={app}
+          ariaLabel={`Actions for ${app.name}`}
+          buttonSx={{ p: 0.5 }}
+          onAfterHideAuthor={onClose}
+        />
         <IconButton
           aria-label="Close app"
           onClick={onClose}
@@ -365,7 +436,43 @@ export default function AppIframeOverlay({
             ref={iframeRef}
             src={loadPhase === 'waiting-release' ? 'about:blank' : url}
             title={app.name}
-            allow="microphone; camera; autoplay; clipboard-read; clipboard-write"
+            // Permissions Policy delegation for the iframe-hosted HF
+            // Space. Each capability is explicitly scoped to the
+            // iframe's own origin (`'src'`, i.e. the `*.hf.space`
+            // subdomain) - explicit `'src'` is preferred over the
+            // bare token because behaviour for bare tokens has
+            // shifted across Permissions Policy revisions and across
+            // engines (WKWebView vs Android WebView vs desktop Chrome).
+            //
+            // Token rationale:
+            //   - microphone  : voice / chat Spaces (`getUserMedia({audio})`)
+            //   - camera      : vision / AR Spaces (`getUserMedia({video})`)
+            //   - geolocation : tour-guide / location-aware Spaces
+            //   - autoplay    : media playback without prior user gesture
+            //   - clipboard-* : text / image copy-paste from inside the Space
+            //
+            // Each token needs a matching OS-side authorisation:
+            //   - iOS  : `NSMicrophoneUsageDescription`,
+            //            `NSCameraUsageDescription`,
+            //            `NSLocationWhenInUseUsageDescription`
+            //            in `src-tauri/Info.plist`. Missing the
+            //            Camera key while granting the iframe token
+            //            HARD-crashes the WKWebView process on
+            //            recent iOS - non-optional.
+            //   - Android : `RECORD_AUDIO`, `CAMERA`,
+            //               `ACCESS_FINE_LOCATION` in the generated
+            //               `AndroidManifest.xml`, plus a custom
+            //               `WebChromeClient` in `MainActivity.kt`
+            //               that maps `onPermissionRequest` and
+            //               `onGeolocationPermissionsShowPrompt` to
+            //               the OS grants. Tauri's default WebView
+            //               denies iframe permission requests
+            //               otherwise. Full runbook in
+            //               `docs/ANDROID_PERMISSIONS.md`. The
+            //               Android target itself isn't initialised
+            //               in this repo today; the iframe tokens
+            //               are harmless until then.
+            allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
               if (loadPhase === 'loading') setLoadPhase('ready');
               // Burst the HF token over postMessage. The first
@@ -384,11 +491,18 @@ export default function AppIframeOverlay({
               // before our theme params resolve.
               const currentTheme: 'dark' | 'light' = isDark ? 'dark' : 'light';
               sendThemeToIframe(currentTheme);
+              // Embed-config: same race, same 3-burst mitigation.
+              // Apps that opt-in (e.g. telepresence) read this to
+              // suppress their own chrome so we don't end up with
+              // two stacked toolbars.
+              sendEmbedConfigToIframe();
               burstTimersRef.current.push(
                 window.setTimeout(sendTokenToIframe, 100),
                 window.setTimeout(sendTokenToIframe, 500),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 100),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 500),
+                window.setTimeout(sendEmbedConfigToIframe, 100),
+                window.setTimeout(sendEmbedConfigToIframe, 500),
               );
             }}
             style={{

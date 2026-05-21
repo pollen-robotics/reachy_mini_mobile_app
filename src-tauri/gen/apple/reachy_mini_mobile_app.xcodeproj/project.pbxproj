@@ -17,6 +17,7 @@
 		D10DC9F766FAF556F1F919E2 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 579ED7F640CF23E0B7881DDE /* WebKit.framework */; };
 		DA868B3F4B903057F6698BAC /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */; };
 		DC6DB658D0D452FC20A23B0D /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71EB51793491EB5A2A3559D /* CoreGraphics.framework */; };
+		EB5B95D71A12B502206CA6C8 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8D00BD22BE5EA69224F37A /* CoreBluetooth.framework */; };
 		FA47719D6FDB9B5037F097C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C80A72A80DB7C32F03A1E534 /* Assets.xcassets */; };
 		FF8EB75A8C1AC8C70457E446 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FA7703A7D2C4F932BFBA870C /* UIKit.framework */; };
 /* End PBXBuildFile section */
@@ -26,6 +27,7 @@
 		3E898BC87981DDCFF37BE25A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		4A3374C4249B8F54AC164F98 /* reachy_mini_mobile_app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = reachy_mini_mobile_app_iOS.entitlements; sourceTree = "<group>"; };
 		579ED7F640CF23E0B7881DDE /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		5D8D00BD22BE5EA69224F37A /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		6A8B419C5F8A5F4B19B08A21 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		97AEE65F5C2817C51454A8A1 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
@@ -50,6 +52,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8F21AF672D0A20FA8C6840B6 /* libapp.a in Frameworks */,
+				EB5B95D71A12B502206CA6C8 /* CoreBluetooth.framework in Frameworks */,
 				DC6DB658D0D452FC20A23B0D /* CoreGraphics.framework in Frameworks */,
 				DA868B3F4B903057F6698BAC /* Metal.framework in Frameworks */,
 				72B046DAA618362BD4249C97 /* MetalKit.framework in Frameworks */,
@@ -73,6 +76,7 @@
 		3DB4E92565106DC702FEE829 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				5D8D00BD22BE5EA69224F37A /* CoreBluetooth.framework */,
 				B71EB51793491EB5A2A3559D /* CoreGraphics.framework */,
 				0FDF5300F421F386E18493EE /* libapp.a */,
 				82D3BA8AB2AB7C2BBFBF9558 /* Metal.framework */,

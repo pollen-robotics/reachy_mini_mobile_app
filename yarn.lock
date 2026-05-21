@@ -451,6 +451,18 @@
     "@eslint/core" "^0.17.0"
     levn "^0.4.1"
 
+"@huggingface/hub@^0.15.2":
+  version "0.15.2"
+  resolved "https://registry.yarnpkg.com/@huggingface/hub/-/hub-0.15.2.tgz#0ec8db06a7faf5461e0699d1f1e25dc2af0f08bb"
+  integrity sha512-MKu7RTkEBp8tvn0ZhBIjQwC1CHA+q8rzTYXAVklOTJEo/SZwCewVL+IcEuj4CoA5DnJ1IhyjkBquxN2dFVnEHg==
+  dependencies:
+    "@huggingface/tasks" "^0.12.1"
+
+"@huggingface/tasks@^0.12.1":
+  version "0.12.30"
+  resolved "https://registry.yarnpkg.com/@huggingface/tasks/-/tasks-0.12.30.tgz#ed1295c12cd85fc1ff4621485703be92083148b0"
+  integrity sha512-A1ITdxbEzx9L8wKR8pF7swyrTLxWNDFIGDLUWInxvks2ruQ8PLRBZe8r0EcjC3CDdtlj9jV1V4cgV35K/iy3GQ==
+
 "@humanfs/core@^0.19.2":
   version "0.19.2"
   resolved "https://registry.npmjs.org/@humanfs/core/-/core-0.19.2.tgz"
@@ -606,6 +618,17 @@
     clsx "^2.1.1"
     prop-types "^15.8.1"
     react-is "^19.2.3"
+
+"@pollen-robotics/reachy-mini-sdk@1.7.3-main.b44388c":
+  version "1.7.3-main.b44388c"
+  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.7.3-main.b44388c.tgz#37528ebcc95c84ba19efebfcb29d60538c6dd5e3"
+  integrity sha512-UePqImsOcg6pXUL1qqRoGn2cPUe0QrBcR5QfbatJB4UsN5dj/FejLSWqvqkFBGTmWlKOLL6ZW9jGRPT4WCs7WA==
+  dependencies:
+    "@emotion/react" "^11.14.0"
+    "@emotion/styled" "^11.14.1"
+    "@huggingface/hub" "^0.15.2"
+    "@mui/icons-material" "^7.3.5"
+    "@mui/material" "^7.3.5"
 
 "@popperjs/core@^2.11.8":
   version "2.11.8"
@@ -2309,6 +2332,13 @@ tauri-plugin-auth-session-api@^0.2.2:
   version "0.2.2"
   resolved "https://registry.yarnpkg.com/tauri-plugin-auth-session-api/-/tauri-plugin-auth-session-api-0.2.2.tgz#cd52aee5c47ca9de964d1bd731aa078a7f778680"
   integrity sha512-4kqQ4XZo0z3F8pW88/ckz5tUk3TX/sI8MJMgMNRC+7hrlasYIxweLalgI8h5cayk2/WEDHb4zyLQaCU84eUUbw==
+
+tauri-plugin-keep-screen-on-api@^0.1.4:
+  version "0.1.4"
+  resolved "https://registry.yarnpkg.com/tauri-plugin-keep-screen-on-api/-/tauri-plugin-keep-screen-on-api-0.1.4.tgz#1fb42bb3155c1f5a1db7482a0145d1f8ecc2fea5"
+  integrity sha512-uFY2EKWiKQ3xmwpMYfjaXgYr5USSNS0/Nz8h75lnG0bgttsEcUs4soP0fHPpE7tL3BKbzJdyTycusirkS9aKkA==
+  dependencies:
+    "@tauri-apps/api" ">=2.0.0-beta.6"
 
 tinybench@^2.9.0:
   version "2.9.0"

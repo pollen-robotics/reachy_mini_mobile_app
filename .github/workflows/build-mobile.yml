@@ -513,6 +513,71 @@ jobs:
             grep -n 'minSdk' "$GRADLE_FILE" || true
           fi
 
+      - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
+        # `tauri-plugin-auth-session` declares `AuthSessionActivity`
+        # in its own manifest but, by design, leaves the OAuth-callback
+        # intent-filter to the consumer app (the scheme is app-specific).
+        # Without that filter, Chrome Custom Tabs has no Android handler
+        # for `reachymini://oauth/callback?...`: the redirect dead-ends,
+        # AuthSessionActivity's onResume fires a second time without
+        # onNewIntent, the plugin emits "user_cancelled" and HF sign-in
+        # is broken on every CI-built APK.
+        #
+        # We patch the regenerated manifest in CI rather than vendoring
+        # `gen/android/`, mirroring the build.gradle.kts approach above.
+        # Idempotent: re-running is a no-op once the filter is present.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+
+          if 'android:scheme="reachymini"' in s:
+              print("reachymini:// intent-filter already present, skipping.")
+              sys.exit(0)
+
+          # 1. Ensure xmlns:tools is on <manifest> (needed for tools:node="merge").
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr)
+                  sys.exit(1)
+              s = s2
+
+          # 2. Inject AuthSessionActivity + intent-filter before </application>.
+          # The first line has 4 spaces because str.replace preserves the
+          # original line's leading whitespace (`    </application>`), so the
+          # snippet's 4 spaces are added on top to reach the 8-space nesting
+          # the surrounding <application> children use.
+          snippet = (
+              '    <activity\n'
+              '            android:name="app.tauri.auth_session.AuthSessionActivity"\n'
+              '            android:exported="true"\n'
+              '            tools:node="merge">\n'
+              '            <intent-filter>\n'
+              '                <action android:name="android.intent.action.VIEW" />\n'
+              '                <category android:name="android.intent.category.DEFAULT" />\n'
+              '                <category android:name="android.intent.category.BROWSABLE" />\n'
+              '                <data android:scheme="reachymini" />\n'
+              '            </intent-filter>\n'
+              '        </activity>\n'
+              '    </application>'
+          )
+          s3 = s.replace("</application>", snippet, 1)
+          if s3 == s:
+              print("::error::</application> anchor not found in manifest.", file=sys.stderr)
+              sys.exit(1)
+
+          p.write_text(s3)
+          print("Injected reachymini:// intent-filter on AuthSessionActivity.")
+          PY
+
       - name: Build Android (debug APK)
         run: yarn tauri android build --debug --apk
 
@@ -1282,6 +1347,62 @@ jobs:
           p.write_text(s)
           print("--- patched build.gradle.kts ---")
           print(s)
+          PY
+
+      - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
+        # Mirror of the debug job's manifest patch. See the debug-job
+        # step for the full rationale; in short, the OAuth callback
+        # scheme `reachymini://` needs a host-app intent-filter on
+        # `AuthSessionActivity`, otherwise HF sign-in dead-ends with
+        # "user_cancelled" on the released APK. Idempotent.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+
+          if 'android:scheme="reachymini"' in s:
+              print("reachymini:// intent-filter already present, skipping.")
+              sys.exit(0)
+
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr)
+                  sys.exit(1)
+              s = s2
+
+          # The first line has 4 spaces because str.replace preserves the
+          # original line's leading whitespace (`    </application>`), so the
+          # snippet's 4 spaces are added on top to reach the 8-space nesting
+          # the surrounding <application> children use.
+          snippet = (
+              '    <activity\n'
+              '            android:name="app.tauri.auth_session.AuthSessionActivity"\n'
+              '            android:exported="true"\n'
+              '            tools:node="merge">\n'
+              '            <intent-filter>\n'
+              '                <action android:name="android.intent.action.VIEW" />\n'
+              '                <category android:name="android.intent.category.DEFAULT" />\n'
+              '                <category android:name="android.intent.category.BROWSABLE" />\n'
+              '                <data android:scheme="reachymini" />\n'
+              '            </intent-filter>\n'
+              '        </activity>\n'
+              '    </application>'
+          )
+          s3 = s.replace("</application>", snippet, 1)
+          if s3 == s:
+              print("::error::</application> anchor not found in manifest.", file=sys.stderr)
+              sys.exit(1)
+
+          p.write_text(s3)
+          print("Injected reachymini:// intent-filter on AuthSessionActivity.")
           PY
 
       - name: Build Android (signed release APK + AAB)

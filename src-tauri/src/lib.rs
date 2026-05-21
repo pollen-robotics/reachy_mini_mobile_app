@@ -65,6 +65,11 @@ pub fn run() {
                 tauri_plugin_blec::init()
             }
         })
+        // Keep-screen-on: disables the OS idle timer while the JS
+        // layer requests it (active conversation or open iframe app).
+        // No-op on desktop; the JS wrapper falls back to the Web
+        // Wake Lock API for the macOS / Linux preview builds.
+        .plugin(tauri_plugin_keep_screen_on::init())
         .setup(|app| {
             info!("reachy_mini_mobile_app starting");
             // In debug builds, auto-open the WebView devtools so the

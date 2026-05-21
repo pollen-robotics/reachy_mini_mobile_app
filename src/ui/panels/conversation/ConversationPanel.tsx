@@ -53,6 +53,7 @@ import { useActiveLanguageId } from '@/features/conversation-language';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { LanguageFlagPicker } from '@/ui/widgets/language-picker';
 import { PersonalityGrid, PersonalityPill } from '@/ui/widgets/personality-pill';
+import { LAYOUT } from '@/ui/design/tokens';
 
 export interface ConversationPanelProps {
   /**
@@ -332,12 +333,23 @@ export function ConversationPanel({
           <Box
             sx={{
               flexShrink: 0,
-              width: '100%',
-              maxWidth: 420,
-              mx: 'auto',
-              px: 3,
-              pt: 1.75,
-              pb: 2,
+              // Full-bleed escape, mirrors the persona sub-header
+              // at the top of the panel. The strip is rendered
+              // inside `RobotSessionScreen`, which wraps the whole
+              // tab body in a `Stack` with `px: 3` (24 px on each
+              // side) for the orb's breathing room. Without this
+              // escape, the strip would inherit those 24 px gaps
+              // on both sides and the borderTop hairline would
+              // stop short of the screen edges - which is exactly
+              // what the user has been seeing.
+              //
+              // `width: '100vw'` + `mx: 'calc(50% - 50vw)'` is the
+              // canonical way to break out of an arbitrary parent
+              // padding chain in a centred layout: the box sizes
+              // itself to the viewport and recenters via a
+              // negative margin computed from its own offset.
+              width: '100vw',
+              mx: 'calc(50% - 50vw)',
               // Top border detaches the strip from the orb / caption
               // area above. Using the theme's divider keeps the line
               // consistent with the persona sub-header divider at the
@@ -349,8 +361,8 @@ export function ConversationPanel({
           >
             {/* Bottom utility strip. Three tools in a single row,
                 each cell visually separated by a thin vertical
-                "tick" divider:
-                  [🇫🇷] │ [🔊 ──●──] │ [🎤 ──●──]
+                "tick" divider that spans the strip edge-to-edge:
+                  │[🇫🇷]│[🔊 ──●──]│[🎤 ──●──]│
                 The dividers reinforce that each cell is its own
                 control - language preference is independent from
                 speaker volume which is independent from mic
@@ -358,39 +370,82 @@ export function ConversationPanel({
                 line with the borderTop hairline above. The audio
                 cards keep a 50/50 split of the remaining width;
                 the picker takes its intrinsic width (32×32
-                anchor) and never compresses on small screens. */}
-            <Stack
-              direction="row"
-              spacing={1.75}
-              alignItems="center"
-              sx={{ width: '100%' }}
-            >
-              <Box sx={{ flexShrink: 0, display: 'flex' }}>
-                <LanguageFlagPicker
-                  disabled={session.engineState === 'error'}
-                />
-              </Box>
-              <StripDivider />
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <AudioControlCard
-                  kind="speaker"
-                  value={daemon.speakerVolume ?? 50}
-                  onChange={daemon.setSpeakerVolume}
-                  onToggleMute={daemon.toggleSpeakerMute}
-                  disabled={!audioReady}
-                />
-              </Box>
-              <StripDivider />
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <AudioControlCard
-                  kind="microphone"
-                  value={daemon.microphoneVolume ?? 50}
-                  onChange={daemon.setMicrophoneVolume}
-                  onToggleMute={daemon.toggleMicrophoneMute}
-                  disabled={!audioReady}
-                />
-              </Box>
-            </Stack>
+                anchor) and never compresses on small screens.
+
+                Stack `spacing={0}` (cells touch the dividers
+                directly) + per-cell `px: STRIP_CELL_PX` give us
+                the breathing room around the divider WITHOUT
+                inserting gaps between cells and dividers. That
+                way the dividers reach the full strip height
+                (thanks to `alignItems="stretch"`) and the strip
+                content reaches the full strip width.
+
+                Inner `maxWidth: LAYOUT.contentMaxWidth` keeps the
+                cells from sprawling on large viewports, mirroring
+                how the persona sub-header caps its inner box too
+                - the hairline spans the screen, the controls stay
+                in the central column. */}
+            <Box sx={{ maxWidth: LAYOUT.contentMaxWidth, mx: 'auto' }}>
+              <Stack
+                direction="row"
+                spacing={0}
+                alignItems="stretch"
+                sx={{ width: '100%' }}
+              >
+                <Box
+                  sx={{
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    px: STRIP_CELL_PX,
+                    py: STRIP_CELL_PY,
+                  }}
+                >
+                  <LanguageFlagPicker
+                    disabled={session.engineState === 'error'}
+                  />
+                </Box>
+                <StripDivider />
+                <Box
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    px: STRIP_CELL_PX,
+                    py: STRIP_CELL_PY,
+                  }}
+                >
+                  <AudioControlCard
+                    kind="speaker"
+                    value={daemon.speakerVolume ?? 50}
+                    onChange={daemon.setSpeakerVolume}
+                    onToggleMute={daemon.toggleSpeakerMute}
+                    disabled={!audioReady}
+                  />
+                </Box>
+                <StripDivider />
+                <Box
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    px: STRIP_CELL_PX,
+                    py: STRIP_CELL_PY,
+                  }}
+                >
+                  <AudioControlCard
+                    kind="microphone"
+                    value={daemon.microphoneVolume ?? 50}
+                    onChange={daemon.setMicrophoneVolume}
+                    onToggleMute={daemon.toggleMicrophoneMute}
+                    disabled={!audioReady}
+                  />
+                </Box>
+              </Stack>
+            </Box>
           </Box>
         )}
 
@@ -410,6 +465,36 @@ export function ConversationPanel({
 }
 
 /**
+ * Vertical padding applied to each cell of the bottom utility
+ * strip (in MUI spacing units - 1.75 = 14px).
+ *
+ * Lives on the cells (not on the outer strip Box) so the inter-
+ * cell vertical dividers can stretch the full strip height. The
+ * cells then center their own content vertically, so the visual
+ * outcome matches the previous "centered row" layout while the
+ * dividers gain top-to-bottom reach.
+ *
+ * Kept as a module-level constant so both audio cells and the
+ * language cell stay in lockstep - a future tweak to row breath
+ * only needs to change one number.
+ */
+const STRIP_CELL_PY = 1.75;
+
+/**
+ * Horizontal padding applied to each cell of the bottom utility
+ * strip (in MUI spacing units - 1.5 = 12px).
+ *
+ * Same rationale as `STRIP_CELL_PY`: by moving the L/R breathing
+ * room from the outer strip box onto each cell, the vertical
+ * dividers can sit flush against the cells (Stack `spacing={0}`)
+ * and the strip's content reaches all the way to the strip's
+ * own left + right edges. Tuned slightly tighter than the
+ * vertical padding so the strip reads as a horizontal toolbar
+ * rather than a chunky button row.
+ */
+const STRIP_CELL_PX = 1.5;
+
+/**
  * Vertical "tick" divider used between the three cells of the
  * bottom utility strip (language picker, speaker, microphone).
  *
@@ -419,16 +504,19 @@ export function ConversationPanel({
  * between the two call sites. Kept private to the file - this is
  * panel-internal styling chrome, not something to expose.
  *
- * Visual posture: shorter than the row (`my: 0.5`) so the line
- * feels like a punctuation mark between tools rather than a hard
- * split, in line with the macOS / iOS toolbar idiom.
+ * Visual posture: edge-to-edge of the strip (no vertical margin)
+ * so the line reads as a clean toolbar separator rather than a
+ * floating tick. Combined with the `alignItems="stretch"` on the
+ * outer row and the per-cell `py: STRIP_CELL_PY`, this divider
+ * reaches from the strip's `borderTop` hairline all the way to
+ * its bottom edge, framing each cell as its own column.
  */
 function StripDivider() {
   return (
     <Divider
       orientation="vertical"
       flexItem
-      sx={{ my: 0.5, borderColor: 'divider' }}
+      sx={{ borderColor: 'divider' }}
     />
   );
 }
