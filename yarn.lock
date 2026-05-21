@@ -619,12 +619,16 @@
     prop-types "^15.8.1"
     react-is "^19.2.3"
 
-"@pollen-robotics/reachy-mini-sdk@1.7.3-main.b45523d":
-  version "1.7.3-main.b45523d"
-  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.7.3-main.b45523d.tgz#265469fb65f090c80884ca471e9f2d5f734dc5f8"
-  integrity sha512-tcgdpFKQHYmLBTgr80M/Hcfmrvn47jF1dZhiqerpfV1mtcc3mA3wtEKT1jsURmDbKHKMyaAcPjT4Z/QZf0aTtw==
+"@pollen-robotics/reachy-mini-sdk@1.7.3-main.b44388c":
+  version "1.7.3-main.b44388c"
+  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.7.3-main.b44388c.tgz#37528ebcc95c84ba19efebfcb29d60538c6dd5e3"
+  integrity sha512-UePqImsOcg6pXUL1qqRoGn2cPUe0QrBcR5QfbatJB4UsN5dj/FejLSWqvqkFBGTmWlKOLL6ZW9jGRPT4WCs7WA==
   dependencies:
+    "@emotion/react" "^11.14.0"
+    "@emotion/styled" "^11.14.1"
     "@huggingface/hub" "^0.15.2"
+    "@mui/icons-material" "^7.3.5"
+    "@mui/material" "^7.3.5"
 
 "@popperjs/core@^2.11.8":
   version "2.11.8"

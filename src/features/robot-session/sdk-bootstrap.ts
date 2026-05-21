@@ -34,17 +34,17 @@ if (typeof window !== 'undefined') {
   // CDN-style `ReachyMini: ReachyMiniConstructor` declaration that
   // describes the engine's own internal SDK surface
   // (`ReachyMiniInstance` - includes `_pc`, `attachVideo`,
-  // `setHeadRpyDeg`, `setMicMuted`, ...). The npm SDK's ambient
-  // `.d.ts` (`src/types/reachy-mini-sdk.d.ts`) is a smaller, partial
-  // surface (`robotState`, `setTarget`, `setHeadOrientation`, ...).
-  // The two disagree on the type level even though at runtime the
-  // bundled class implements every method either side names - the JS
-  // source has both `setHeadRpyDeg` (engine-facing) and
-  // `setHeadOrientation` (vendor-facing alias), `setMicMuted`, `_pc`,
-  // etc.
+  // `setHeadRpyDeg`, `setMicMuted`, ...). The npm SDK's bundled
+  // `.d.ts` (`@pollen-robotics/reachy-mini-sdk/reachy-mini-sdk.d.ts`)
+  // is the public surface (`robotState`, `setTarget`,
+  // `setHeadOrientation`, ...). The two disagree on the type level
+  // even though at runtime the bundled class implements every method
+  // either side names - the JS source has both `setHeadRpyDeg`
+  // (engine-facing) and `setHeadOrientation` (vendor-facing alias),
+  // `setMicMuted`, `_pc`, etc.
   //
   // Reconciling the two via overlapping interfaces would force a
-  // change to the ambient `.d.ts` (out of this module's scope) or
+  // change to the upstream `.d.ts` (out of this module's scope) or
   // a duplicated declaration. We sidestep by going through
   // `unknown`: the assignment is correct at runtime, the cast just
   // tells TypeScript not to police the discrepancy.
