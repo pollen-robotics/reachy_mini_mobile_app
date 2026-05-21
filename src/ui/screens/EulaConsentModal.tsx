@@ -53,15 +53,16 @@ import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 /**
- * Same TODO placeholders as `HelpAndSupportSheet`. We duplicate
+ * Same canonical URLs as `HelpAndSupportSheet`. We duplicate
  * (rather than import) so the strings stay co-located with the
  * surface that uses them, and so the consent modal still tells
  * a coherent story if Help & Support is later moved or reworked.
- * When legal lands the canonical URLs, update both files in one
- * pass.
+ * Update both files in one pass on the next legal revision.
  */
-const PRIVACY_POLICY_URL = 'https://pollen-robotics.com/privacy';
-const TERMS_OF_SERVICE_URL = 'https://pollen-robotics.com/terms';
+const PRIVACY_POLICY_URL =
+  'https://www.pollen-robotics.com/personal-data-protection-charter/';
+const TERMS_OF_SERVICE_URL =
+  'https://www.pollen-robotics.com/general-terms-and-conditions-of-sales/';
 
 interface EulaConsentModalProps {
   onAccept: () => void;

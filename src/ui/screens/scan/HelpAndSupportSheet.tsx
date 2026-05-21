@@ -8,14 +8,22 @@
  * the host app to publish "easily accessible contact information"
  * for users who want to escalate beyond the per-app Report flow
  * (`AppActionsMenu`). The same guideline is mirrored on Google
- * Play's UGC policy. Today the mobile app exposes none of this -
- * the sheet is the minimal Apple-friendly contact surface:
+ * Play's UGC policy. The sheet is the Apple-friendly contact
+ * surface, plus the obvious "where do I go for more info" links:
  *
- *   - "Contact us"        -> mailto with version + commit pre-filled
- *   - "Privacy Policy"    -> external URL (Pollen-hosted)
- *   - "Terms of Service"  -> external URL (Pollen-hosted)
- *   - footer              -> app version (and a hint that it ships
- *                            with the email so support can repro)
+ *   Get help
+ *     - "Contact us"          -> mailto with version pre-filled
+ *     - "Troubleshooting"     -> HF docs (reachy_mini)
+ *     - "Documentation"       -> HF docs (reachy_mini index)
+ *   Community
+ *     - "Discord"             -> Pollen community server
+ *     - "GitHub"              -> Pollen Robotics org
+ *   Legal
+ *     - "Privacy Policy"      -> external URL (Pollen-hosted)
+ *     - "Terms of Service"    -> external URL (Pollen-hosted)
+ *   footer                    -> app version (and a hint that it
+ *                                ships with the email so support
+ *                                can repro)
  *
  * Why a Drawer (bottom)
  * ─────────────────────
@@ -35,14 +43,12 @@
  * `RobotSessionScreen`, this sheet graduates to
  * `ui/widgets/help-and-support/`.
  *
- * Placeholders
- * ────────────
+ * Constants
+ * ─────────
  * `SUPPORT_EMAIL`, `PRIVACY_POLICY_URL` and `TERMS_OF_SERVICE_URL`
- * are TODO placeholders. The strings are deliberately centralised
- * at the top of the file so legal can hand us the canonical URLs
- * and we update one constant each. Until then the privacy / terms
- * items still RENDER and still BEHAVE (open the placeholder URL),
- * so the contact surface is testable end-to-end on TestFlight.
+ * point at the canonical Pollen-hosted resources. The strings are
+ * centralised at the top of the file so a future legal revision is
+ * a one-constant change.
  */
 import { useCallback } from 'react';
 import {
@@ -56,12 +62,17 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  ListSubheader,
   Stack,
   Typography,
 } from '@mui/material';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import CloseIcon from '@mui/icons-material/Close';
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
+import GitHubIcon from '@mui/icons-material/GitHub';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
@@ -71,19 +82,29 @@ import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 /**
- * TODO(legal): confirm the canonical addresses below before the
- * first public store submission.
+ * Canonical Pollen Robotics / Hugging Face endpoints.
  *
- * - The email lands in the team's general support inbox; the
- *   subject + body template helps us repro fast (version + commit
- *   are baked in).
- * - The two URLs need to be live by the time we hit App Review
- *   because the Privacy Nutrition Label / Data Safety form on the
- *   stores requires a public privacy policy URL.
+ * - `SUPPORT_EMAIL` lands in the team's general inbox; the subject
+ *   + body template helps us repro fast (version is baked in).
+ * - `TROUBLESHOOTING_URL` and `DOCUMENTATION_URL` point at the
+ *   Hugging Face-hosted docs for `reachy_mini` (single source of
+ *   truth, no Pollen-side mirror to keep in sync).
+ * - `DISCORD_URL` and `GITHUB_URL` are the public community
+ *   surfaces; the Discord invite is permanent (vanity link).
+ * - Both legal URLs are the live Pollen-hosted pages used for the
+ *   App Store Privacy Nutrition Label / Play Store Data Safety
+ *   form.
  */
-const SUPPORT_EMAIL = 'mobile@pollen-robotics.com';
-const PRIVACY_POLICY_URL = 'https://pollen-robotics.com/privacy';
-const TERMS_OF_SERVICE_URL = 'https://pollen-robotics.com/terms';
+const SUPPORT_EMAIL = 'support@pollen-robotics.com';
+const TROUBLESHOOTING_URL =
+  'https://huggingface.co/docs/reachy_mini/troubleshooting';
+const DOCUMENTATION_URL = 'https://huggingface.co/docs/reachy_mini/index';
+const DISCORD_URL = 'https://discord.gg/2bAhWfXme9';
+const GITHUB_URL = 'https://github.com/pollen-robotics';
+const PRIVACY_POLICY_URL =
+  'https://www.pollen-robotics.com/personal-data-protection-charter/';
+const TERMS_OF_SERVICE_URL =
+  'https://www.pollen-robotics.com/general-terms-and-conditions-of-sales/';
 
 interface HelpAndSupportSheetProps {
   open: boolean;
@@ -128,23 +149,21 @@ export default function HelpAndSupportSheet({
     onClose();
   }, [onClose]);
 
-  const handleOpenPrivacy = useCallback(async () => {
-    try {
-      await openExternalUrl(PRIVACY_POLICY_URL);
-    } catch (err) {
-      console.warn('[help] privacy URL failed:', err);
-    }
-    onClose();
-  }, [onClose]);
-
-  const handleOpenTerms = useCallback(async () => {
-    try {
-      await openExternalUrl(TERMS_OF_SERVICE_URL);
-    } catch (err) {
-      console.warn('[help] terms URL failed:', err);
-    }
-    onClose();
-  }, [onClose]);
+  // Single helper for plain-URL rows. Keeps each row dumb (tap ->
+  // browser -> dismiss sheet) and avoids a callback per item. The
+  // label is only used for the warn line so support can tell us
+  // which row failed.
+  const handleOpenUrl = useCallback(
+    async (label: string, url: string): Promise<void> => {
+      try {
+        await openExternalUrl(url);
+      } catch (err) {
+        console.warn(`[help] ${label} URL failed:`, err);
+      }
+      onClose();
+    },
+    [onClose],
+  );
 
   return (
     <Drawer
@@ -209,8 +228,30 @@ export default function HelpAndSupportSheet({
             px: 2,
             py: 1.5,
           },
+          // Group headers (`Get help`, `Community`, `Legal`) share
+          // a single visual treatment: small caps-ish label,
+          // muted, slightly tighter vertical rhythm than the
+          // rows. Defined once on the parent to keep markup
+          // light.
+          '& .MuiListSubheader-root': {
+            bgcolor: 'background.paper',
+            color: 'text.secondary',
+            fontSize: TYPO.tiny,
+            fontWeight: FONT_WEIGHT.semibold,
+            letterSpacing: '0.6px',
+            textTransform: 'uppercase',
+            lineHeight: 1.2,
+            px: 2,
+            pt: 2,
+            pb: 0.75,
+          },
         }}
       >
+        {/* Group 1 - Get help.
+            "Talk to us, or read what we already wrote." This is
+            the primary intent of the sheet (Apple UGC contact
+            surface) so it sits first. */}
+        <ListSubheader disableSticky>Get help</ListSubheader>
         <ListItemButton onClick={handleContact}>
           <ListItemIcon sx={{ minWidth: 40 }}>
             <MailOutlineIcon fontSize="small" />
@@ -230,7 +271,104 @@ export default function HelpAndSupportSheet({
         </ListItemButton>
         <Divider component="li" />
 
-        <ListItemButton onClick={handleOpenPrivacy}>
+        <ListItemButton
+          onClick={() => handleOpenUrl('troubleshooting', TROUBLESHOOTING_URL)}
+        >
+          <ListItemIcon sx={{ minWidth: 40 }}>
+            <BuildOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Troubleshooting"
+            primaryTypographyProps={{
+              fontSize: TYPO.md,
+              fontWeight: FONT_WEIGHT.medium,
+            }}
+          />
+          <OpenInNewIcon
+            fontSize="small"
+            sx={{ color: 'text.secondary', ml: 1 }}
+          />
+        </ListItemButton>
+        <Divider component="li" />
+
+        <ListItemButton
+          onClick={() => handleOpenUrl('documentation', DOCUMENTATION_URL)}
+        >
+          <ListItemIcon sx={{ minWidth: 40 }}>
+            <MenuBookOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Documentation"
+            primaryTypographyProps={{
+              fontSize: TYPO.md,
+              fontWeight: FONT_WEIGHT.medium,
+            }}
+          />
+          <OpenInNewIcon
+            fontSize="small"
+            sx={{ color: 'text.secondary', ml: 1 }}
+          />
+        </ListItemButton>
+
+        {/* Group 2 - Community.
+            Discord + GitHub. Discord is the canonical place to
+            ask questions or share builds with other owners;
+            GitHub is for issues / code. Both are public surfaces
+            so they don't need a UGC moderation note. */}
+        <ListSubheader disableSticky>Community</ListSubheader>
+        <ListItemButton onClick={() => handleOpenUrl('discord', DISCORD_URL)}>
+          <ListItemIcon sx={{ minWidth: 40 }}>
+            <ForumOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Discord"
+            secondary="Join the community"
+            primaryTypographyProps={{
+              fontSize: TYPO.md,
+              fontWeight: FONT_WEIGHT.medium,
+            }}
+            secondaryTypographyProps={{
+              fontSize: TYPO.xs,
+              color: 'text.secondary',
+            }}
+          />
+          <OpenInNewIcon
+            fontSize="small"
+            sx={{ color: 'text.secondary', ml: 1 }}
+          />
+        </ListItemButton>
+        <Divider component="li" />
+
+        <ListItemButton onClick={() => handleOpenUrl('github', GITHUB_URL)}>
+          <ListItemIcon sx={{ minWidth: 40 }}>
+            <GitHubIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="GitHub"
+            secondary="pollen-robotics"
+            primaryTypographyProps={{
+              fontSize: TYPO.md,
+              fontWeight: FONT_WEIGHT.medium,
+            }}
+            secondaryTypographyProps={{
+              fontSize: TYPO.xs,
+              color: 'text.secondary',
+            }}
+          />
+          <OpenInNewIcon
+            fontSize="small"
+            sx={{ color: 'text.secondary', ml: 1 }}
+          />
+        </ListItemButton>
+
+        {/* Group 3 - Legal.
+            Privacy + Terms last, both because they're the least
+            frequently tapped and because Apple / Play reviewers
+            scan for them at the bottom of similar surfaces. */}
+        <ListSubheader disableSticky>Legal</ListSubheader>
+        <ListItemButton
+          onClick={() => handleOpenUrl('privacy', PRIVACY_POLICY_URL)}
+        >
           <ListItemIcon sx={{ minWidth: 40 }}>
             <PrivacyTipOutlinedIcon fontSize="small" />
           </ListItemIcon>
@@ -248,7 +386,9 @@ export default function HelpAndSupportSheet({
         </ListItemButton>
         <Divider component="li" />
 
-        <ListItemButton onClick={handleOpenTerms}>
+        <ListItemButton
+          onClick={() => handleOpenUrl('terms', TERMS_OF_SERVICE_URL)}
+        >
           <ListItemIcon sx={{ minWidth: 40 }}>
             <GavelOutlinedIcon fontSize="small" />
           </ListItemIcon>
