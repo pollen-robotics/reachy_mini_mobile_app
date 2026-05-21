@@ -953,13 +953,13 @@ async function runConversationParts(): Promise<void> {
  * Stop every audio track captured by the SDK's `_micStream`.
  *
  * Reaches into a private SDK field; the cast is intentional. We
- * accept the coupling because the alternative (forking the
- * vendored SDK to add a public `releaseLocalMic()`) would diverge
- * from `scripts/sync-vendor-sdk.sh` and bite us on the next
- * upstream pull. If the field is renamed in a future SDK sync,
- * this becomes a silent no-op (the `?? null` guard) and the iOS
- * mic indicator regression resurfaces - which is observable by
- * inspection on TestFlight, easy to spot and fix.
+ * accept the coupling because the alternative (forking the npm
+ * SDK to add a public `releaseLocalMic()`) would force us to
+ * pin a fork instead of `@pollen-robotics/reachy-mini-sdk`. If
+ * the field is renamed in a future SDK bump, this becomes a
+ * silent no-op (the `?? null` guard) and the iOS mic indicator
+ * regression resurfaces — which is observable by inspection on
+ * TestFlight, easy to spot and fix.
  */
 function releaseSdkPhoneMic(robotInstance: ReachyMiniInstance | null): void {
   if (!robotInstance) return;

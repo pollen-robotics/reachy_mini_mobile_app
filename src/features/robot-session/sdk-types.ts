@@ -1,6 +1,13 @@
 /**
- * Type declarations for the ReachyMini SDK loaded from a CDN script tag in
- * index.html. We only expose what we actually consume here.
+ * Engine-facing TypeScript surface for the ReachyMini SDK.
+ *
+ * The SDK is bundled via the npm package
+ * `@pollen-robotics/reachy-mini-sdk` (see `sdk-bootstrap.ts` for the
+ * `window.ReachyMini` shim). Its own ambient `.d.ts` lives at
+ * `src/types/reachy-mini-sdk.d.ts` and declares the public surface;
+ * the interface below is the engine's superset — it adds the
+ * runtime-only fields and aliases the engine actually consumes
+ * (`_pc`, `attachVideo`, `setMicMuted`, `sendRaw`, ...).
  */
 
 export interface RobotInfo {

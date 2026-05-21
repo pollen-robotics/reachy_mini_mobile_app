@@ -10,9 +10,9 @@
  * finished evaluating.
  *
  * The mobile app bundles the SDK directly via Vite (ES module import
- * from `src/vendor/reachy-mini.js`). There is no `<script>` tag, no
- * external loader, and the global never gets set - which made the
- * engine sit forever in `connecting`, with no `wakeUp` ever firing.
+ * from `@pollen-robotics/reachy-mini-sdk`). There is no `<script>`
+ * tag, no external loader, and the global never gets set - which made
+ * the engine sit forever in `connecting`, with no `wakeUp` ever firing.
  *
  * This file fixes that mismatch the surgical way: as soon as the
  * conversation module's engine code is loaded, we attach the bundled
@@ -27,23 +27,24 @@
  * (the assignment guards against double-set) so repeated imports are
  * a no-op.
  */
-import { ReachyMini } from '@/vendor/reachy-mini';
+import { ReachyMini } from '@pollen-robotics/reachy-mini-sdk';
 
 if (typeof window !== 'undefined') {
   // Type story: the engine's `globals.ts` augments `Window` with a
   // CDN-style `ReachyMini: ReachyMiniConstructor` declaration that
   // describes the engine's own internal SDK surface
   // (`ReachyMiniInstance` - includes `_pc`, `attachVideo`,
-  // `setHeadRpyDeg`, `setMicMuted`, ...). The bundled SDK's `.d.ts`
-  // (`src/vendor/reachy-mini.d.ts`) is a smaller, partial surface
-  // (`robotState`, `setTarget`, `setHeadOrientation`, ...). The two
-  // disagree on the type level even though at runtime the bundled
-  // class implements every method either side names - the JS source
-  // has both `setHeadRpyDeg` (engine-facing) and `setHeadOrientation`
-  // (vendor-facing alias), `setMicMuted`, `_pc`, etc.
+  // `setHeadRpyDeg`, `setMicMuted`, ...). The npm SDK's ambient
+  // `.d.ts` (`src/types/reachy-mini-sdk.d.ts`) is a smaller, partial
+  // surface (`robotState`, `setTarget`, `setHeadOrientation`, ...).
+  // The two disagree on the type level even though at runtime the
+  // bundled class implements every method either side names - the JS
+  // source has both `setHeadRpyDeg` (engine-facing) and
+  // `setHeadOrientation` (vendor-facing alias), `setMicMuted`, `_pc`,
+  // etc.
   //
   // Reconciling the two via overlapping interfaces would force a
-  // change to the vendor `.d.ts` (out of this module's scope) or
+  // change to the ambient `.d.ts` (out of this module's scope) or
   // a duplicated declaration. We sidestep by going through
   // `unknown`: the assignment is correct at runtime, the cast just
   // tells TypeScript not to police the discrepancy.
