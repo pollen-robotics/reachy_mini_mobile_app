@@ -38,6 +38,35 @@ import type { AppEntry } from './types';
  */
 export const MIN_RAIL_SIZE = 3;
 
+/**
+ * Synthetic descriptor for the "Pollen Certified" rail, prepended
+ * before the LLM-driven taxonomy. Lives outside `CATEGORY_TAXONOMY`
+ * on purpose: certified is a curatorial *facet* on top of the
+ * sematic categories (an app is `motion` because of what it does,
+ * `official` because of who blesses it), and we don't want to
+ * pollute the LLM-driven taxonomy with an editorial flag.
+ *
+ * The id stays distinct from any real LLM category slug so consumers
+ * that key off `descriptor.id` (e.g. drill-down focus mode) can
+ * branch reliably on it without colliding with a future taxonomy
+ * entry.
+ */
+export const OFFICIAL_RAIL_ID = 'official' as const;
+const OFFICIAL_RAIL_DESCRIPTOR: CategoryDescriptor = {
+  id: OFFICIAL_RAIL_ID,
+  label: 'Pollen Certified',
+};
+
+/**
+ * Minimum number of apps for the "Pollen Certified" rail to be
+ * rendered. Lower than the generic threshold because the certified
+ * set is small by design (curated by hand) and the rail carries
+ * editorial weight that justifies showing even a single tile -
+ * unlike a sparse semantic bucket, an "official" rail with one app
+ * still communicates "Pollen vouches for this".
+ */
+const MIN_OFFICIAL_RAIL_SIZE = 1;
+
 interface UseFilteredAppsArgs {
   apps: AppEntry[];
   searchQuery: string;
@@ -123,6 +152,20 @@ export function useFilteredApps({
     // and the consumer doesn't need to re-sort. Drop sparse
     // buckets to keep the home focused on rails worth scrolling.
     const rails: CategoryBucket[] = [];
+
+    // "Pollen Certified" rail goes first when non-empty. We sort by
+    // likes (same rule as the rest of the rails) so the most loved
+    // certified apps surface at the head. Apps in this rail also
+    // appear in their semantic rail below if they have one - that
+    // overlap is intentional, the home is a discovery surface and
+    // double exposure is good for browsing.
+    const officialBucket = apps
+      .filter((app) => app.isOfficial)
+      .sort(sortByLikesDesc);
+    if (officialBucket.length >= MIN_OFFICIAL_RAIL_SIZE) {
+      rails.push({ descriptor: OFFICIAL_RAIL_DESCRIPTOR, apps: officialBucket });
+    }
+
     for (const descriptor of CATEGORY_TAXONOMY) {
       const bucket = apps.filter((app) => app.categories?.includes(descriptor.id));
       if (bucket.length < MIN_RAIL_SIZE) continue;
