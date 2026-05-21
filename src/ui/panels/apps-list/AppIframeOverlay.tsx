@@ -390,12 +390,17 @@ export default function AppIframeOverlay({
             //            recent iOS - non-optional.
             //   - Android : `RECORD_AUDIO`, `CAMERA`,
             //               `ACCESS_FINE_LOCATION` in the generated
-            //               `AndroidManifest.xml`. Tracked separately
-            //               (TODO: Android target is not initialised
-            //               in this repo today; the iframe tokens are
-            //               harmless until then, runtime denial just
-            //               surfaces a normal `permission denied`
-            //               error to the Space).
+            //               `AndroidManifest.xml`, plus a custom
+            //               `WebChromeClient` in `MainActivity.kt`
+            //               that maps `onPermissionRequest` and
+            //               `onGeolocationPermissionsShowPrompt` to
+            //               the OS grants. Tauri's default WebView
+            //               denies iframe permission requests
+            //               otherwise. Full runbook in
+            //               `docs/ANDROID_PERMISSIONS.md`. The
+            //               Android target itself isn't initialised
+            //               in this repo today; the iframe tokens
+            //               are harmless until then.
             allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
               if (loadPhase === 'loading') setLoadPhase('ready');
