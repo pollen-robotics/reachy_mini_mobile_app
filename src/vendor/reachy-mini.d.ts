@@ -142,6 +142,31 @@ export class ReachyMini extends EventTarget {
    *  sessions. Resolves with the applied value. */
   setMicrophoneVolume(volume: number): Promise<number | null>;
 
+  // ─── XVF3800 audio-board tuning (Wireless only) ───────────────────
+  //
+  // Wireless robots carry a USB ReSpeaker / XVF3800 board. These
+  // helpers expose its parameter API over the DataChannel so a remote
+  // app (browser / mobile) can tune AGC / NS / post-processing
+  // without SSHing into the robot. Mirrors the on-robot Python SDK's
+  // `AudioBase.apply_audio_config()` / `ReSpeaker.read_values()`.
+  //
+  // Lite / dev robots have no board: both calls resolve to a
+  // benign falsy value (`false` / `null`) rather than throwing.
+
+  /**
+   * Write a batch of XVF3800 parameters. When `verify` is true (default),
+   * each parameter is read back after writing and the promise resolves
+   * with `true` only if every read-back matches.
+   */
+  applyAudioConfig(
+    config: ReadonlyArray<{ name: string; values: number[] }>,
+    options?: { verify?: boolean },
+  ): Promise<boolean>;
+
+  /** Read a single XVF3800 parameter by name; `null` when the
+   *  parameter is unknown or the board is unavailable. */
+  readAudioParameter(name: string): Promise<number[] | null>;
+
   // ─── Daemon log streaming (DataChannel) ───────────────────────────
   //
   // Subscribe to the `journalctl -u reachy-mini-daemon` stream over

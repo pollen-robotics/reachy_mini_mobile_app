@@ -111,6 +111,23 @@ export interface ReachyMiniInstance extends EventTarget {
   setMicrophoneVolume(volume: number): Promise<number | null>;
 
   /**
+   * XVF3800 audio-board batch tuning (Wireless only). Resolves
+   * `true` on full success; `false` when the board is absent
+   * (Lite / dev) or any write/verify failed. Never throws.
+   * Mirrors the on-robot `AudioBase.apply_audio_config()` SDK.
+   */
+  applyAudioConfig(
+    config: ReadonlyArray<{ name: string; values: number[] }>,
+    options?: { verify?: boolean },
+  ): Promise<boolean>;
+
+  /**
+   * Read a single XVF3800 parameter by name. `null` when the
+   * parameter is unknown or the audio board is unavailable.
+   */
+  readAudioParameter(name: string): Promise<number[] | null>;
+
+  /**
    * Daemon version string (e.g. `"1.5.1"`), one-shot over the data
    * channel. Resolves to `null` when the channel isn't open or the
    * daemon predates the `get_version` Cmd.

@@ -28,15 +28,19 @@ set -euo pipefail
 
 # ─── Configuration ─────────────────────────────────────────────────────────
 
-# Default ref. Bump this when PR #1098 lands on `main`. The current pin is
-# the integration branch carrying the four iframe-handoff fixes the mobile
-# shell needs (preselectedRobotId, skip empty ICE, buffer ICE before SDP,
-# silent mic fallback).
-DEFAULT_REF="feat/sdk-mobile-shell-handoff"
+# Default ref. PR #1098 (awaitable wake/sleep) has landed on `main`; PR
+# #1134 (XVF3800 audio-config helpers) sits on top, merged with `main`,
+# so this branch carries BOTH feature sets — `applyAudioConfig` /
+# `readAudioParameter` AND `_pendingMotionCompletions` /
+# `_sendCommandAwaitCompletion`. Bump to `main` once #1134 itself merges.
+DEFAULT_REF="1058-audio-config-helper-for-wireless"
 
 UPSTREAM_OWNER="pollen-robotics"
 UPSTREAM_REPO="reachy_mini"
-UPSTREAM_PATH="js/reachy-mini.js"
+# Upstream renamed `js/reachy-mini.js` → `js/reachy-mini-sdk.js` in #1135
+# (npm-package re-org). The local filename stays `reachy-mini.js` to
+# avoid churn across the mobile codebase's imports.
+UPSTREAM_PATH="js/reachy-mini-sdk.js"
 LOCAL_PATH="src/vendor/reachy-mini.js"
 
 # Markers that MUST be present in the synced file. If any is missing the
@@ -57,6 +61,14 @@ REQUIRED_MARKERS=(
     # PR #1098 thread upstream for the full plumbing rationale.
     "_pendingMotionCompletions"    # queue of pending wake_up / goto_sleep awaiters
     "_sendCommandAwaitCompletion"  # internal Promise wrapper for motion commands
+    # XVF3800 audio-board tuning (PR #1058 / #1134). Required so the mobile
+    # conversation engine can apply optimal mic parameters at session
+    # start — see src/features/conversation/engine/audio-startup-config.ts.
+    # Currently carried as a local surgical port in reachy-mini.js; this
+    # marker enforces that any future upstream sync only proceeds from a
+    # ref that retains the helper.
+    "applyAudioConfig"             # XVF3800 batch-write SDK method
+    "readAudioParameter"           # XVF3800 single-param read SDK method
 )
 
 # ─── Locate the script + repo root ─────────────────────────────────────────
