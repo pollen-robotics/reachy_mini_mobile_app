@@ -2333,6 +2333,13 @@ tauri-plugin-auth-session-api@^0.2.2:
   resolved "https://registry.yarnpkg.com/tauri-plugin-auth-session-api/-/tauri-plugin-auth-session-api-0.2.2.tgz#cd52aee5c47ca9de964d1bd731aa078a7f778680"
   integrity sha512-4kqQ4XZo0z3F8pW88/ckz5tUk3TX/sI8MJMgMNRC+7hrlasYIxweLalgI8h5cayk2/WEDHb4zyLQaCU84eUUbw==
 
+tauri-plugin-keep-screen-on-api@^0.1.4:
+  version "0.1.4"
+  resolved "https://registry.yarnpkg.com/tauri-plugin-keep-screen-on-api/-/tauri-plugin-keep-screen-on-api-0.1.4.tgz#1fb42bb3155c1f5a1db7482a0145d1f8ecc2fea5"
+  integrity sha512-uFY2EKWiKQ3xmwpMYfjaXgYr5USSNS0/Nz8h75lnG0bgttsEcUs4soP0fHPpE7tL3BKbzJdyTycusirkS9aKkA==
+  dependencies:
+    "@tauri-apps/api" ">=2.0.0-beta.6"
+
 tinybench@^2.9.0:
   version "2.9.0"
   resolved "https://registry.npmjs.org/tinybench/-/tinybench-2.9.0.tgz"

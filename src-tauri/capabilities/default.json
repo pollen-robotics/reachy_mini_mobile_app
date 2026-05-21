@@ -11,6 +11,7 @@
     "os:allow-os-type",
     "blec:default",
     "auth-session:default",
+    "keep-screen-on:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

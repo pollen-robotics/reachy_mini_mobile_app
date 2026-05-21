@@ -79,7 +79,7 @@ methods that wrap the SDK with the right preconditions and bookkeeping:
 Sibling modules in `features/robot-session/` provide the helpers
 (`start-session.ts`, `physical.ts`, `session-guard.ts`,
 `video-cache.ts`, `transport-monitor.ts`, `dc-health.ts`,
-`background-resilience.ts`, `wake-lock.ts`, `sdk-bootstrap.ts`,
+`background-resilience.ts`, `sdk-bootstrap.ts`,
 `sdk-types.ts`, `token-hash.ts`, `lifecycle-queue.ts`).
 
 The conversation engine instantiates ONE `RobotSession` per
