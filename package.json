@@ -37,6 +37,7 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "tauri-plugin-auth-session-api": "^0.2.2",
+    "tauri-plugin-keep-screen-on-api": "^0.1.4",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

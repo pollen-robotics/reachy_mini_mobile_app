@@ -87,6 +87,7 @@ import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import SessionErrorView from './session/SessionErrorView';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
 export type ConnectionTarget = {
   kind: 'remote';
@@ -293,6 +294,42 @@ function ConnectedSession({
   // stays mounted underneath so the orb resumes smoothly.
   const showReacquiringOverlay =
     !leaving && !isError && session.phase === 'reacquiring';
+
+  // Keep-screen-on rule. We only ask the OS to suppress the idle
+  // timer while the user is engaged with the robot in a way that
+  // can't tolerate a mid-flow screen lock. Three contexts qualify:
+  //
+  //   - **Active conversation**. The orb is `listening`,
+  //     `user-speaking`, `processing` or `ai-speaking`: user and
+  //     robot are mid-dialog, a screen lock would drop the WebRTC
+  //     audio and break the turn.
+  //   - **Open iframe app** (Marionette etc.). The conversation
+  //     engine has released its session for handoff (`releaseFor
+  //     Handoff`) so the engine-side wake lock is OFF here - we
+  //     pick up the slack from the UI layer. This is the case the
+  //     original bug report covered.
+  //   - **Bring-up in flight**. `connecting` / `auto-selecting` /
+  //     `starting`: the user is actively waiting on the loading
+  //     view. Letting the screen sleep mid-handshake would force
+  //     a fresh tap to wake the device, only to find a stalled
+  //     session - irritating.
+  //
+  // Anything else (`ready` orb idle, `connected` without a
+  // conversation, the error / leaving terminal states) lets the
+  // system idle timer behave normally. The hook is refcounted at
+  // the module level, so other screens can opt into the same lock
+  // without coordination.
+  const isConversing =
+    session.engineState === 'listening' ||
+    session.engineState === 'user-speaking' ||
+    session.engineState === 'processing' ||
+    session.engineState === 'ai-speaking';
+  const isBringingUp =
+    session.engineState === 'connecting' ||
+    session.engineState === 'auto-selecting' ||
+    session.engineState === 'starting';
+  const isAppOpen = openedApp !== null;
+  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
 
   return (
     /* `DaemonStateProvider` is the single source of truth for

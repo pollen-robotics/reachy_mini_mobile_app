@@ -45,7 +45,6 @@
  *     video-cache.ts           Cached `MediaStream` for late attachers.
  *     transport-monitor.ts     ICE candidate pair classifier.
  *     dc-health.ts             Data-channel failure streak monitor.
- *     wake-lock.ts             Screen Wake Lock helper.
  *     background-resilience.ts visibility / audio-context resume.
  *     sdk-bootstrap.ts         Side-effect import of the vendored SDK.
  *     sdk-types.ts             `ReachyMiniInstance` shape.
@@ -97,7 +96,6 @@ import {
   type BackgroundAudioKeeper,
 } from "../background-audio-keeper";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
-import { WakeLockHandle } from "@/features/robot-session/wake-lock";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
 import { memoryStore } from "./memory";
@@ -428,13 +426,14 @@ session.setTransportListener(onTransportChange);
 // by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
 // as a read-only view for the few sites that need it.
 
-// Screen Wake Lock held for the duration of an active session.
-// Prevents mobile / laptop browsers from throttling timers,
-// suspending media, or sleeping the device mid-conversation.
-// Released on teardown. Implementation in `./wakeLock.ts`; we keep
-// a single instance per engine mount so the "unavailable" latch
-// persists across visibility flips.
-const wakeLock = new WakeLockHandle();
+// Screen keep-awake is no longer driven from the engine. The host
+// (`RobotSessionScreen` via `useKeepScreenOn`) owns that policy now
+// because it has visibility on both the engine state AND the iframe
+// app overlay - the iframe handoff path used to drop the engine's
+// wake lock at the exact moment the user needed the screen ON (e.g.
+// piloting through Marionette). See
+// `shared/tauri/keepScreenOn.ts` for the underlying native plugin
+// + Web Wake Lock wrapper.
 
 // The mic-muted flag used to live here so the engine could re-paint
 // its own button. The React side controls own that state now (kept
@@ -893,10 +892,6 @@ async function runConversationParts(): Promise<void> {
   // Idempotent (no-op if already running on a re-acquire path).
   backgroundAudioKeeper.start();
 
-  // Keep the device awake for the whole conversation so timers and the
-  // media stack don't get throttled on mobile / laptop-on-battery.
-  void acquireWakeLock();
-
   // Reset the bridge's per-session retry budget so a stale failure
   // from a previous run can't poison this fresh handshake.
   openaiBridge?.resetReconnectCounter();
@@ -1065,19 +1060,9 @@ function stopAiLevelMonitor(): void {
 //   - AudioContexts can end up suspended on return (Safari, mobile)
 //   - a device sleep during silence can kill everything
 //
-// We mitigate with a Wake Lock during the session and a visibilitychange
-// handler that re-acquires the lock and resumes any suspended contexts.
-
-// Wake-lock acquire/release are now methods on the `WakeLockHandle`
-// instance above. Local function aliases keep the call sites in this
-// file readable without sprinkling `wakeLock.` everywhere.
-function acquireWakeLock(): Promise<void> {
-  return wakeLock.acquire();
-}
-
-function releaseWakeLock(): Promise<void> {
-  return wakeLock.release();
-}
+// The keep-screen-on side of that mitigation lives in the host
+// (`RobotSessionScreen` via `useKeepScreenOn`). The engine only owns
+// the audio-context resume on visibility return, below.
 
 function resumeAudioContexts(): void {
   // HeadWobbler, MicLevelMonitor and AiLevelMonitor each own a private
@@ -1357,7 +1342,6 @@ async function teardown(): Promise<void> {
   // revert to `Ambient` and we go back to plain foreground-only
   // behaviour. Safe to call when not running.
   backgroundAudioKeeper.stop();
-  void releaseWakeLock();
 
   // Capture the session flag BEFORE resetting it - we need it to
   // decide whether to run the goto-sleep dance below. Resetting
@@ -1406,8 +1390,8 @@ async function teardown(): Promise<void> {
     // Wrapped in `expectedStop` so the `sessionStopped` listener
     // doesn't try to run its own (now redundant) cleanup path. The
     // teardown() function above already handles motor mode, audio
-    // monitors, conversation parts, and the wake-lock; the listener
-    // would otherwise also reset `selectedRobotId` and force a
+    // monitors and conversation parts; the listener would otherwise
+    // also reset `selectedRobotId` and force a
     // state transition, racing with the calling site (handleHostStop
     // / unmount / the fatal-error handler).
     await expectedStop(() => robot!.stopSession());
@@ -1712,8 +1696,12 @@ const bootChain: Promise<void> = whenReachyReady()
 // Background-tab + page-hide resilience. The module owns the listener
 // install / dispose contract and the sendBeacon endSession path; the
 // engine wires up the `onResume` callback with whatever the live
-// session needs (re-acquire wake lock, resume audio analysers, probe
-// the data channel).
+// session needs (resume audio analysers, probe the data channel).
+// The keep-screen-on lock is owned by the host and isn't subject to
+// visibility flips: iOS / Android release the OS idle-timer flag
+// automatically when the app goes to background, and the
+// `useKeepScreenOn` hook re-acquires it on the next render when
+// the user returns and the relevant state is still active.
 const disposeBackgroundResilience = installBackgroundResilience({
   getRobot: () => robot,
   centralSendUrl: `${CENTRAL_SIGNALING_URL}/send`,
@@ -1724,7 +1712,6 @@ const disposeBackgroundResilience = installBackgroundResilience({
       currentState === "processing" ||
       currentState === "ai-speaking"
     ) {
-      void acquireWakeLock();
       resumeAudioContexts();
       void probeRobotLink();
     }
@@ -1857,7 +1844,6 @@ const handle: ConversationEngineHandle = {
     stopMicLevelMonitor();
     stopAiLevelMonitor();
     backgroundAudioKeeper.stop();
-    void releaseWakeLock();
     // Mute the robot mic so any in-flight audio frames don't leak
     // through to the speakers while the OpenAI client is gone.
     try {
@@ -1971,7 +1957,6 @@ const handle: ConversationEngineHandle = {
       stopMicLevelMonitor();
       stopAiLevelMonitor();
       backgroundAudioKeeper.stop();
-      void releaseWakeLock();
       try {
         robot.setMicMuted(true);
       } catch {
