@@ -366,23 +366,37 @@ export default function AppIframeOverlay({
             src={loadPhase === 'waiting-release' ? 'about:blank' : url}
             title={app.name}
             // Permissions Policy delegation for the iframe-hosted HF
-            // Space. Bare tokens scope each capability to the iframe's
-            // own origin (`'src'`, i.e. the `*.hf.space` subdomain),
-            // they do NOT broadcast to arbitrary origins.
+            // Space. Each capability is explicitly scoped to the
+            // iframe's own origin (`'src'`, i.e. the `*.hf.space`
+            // subdomain) - explicit `'src'` is preferred over the
+            // bare token because behaviour for bare tokens has
+            // shifted across Permissions Policy revisions and across
+            // engines (WKWebView vs Android WebView vs desktop Chrome).
+            //
             // Token rationale:
             //   - microphone  : voice / chat Spaces (`getUserMedia({audio})`)
             //   - camera      : vision / AR Spaces (`getUserMedia({video})`)
             //   - geolocation : tour-guide / location-aware Spaces
             //   - autoplay    : media playback without prior user gesture
             //   - clipboard-* : text / image copy-paste from inside the Space
+            //
             // Each token needs a matching OS-side authorisation:
-            // `NSMicrophoneUsageDescription`, `NSCameraUsageDescription`,
-            // `NSLocationWhenInUseUsageDescription` in `src-tauri/Info.plist`
-            // for iOS, and `RECORD_AUDIO` / `CAMERA` / `ACCESS_FINE_LOCATION`
-            // in `AndroidManifest.xml` for Android. Missing the OS-side
-            // key while granting the iframe token can hard-crash the
-            // WebView process on iOS.
-            allow="microphone; camera; geolocation; autoplay; clipboard-read; clipboard-write"
+            //   - iOS  : `NSMicrophoneUsageDescription`,
+            //            `NSCameraUsageDescription`,
+            //            `NSLocationWhenInUseUsageDescription`
+            //            in `src-tauri/Info.plist`. Missing the
+            //            Camera key while granting the iframe token
+            //            HARD-crashes the WKWebView process on
+            //            recent iOS - non-optional.
+            //   - Android : `RECORD_AUDIO`, `CAMERA`,
+            //               `ACCESS_FINE_LOCATION` in the generated
+            //               `AndroidManifest.xml`. Tracked separately
+            //               (TODO: Android target is not initialised
+            //               in this repo today; the iframe tokens are
+            //               harmless until then, runtime denial just
+            //               surfaces a normal `permission denied`
+            //               error to the Space).
+            allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
               if (loadPhase === 'loading') setLoadPhase('ready');
               // Burst the HF token over postMessage. The first

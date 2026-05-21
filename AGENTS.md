@@ -230,6 +230,13 @@ delegates these capabilities to your iframe today: `microphone`, `camera`,
 `geolocation`, `autoplay`, `clipboard-read`, `clipboard-write`. Use the
 corresponding `navigator.*` API — nothing extra to request on your end.
 
+> **Platform status today**: iOS is fully wired (Info.plist usage strings
+> + iframe `allow` tokens). Android is not yet initialised as a Tauri
+> target in this repo; the iframe tokens are already in place so the
+> moment Android is enabled, the corresponding `<uses-permission>`
+> entries (`RECORD_AUDIO`, `CAMERA`, `ACCESS_FINE_LOCATION`) only need
+> to be added to the generated `AndroidManifest.xml`.
+
 ### Don't gate on the permission prompt — ask, and if it works, go
 
 In a regular browser, the first `getUserMedia` / `getCurrentPosition` call
