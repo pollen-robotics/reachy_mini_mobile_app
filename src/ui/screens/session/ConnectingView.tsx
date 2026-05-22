@@ -51,8 +51,9 @@
  * engine coupling beyond the typed props.
  */
 import { useEffect, useState } from 'react';
-import { Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 
+import connectionUrl from '@/assets/connection.svg';
 import type {
   ConversationConnectionAttempt,
   ConversationState,
@@ -120,6 +121,30 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
       spacing={3.5}
       sx={{ flex: 1, minHeight: 0, width: '100%', px: 3 }}
     >
+      {/* Illustration anchors the view above the stepper, mirroring
+          the visual identity used by `SessionErrorView`. Hidden from
+          assistive tech: the headline + caption already convey the
+          state. */}
+      <Box
+        sx={{
+          width: '100%',
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        <Box
+          component="img"
+          src={connectionUrl}
+          alt=""
+          aria-hidden
+          sx={{
+            width: 144,
+            height: 144,
+            display: 'block',
+          }}
+        />
+      </Box>
+
       {/* Stepper takes the visual lead; capped width so the dots
           stay close enough together to read as a single
           progression. The desktop component is designed to fill its

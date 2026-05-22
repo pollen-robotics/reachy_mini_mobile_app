@@ -46,11 +46,19 @@
  * postMessage bridge
  * ──────────────────
  * After the iframe loads, the embed posts `embed:ready` to the
- * parent (this app). The mobile app SHOULD reply with `host:init`
- * to push live theme / config updates downstream. If it doesn't,
- * the embed times out after 8 s and proceeds with the hash creds
- * unchanged - so a stale mobile build that hasn't been updated
- * to speak v1 still works against a v1 host bundle.
+ * parent (this app). The mobile shell replies with `host:init` at
+ * the protocol-v1 wire format (`source: 'reachy-mini'`, `type:
+ * 'host:init'`, `version: 1`) so the embed can resolve its boot
+ * synchronously instead of waiting on its fallback timer. The
+ * payload is the same data we already serialised into the hash -
+ * built once via `buildEmbedCreds()` and reused for both channels
+ * so they can never drift.
+ *
+ * If the parent never sends `host:init` (older mobile builds,
+ * manual testing, scripted page hits), the embed waits a short
+ * `HOST_INIT_TIMEOUT_MS` and proceeds from the hash creds alone -
+ * graceful degradation, no hard dependency on the postMessage
+ * channel.
  */
 import type { AppSdk } from './types';
 
@@ -117,15 +125,72 @@ export function spaceRuntimeHost(slug: string, sdk: AppSdk): string {
 /**
  * Encode the credentials bundle into a URL-safe base64 string,
  * matching the format `@reachy-mini/host` expects in
- * `decodeCredsFromHash()`.
+ * `decodeCredsFromHash()`. Accepts the typed `EmbedCredsBundle`
+ * directly (declared below) so callers don't have to cast through
+ * `Record<string, unknown>`.
  */
-function encodeCreds(bundle: Record<string, unknown>): string {
+function encodeCreds(bundle: EmbedCredsBundle): string {
   const json = JSON.stringify(bundle);
   return btoa(unescape(encodeURIComponent(json)));
 }
 
 const DEFAULT_SIGNALING_URL =
   'https://pollen-robotics-reachy-mini-central.hf.space';
+
+/**
+ * Protocol v1 credentials bundle. Same shape as
+ * `@reachy-mini/host/lib/protocol#CredsBundle` (camelCase keys, no
+ * `username` typo - the embed's `seedSessionToken` gates on
+ * `userName` and a snake/lower typo silently drops the HF token).
+ *
+ * We don't import the type from `@reachy-mini/host` because the
+ * mobile shell doesn't depend on that package; duplicating ~10
+ * lines is cheaper than dragging the React build pipeline of the
+ * host package into a Tauri bundle.
+ */
+export interface EmbedCredsBundle {
+  hfToken: string;
+  userName: string;
+  robotPeerId: string;
+  signalingUrl: string;
+  theme: 'dark' | 'light';
+  config: unknown;
+  hostName: string;
+  appName: string;
+}
+
+/**
+ * Build the protocol v1 creds bundle for an embedded app. Used in
+ * two places that MUST stay byte-identical:
+ *
+ *   1. Encoded into the URL hash (`#creds=<base64>`) so the embed
+ *      can decode it on its first synchronous tick, before any
+ *      `await`.
+ *   2. Posted as `host:init` over postMessage once the iframe
+ *      shouts `embed:ready` so the embed resolves its
+ *      `awaitHostInit` immediately instead of falling back through
+ *      its timeout.
+ *
+ * Centralising the construction here means the two channels are
+ * literally the same object: theme, signaling URL, opaque config
+ * etc. cannot drift between hash and postMessage, and there is no
+ * second source of truth to keep in sync.
+ */
+export function buildEmbedCreds(
+  ctx: AppEmbedContext,
+  appNameFallback?: string,
+): EmbedCredsBundle {
+  return {
+    hfToken: ctx.hfToken,
+    userName: ctx.hfUsername ?? 'user',
+    robotPeerId: ctx.robotPeerId,
+    signalingUrl: ctx.signalingUrl ?? DEFAULT_SIGNALING_URL,
+    theme: ctx.theme,
+    config: ctx.config ?? null,
+    hostName: ctx.hostName ?? 'Reachy Mini',
+    appName: ctx.appName ?? appNameFallback ?? ctx.robotName,
+  };
+}
 
 export function buildAppEmbedUrl(
   spaceId: string,
@@ -142,22 +207,7 @@ export function buildAppEmbedUrl(
   url.searchParams.set('theme', ctx.theme);
   url.searchParams.set('_t', String(Date.now()));
 
-  // Build the protocol v1 creds bundle. Matches
-  // `@reachy-mini/host/lib/protocol#CredsBundle`. Field names MUST
-  // be camelCase (`userName`, not `username`) - the embed's
-  // `seedSessionToken` gates on `creds.userName` so a snake/lower
-  // typo here silently drops the token and the SDK boots with no
-  // credentials, then `connect()` throws "No token".
-  const bundle = {
-    hfToken: ctx.hfToken,
-    userName: ctx.hfUsername ?? 'user',
-    robotPeerId: ctx.robotPeerId,
-    signalingUrl: ctx.signalingUrl ?? DEFAULT_SIGNALING_URL,
-    theme: ctx.theme,
-    config: ctx.config ?? null,
-    hostName: ctx.hostName ?? 'Reachy Mini',
-    appName: ctx.appName ?? ctx.robotName,
-  };
+  const bundle = buildEmbedCreds(ctx);
   url.hash = `creds=${encodeURIComponent(encodeCreds(bundle))}`;
   return url.toString();
 }

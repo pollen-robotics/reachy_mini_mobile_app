@@ -1,17 +1,26 @@
 /**
  * Robot session screen.
  *
- * Three-tab shell hosted on a single connected robot:
+ * Two-tab shell hosted on a single connected robot:
  *
  *   ┌──────────────────────────────────────────────┐
- *   │ Header (back/power-off + name + chips)       │
+ *   │ Header (name + chips + [ⓘ info] + [⏻ off])   │
  *   ├──────────────────────────────────────────────┤
  *   │                                              │
- *   │  Tab body  (Conversation | Apps | Robot)     │
+ *   │       Tab body  (Conversation | Apps)        │
  *   │                                              │
  *   ├──────────────────────────────────────────────┤
- *   │ BottomNavigation : [Conv] [Apps] [Robot]     │
+ *   │ BottomNavigation : [Conv]      [Apps]        │
  *   └──────────────────────────────────────────────┘
+ *
+ * The standalone `Robot` tab (camera + joystick + log tail +
+ * WebRTC overlay) was deleted: camera + manual head steering moved
+ * to the dedicated telepresence app where they belong, and the
+ * diagnostic signals (transport / version / IP / live logs) live
+ * in an on-demand `<RobotInfoSheet>` triggered by the `ⓘ` button
+ * in the topbar. The tab took a full bottom-nav slot for a surface
+ * the user rarely needed; the sheet is the right granularity for
+ * "occasionally I want to peek at the daemon".
  *
  * Architectural separation (A / B / C / D layers)
  * ───────────────────────────────────────────────
@@ -30,11 +39,15 @@
  * the iframe dials in, and asks for it back on close (via
  * `session.reacquire()`). The robot stays awake throughout.
  *
- * `<RobotTabView>` is a third consumer: it surfaces the robot's
- * camera feed (via `session.attachVideo`) and the daemon-level
- * audio controls (volume + speaker test via `session.playSound`).
- * It never starts a conversation - the conv pipeline is owned by
- * the Conv tab via `session.startConversation`.
+ * `<RobotInfoPanel>` is a third consumer: it surfaces the daemon
+ * version (via `useDaemonState`), the live WebRTC transport
+ * signals (kind / IP / bitrate), and the daemon's log tail (via
+ * `session.subscribeLogs`). Rendered as a `position: fixed`
+ * overlay pinned BELOW the session topbar (covers body + bottom
+ * nav, but never the topbar) so the user always sees which robot
+ * they're inspecting via the chips at the top and can dismiss by
+ * tapping the same button they opened with (the topbar's info
+ * glyph swaps to a `✕` while the panel is open).
  *
  * Tabs are independent of the session lifecycle: switching tabs
  * does NOT release the WebRTC session; only OPENING an app does.
@@ -54,11 +67,12 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import CloseIcon from '@mui/icons-material/Close';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
 import AppsIcon from '@/ui/design/icons/AppsIcon';
 import MicIcon from '@/ui/design/icons/MicIcon';
-import RobotIcon from '@/ui/design/icons/RobotIcon';
 
 import {
   extractRobotHardwareId,
@@ -70,21 +84,21 @@ import {
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 // `CameraOverlay` is intentionally NOT imported here at the moment.
 // The conversation tab keeps the orb visually clean (no floating
-// PIP); the camera surfaces in the dedicated `Robot` tab via
-// `<RobotTabView>`, full-width and 4:3, where the user can actually
-// frame what Reachy sees. Re-add the import + render it back inside
-// the `tab === 'conv'` block if/when we want a small PIP during
-// conversations too (the underlying `VideoFeed` already supports
+// PIP). Re-add the import + render it back inside the
+// `tab === 'conv'` block if/when we want a small PIP during
+// conversations (the underlying `VideoFeed` already supports
 // release/reacquire and concurrent mounts on the same SDK track).
+// Full-frame camera + manual head steering live in the dedicated
+// telepresence app.
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
-import RobotTabView from '@/ui/panels/robot/RobotTabView';
 import ConnectingView from './session/ConnectingView';
 import IdentityChipBar from './session/IdentityChipBar';
 import LeavingView from './session/LeavingView';
+import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
@@ -101,7 +115,7 @@ interface RobotSessionScreenProps {
   onBack: () => void;
 }
 
-type Tab = 'conv' | 'apps' | 'robot';
+type Tab = 'conv' | 'apps';
 
 export default function RobotSessionScreen({
   target,
@@ -176,14 +190,21 @@ function ConnectedSession({
    * release.
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
+  /**
+   * Robot-info panel visibility. The panel itself is mounted /
+   * unmounted via this flag (no need to keep a hidden subscription
+   * alive: the daemon log buffer that the panel reads is gated
+   * inside `useDaemonLogs` on the engine being live, and the
+   * panel's content is cheap to remount). Topbar `ⓘ` toggles, X
+   * inside the panel sets to `false`.
+   */
+  const [infoOpen, setInfoOpen] = useState(false);
 
   // Daemon version is fetched (with retry-on-null) by the
-  // `<DaemonStateProvider>` further down and read by the camera
-  // debug overlay (`<CameraDebugOverlay>` inside `<RobotTabView>`)
-  // via `useDaemonState()`. Centralising it there means the same
-  // value is shared across every consumer (overlay, audio cards,
-  // future settings panels, etc.) without any component having to
-  // fetch it locally.
+  // `<DaemonStateProvider>` further down and read by the info sheet
+  // (`<RobotInfoSheet>`) and the audio cards via `useDaemonState()`.
+  // Centralising it there means the same value is shared across
+  // every consumer without any component having to fetch it locally.
 
   // Power-off / back: drives `session.tearDown()` (gotoSleep + motors
   // disabled + stopSession + disconnect) before navigating away. The
@@ -360,8 +381,8 @@ function ConnectedSession({
       {/* Top toolbar - full bleed, mirror of the BottomNavigation.
        *
        *   ┌─────────────────────────────────────────────────────────┐
-       *   │  reachy-mini-foo  #abc12                          [⏻]  │
-       *   │  [Wi-Fi]                                                 │
+       *   │  reachy-mini-foo  [Wi-Fi]                  [ⓘ]   [⏻]  │
+       *   │  #abc12                                                  │
        *   └─────────────────────────────────────────────────────────┘
        *
        * Visual contract:
@@ -380,23 +401,33 @@ function ConnectedSession({
        *     controls vertically padded. On platforms without an
        *     inset we just get the 12px fallback.
        *   - Internal `px: 3` matches the body's horizontal rhythm so
-       *     the identity column and power button visually align
-       *     with the body content edges.
+       *     the identity column and right-hand action buttons
+       *     visually align with the body content edges.
        *
        * Identity (`IdentityChipBar`) takes the left flex column and
        * carries the everyday-grade identity: robot name + physical
-       * transport chip (Wi-Fi / USB) + short hardware id. The
-       * debug-grade signals (daemon version, live WebRTC kind +
-       * IP + bitrate) relocated to a `<CameraDebugOverlay>` inside
-       * the Robot tab's video frame - they were crowding the
-       * topbar on small phones and competing with the power-off
-       * button for thumb space. Power-off is the rightmost glyph,
-       * large enough to be a comfortable thumb target -
-       * tapping it is destructive (gotoSleep + motors disabled +
-       * stopSession + disconnect) so we want it deliberate but
-       * easy to reach. We dropped the `@username` chip: the user
-       * is by definition signed in here, the redundant pill was
-       * just noise.
+       * transport chip (Wi-Fi / USB) + short hardware id.
+       *
+       * Right edge carries two icon buttons:
+       *   - `[ⓘ]` opens `<RobotInfoPanel>` with the debug-grade
+       *     signals (daemon version, live WebRTC kind + IP +
+       *     bitrate) and the daemon log tail. The info button
+       *     replaces what used to be a dedicated `Robot` tab in
+       *     the bottom-nav; same surface, on-demand instead of
+       *     always-mounted. While the panel is open the glyph
+       *     swaps to a cross (`✕`) so a second tap dismisses;
+       *     the panel itself doesn't paint its own close button
+       *     (the session topbar IS the chrome for it).
+       *   - `[⏻]` powers the robot down (gotoSleep + motors
+       *     disabled + stopSession + disconnect). Rightmost glyph
+       *     by design: it's destructive, the user's thumb naturally
+       *     lands on the screen edge, and the position makes a
+       *     mis-tap on the adjacent info button much less likely
+       *     than the other way around.
+       *
+       * We dropped the `@username` chip a while back: the user is by
+       * definition signed in here, the redundant pill was just
+       * noise.
        */}
       <Stack
         direction="row"
@@ -419,18 +450,50 @@ function ConnectedSession({
           fallbackId={robotId}
           transport={robotTransport}
         />
-        <IconButton
-          aria-label="End session"
-          onClick={handleLeave}
-          color="primary"
-          disabled={leaving}
-          sx={{
-            mr: -0.5,
-            flexShrink: 0,
-          }}
+        {/* Right-hand action cluster. `spacing={0.25}` keeps the two
+            buttons visually grouped (they're both "session-level
+            controls") while remaining distinct tap targets - MUI's
+            default `IconButton` has its own internal padding so
+            they don't visually touch. */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.25}
+          sx={{ flexShrink: 0, mr: -0.5 }}
         >
-          <PowerSettingsNewIcon sx={{ fontSize: 24 }} />
-        </IconButton>
+          {/* Info button. Same slot, swappable glyph:
+                - closed : `ⓘ` invites the user to open the panel.
+                - open   : `✕` makes "tap again to dismiss" the
+                           only logical action and matches the
+                           usual close-affordance idiom (single
+                           cross at the top-right of an opened
+                           sheet / modal). We deliberately keep
+                           a single button rather than rendering
+                           two siblings: the user's thumb already
+                           found the spot once, the same target
+                           closes the view - no relearning. */}
+          <IconButton
+            aria-label={infoOpen ? 'Close robot info' : 'Robot info'}
+            onClick={() => setInfoOpen((open) => !open)}
+            color="primary"
+            sx={{ flexShrink: 0 }}
+          >
+            {infoOpen ? (
+              <CloseIcon sx={{ fontSize: 24 }} />
+            ) : (
+              <InfoOutlinedIcon sx={{ fontSize: 24 }} />
+            )}
+          </IconButton>
+          <IconButton
+            aria-label="End session"
+            onClick={handleLeave}
+            color="primary"
+            disabled={leaving}
+            sx={{ flexShrink: 0 }}
+          >
+            <PowerSettingsNewIcon sx={{ fontSize: 24 }} />
+          </IconButton>
+        </Stack>
       </Stack>
 
       <Box
@@ -447,10 +510,9 @@ function ConnectedSession({
           // to sit FLUSH against the top toolbar's bottom divider
           // so the two bands read as one continuous chrome strip;
           // any `pt` here would push it down with a stray gap.
-          // The apps + robot tabs already apply their own `pt: 1`
-          // inside their content stacks (see AppsTabView /
-          // RobotTabView), so the visual rhythm stays the same
-          // for them.
+          // The apps tab already applies its own `pt: 1` inside
+          // its content stack (see AppsTabView), so the visual
+          // rhythm stays the same for it.
           position: 'relative',
         }}
       >
@@ -467,13 +529,13 @@ function ConnectedSession({
               │                                  │
               └──────────────────────────────────┘
 
-            The Speaker / Microphone cards used to live above the
-            orb here; they were redundant with the dedicated
-            Robot tab (`<RobotTabView>`) which exposes the same
-            cards alongside the camera + future logs. Keeping the
-            conv tab orb-only matches the desktop minimal-conversation
-            shell and lets the orb breathe full-height on small
-            phones. */}
+            The Speaker / Microphone cards now live under the orb
+            inside `<ConversationPanel>` (see its bottom audio
+            strip) - the conv tab is the canonical place to hear
+            and talk to Reachy, so the volume controls belong
+            right there. Keeping the orb full-height above them
+            matches the desktop minimal-conversation shell and
+            lets the orb breathe on small phones. */}
         {!leaving && !isError && (
           <Box
             sx={{
@@ -500,19 +562,6 @@ function ConnectedSession({
             }}
           >
             <AppsTabView onOpen={setOpenedApp} />
-          </Box>
-        )}
-
-        {tab === 'robot' && !leaving && !isError && (
-          <Box
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <RobotTabView session={session} isLive={session.hasReachedReady} />
           </Box>
         )}
 
@@ -665,24 +714,54 @@ function ConnectedSession({
         />
         {/* Bespoke `AppsIcon` (4 hollow rounded squares in a 2×2
             grid) so the glyph matches the visual rhythm of
-            `MicIcon` and `RobotIcon` - same `1.8 px` stroke
-            weight, same outline-only treatment, same 24×24
-            viewBox. */}
+            `MicIcon` - same `1.8 px` stroke weight, same
+            outline-only treatment, same 24×24 viewBox. */}
         <BottomNavigationAction
           value="apps"
           label="Apps"
           icon={<AppsIcon />}
         />
-        {/* Robot tab uses the bespoke `RobotIcon` (lifted from
-            `assets/robot--icon.svg`). Same Reachy silhouette the
-            user sees on every robot avatar across the app
-            (discovery cards, identity bar). */}
-        <BottomNavigationAction
-          value="robot"
-          label="Robot"
-          icon={<RobotIcon />}
-        />
       </BottomNavigation>
+
+      {/* `<RobotInfoPanel>` overlay. Pinned BELOW the session
+          topbar so the topbar's identity chips + the [✕] action
+          stay visible: the user always knows which robot they're
+          inspecting and has an obvious "tap-again-to-dismiss"
+          affordance in the same spot they opened the panel from
+          (the info button glyph swaps to a cross while open).
+          The overlay still covers the body + the bottom nav, so
+          tab switching is suppressed while info is up (no
+          ambiguous "I'm reading logs of which tab?" state).
+            - `top: max(76px, safe-area + 70px)` is the exact
+              total height of the session topbar:
+                desktop  : max(76, 0+70)  = 76 ✓
+                iPhone X : max(76, 47+70) = 117 ✓
+              The `max()` accounts for the topbar's `minHeight:
+              76` floor on platforms without a notch.
+            - zIndex 1200 stays above body content / bottom nav
+              but BELOW the AppIframeOverlay / FullScreenTransition
+              layer (1300) so a connecting / leaving / iframe-open
+              event still takes precedence over a stale info panel. */}
+      {infoOpen && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 'max(76px, calc(env(safe-area-inset-top, 0px) + 70px))',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1200,
+          }}
+        >
+          <RobotInfoPanel
+            onClose={() => setInfoOpen(false)}
+            username={username}
+            sessionPhase={session.phase}
+            session={session}
+            isLive={session.hasReachedReady}
+          />
+        </Box>
+      )}
 
       {openedApp && (
         <AppIframeOverlay
