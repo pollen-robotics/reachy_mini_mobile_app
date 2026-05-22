@@ -407,7 +407,7 @@ function ConnectedSession({
           mx: -3,
           px: 3,
           pb: 2,
-          pt: 'calc(env(safe-area-inset-top, 0px) + 14px)',
+          pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 14px)',
           minHeight: 76,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
@@ -568,7 +568,18 @@ function ConnectedSession({
           // desktop) `env()` resolves to 0 and the bar collapses
           // back to a flush 68 px - same rendering as before.
           height: 'auto',
-          minHeight: 'calc(68px + env(safe-area-inset-bottom, 0px))',
+          minHeight: 'calc(68px + var(--inset-bottom, env(safe-area-inset-bottom, 0px)))',
+          // Android-only bottom padding to push the icon+label cluster
+          // up out of the system-nav touch zone (3-button or gesture
+          // bar). `--inset-bottom` is set by the host activity on
+          // Android (see `MainActivity.kt`); on iOS it's undefined and
+          // resolves to `0px`, preserving the original stretched-tab
+          // layout where the active tab paper fill reaches the screen
+          // edge under the home indicator. The "grey shoe" the
+          // stretched-layout was designed to avoid never shows on
+          // Android because the system-nav strip itself covers that
+          // zone — purely a platform-asymmetric problem.
+          paddingBottom: 'var(--inset-bottom, 0px)',
           borderTop: `1px solid ${theme.palette.divider}`,
           bgcolor: 'background.default',
           '& .MuiBottomNavigationAction-root': {

@@ -125,8 +125,8 @@ function Fallback({
         // we don't have to rely on `width: 100%` shrinking with
         // padding (some WebViews handle that interaction
         // unpredictably for `position: fixed; inset: 0` parents).
-        paddingTop: 'max(28px, env(safe-area-inset-top, 0px))',
-        paddingBottom: 'max(28px, env(safe-area-inset-bottom, 0px))',
+        paddingTop: 'max(28px, var(--inset-top, env(safe-area-inset-top, 0px)))',
+        paddingBottom: 'max(28px, var(--inset-bottom, env(safe-area-inset-bottom, 0px)))',
         background: palette.bg,
         color: palette.text,
         fontFamily:
