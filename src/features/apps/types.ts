@@ -110,10 +110,32 @@ export interface AppEntry {
 }
 
 /**
+ * One entry of the server-published category taxonomy. Mirrors
+ * the shape returned by `getPublicTaxonomy()` in
+ * `reachy-mini-website/server/categories.js`. We deliberately
+ * keep the shape minimal: `slug` and `label` are required for UI
+ * rendering, `emoji` and `order` are nice-to-haves the server
+ * always ships today but the client tolerates missing.
+ */
+export interface ApiCategoryEntry {
+  slug: string;
+  label: string;
+  emoji: string | null;
+  order: number | null;
+}
+
+/**
  * Top-level meta block published by `/api/js-apps` describing the
  * server's classification state. Surfaced by `useApps()` so a
  * future UI can hint "Classifying new apps..." when
- * `inProgress === true`. V1 mobile ignores it.
+ * `inProgress === true`.
+ *
+ * `taxonomy` is the authoritative slug list for this catalog
+ * snapshot. Consumers should pass it through
+ * `resolveTaxonomy()` in `categoryTaxonomy.ts` to obtain the
+ * render-ready `CategoryDescriptor[]`. The field is `null` when
+ * talking to a pre-taxonomy-shipping server build (forward
+ * compatibility): the resolver falls back to the local snapshot.
  */
 export interface CategorizationMeta {
   enabled: boolean;
@@ -125,4 +147,10 @@ export interface CategorizationMeta {
   dataset: string | null;
   /** Server-side taxonomy version. Increments when categories ids change. */
   taxonomyVersion: number | null;
+  /**
+   * Live taxonomy projection (slug + label + emoji + order). `null`
+   * when the server hasn't shipped this field yet - callers fall
+   * back to the local snapshot in `categoryTaxonomy.ts`.
+   */
+  taxonomy: readonly ApiCategoryEntry[] | null;
 }

@@ -27,11 +27,13 @@
  * entire viewport. Inside each panel, content is re-constrained
  * to the centred column via `COLUMN_SX`.
  *
- * Categorisation is server-driven (`/api/js-apps` returns the
- * `categories: string[] \| null` array per app, classified by an
- * LLM on the website Space). The mobile build embeds only a
- * passive taxonomy mirror (`categoryTaxonomy.ts`) for display
- * metadata. See `docs/APPS_TAB_REDESIGN.md`, Section 5.
+ * Categorisation is server-driven: `/api/js-apps` returns both the
+ * per-app `categories: string[] | null` array (classified by an LLM
+ * on the website Space) AND the live taxonomy itself under
+ * `categorization.taxonomy`. The mobile shell consumes the taxonomy
+ * via `resolveTaxonomy()` (label overrides + offline fallback in
+ * `categoryTaxonomy.ts`); the slug list is never mirrored by hand.
+ * See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
 import {
   useCallback,
@@ -59,6 +61,7 @@ import StarOutlineIcon from '@mui/icons-material/StarOutline';
 
 import ReachiesCarousel from '@/ui/widgets/reachies-carousel/ReachiesCarousel';
 
+import { resolveTaxonomy } from '@/features/apps/categoryTaxonomy';
 import type { AppEntry } from '@/features/apps/types';
 import { useApps } from '@/features/apps/useApps';
 import { useFilteredApps } from '@/features/apps/useFilteredApps';
@@ -168,10 +171,25 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
 
   const pinnedApps = usePinnedApps();
 
+  // Resolve the live taxonomy from the catalog payload. The server
+  // ships the slug list under `categorization.taxonomy`, so the
+  // mobile shell never has to mirror it by hand: a server taxonomy
+  // bump (e.g. adding `games`, renaming `dance` → `motion`) takes
+  // effect on the next catalog refresh, no mobile build required.
+  // The resolver applies mobile-preferred label overrides
+  // (`Music & Beats` → `Music`) and falls back to a typed snapshot
+  // when the payload is missing (cold start, offline, pre-taxonomy
+  // server build).
+  const taxonomy = useMemo(
+    () => resolveTaxonomy(state.categorization?.taxonomy ?? null),
+    [state.categorization],
+  );
+
   const filtered = useFilteredApps({
     apps,
     searchQuery: deferredQuery,
     pinnedIds: pinnedApps.set,
+    taxonomy,
   });
 
   // Snackbar for the cap-reached toast. The toggle handler
@@ -565,13 +583,17 @@ function IntroPanel() {
       />
 
 
-      <Stack direction="row" spacing={1.5} alignItems="stretch">
-        {/* Hero column. Mirrors the structure of a single
-            `AppPinnedTile` exactly (square glyph + caption line)
-            so the IntroPanel's height matches a pinned panel
-            with one row of pins, pixel-for-pixel. The transition
-            "no pins → first pin" then swaps the panel content
-            without any vertical jump. */}
+      <Stack direction="row" spacing={2} alignItems="center">
+        {/* Hero column. Mirrors the WIDTH of a single
+            `AppPinnedTile` (same `1fr` share of the 3-column
+            grid). The caption phantom that pads the pinned tile's
+            bottom (~20 px: `mt: 0.75` + a `TYPO.tiny` line) lives
+            OUTSIDE this Stack — see the `Box` after the Stack —
+            so it preserves the panel's total height without
+            polluting the row's alignment baseline. With the
+            phantom in here, the text column's vertical center
+            ended up ~10 px below the square's visual center,
+            which read as "Discover apps not centred". */}
         <Box
           aria-hidden
           sx={{
@@ -582,53 +604,25 @@ function IntroPanel() {
             // `repeat(3, minmax(0, 1fr))` with `columnGap: 3`
             // (24 px), so each cell is `(100% - 2 × 24px) / 3`.
             width: 'calc((100% - 48px) / 3)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'stretch',
+            aspectRatio: '1 / 1',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
             minWidth: 0,
+            // Hero punch-up: the illustration is the panel's only
+            // visual, so we let it breathe a touch past its layout
+            // slot via a pure transform (no reflow, the text
+            // column stays put). The slight negative `translateY`
+            // lifts the carousel into the visual centre of the
+            // heading + paragraph cluster rather than the row's
+            // geometric centre, which reads more "hero-ish".
+            transform: 'scale(1.12) translateY(-4px)',
+            transformOrigin: 'center',
           }}
         >
-          {/* Square glyph - identical geometry to the pinned tile
-              glyph (`width: 100%, aspectRatio: 1 / 1`). The
-              carousel fills it 100 %, with `overflow: hidden`
-              clipping the carousel's `scale > 1` zoom. No border
-              and no background fill: the artwork carries the
-              entire visual weight, and the absence of chrome
-              makes the hero feel lighter than a pinned tile
-              even at the same dimensions. */}
-          <Box
-            sx={{
-              width: '100%',
-              aspectRatio: '1 / 1',
-              overflow: 'hidden',
-              boxSizing: 'border-box',
-            }}
-          >
-            <ReachiesCarousel zoom={1.4} verticalAlign="60%" />
-          </Box>
-          {/* Phantom caption: same metrics as `AppPinnedTile`'s
-              name caption (`mt: 0.75`, `fontSize: TYPO.tiny`,
-              `lineHeight: 1.2`) but invisible. Reserves the
-              vertical room so this column has the exact height
-              of a real pinned tile + name. The non-breaking
-              space prevents the line from collapsing. */}
-          <Typography
-            sx={{
-              mt: 0.75,
-              fontSize: TYPO.tiny,
-              fontWeight: FONT_WEIGHT.medium,
-              lineHeight: 1.2,
-              visibility: 'hidden',
-            }}
-          >
-            &nbsp;
-          </Typography>
+          <ReachiesCarousel zoom={1.4} verticalAlign="60%" />
         </Box>
 
-        <Stack
-          spacing={1}
-          sx={{ flex: 1, minWidth: 0, justifyContent: 'center' }}
-        >
+        <Stack spacing={1} sx={{ flex: 1, minWidth: 0 }}>
           <Typography
             sx={{
               fontSize: TYPO.xxl,
@@ -661,6 +655,28 @@ function IntroPanel() {
           </Typography>
         </Stack>
       </Stack>
+
+      {/* Phantom caption row: same vertical footprint as the
+          `AppPinnedTile`'s name caption (`mt: 0.75` + a
+          `TYPO.tiny / lineHeight 1.2` line ≈ 20 px). Sits below
+          the row instead of inside the icon column so the row's
+          two columns center on their VISIBLE centers (the square
+          and the heading), while the panel's total height still
+          matches a pinned panel with one row of tiles — keeps
+          the "no pins → first pin" transition free of vertical
+          jump. */}
+      <Typography
+        aria-hidden
+        sx={{
+          mt: 0.75,
+          fontSize: TYPO.tiny,
+          fontWeight: FONT_WEIGHT.medium,
+          lineHeight: 1.2,
+          visibility: 'hidden',
+        }}
+      >
+        &nbsp;
+      </Typography>
     </Box>
   );
 }

@@ -24,8 +24,9 @@ Source selection
 ----------------
 By default, the script picks the first that exists, in this order:
 
-  1. `src/assets/reachy-icon.svg` - rasterized at `--render-size` (default
-     2048) via `rsvg-convert`. Best quality at every output size.
+  1. `src/assets/reachy-app-icon.svg` - dedicated app-icon master (NOT
+     `reachy-icon.svg`, which is used for in-app UI illustrations).
+     Rasterized at `--render-size` (default 2048) via `rsvg-convert`.
   2. `src-tauri/icons/icon-source-transparent.png` - backup of the
      original transparent PNG master (created on first run).
   3. `src-tauri/icons/icon.png` - live master (a one-time backup is made
@@ -84,21 +85,39 @@ import sys
 from pathlib import Path
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageDraw
 except ImportError:
     print("error: Pillow is required (pip install Pillow)", file=sys.stderr)
     sys.exit(2)
 
 
-DEFAULT_SVG_SOURCE = Path("src/assets/reachy-icon.svg")
+# NOTE: this is the dedicated app-icon master, distinct from
+# `src/assets/reachy-icon.svg` (which is used in-app for UI illustrations
+# - splash, robot avatars, etc.). The app-icon master is a minimal
+# "black-on-black with glowing eyes" variant tuned for the OS launcher
+# context, where the icon sits inside a small rounded tile and needs
+# strong silhouette readability rather than full robot detail.
+DEFAULT_SVG_SOURCE = Path("src/assets/reachy-app-icon.svg")
 
 
-TOPLEVEL_TARGETS = (
+# Files that need the macOS squircle treatment (transparent canvas with a
+# centered squircle filled with the bg color, source compositted on top).
+# These are the desktop bundle icons that Tauri uses for the macOS .app and
+# the Linux desktop entry; iOS / Windows / Android tiles must stay full-bleed
+# squares because their respective OS shells either apply their own mask
+# (iOS, Android adaptive) or expect square art (Windows tiles).
+DESKTOP_SQUIRCLE_TARGETS = (
     "32x32.png",
     "64x64.png",
     "128x128.png",
     "128x128@2x.png",
     "icon.png",
+)
+
+# Files that stay as full-bleed squares (filled corner-to-corner with bg).
+# Windows Store tiles + StoreLogo render as-is on the OS, so they need
+# square art that occupies the whole canvas.
+DESKTOP_SQUARE_TARGETS = (
     "Square30x30Logo.png",
     "Square44x44Logo.png",
     "Square71x71Logo.png",
@@ -110,6 +129,8 @@ TOPLEVEL_TARGETS = (
     "Square310x310Logo.png",
     "StoreLogo.png",
 )
+
+TOPLEVEL_TARGETS = DESKTOP_SQUIRCLE_TARGETS + DESKTOP_SQUARE_TARGETS
 
 ANDROID_MIPMAP_DIRS = (
     "android/mipmap-mdpi",
@@ -127,6 +148,14 @@ ANDROID_LEGACY_TARGETS = (
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 ICNS_SIZE = 1024  # upscaled if source is smaller; Pillow handles internal subimages
 
+# macOS app icon template (Apple HIG, Big Sur+):
+#   - the visible squircle covers ~80.5% of the icon canvas (824/1024)
+#   - the corner radius is ~22.5% of the squircle's side (185/824 ~= iOS 22.37%)
+#   - the remaining margin is fully transparent (no background fill there)
+# These are the values Apple ships in their own AppIcon.iconset templates.
+SQUIRCLE_INNER_FRACTION = 0.805
+SQUIRCLE_RADIUS_FRACTION = 0.225
+
 
 def hex_to_rgb(value: str) -> tuple[int, int, int]:
     s = value.strip().lstrip("#")
@@ -138,14 +167,61 @@ def hex_to_rgb(value: str) -> tuple[int, int, int]:
 
 
 def composite(source: Image.Image, size: tuple[int, int], bg: tuple[int, int, int]) -> Image.Image:
-    """Resize `source` to `size` and composite onto solid `bg`. Returns RGB."""
+    """Resize `source` to `size` and composite onto solid `bg`. Returns RGBA
+    (fully opaque, alpha=255 everywhere). Tauri's `tauri::generate_context!`
+    macro requires RGBA PNGs at the icon paths it ingests, so do NOT
+    convert to RGB here even though every pixel is opaque."""
     if source.size == size:
         resized = source
     else:
         resized = source.resize(size, Image.LANCZOS)
     canvas = Image.new("RGBA", size, bg + (255,))
-    composed = Image.alpha_composite(canvas, resized)
-    return composed.convert("RGB")
+    return Image.alpha_composite(canvas, resized)
+
+
+def composite_macos_squircle(
+    source: Image.Image,
+    size: tuple[int, int],
+    bg: tuple[int, int, int],
+    inner_fraction: float = SQUIRCLE_INNER_FRACTION,
+    radius_fraction: float = SQUIRCLE_RADIUS_FRACTION,
+) -> Image.Image:
+    """Render the macOS-style app icon: a centered squircle (rounded
+    rectangle) of side `inner_fraction * canvas`, filled with `bg`, with
+    `source` composited on top, the squircle corners radiused at
+    `radius_fraction * inner_side`, and the remaining canvas margin fully
+    transparent.
+
+    macOS does NOT auto-round app icons (unlike iOS) - the icon ships its
+    own rounded silhouette. Pillow's `rounded_rectangle` is a circular-arc
+    approximation of Apple's continuous squircle, but at icon sizes the
+    visual difference is negligible.
+    """
+    canvas_w, canvas_h = size
+    inner_w = max(1, int(round(canvas_w * inner_fraction)))
+    inner_h = max(1, int(round(canvas_h * inner_fraction)))
+    radius = max(0, int(round(min(inner_w, inner_h) * radius_fraction)))
+
+    if source.size != (inner_w, inner_h):
+        resized = source.resize((inner_w, inner_h), Image.LANCZOS)
+    else:
+        resized = source
+
+    inner = Image.new("RGBA", (inner_w, inner_h), bg + (255,))
+    inner = Image.alpha_composite(inner, resized)
+
+    # Build squircle alpha mask and use it as the new alpha channel.
+    mask = Image.new("L", (inner_w, inner_h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, inner_w, inner_h), radius=radius, fill=255
+    )
+    inner.putalpha(mask)
+
+    out = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    ox = (canvas_w - inner_w) // 2
+    oy = (canvas_h - inner_h) // 2
+    out.paste(inner, (ox, oy), inner)
+    return out
 
 
 def overwrite_png(target: Path, image: Image.Image) -> None:
@@ -261,7 +337,8 @@ def main() -> int:
     rewritten = 0
     missing = 0
 
-    # 1) Top-level icons.
+    # 1) Top-level icons. Squircle for macOS desktop; full-bleed square
+    # for Windows tiles + StoreLogo.
     for name in TOPLEVEL_TARGETS:
         path = icons_dir / name
         if not path.exists():
@@ -270,10 +347,15 @@ def main() -> int:
             continue
         with Image.open(path) as cur:
             size = cur.size
-        out = composite(source, size, bg)
+        if name in DESKTOP_SQUIRCLE_TARGETS:
+            out = composite_macos_squircle(source, size, bg)
+            tag = "squircle"
+        else:
+            out = composite(source, size, bg)
+            tag = "square"
         overwrite_png(path, out)
         rewritten += 1
-        print(f"  rewritten: {path}  ({size[0]}x{size[1]})")
+        print(f"  rewritten ({tag}): {path}  ({size[0]}x{size[1]})")
 
     # 2a) Android legacy raster icons (kept coherent with the rest, even
     # though minSdk 26 means they're effectively dead code).
@@ -333,14 +415,15 @@ def main() -> int:
         rewritten += 1
         print(f"  rewritten: {ico_path}  ({len(ICO_SIZES)} sizes)")
 
-    # 5) icon.icns.
+    # 5) icon.icns - macOS gets the squircle treatment so the Dock and
+    # Finder render with native rounded corners + transparent margin.
     icns_path = icons_dir / "icon.icns"
     if icns_path.exists():
-        base = composite(source, (ICNS_SIZE, ICNS_SIZE), bg)
+        base = composite_macos_squircle(source, (ICNS_SIZE, ICNS_SIZE), bg)
         try:
             base.save(icns_path, format="ICNS")
             rewritten += 1
-            print(f"  rewritten: {icns_path}")
+            print(f"  rewritten (squircle): {icns_path}")
         except OSError as exc:
             print(f"  warning: ICNS save failed ({exc}); skipping", file=sys.stderr)
 

@@ -24,7 +24,7 @@
  */
 import { useMemo } from 'react';
 
-import { CATEGORY_TAXONOMY, type CategoryDescriptor } from './categoryTaxonomy';
+import { type CategoryDescriptor } from './categoryTaxonomy';
 import type { AppEntry } from './types';
 
 /**
@@ -113,6 +113,15 @@ interface UseFilteredAppsArgs {
   apps: AppEntry[];
   searchQuery: string;
   pinnedIds: ReadonlySet<string>;
+  /**
+   * Render-ready taxonomy in render order. Built by the caller via
+   * `resolveTaxonomy(catalog.categorization?.taxonomy ?? null)`; we
+   * accept it as a prop instead of importing the constant so the
+   * data flow is explicit (no hidden coupling to the API shape)
+   * and so unit tests can pass any descriptor list without
+   * monkey-patching the module.
+   */
+  taxonomy: ReadonlyArray<CategoryDescriptor>;
 }
 
 export interface CategoryBucket {
@@ -156,6 +165,7 @@ export function useFilteredApps({
   apps,
   searchQuery,
   pinnedIds,
+  taxonomy,
 }: UseFilteredAppsArgs): FilteredApps {
   const trimmed = searchQuery.trim().toLowerCase();
   const isSearching = trimmed.length > 0;
@@ -227,7 +237,7 @@ export function useFilteredApps({
       });
     }
 
-    for (const descriptor of CATEGORY_TAXONOMY) {
+    for (const descriptor of taxonomy) {
       const bucket = apps.filter((app) => app.categories?.includes(descriptor.id));
       if (bucket.length < MIN_RAIL_SIZE) continue;
       bucket.sort(sortByLikesDesc);
@@ -240,5 +250,5 @@ export function useFilteredApps({
       pinned,
       rails,
     };
-  }, [apps, isSearching, trimmed, pinnedIds]);
+  }, [apps, isSearching, trimmed, pinnedIds, taxonomy]);
 }
