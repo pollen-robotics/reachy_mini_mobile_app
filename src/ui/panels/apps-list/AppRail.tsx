@@ -26,7 +26,7 @@
  * cleanly on the next tile rather than mid-card.
  */
 import type { ReactNode } from 'react';
-import { Box, ButtonBase, Stack, Typography } from '@mui/material';
+import { Box, Button, Stack, Typography } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
@@ -114,31 +114,34 @@ export default function AppRail({
           )}
         </Stack>
         {onSeeAll && (
-          <ButtonBase
+          <Button
             onClick={onSeeAll}
-            disableRipple
+            variant="outlined"
+            color="primary"
+            size="small"
+            endIcon={<ChevronRightIcon sx={{ fontSize: TYPO.lg }} />}
             sx={{
               flexShrink: 0,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.25,
-              fontSize: TYPO.sm,
-              fontWeight: FONT_WEIGHT.medium,
-              color: 'primary.main',
-              // No underline, no uppercase: a quiet sentence-case
-              // text link with a trailing chevron, the way the
-              // rest of the modern iOS / App Store surfaces
-              // render their "See all" affordance. The bumped
-              // `:hover` opacity is the only state cue the user
-              // gets on touch surfaces - rippleless to keep it
-              // calm.
-              '&:hover': { opacity: 0.7 },
-              '&:active': { opacity: 0.6 },
+              fontSize: TYPO.xs,
+              fontWeight: FONT_WEIGHT.semibold,
+              // Sentence-case label - the verb "See all" reads
+              // better as itself than as SCREAMING.
+              textTransform: 'none',
+              // Tight padding so the chip-style outline doesn't
+              // overpower the rail label on its left.
+              minWidth: 0,
+              lineHeight: 1.4,
+              px: 1.25,
+              py: 0.25,
+              // Pull the chevron in closer to the label - MUI's
+              // default `endIcon` margin is 8 px which floats
+              // the chevron away from "See all" and breaks the
+              // single-glance reading.
+              '& .MuiButton-endIcon': { ml: 0.25 },
             }}
           >
             See all
-            <ChevronRightIcon sx={{ fontSize: TYPO.lg, ml: 0.25 }} />
-          </ButtonBase>
+          </Button>
         )}
       </Box>
 
