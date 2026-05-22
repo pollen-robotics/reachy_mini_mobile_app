@@ -44,7 +44,6 @@ import {
   Alert,
   Box,
   Button,
-  ButtonBase,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -96,6 +95,24 @@ const COLUMN_SX = {
   mx: 'auto',
   px: 3,
 } as const;
+
+/**
+ * Shared min-height for the pinned panel header row (label on the
+ * left, `Edit` button on the right). The number is dictated by the
+ * outlined `Button size="small"` we render on the right - its
+ * actual rendered height is `fontSize × lineHeight + 2 × py +
+ * 2 × border` ≈ 12 × 1.4 + 4 + 2 = ~23 px. We round to 28 to give
+ * the chip a touch of vertical breathing room AND a clean rhythm
+ * with the 8 px design grid.
+ *
+ * The `IntroPanel` (empty state) reserves the SAME min-height for
+ * its phantom header so the "no pins → first pin" transition keeps
+ * the body's vertical rhythm pixel-stable. Without this, the
+ * intro panel sits ~12 px shorter than the pinned panel and the
+ * whole rail stack underneath jumps as soon as the user pins
+ * their first app.
+ */
+const PINNED_HEADER_MIN_HEIGHT = 28;
 
 /**
  * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
@@ -527,20 +544,26 @@ function IntroPanel() {
           surface that's already heavy with copy. The phantom
           element preserves the panel height so the transition
           to the pinned panel (which DOES have a "Pinned · N"
-          label) is seamless: the body's vertical rhythm stays
-          identical whether or not the user has pinned anything. */}
-      <Typography
+          label + outlined `Edit` chip) is seamless: the body's
+          vertical rhythm stays identical whether or not the
+          user has pinned anything.
+          ────────────────
+          We size with `minHeight: PINNED_HEADER_MIN_HEIGHT`
+          (NOT a `<Typography>` of TYPO.tiny which only renders
+          ~12 px tall), so the phantom matches the actual rendered
+          height of the pinned panel's `Edit` outlined chip
+          (~23 px). Without this match, pinning the first app made
+          the body jump ~12 px - the whole rail stack underneath
+          shifted at the exact moment the user looked at their
+          new pin, which read as a UI glitch. */}
+      <Box
         aria-hidden
         sx={{
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.semibold,
-          lineHeight: 1.1,
           mb: 1.5,
-          visibility: 'hidden',
+          minHeight: PINNED_HEADER_MIN_HEIGHT,
         }}
-      >
-        &nbsp;
-      </Typography>
+      />
+
 
       <Stack direction="row" spacing={1.5} alignItems="stretch">
         {/* Hero column. Mirrors the structure of a single
@@ -704,7 +727,7 @@ function PinnedGrid({
         direction="row"
         alignItems="center"
         justifyContent="space-between"
-        sx={{ mb: 1.5, minHeight: 18 }}
+        sx={{ mb: 1.5, minHeight: PINNED_HEADER_MIN_HEIGHT }}
       >
         <Typography
           sx={{
@@ -732,26 +755,31 @@ function PinnedGrid({
             a pin. Mounted unconditionally - even with a single
             pin, the user might want to remove it - so the
             affordance is always there from pin #1 onward. */}
-        <ButtonBase
+        <Button
+          variant="outlined"
+          color="primary"
+          size="small"
           onClick={() => setEditMode((prev) => !prev)}
-          disableRipple
           aria-pressed={editMode}
           aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
           sx={{
             flexShrink: 0,
             fontSize: TYPO.xs,
             fontWeight: FONT_WEIGHT.semibold,
-            color: 'primary.main',
-            lineHeight: 1.1,
-            px: 0.5,
+            // Sentence-case label - keep it as a verb the user
+            // recognises, not a SCREAMING button.
+            textTransform: 'none',
+            // Tight padding so the chip-style button fits the
+            // panel header rhythm without dwarfing the
+            // "PINNED APPS" label on its left.
+            minWidth: 0,
+            lineHeight: 1.4,
+            px: 1.25,
             py: 0.25,
-            borderRadius: 0.5,
-            '&:hover': { opacity: 0.7 },
-            '&:active': { opacity: 0.6 },
           }}
         >
           {editMode ? 'Done' : 'Edit'}
-        </ButtonBase>
+        </Button>
       </Stack>
       <Box
         sx={{

@@ -22,10 +22,19 @@ This script post-processes the generated `ic_launcher_foreground.png`
 
   1. Cropping each PNG to the bounding box of its non-transparent pixels.
   2. Scaling that bbox so its longest side is `--inner-fraction` of the
-     canvas (default 0.62, i.e. 62% - inside the 66/108 safe zone with a
-     small extra margin).
+     canvas (default 0.55, well inside the 66/108 safe zone so the icon
+     also sits cleanly inside the circular launcher mask).
   3. Pasting it centered onto a fresh transparent canvas of the original
      mipmap size and overwriting the file in place.
+
+`--center-mode` controls the centering reference:
+
+  - `bbox` (default): center the resized bbox on the canvas. Simple
+    and predictable; works best for visually symmetric icons.
+  - `centroid`: center on the alpha-weighted centroid of the resized
+    content. Better for icons whose visual mass is offset from their
+    geometric bbox (e.g. our Reachy logo, where the antennas elongate
+    the bbox vertically without contributing meaningful visual weight).
 
 The script is idempotent: re-running it on already-padded foregrounds
 will scale the inner content to the same inner-fraction and produce
@@ -34,10 +43,12 @@ the same output (up to PNG encoding noise).
 Usage
 -----
     python3 scripts/pad-android-foreground.py \
-        --icons-dir src-tauri/icons/android
+        --icons-dir src-tauri/icons/android \
+        --inner-fraction 0.55 \
+        --center-mode centroid
 
-By default it processes both `ic_launcher_foreground.png` and
-`ic_launcher_round.png`. Run with `--help` for all options.
+By default it processes only `ic_launcher_foreground.png`. Run with
+`--help` for all options.
 """
 
 from __future__ import annotations
@@ -81,9 +92,34 @@ DEFAULT_TARGETS = (
 ALREADY_PADDED_MARGIN = 0.02
 
 
-def pad_image(src: Path, inner_fraction: float) -> str:
+def _alpha_centroid(img: Image.Image) -> tuple[float, float]:
+    """Return the alpha-weighted centroid (cx, cy) of `img` (RGBA)."""
+    alpha = img.split()[-1]
+    w, h = alpha.size
+    px = alpha.load()
+    sum_a = 0
+    sum_x = 0.0
+    sum_y = 0.0
+    for y in range(h):
+        for x in range(w):
+            a = px[x, y]
+            if a:
+                sum_a += a
+                sum_x += x * a
+                sum_y += y * a
+    if sum_a == 0:
+        return w / 2.0, h / 2.0
+    return sum_x / sum_a, sum_y / sum_a
+
+
+def pad_image(src: Path, inner_fraction: float, center_mode: str) -> str:
     """Rewrite `src` so its non-transparent content fits within the
     central `inner_fraction` of the canvas.
+
+    `center_mode` is one of:
+      - "bbox": center the resized bbox on the canvas (default-ish).
+      - "centroid": center the alpha-weighted centroid (visual mass)
+        on the canvas. Better for asymmetric icons.
 
     Returns one of:
       - "padded": file rewritten with new padding
@@ -100,11 +136,12 @@ def pad_image(src: Path, inner_fraction: float) -> str:
     cw = bbox[2] - bbox[0]
     ch = bbox[3] - bbox[1]
     current_ratio = max(cw, ch) / max(canvas_w, canvas_h)
-    # Only rewrite if the content meaningfully exceeds the safe zone.
-    # This makes the script idempotent in practice: re-running it on
-    # already-padded foregrounds is a no-op (avoids byte-level churn
-    # from repeated PNG resampling/encoding).
-    if current_ratio <= inner_fraction + ALREADY_PADDED_MARGIN:
+    # Only rewrite if the content meaningfully exceeds the safe zone OR
+    # if we're in centroid mode and the existing centering is bbox-based
+    # (which we can't easily detect, so we always rewrite when not already
+    # at the target size). In bbox mode the script remains idempotent
+    # for repeated runs.
+    if center_mode == "bbox" and current_ratio <= inner_fraction + ALREADY_PADDED_MARGIN:
         return "skipped-already-padded"
 
     cropped = img.crop(bbox)
@@ -122,8 +159,19 @@ def pad_image(src: Path, inner_fraction: float) -> str:
 
     resized = cropped.resize((new_w, new_h), Image.LANCZOS)
 
+    if center_mode == "centroid":
+        cx, cy = _alpha_centroid(resized)
+        offset_x = int(round(canvas_w / 2 - cx))
+        offset_y = int(round(canvas_h / 2 - cy))
+        # Clamp so the visible content stays fully on canvas (no partial crop).
+        offset_x = max(0, min(canvas_w - new_w, offset_x))
+        offset_y = max(0, min(canvas_h - new_h, offset_y))
+    else:
+        offset_x = (canvas_w - new_w) // 2
+        offset_y = (canvas_h - new_h) // 2
+
     out = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    out.paste(resized, ((canvas_w - new_w) // 2, (canvas_h - new_h) // 2), resized)
+    out.paste(resized, (offset_x, offset_y), resized)
     out.save(src, format="PNG", optimize=True)
     return "padded"
 
@@ -143,11 +191,25 @@ def main() -> int:
     parser.add_argument(
         "--inner-fraction",
         type=float,
-        default=0.62,
+        default=0.55,
         help=(
             "Fraction of the canvas the visible content should occupy along "
-            "its longest side. Android safe zone is 66/108 ~= 0.611; the "
-            "default 0.62 leaves a tiny extra margin for round masks."
+            "its longest side. Android safe zone is 66/108 ~= 0.611, but the "
+            "circular launcher mask only inscribes the central disc, so a "
+            "square bbox at 0.611 has its corners clipped. Default 0.55 "
+            "keeps the bbox well inside the inscribed circle."
+        ),
+    )
+    parser.add_argument(
+        "--center-mode",
+        choices=("bbox", "centroid"),
+        default="centroid",
+        help=(
+            "How to center the rescaled content on the canvas. 'bbox' "
+            "centers the geometric bounding box (simple, predictable). "
+            "'centroid' centers the alpha-weighted center of mass (better "
+            "for asymmetric icons whose bbox is dominated by thin "
+            "extremities like antennas). Default: centroid."
         ),
     )
     parser.add_argument(
@@ -185,7 +247,7 @@ def main() -> int:
             if not src.exists():
                 missing += 1
                 continue
-            result = pad_image(src, args.inner_fraction)
+            result = pad_image(src, args.inner_fraction, args.center_mode)
             if result == "padded":
                 rewritten += 1
                 print(f"  padded: {src}")
@@ -199,7 +261,7 @@ def main() -> int:
     print(
         f"done: rewrote {rewritten}, already-padded {skipped_already}, "
         f"empty {skipped_empty}, missing {missing} "
-        f"(inner_fraction={args.inner_fraction})"
+        f"(inner_fraction={args.inner_fraction}, center_mode={args.center_mode})"
     )
     return 0
 

@@ -22,11 +22,11 @@
  *
  * Earlier revisions also surfaced the daemon version here, and a
  * live WebRTC transport badge (LAN / Direct / Relay + IP +
- * bitrate). Those signals are debug-grade only and now live in a
- * dedicated overlay anchored to the bottom-left of the camera feed
- * (`<CameraDebugOverlay>`, mounted by `RobotTabView`). The
- * transport chip stays in the topbar because a quick "USB or Wi-Fi"
- * read is everyday-grade information, not debug-grade.
+ * bitrate). Those signals are debug-grade only and now live in the
+ * on-demand `<RobotInfoSheet>` opened from the `ⓘ` button in the
+ * topbar's right action cluster. The transport chip stays here
+ * because a quick "USB or Wi-Fi" read is everyday-grade
+ * information, not debug-grade.
  *
  * The little Reachy avatar on the left is the same illustration
  * used on the discovery cards (just smaller), so the user

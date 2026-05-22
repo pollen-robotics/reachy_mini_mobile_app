@@ -1,0 +1,913 @@
+/**
+ * "Info" panel rendered by `RobotSessionScreen` when the user taps
+ * the `ⓘ` button in the session topbar (which swaps to a `✕` while
+ * open).
+ *
+ *   ┌──────────────────────────────────────┐
+ *   │ ⟵ session topbar stays visible    [✕]│  (NOT painted here)
+ *   ├──────────────────────────────────────┤
+ *   │  CONNECTION                          │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ ● LAN              │  11 Mbps  │  │
+ *   │  │ Remote IP      192.168.1.19[⧉] │  │
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   │  SOFTWARE                            │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ Daemon v1.7.1  │  App v0.6.3   │  │
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   │  ACCOUNT                             │
+ *   │  ┌────────────────────────────────┐  │
+ *   │  │ Signed in           @hf-handle │  │
+ *   │  │ Session ⓘ              ● Live  │  │
+ *   │  └────────────────────────────────┘  │
+ *   │                                      │
+ *   │  ┌──────────────────────[⤢] [⧉]──┐  │
+ *   │  │ Logs                            │  │
+ *   │  │ 12:35:34 Daemon started...      │  │
+ *   │  │             (eats all space)    │  │
+ *   │  └─────────────────────────────────┘  │
+ *   └──────────────────────────────────────┘
+ *
+ * Why no panel topbar
+ * ───────────────────
+ * Earlier iterations painted a dedicated topbar inside the panel
+ * (`Robot info` title + `[✕]` close, sized to match the session
+ * topbar) AND a hero identity card with `<RobotAvatar>` + robot
+ * name + transport chip + full hardware id at the top of the body.
+ * Both were dropped: the session topbar already carries
+ * `<IdentityChipBar>` (robot name + transport chip + short id) and
+ * a `[✕]` (the info button glyph swaps to a cross while the panel
+ * is open) - duplicating any of that inside the panel was just
+ * noise. The panel is now metadata + logs only; the session
+ * topbar IS its chrome.
+ *
+ * Layout contract (driven by the host)
+ * ────────────────────────────────────
+ * This component is a self-sized flex column (`height: 100%`); the
+ * HOST is responsible for placing it via a `position: fixed`
+ * wrapper that sits BELOW the session topbar (`top: max(76px,
+ * env(safe-area-inset-top) + 70px)`) and covers everything down
+ * to the bottom of the viewport (body + bottom nav). The expected
+ * pattern in `RobotSessionScreen` is:
+ *
+ *   {infoOpen && (
+ *     <Box sx={{ position: 'fixed', top: TOPBAR_HEIGHT,
+ *                left: 0, right: 0, bottom: 0, zIndex: 1200 }}>
+ *       <RobotInfoPanel onClose={...} ... />
+ *     </Box>
+ *   )}
+ *
+ * The panel itself never positions absolutely - that lets the host
+ * decide where it lives without the panel having to know.
+ *
+ * `onClose` is the panel's "fully dismiss" callback. We DON'T paint
+ * a close button for it ourselves (the session topbar's `[✕]`
+ * carries that affordance), but we keep the prop on the API so
+ * descendants (e.g. the future "ssh me into this robot" link)
+ * can dismiss the panel when their work is done.
+ *
+ * Data plumbing
+ * ─────────────
+ *   - daemon version  : `useDaemonState()` (shared provider in
+ *                       `RobotSessionScreen`, ensures one fetch).
+ *   - WebRTC signals  : `webrtcTransport` prop from the session
+ *                       handle (kind / bitrate / remote IP).
+ *   - daemon logs     : `useDaemonLogs({ session, enabled })` -
+ *                       gated on `enabled` so we don't subscribe
+ *                       while the engine hasn't reached `ready`.
+ */
+import { useCallback, useState } from 'react';
+import {
+  Box,
+  IconButton,
+  Stack,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+
+import {
+  formatEntriesForCopy,
+  useDaemonLogs,
+} from '@/features/daemon-logs';
+import { useDaemonState } from '@/features/daemon-state';
+import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
+import type {
+  RobotSessionHandle,
+  SessionPhase,
+} from '@/features/robot-session/useRobotSession';
+import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
+import { RobotPanel } from '@/ui/widgets/robot-panel';
+import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
+
+/**
+ * Per-kind label + dot colour. Mirrors what the old
+ * `<CameraDebugOverlay>` exposed inside the camera frame; the same
+ * three colours read consistently across the app (`STATUS.success`
+ * for the happy-path LAN, `STATUS.info` for direct, `STATUS.warning`
+ * for relay - the only kind worth noticing as a potential UX issue).
+ */
+const KIND_META = {
+  checking: { label: 'Checking…', color: STATUS.info },
+  lan: { label: 'LAN', color: STATUS.success },
+  direct: { label: 'Direct', color: STATUS.info },
+  relay: { label: 'Relay', color: STATUS.warning },
+} as const;
+
+/**
+ * Per-phase label + dot colour for the `Session` row in the
+ * Account section. Same dot palette as `KIND_META` so the panel
+ * has one consistent "signal colour" language:
+ *   - green  = happy path (`live`)
+ *   - info   = in-flight transition (everything that's neither
+ *              terminal nor failed)
+ *   - warning = teardown about to land
+ *   - error  = `error`
+ * The friendly labels avoid surfacing the raw engine vocabulary
+ * (`bringing-up` / `reacquiring` / `tearing-down`) which reads
+ * like internal jargon to a non-developer user.
+ */
+const PHASE_META: Record<
+  SessionPhase,
+  { label: string; color: string }
+> = {
+  idle: { label: 'Idle', color: STATUS.info },
+  'bringing-up': { label: 'Connecting', color: STATUS.info },
+  live: { label: 'Live', color: STATUS.success },
+  releasing: { label: 'Releasing', color: STATUS.info },
+  released: { label: 'Released', color: STATUS.info },
+  reacquiring: { label: 'Reconnecting', color: STATUS.info },
+  'tearing-down': { label: 'Shutting down', color: STATUS.warning },
+  error: { label: 'Error', color: STATUS.error },
+};
+
+const DOT_SIZE_PX = 8;
+
+/**
+ * Floor for the LOGS panel inside the view. Tuned generous so the
+ * live tail dominates the bottom half of the panel even before
+ * scrolling - users open the info view mostly to read logs, the
+ * metadata above is at-a-glance reference. 280 px ~= 8-9 rows of
+ * `LogLineRow`, enough to read a small burst without expanding
+ * to the dedicated full-screen logs view (the `OpenInFullIcon`
+ * action on the panel header). The body scrolls if the metadata
+ * + logs floor overflow on small viewports.
+ */
+const LOGS_MIN_HEIGHT_PX = 280;
+
+interface RobotInfoPanelProps {
+  /**
+   * Fully dismisses the panel. The host (`RobotSessionScreen`)
+   * normally drives dismissal itself via the session topbar's
+   * `[✕]` button, but we keep this prop on the contract so future
+   * content inside the panel (an SSH deep-link, a "report a bug"
+   * CTA that opens its own surface, …) can close the panel as a
+   * side-effect of completing its own action.
+   *
+   * Unused for now - prefix with `_` to mark intent. Drop the
+   * underscore the moment a child needs it.
+   */
+  onClose: () => void;
+  /**
+   * Hugging Face handle of the signed-in user. `null` shouldn't
+   * happen on this screen in practice (the user is by definition
+   * signed in to reach `RobotSessionScreen`) but we still handle
+   * it defensively.
+   */
+  username: string | null;
+  /**
+   * Current session phase reported by `useRobotSession`. Surfaced
+   * in the Account section so the user sees concrete state when
+   * the orb behaves unexpectedly (e.g. stuck in `bringing-up`).
+   */
+  sessionPhase: SessionPhase;
+  /**
+   * Slice of the session handle the panel consumes. Typed via
+   * `Pick` so the dependency surface is explicit at the call site
+   * and the panel can be unit-tested with a fake handle.
+   */
+  session: Pick<RobotSessionHandle, 'subscribeLogs' | 'webrtcTransport'>;
+  /**
+   * Becomes `true` once the engine has reached `ready` for the
+   * first time. Gates the daemon log subscription so we don't
+   * spam errors while the WebRTC link is still coming up.
+   */
+  isLive: boolean;
+}
+
+export default function RobotInfoPanel({
+  onClose: _onClose,
+  username,
+  sessionPhase,
+  session,
+  isLive,
+}: RobotInfoPanelProps) {
+  const { daemonVersion } = useDaemonState();
+  const versionLabel = daemonVersion ? `v${daemonVersion}` : '—';
+
+  // Daemon log buffer. Lives in the panel host so the copy button
+  // can sit in the panel's actions slot without subscribing twice
+  // or threading callbacks. Subscribed for as long as the panel is
+  // mounted (i.e. as long as `infoOpen` in the host); the panel's
+  // mount lifecycle is controlled by the host so closing the panel
+  // releases the subscription naturally. The same `logs` object is
+  // passed to both the inline `<DaemonLogConsole>` and the
+  // full-screen variant so they share the buffer (and the user
+  // doesn't lose context when toggling).
+  const logs = useDaemonLogs({ session, enabled: isLive });
+
+  /**
+   * Whether the logs are taking over the whole panel surface.
+   * Toggled via the `OpenInFullIcon` action in the inline logs
+   * panel header. When `true`, the body swaps to a full-bleed
+   * `<DaemonLogConsole>` and the panel topbar relabels to "Logs"
+   * with `[copy]` + `[close]` actions; the metadata sections are
+   * unmounted. The `useDaemonLogs` subscription up here keeps
+   * running across the swap so the buffer is preserved.
+   */
+  const [logsFullscreen, setLogsFullscreen] = useState(false);
+
+  const handleCopyLogs = useCallback(async () => {
+    const text = formatEntriesForCopy(logs.entries);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.warn('[robot-info-panel] clipboard.writeText for logs failed:', err);
+    }
+  }, [logs.entries]);
+
+  // WebRTC kind + dot. While ICE is still gathering, `kind` is
+  // `checking`; we still render a row (with a muted label) so the
+  // section's row count stays stable as the link comes up.
+  const webrtc = session.webrtcTransport;
+  const webrtcMeta = webrtc ? KIND_META[webrtc.kind] : null;
+  const remoteIp = formatRemoteIp(webrtc);
+  const bitrate = formatBitrate(webrtc?.bps ?? null);
+
+  return (
+    <Stack
+      sx={{
+        height: '100%',
+        width: '100%',
+        bgcolor: 'background.default',
+        // Host wraps us in `position: fixed; top: <topbar>; left|
+        // right|bottom: 0` so we cover body + bottom nav but NOT
+        // the session topbar. We paint the bg here (not on the
+        // host wrapper) so the panel is the self-contained visual
+        // unit: drop it anywhere with a `height: 100%` contract
+        // and it still reads as "a screen".
+      }}
+    >
+      {logsFullscreen ? (
+        /* Full-screen logs surface. The DaemonLogConsole paints
+           edge-to-edge below a compact toolbar carrying:
+             - `Logs / Live daemon journal`  : title + subtitle so
+               the user knows what they're looking at even though
+               the session topbar above doesn't relabel.
+             - `[⧉ copy]`                    : copy buffer to
+                                               clipboard.
+             - `[↘ collapse]`                : back to the inline
+               metadata+logs layout.
+           Note: the session topbar's `[✕]` is the way to fully
+           dismiss the info view; the toolbar's collapse button
+           is the way to keep info open but get the metadata
+           back. Two distinct affordances, two distinct buttons
+           in two distinct locations. */
+        <>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={(theme) => ({
+              flexShrink: 0,
+              px: 2,
+              py: 1.25,
+              minHeight: 48,
+              borderBottom: `1px solid ${theme.palette.divider}`,
+            })}
+          >
+            <Stack
+              direction="row"
+              alignItems="baseline"
+              spacing={1}
+              sx={{ minWidth: 0 }}
+            >
+              <Typography
+                component="h2"
+                sx={{
+                  fontSize: TYPO.md,
+                  fontWeight: FONT_WEIGHT.semibold,
+                  color: 'text.primary',
+                  lineHeight: 1.2,
+                }}
+              >
+                Logs
+              </Typography>
+              <Typography
+                component="span"
+                sx={{
+                  fontSize: TYPO.xs,
+                  color: 'text.secondary',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                Live daemon journal
+              </Typography>
+            </Stack>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              sx={{ flexShrink: 0 }}
+            >
+              <Tooltip title="Copy all lines to clipboard" arrow>
+                <span>
+                  <IconButton
+                    aria-label="Copy logs"
+                    onClick={handleCopyLogs}
+                    disabled={logs.entries.length === 0}
+                    size="small"
+                  >
+                    <ContentCopyIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Collapse logs" arrow>
+                <IconButton
+                  aria-label="Collapse logs"
+                  onClick={() => setLogsFullscreen(false)}
+                  size="small"
+                >
+                  <CloseFullscreenIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          </Stack>
+          <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <DaemonLogConsole
+              entries={logs.entries}
+              status={logs.status}
+              errorMessage={logs.errorMessage}
+              enabled={isLive}
+            />
+          </Box>
+        </>
+      ) : (
+        /* Body. Flex column hosting the compact metadata sections
+           and the LOGS panel. The whole column is wrapped in
+           `overflowY: auto` so the metadata can spill into a normal
+           page scroll if the viewport is short, instead of
+           squashing the LOGS panel. The LOGS panel itself uses
+           `flex: 1, minHeight: …` to eat the leftover vertical
+           space and scrolls internally. */
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          px: 2,
+          pt: 2,
+          // Bottom safe-area padding so the LOGS panel's bottom
+          // edge isn't hidden under the iOS home indicator (we
+          // cover the BottomNavigation, which normally provided
+          // its own safe-area inset).
+          pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
+          overflowY: 'auto',
+        }}
+      >
+        <Section label="Connection">
+          {/* Physical `Transport` (Wi-Fi / USB) used to live here
+              as its own row, but it's already surfaced by the
+              chip in the hero card above; the section is now
+              focused on the WebRTC-level signals (kind / IP /
+              bitrate) that AREN'T in the hero card.
+
+              Headline row collapses the two glanceable health
+              signals (link kind + live bitrate) into a single
+              two-cell strip - same two-cell pattern as the
+              Software section but with the values pointing to
+              opposite edges (kind flush-left, bitrate flush-
+              right) so the row reads like a status bar: "what
+              kind of link / how fast". The Remote IP stays on
+              its own `MetadataRow` because it carries the copy
+              affordance and a value (an IPv4 string) that needs
+              room. */}
+          <Stack
+            direction="row"
+            alignItems="stretch"
+            sx={(theme) => ({
+              px: 1.5,
+              py: 1,
+              minHeight: 40,
+              '&:not(:last-of-type)': {
+                borderBottom: `1px solid ${theme.palette.divider}`,
+              },
+            })}
+          >
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              {webrtcMeta ? (
+                <StatusDotLabel
+                  color={webrtcMeta.color}
+                  label={webrtcMeta.label}
+                />
+              ) : (
+                <Typography
+                  component="span"
+                  sx={{ fontSize: TYPO.sm, color: 'text.disabled' }}
+                >
+                  —
+                </Typography>
+              )}
+            </Box>
+            <Box
+              sx={(theme) => ({
+                width: '1px',
+                alignSelf: 'stretch',
+                mx: 1.5,
+                my: 0.25,
+                bgcolor: theme.palette.divider,
+              })}
+            />
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+              }}
+            >
+              <Typography
+                component="span"
+                sx={{
+                  fontSize: TYPO.sm,
+                  fontFamily:
+                    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                  color: bitrate ? 'text.primary' : 'text.disabled',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {bitrate ?? '—'}
+              </Typography>
+            </Box>
+          </Stack>
+          {remoteIp && (
+            <MetadataRow
+              label="Remote IP"
+              value={remoteIp}
+              mono
+              copyable
+            />
+          )}
+        </Section>
+
+        {/* Software section. Both version numbers (daemon firmware
+            + this mobile app) are surfaced together on ONE row,
+            split into two equal cells by a hairline divider. The
+            section header ("SOFTWARE") already names the group,
+            so the row drops the redundant left-label column the
+            other sections use and gives each version balanced
+            visual weight - which is what the user actually copies
+            into a bug report ("daemon X, app Y"). The version
+            strings stay monospaced for legibility / line-up. */}
+        <Section label="Software">
+          <Stack
+            direction="row"
+            // `center` (not the flex default `stretch`) so the
+            // text pair inside each `VersionCell` sits on the
+            // row's vertical centre line. With `stretch`, the
+            // cell grew to the row's `minHeight: 40` and the
+            // baseline-aligned label+value pair anchored to the
+            // top, leaving an off-balance ~8 px gap at the
+            // bottom of the card.
+            alignItems="center"
+            sx={{
+              px: 1.5,
+              py: 1,
+              minHeight: 40,
+            }}
+          >
+            <VersionCell label="Daemon" value={versionLabel} />
+            <Box
+              sx={(theme) => ({
+                width: '1px',
+                alignSelf: 'stretch',
+                mx: 1.5,
+                my: 0.25,
+                bgcolor: theme.palette.divider,
+              })}
+            />
+            <VersionCell label="App" value={`v${__APP_VERSION__}`} />
+          </Stack>
+        </Section>
+
+        {/* Account section. Two everyday-grade signals that don't
+            belong elsewhere:
+              - HF username: reassurance about which account is
+                signed in (and what the support team will see
+                attached to a bug report).
+              - Session phase: when the orb behaves unexpectedly
+                ("why isn't it responding?"), the phase gives a
+                concrete answer (still `bringing-up`, briefly
+                `reacquiring` after an iframe close, …). Rendered
+                with a `<StatusDotLabel>` colour-coded the same
+                way as the WebRTC row above so a glance at the
+                panel surfaces the two main "is the link healthy"
+                signals at the same vertical level. */}
+        <Section label="Account">
+          <MetadataRow
+            label="Signed in"
+            value={username ? `@${username}` : '—'}
+            mono={Boolean(username)}
+          />
+          <MetadataRow
+            label="Session"
+            info={
+              'Lifecycle state of the link to the robot ' +
+              '(connection, conversation, hand-off to an app, ' +
+              'teardown). Mostly Live; the other values show up ' +
+              'briefly when the link is being brought up or ' +
+              'reacquired.'
+            }
+            value={
+              <StatusDotLabel
+                color={PHASE_META[sessionPhase].color}
+                label={PHASE_META[sessionPhase].label}
+              />
+            }
+          />
+        </Section>
+
+        {/* LOGS panel. Eats the leftover vertical space via
+            `flex: 1, minHeight: …` so the user gets a generous live
+            tail. Body has no padding so the terminal-style console
+            paints its own dim bg edge-to-edge; the actions slot
+            carries the [expand] + [copy] cluster so the user can
+            either lift the logs to a dedicated full-screen view
+            (`OpenInFullIcon`) or copy the buffer to the clipboard
+            in one tap. */}
+        <RobotPanel
+          title="Logs"
+          subtitle="Live daemon journal"
+          actions={
+            <>
+              <Tooltip title="Expand logs to full screen" arrow>
+                <IconButton
+                  aria-label="Expand logs"
+                  onClick={() => setLogsFullscreen(true)}
+                  size="small"
+                  sx={{ width: 24, height: 24, p: 0.25 }}
+                >
+                  <OpenInFullIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Copy all lines to clipboard" arrow>
+                <span>
+                  <IconButton
+                    aria-label="Copy logs"
+                    onClick={handleCopyLogs}
+                    disabled={logs.entries.length === 0}
+                    size="small"
+                    sx={{ width: 24, height: 24, p: 0.25 }}
+                  >
+                    <ContentCopyIcon sx={{ fontSize: 12 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          }
+          noBodyChrome
+          sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
+        >
+          <DaemonLogConsole
+            entries={logs.entries}
+            status={logs.status}
+            errorMessage={logs.errorMessage}
+            enabled={isLive}
+          />
+        </RobotPanel>
+      </Box>
+      )}
+    </Stack>
+  );
+}
+
+/**
+ * Coloured-dot + label cluster, used as a value cell inside
+ * `<MetadataRow>` for any "status-of-something" row (WebRTC
+ * transport kind, session phase, …).
+ *
+ *   ●  LAN
+ *
+ * Centralised here so every status row in the panel has the same
+ * dot size, gap, and typography. A future addition (e.g. daemon
+ * health, motor mode) drops in by reusing this helper instead of
+ * re-implementing the cluster inline.
+ */
+function StatusDotLabel({ color, label }: { color: string; label: string }) {
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      spacing={0.75}
+      sx={{ minWidth: 0 }}
+    >
+      <Box
+        aria-hidden
+        sx={{
+          width: DOT_SIZE_PX,
+          height: DOT_SIZE_PX,
+          borderRadius: '50%',
+          bgcolor: color,
+          flexShrink: 0,
+        }}
+      />
+      <Typography
+        component="span"
+        sx={{
+          fontSize: TYPO.sm,
+          color: 'text.primary',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </Typography>
+    </Stack>
+  );
+}
+
+/**
+ * Grouped section header + framed body. The header label is the
+ * small uppercase / spaced tag we use everywhere else in this app
+ * (cf. `RobotPanel.title`, `HelpAndSupportSheet` subheaders) so the
+ * three sections read as one consistent visual rhythm.
+ */
+function Section({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Stack spacing={0.75}>
+      <Typography
+        component="h3"
+        sx={{
+          fontSize: TYPO.tiny,
+          fontWeight: FONT_WEIGHT.semibold,
+          color: 'text.secondary',
+          letterSpacing: '0.6px',
+          textTransform: 'uppercase',
+          lineHeight: 1.2,
+          pl: 0.25,
+        }}
+      >
+        {label}
+      </Typography>
+      <Box
+        sx={(theme) => ({
+          borderRadius: `${RADIUS.lg}px`,
+          border: `1px solid ${theme.palette.divider}`,
+          bgcolor: theme.palette.background.paper,
+          overflow: 'hidden',
+        })}
+      >
+        {children}
+      </Box>
+    </Stack>
+  );
+}
+
+/**
+ * One half of the "Software" row - a muted inline label followed
+ * by a monospaced version string. Two of these sit side-by-side
+ * inside the Software `<Section>`, separated by a hairline
+ * divider, so the user reads both versions ("daemon X, app Y")
+ * on a single visual line instead of stacked rows.
+ *
+ * `flex: 1` + `minWidth: 0` lets each cell shrink with truncation
+ * if either version string blows out the row width (e.g. a long
+ * pre-release tag); the labels stay pinned at full width thanks
+ * to `flexShrink: 0`.
+ */
+function VersionCell({ label, value }: { label: string; value: string }) {
+  return (
+    <Stack
+      direction="row"
+      alignItems="baseline"
+      spacing={1}
+      sx={{ flex: 1, minWidth: 0 }}
+    >
+      <Typography
+        component="span"
+        sx={{
+          fontSize: TYPO.sm,
+          color: 'text.secondary',
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        component="span"
+        sx={{
+          fontSize: TYPO.sm,
+          color: 'text.primary',
+          fontFamily:
+            'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+      </Typography>
+    </Stack>
+  );
+}
+
+/**
+ * One key/value row inside a `<Section>`. The label sits on the
+ * left in `text.secondary`; the value column is right-aligned and
+ * carries the bright text. An optional `copyable` flag renders a
+ * small trailing copy button that lifts the row's value to the
+ * clipboard. Uses `<Divider component="li">`-style hairlines via
+ * `:not(:last-of-type)` so the bottom row stays clean.
+ */
+function MetadataRow({
+  label,
+  value,
+  mono = false,
+  copyable = false,
+  info,
+}: {
+  label: string;
+  value: React.ReactNode;
+  /** Render the value in monospace (ids, IPs, version strings). */
+  mono?: boolean;
+  /** Render a trailing copy button. Only works for string values. */
+  copyable?: boolean;
+  /**
+   * When set, render a small `ⓘ` icon next to the label that
+   * surfaces this string on hover (desktop) / long-press
+   * (mobile via MUI's Tooltip touch fallback). Use for rows
+   * whose meaning is opaque from the label alone (e.g. the
+   * `Session` row in the Account section).
+   */
+  info?: string;
+}) {
+  const stringValue = typeof value === 'string' ? value : null;
+
+  const handleCopy = useCallback(async () => {
+    if (!stringValue) return;
+    try {
+      await navigator.clipboard.writeText(stringValue);
+    } catch (err) {
+      console.warn('[robot-info-panel] clipboard.writeText failed:', err);
+    }
+  }, [stringValue]);
+
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      spacing={1}
+      sx={(theme) => ({
+        px: 1.5,
+        py: 1,
+        minHeight: 40,
+        '&:not(:last-of-type)': {
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        },
+      })}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={0.5}
+        sx={{ flexShrink: 0 }}
+      >
+        <Typography
+          component="span"
+          sx={{
+            fontSize: TYPO.sm,
+            color: 'text.secondary',
+          }}
+        >
+          {label}
+        </Typography>
+        {info && (
+          <Tooltip title={info} arrow enterTouchDelay={0} leaveTouchDelay={4000}>
+            <InfoOutlinedIcon
+              aria-label={`What is ${label.toLowerCase()}?`}
+              sx={{
+                fontSize: 14,
+                color: 'text.disabled',
+                cursor: 'help',
+              }}
+            />
+          </Tooltip>
+        )}
+      </Stack>
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: 0.5,
+        }}
+      >
+        {stringValue !== null ? (
+          <Typography
+            component="span"
+            sx={{
+              fontSize: TYPO.sm,
+              color: 'text.primary',
+              fontFamily: mono
+                ? 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
+                : undefined,
+              textAlign: 'right',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {value}
+          </Typography>
+        ) : (
+          value
+        )}
+        {copyable && stringValue && (
+          <Tooltip title="Copy to clipboard" arrow>
+            <IconButton
+              aria-label={`Copy ${label.toLowerCase()}`}
+              size="small"
+              onClick={handleCopy}
+              sx={{ width: 24, height: 24, p: 0.25 }}
+            >
+              <ContentCopyIcon sx={{ fontSize: 12 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </Box>
+    </Stack>
+  );
+}
+
+/**
+ * Hide an mDNS `.local` hostname on LAN: the LAN dot already
+ * carries the "same network" signal and the hostname isn't directly
+ * SSH-friendly. Real IPv4/IPv6 values are returned as-is. Returns
+ * an empty string when the row has nothing meaningful to show
+ * (caller checks truthiness to drop the row entirely).
+ */
+function formatRemoteIp(
+  webrtc: ConversationTransportInfo | null | undefined,
+): string {
+  if (!webrtc || !webrtc.remoteIp) return '';
+  const normalised = webrtc.remoteIp.toLowerCase();
+  const isMdns =
+    normalised.endsWith('.local') || normalised.endsWith('.local.');
+  if (isMdns && webrtc.kind === 'lan') return '';
+  return webrtc.remoteIp;
+}
+
+/**
+ * Format `bps` as a kbps / Mbps string with one decimal until the
+ * value gets fat enough to read cleanly without (≥ 10 Mbps or ≥ 100
+ * kbps). Returns `''` for "no point displaying" so the caller can
+ * just check truthiness to drop the row entirely.
+ */
+function formatBitrate(bps: number | null): string {
+  if (bps === null || !Number.isFinite(bps) || bps <= 0) return '';
+  if (bps >= 1_000_000) {
+    const mbps = bps / 1_000_000;
+    return `${mbps.toFixed(mbps >= 10 ? 0 : 1)} Mbps`;
+  }
+  const kbps = bps / 1_000;
+  return `${kbps.toFixed(kbps >= 100 ? 0 : 1)} kbps`;
+}
