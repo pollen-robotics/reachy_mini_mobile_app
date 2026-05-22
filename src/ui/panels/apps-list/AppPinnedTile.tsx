@@ -47,7 +47,7 @@
  * trades a tap for full discoverability.
  */
 import { memo, useMemo, type KeyboardEvent, type MouseEvent } from 'react';
-import { Box, IconButton, Typography } from '@mui/material';
+import { Box, IconButton, Typography, alpha } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
 import type { AppEntry } from '@/features/apps/types';
@@ -346,34 +346,37 @@ function AppPinnedTileImpl({
             height: 22,
             minWidth: 0,
             padding: 0,
-            // High-contrast pill: dark in light mode, light in
-            // dark mode. The badge must read clearly against
-            // ANY app icon (white logos, dark logos, photographic
-            // emoji), so we lean on a strong fill + a thin
-            // surface-coloured ring so it always pops off the
-            // plate underneath.
-            bgcolor:
-              theme.palette.mode === 'dark'
-                ? theme.palette.grey[100]
-                : theme.palette.grey[900],
-            color:
-              theme.palette.mode === 'dark'
-                ? theme.palette.grey[900]
-                : theme.palette.common.white,
-            border: `2px solid ${theme.palette.background.default}`,
-            boxShadow: theme.shadows[2],
+            // Primary-outlined pill, matching the Edit/Done toggle
+            // in the panel header so both halves of the unpin
+            // affordance (enter edit mode, then remove a tile)
+            // read as the same "primary action" family.
+            //
+            // We give the pill a surface fill (background.paper)
+            // rather than a transparent one because it floats on
+            // TOP of arbitrary app icons - photographic emoji,
+            // dark logos, white logos. Without an opaque fill,
+            // the icon's edge bleeds through the outline and the
+            // glyph stops reading as a tappable target.
+            bgcolor: 'background.paper',
+            color: 'primary.main',
+            border: `1.5px solid ${theme.palette.primary.main}`,
+            boxShadow: theme.shadows[1],
             zIndex: 2,
-            transition: theme.transitions.create(['transform', 'opacity'], {
-              duration: theme.transitions.duration.shortest,
-            }),
+            transition: theme.transitions.create(
+              ['transform', 'background-color'],
+              { duration: theme.transitions.duration.shortest },
+            ),
+            // Subtle primary tint on hover / press, mirroring
+            // MUI's outlined-Button feedback (`alpha(primary, 0.04)`
+            // hover, `0.12` press). Stronger on press so a finger
+            // tap registers visually even though the surrounding
+            // tile is also wiggling.
             '&:hover': {
-              bgcolor:
-                theme.palette.mode === 'dark'
-                  ? theme.palette.grey[200]
-                  : theme.palette.grey[800],
+              bgcolor: alpha(theme.palette.primary.main, 0.08),
             },
             '&:active': {
               transform: 'scale(0.9)',
+              bgcolor: alpha(theme.palette.primary.main, 0.16),
             },
           })}
         >

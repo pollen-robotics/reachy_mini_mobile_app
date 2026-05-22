@@ -44,7 +44,6 @@ import {
   Alert,
   Box,
   Button,
-  ButtonBase,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -732,26 +731,31 @@ function PinnedGrid({
             a pin. Mounted unconditionally - even with a single
             pin, the user might want to remove it - so the
             affordance is always there from pin #1 onward. */}
-        <ButtonBase
+        <Button
+          variant="outlined"
+          color="primary"
+          size="small"
           onClick={() => setEditMode((prev) => !prev)}
-          disableRipple
           aria-pressed={editMode}
           aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
           sx={{
             flexShrink: 0,
             fontSize: TYPO.xs,
             fontWeight: FONT_WEIGHT.semibold,
-            color: 'primary.main',
-            lineHeight: 1.1,
-            px: 0.5,
+            // Sentence-case label - keep it as a verb the user
+            // recognises, not a SCREAMING button.
+            textTransform: 'none',
+            // Tight padding so the chip-style button fits the
+            // panel header rhythm without dwarfing the
+            // "PINNED APPS" label on its left.
+            minWidth: 0,
+            lineHeight: 1.4,
+            px: 1.25,
             py: 0.25,
-            borderRadius: 0.5,
-            '&:hover': { opacity: 0.7 },
-            '&:active': { opacity: 0.6 },
           }}
         >
           {editMode ? 'Done' : 'Edit'}
-        </ButtonBase>
+        </Button>
       </Stack>
       <Box
         sx={{
