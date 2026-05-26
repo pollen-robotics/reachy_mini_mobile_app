@@ -6,8 +6,15 @@
  * (no image support there yet) - a separate HTTPS round-trip is the
  * cheapest path and keeps the Realtime context bounded to plain text.
  *
- * Reuses the engine's `VITE_OPENAI_API_KEY` via the `apiKey` ctor
- * argument so we don't have to provision a separate credential.
+ * Historically reused the engine's build-time `VITE_OPENAI_API_KEY`
+ * via the `apiKey` ctor argument. The mobile shell no longer
+ * carries a long-lived OpenAI key (see
+ * `features/conversation/engine/ephemeral-key.ts`), so the
+ * provider is currently inert: the engine passes `openaiApiKey: ''`
+ * and `attachVision` returns null. Re-enabling requires either a
+ * server-side proxy for `/v1/chat/completions` or switching to a
+ * Hugging Face Inference Providers route. See the comment block
+ * in `conversation-engine.ts` next to the `attachVision` call.
  */
 
 import { VISION_CONFIG } from "../config";
@@ -17,8 +24,10 @@ import type { VlmProvider } from "./types";
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 
 export interface OpenaiVlmProviderOptions {
-  /** OpenAI API key. Resolved by the engine from settings (which in
-   *  turn reads `VITE_OPENAI_API_KEY` or the localStorage override). */
+  /** OpenAI API key. The engine currently passes an empty string,
+   *  which makes `attachVision` short-circuit to a no-op. Kept on
+   *  the API for the eventual server-proxied / HF-Inference
+   *  re-enablement. */
   apiKey: string;
   /** Model id. Defaults to `VISION_CONFIG.openaiVlmModel`. */
   model?: string;

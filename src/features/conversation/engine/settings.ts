@@ -1,27 +1,19 @@
 /**
- * Engine-side configuration: model defaults + system prompt +
- * OpenAI key resolution.
+ * Engine-side configuration: model defaults + system prompt.
  *
- * The mobile shell has no settings UI, so most values are baked
- * in here as constants and never persisted. Only the OpenAI API
- * key has two sources:
+ * The mobile shell has no settings UI, so every value here is
+ * baked in as a constant and never persisted.
  *
- *   1. `localStorage` override (manual debug escape hatch -
- *      `localStorage.setItem('reachyMini.openai.apiKey', '…')`
- *      from DevTools)
- *   2. Build-time fallback from `VITE_OPENAI_API_KEY` in
- *      `.env.local` (the normal path - see `.env.example` and
- *      the GitHub Actions workflow)
- *
- * If neither is set, the engine surfaces "Add OpenAI key in
- * settings" when the user taps the orb to start a conversation.
- *
- * Historic note: an earlier version of this file mirrored the
- * Space app's full settings infrastructure (HF clientId stored
- * in localStorage, model/voice/instructions configurable from a
- * UI modal). The mobile shell has none of that, so the
- * scaffolding has been collapsed down to the one value that
- * actually has two viable sources.
+ * Historic note: this module used to also resolve the OpenAI API
+ * key from two sources (a localStorage debug override + a
+ * build-time `VITE_OPENAI_API_KEY` injection). Both have been
+ * retired: the mobile shell now mints per-user OpenAI Realtime
+ * ephemeral keys via the website's `/api/openai/ephemeral`
+ * endpoint at conversation-start time. See
+ * `./ephemeral-key.ts` for the new acquisition path and
+ * `docs/APP_STORE_AUDIT_2026-05.md` § 2.1 for the rationale (the
+ * old key was extractable from the bundle and violated OpenAI's
+ * ToS for distributed clients).
  */
 
 // `gpt-realtime-2` is OpenAI's reasoning-capable Realtime model
@@ -43,6 +35,10 @@
 // (`POST /v1/realtime?model=...`, raw SDP) returns
 // `400 invalid_model "Model gpt-realtime-2 is only available on the
 // GA API."`. The handshake migration is done in `openai-realtime.ts`.
+//
+// The server-side mint endpoint also pins this model in its
+// default body (server/openaiEphemeral.js); keep both in sync if
+// you bump the default here.
 //
 // Rollback path (if the GA handshake misbehaves on a specific
 // device or network): set this back to `'gpt-realtime'`. The GA
@@ -75,74 +71,14 @@ export const DEFAULT_INSTRUCTIONS =
   'memory tools silently in the background - do not narrate the act of ' +
   "remembering, just acknowledge naturally (\"got it\", \"noted\").";
 
-/**
- * The single localStorage key still in use: a manual debug
- * override for the OpenAI API key. The mobile UI never writes
- * to it - developers can set it from DevTools when they want
- * to override the build-time key without rebuilding.
- */
-const API_KEY_STORAGE_KEY = 'reachyMini.openai.apiKey';
-
 export interface Settings {
-  apiKey: string;
   model: string;
   voice: string;
   instructions: string;
 }
 
-/**
- * ⚠️ TEMPORARY: build-time OpenAI key, populated by Vite from
- * `.env.local` at build time (`VITE_OPENAI_API_KEY=…`). The
- * mobile shell currently has no settings screen for the key, so
- * we let developers bake theirs into the bundle - and the GitHub
- * Actions workflow does the same for TestFlight / internal
- * Android builds via the `OPENAI_API_KEY` repo secret (see
- * `.github/workflows/build-mobile.yml`). `.env.local` is in
- * `.gitignore`, so the secret never reaches the repo, but it
- * DOES end up in the distributed `.ipa` / `.apk` - anyone with
- * the binary can extract the key.
- *
- * This is a known anti-pattern, kept ONLY for the debug /
- * internal-tester window where we want the conversation to
- * "just work" out of the box. Production releases MUST replace
- * this with a proper architecture (server-side ephemeral keys,
- * per-user OAuth, …) and remove the build-time injection from
- * both `.env.local` AND the workflow's three "Inject OpenAI
- * API key (TEMPORARY)" steps.
- */
-const BUILD_TIME_OPENAI_KEY: string =
-  (import.meta.env?.VITE_OPENAI_API_KEY as string | undefined) ?? '';
-
 export function loadSettings(): Settings {
-  // `||` (not `??`) so an empty-string entry in localStorage still
-  // falls through to the build-time fallback. The legacy engine
-  // could persist `""` when the user submitted an empty settings
-  // form; once that landed in storage, `??` (which only fallbacks
-  // on null/undefined) trapped the engine on the empty value
-  // forever, even after we shipped a build-time key.
-  const fromStorage = localStorage.getItem(API_KEY_STORAGE_KEY);
-  const apiKey = fromStorage || BUILD_TIME_OPENAI_KEY;
-  // Diagnostic log (length only - never the key value): confirms
-  // which source resolved the OpenAI key. Helps debug "the engine
-  // says no key" when the .env.local is set OR when localStorage
-  // has a stale empty/wrong value.
-  console.info(
-    '[settings] OpenAI key sources:',
-    'localStorage =',
-    fromStorage === null
-      ? 'unset'
-      : fromStorage === ''
-        ? 'empty string (will fall back)'
-        : `set (${fromStorage.length} chars)`,
-    '| build-time =',
-    BUILD_TIME_OPENAI_KEY === ''
-      ? 'unset (no .env.local or VITE_OPENAI_API_KEY missing)'
-      : `set (${BUILD_TIME_OPENAI_KEY.length} chars)`,
-    '| resolved =',
-    apiKey ? `${apiKey.length} chars` : 'EMPTY (engine will prompt)',
-  );
   return {
-    apiKey,
     model: DEFAULT_MODEL,
     voice: DEFAULT_VOICE,
     instructions: DEFAULT_INSTRUCTIONS,

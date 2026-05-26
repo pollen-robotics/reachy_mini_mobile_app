@@ -21,10 +21,14 @@
  *   - It teardown cleanly on unmount: closes the OpenAI peer,
  *     stops the SDK session, releases motors via `goto_sleep`.
  *
- * Configuration: set `VITE_OPENAI_API_KEY` in your `.env.local` to
- * enable the AI side. The engine will fall through to a "ready but
- * silent" state otherwise (the orb still spins / motors still
- * engage, but no AI voice).
+ * Configuration: the engine mints per-user OpenAI Realtime
+ * ephemeral keys via the website's `/api/openai/ephemeral`
+ * endpoint at conversation-start time (see `engine/ephemeral-key.ts`).
+ * No build-time secret is required. The engine will surface a
+ * "Sign in to Hugging Face" UI message if the user isn't
+ * authenticated when they try to start a conversation; otherwise
+ * the orb spins / motors engage and the AI voice comes online
+ * after the SDP handshake.
  */
 
 export type {

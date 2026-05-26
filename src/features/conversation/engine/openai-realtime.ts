@@ -106,7 +106,21 @@ export interface RealtimeToolCall {
 }
 
 export interface RealtimeOptions {
-  apiKey: string;
+  /**
+   * Async getter for an OpenAI Realtime ephemeral key (`ek_…`).
+   * Called once per `connect()` invocation, immediately before the
+   * `POST /v1/realtime/calls` SDP exchange, so a fresh key is in
+   * hand for the handshake. The getter is expected to throw on
+   * failure (no HF token, mint endpoint down, …); the engine
+   * surfaces those errors to the host as fatal so the orb reflects
+   * the auth break to the user.
+   *
+   * We deliberately keep this as a function rather than a plain
+   * string: ephemeral keys expire (~10 minutes), and a bridge
+   * reconnect that happens to fall just outside that window must
+   * be able to mint a new one without rebuilding the whole bridge.
+   */
+  getApiKey: () => Promise<string>;
   model: string;
   voice: string;
   instructions: string;
@@ -293,16 +307,41 @@ export class OpenaiRealtimeClient {
     form.append("sdp", offerSdp);
     form.append("session", JSON.stringify(sessionConfig));
 
+    // Resolve a fresh-enough ephemeral key right before the SDP
+    // exchange. The getter is cached at the layer above, so this
+    // is usually a memory hit; on the first conversation of the
+    // session (or after a long idle gap) it round-trips to the
+    // website's `/api/openai/ephemeral` endpoint.
+    const apiKey = await this.options.getApiKey();
+
     const response = await fetch(REALTIME_BASE_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${this.options.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: form,
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      // Drop the cached key on auth failures so the next retry
+      // (the bridge gives us one shot via `RECONNECT_MAX_ATTEMPTS`)
+      // mints a fresh one instead of replaying the rejected key.
+      // Covers the rare-but-real case where OpenAI revokes a still-
+      // young ephemeral key mid-flight (e.g. server-side master-key
+      // rotation).
+      if (response.status === 401 || response.status === 403) {
+        try {
+          // Lazy import to avoid a circular dep at module load.
+          const { invalidateEphemeralKey } = await import("./ephemeral-key");
+          invalidateEphemeralKey();
+        } catch (importErr) {
+          console.warn(
+            "[openai-realtime] failed to invalidate ephemeral key cache:",
+            importErr,
+          );
+        }
+      }
       throw new Error(`OpenAI Realtime handshake failed (${response.status}): ${text}`);
     }
 

@@ -85,18 +85,23 @@ for your platform.
 
 ### Environment variables
 
-Copy `.env.example` to `.env.local` and fill in:
+The mobile bundle no longer ships with a long-lived OpenAI API
+key. Voice conversation works out of the box against the
+production website Space (`pollen-robotics-reachy-mini.hf.space`),
+which mints per-user OpenAI Realtime ephemeral keys via
+`/api/openai/ephemeral` once the user is signed in to Hugging Face.
+
+Copy `.env.example` to `.env.local` only if you need to override
+defaults (staging signaling or staging website host):
 
 ```env
-# OpenAI Realtime API key (required for the in-app voice conversation).
-# ⚠️ TEMPORARY: baked into the bundle at build time, extractable from
-# the .ipa / .apk - debug / internal-tester only. See AGENTS.md for the
-# proper-arch TODO.
-VITE_OPENAI_API_KEY=sk-proj-...
-
-# Optional: override the central signaling Space for staging.
+# Optional: override the HF central signaling Space for staging.
 # Defaults to the production pollen-robotics instance.
 # VITE_REACHY_CENTRAL_URL=https://my-staging-central.hf.space
+
+# Optional: override the Reachy Mini website host (mint endpoint).
+# Defaults to the production pollen-robotics website Space.
+# VITE_REACHY_WEBSITE_URL=https://my-staging-website.hf.space
 ```
 
 ### Install
@@ -174,9 +179,9 @@ The `lint` step enforces the layer rules from `AGENTS.md` via
 
 GitHub Actions builds iOS + Android tester bundles on every tag push.
 See `.github/workflows/build-mobile.yml` for the matrix. The workflow
-injects the OpenAI API key into the bundle from a repo secret
-(`OPENAI_API_KEY`) - same temporary mechanism as local dev, marked for
-replacement in `AGENTS.md`.
+no longer needs an `OPENAI_API_KEY` repo secret: voice conversation
+goes through the website Space's `/api/openai/ephemeral` mint endpoint
+at runtime, so the bundle is shipped without any OpenAI credential.
 
 ## License
 

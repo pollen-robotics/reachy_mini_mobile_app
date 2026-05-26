@@ -44,21 +44,14 @@ name: Build mobile
 #   is pinned to ${{ github.run_number }} so each tag push gets a
 #   fresh code without manual coordination.
 #
-# ⚠️  TEMPORARY: OpenAI API key injection
-# ────────────────────────────────────────
-# All four release jobs (iOS sim, Android debug, iOS release, Android
-# release) currently bake `VITE_OPENAI_API_KEY` into the client
-# bundle at build time so the in-app conversation works
-# out-of-the-box on TestFlight / Play Internal devices without each
-# tester having to enter their own OpenAI key. This is a KNOWN
-# anti-pattern (anyone with the .ipa/.apk can extract the key) and
-# MUST be removed before any public release.
-#
-# To replace it: implement a proper architecture (server-side
-# ephemeral keys, per-user OAuth, …) and delete the four
-# "Inject OpenAI API key (TEMPORARY)" steps below.
-#
-# Required secret: `OPENAI_API_KEY` (raw `sk-proj-…`).
+# OpenAI access is brokered by the website Space's
+# `/api/openai/ephemeral` endpoint (see
+# `src/features/conversation/engine/ephemeral-key.ts` and the
+# `OPENAI_API_KEY` secret on the website Space). The mobile bundle
+# no longer carries a long-lived OpenAI key, so this workflow no
+# longer needs an `OPENAI_API_KEY` repo secret or any build-time
+# `VITE_OPENAI_API_KEY` injection - the equivalent step blocks
+# were removed alongside the website-side mint endpoint.
 on:
   push:
     tags:
@@ -122,27 +115,6 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
-
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: bake the OpenAI Realtime API key into the
-        # client bundle at build time so the in-app conversation
-        # works out-of-the-box on TestFlight / internal devices
-        # without each tester entering their own key. This is an
-        # ANTI-PATTERN: anyone with the .ipa/.apk can extract the
-        # key. To be removed once the proper architecture lands
-        # (server-side ephemeral keys, per-user OAuth, …). See the
-        # workflow header + `src/conversation/engine/settings.ts`
-        # for the full rationale.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built app will require manual key entry on first launch"
-          fi
 
       - name: Strip developmentTeam from tauri.conf.json (simulator only)
         # The simulator SDK doesn't need a signed binary, but Xcode
@@ -408,23 +380,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: see the workflow header for the full
-        # rationale. Bakes the OpenAI key into the client bundle
-        # so internal Android testers don't have to enter it
-        # manually. To be removed once a proper architecture
-        # (server-side ephemeral keys / per-user OAuth) lands.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built APK will require manual key entry on first launch"
-          fi
-
       - name: Initialize Android project (idempotent)
         run: |
           set -euxo pipefail
@@ -686,23 +641,6 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
-
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: see the workflow header for the full
-        # rationale. Bakes the OpenAI key into the TestFlight
-        # build bundle. CRITICAL to remove before any App Store
-        # public release - until a proper architecture
-        # (server-side ephemeral keys / per-user OAuth) lands.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the TestFlight build will require manual key entry on first launch"
-          fi
 
       - name: Decode signing artifacts from secrets
         # We materialise the 3 binary secrets (cert, profile, API key)
@@ -1116,20 +1054,6 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
-
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # Same temporary key-baking as the iOS / Android-debug jobs.
-        # See workflow header for the rationale.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built APK will require manual key entry on first launch"
-          fi
 
       - name: Decode keystore from secret
         env:
