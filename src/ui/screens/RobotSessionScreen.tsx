@@ -92,6 +92,7 @@ import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 // telepresence app.
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { DaemonStateProvider } from '@/features/daemon-state';
+import { APPS_TAB_ENABLED } from '@/features/apps/featureFlag';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
@@ -103,34 +104,10 @@ import SessionErrorView from './session/SessionErrorView';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
-/**
- * Apps tab kill switch.
- *
- * The Apps tab is the in-app catalog of third-party Hugging Face Spaces
- * (`reachy_mini_js_app` tag), embedded in a sandboxed iframe. It is the
- * UGC surface of the app and cannot ship to the App Store / Play Store
- * before the four UGC pillars in `docs/APP_STORE_COMPLIANCE.md` §6.1 are
- * implemented (report flow, block-author, EULA, contact info) and the
- * server-side moderation kill switch (§6.2) is live.
- *
- * Setting this to `false` cleanly hides the surface from the user while
- * keeping all of the underlying code (state, hooks, components, route
- * handlers, iframe overlay) compiled and ready to ship the day the
- * pillars are in place. Effects of the flag being `false`:
- *
- *   - the "Apps" entry is removed from the bottom navigation, so the
- *     user can only ever sit on the Conversation tab
- *   - the apps tab body (`<AppsTabView>`) is never rendered
- *   - the iframe overlay (`<AppIframeOverlay>`) is never mounted, so no
- *     third-party Space ever loads
- *   - the catalog is never fetched (`AppsTabView` is what triggers
- *     `useApps()`)
- *
- * Flip back to `true` once the UGC compliance plan has shipped. Keep
- * the flag co-located with the routing logic so reviewers tracing the
- * "where does this iframe come from" question land here first.
- */
-const APPS_TAB_ENABLED = false;
+// Apps tab kill switch. Single source of truth lives in
+// `features/apps/featureFlag.ts`; that module also gates the
+// root-level catalog prefetch so a "no-UGC" build does not pull
+// `/api/js-apps` over the wire.
 
 export type ConnectionTarget = {
   kind: 'remote';

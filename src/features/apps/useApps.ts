@@ -45,6 +45,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { queryClient } from '@/queryClient';
 
+import { APPS_TAB_ENABLED } from './featureFlag';
 import { prefetchAppIcons } from './iconCache';
 import type {
   ApiCategoryEntry,
@@ -409,9 +410,19 @@ export function prefetchApps(): Promise<void> {
 /**
  * Hook variant of `prefetchApps()`. Designed to live at the App
  * root: fires the prefetch on mount and forgets.
+ *
+ * Gated by `APPS_TAB_ENABLED` (see `./featureFlag.ts`): when the
+ * Apps tab is hidden we MUST NOT pull the UGC catalog over the
+ * wire, otherwise an App Review network capture would show a
+ * fetch to `/api/js-apps` in a build that declares no UGC surface
+ * in its Privacy Manifest and EULA. The hook is still called
+ * unconditionally from `App.tsx` (no conditional hooks); the
+ * gate sits inside the effect so flipping the flag back to `true`
+ * restores the warm-up automatically.
  */
 export function usePrefetchApps(): void {
   useEffect(() => {
+    if (!APPS_TAB_ENABLED) return;
     void prefetchApps();
   }, []);
 }
