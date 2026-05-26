@@ -10,6 +10,13 @@
  */
 
 export const TYPO = {
+  // New floor of the scale. Introduced for "kicker" labels that
+  // live INSIDE a chip / pill (cf. `HfAccountBar`'s "SIGNED IN
+  // AS" sub-label) where even `micro` reads too loud next to the
+  // content it's framing. Don't use `nano` for free-standing
+  // labels above a card - those should stay at `tiny` to keep
+  // matching `Section`'s canonical header style.
+  nano: '0.6rem',
   micro: '0.65rem',
   tiny: '0.7rem',
   xs: '0.75rem',
@@ -56,8 +63,8 @@ export const DURATION = {
 } as const;
 
 /**
- * Max width used by all centred "card-in-screen" layouts (scan, transition,
- * wifi-setup). Matches the desktop's 420px content card width.
+ * Max width used by all centred "card-in-screen" layouts (scan, transition).
+ * Matches the desktop's 420px content card width.
  */
 export const LAYOUT = {
   contentMaxWidth: 420,
@@ -66,17 +73,23 @@ export const LAYOUT = {
   /**
    * Top padding that respects the OS-reported safe area (notch / status
    * bar). Resolves to the actual inset on iOS (notch devices ~44-50px,
-   * non-notch ~20px), the cutout on Android if any, and `0px` on
-   * platforms without a safe area (Tauri desktop, plain Android, web).
+   * non-notch ~20px), and the system-bars + cutout union on Android
+   * via a CSS variable injected by `MainActivity.kt` from
+   * `WindowInsets`. Falls back to `env()` (works on iOS) and then `0px`
+   * on platforms where neither is set (Tauri desktop, plain web).
    *
    * Plumbed through MUI `sx` as a raw CSS string, which `pt`/`py`
    * accept verbatim. `viewport-fit=cover` is set in `index.html`, which
-   * is required for iOS to expose `env(safe-area-inset-top)`.
+   * is required for iOS to expose `env(safe-area-inset-top)`. The
+   * `--inset-*` family is what the Android host injects — see the
+   * `setOnApplyWindowInsetsListener` block in `MainActivity.kt`.
    */
-  safeAreaTop: 'env(safe-area-inset-top, 0px)',
+  safeAreaTop: 'var(--inset-top, env(safe-area-inset-top, 0px))',
   /**
-   * Same idea for the bottom (home indicator on iPhone X+). Currently
-   * unused but exposed for symmetry.
+   * Bottom equivalent. Critical on Android 15+ where edge-to-edge is
+   * enforced (`enableEdgeToEdge()` in `MainActivity.kt`) and the
+   * 3-button nav bar / gesture indicator would otherwise overlap the
+   * `BottomNavigation`.
    */
-  safeAreaBottom: 'env(safe-area-inset-bottom, 0px)',
+  safeAreaBottom: 'var(--inset-bottom, env(safe-area-inset-bottom, 0px))',
 } as const;

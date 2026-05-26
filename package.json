@@ -1,7 +1,7 @@
 {
   "name": "reachy_mini_mobile_app",
   "private": true,
-  "version": "0.6.3",
+  "version": "0.6.4",
   "type": "module",
   "description": "Minimal cross-platform (iOS/Android, desktop-ready) Tauri app that auto-discovers Reachy Minis on the local network (mDNS) and opens the conversation UI",
   "scripts": {
@@ -24,7 +24,6 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^7.3.5",
     "@mui/material": "^7.3.5",
     "@pollen-robotics/reachy-mini-sdk": "1.7.3-main.b44388c",

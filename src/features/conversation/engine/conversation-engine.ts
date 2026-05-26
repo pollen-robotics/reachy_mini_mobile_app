@@ -99,6 +99,7 @@ import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
 import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
+import { EphemeralKeyError, mintEphemeralKey } from "./ephemeral-key";
 import { memoryStore } from "./memory";
 import { getActivePersonality } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
@@ -535,11 +536,11 @@ function syncMotorModeForState(next: AppState): void {
  * Handle the HF central's `robotsChanged` event.
  *
  * The Space original rendered a "Choose a Reachy" picker here. The
- * mobile app is always paired to a specific robot over Bluetooth just
- * before this engine mounts, so the user has already decided which
- * robot they want - a picker would only create ambiguity if the
- * account lists several robots. We therefore auto-select the first
- * robot that appears and let `doStart` drive the rest.
+ * mobile app always knows which specific robot to talk to before
+ * this engine mounts (the user picked it on the ScanScreen from the
+ * central robot list), so a picker would only create ambiguity if
+ * the account lists several robots. We therefore auto-select the
+ * first robot that appears and let `doStart` drive the rest.
  *
  * If the list ever changes mid-session we keep the currently selected
  * robot: churn in the central's view is not a reason to retarget a
@@ -655,13 +656,12 @@ async function doConnect(): Promise<void> {
   console.log("[shell-webrtc] doConnect: entering, robot.state =", robot.state);
   setState("connecting");
   try {
-    // iOS-only WebKit privacy quirk: get the LAN host candidates flowing
+    // WebKit privacy quirk on iOS: get the LAN host candidates flowing
     // *before* we kick off the SDK's `connect()` (which immediately
-    // starts ICE gathering). Normally the up-front PermissionsScreen
-    // has already run this in a clean user-gesture frame; this call
-    // is the defensive fallback for users who skipped the onboarding,
-    // denied the prompt earlier, or downgraded from a build that
-    // didn't have the screen yet. Idempotent and a no-op on desktop.
+    // starts ICE gathering). This is also where Android first surfaces
+    // the RECORD_AUDIO prompt. Idempotent and a no-op on desktop. See
+    // `features/conversation/permissions/iosMicUnlock.ts` for the full
+    // rationale.
     await unlockIosMicForWebRtc().catch(() => undefined);
 
     // The SDK refuses a second `connect()` when already in `connected` /
@@ -687,13 +687,14 @@ async function doConnect(): Promise<void> {
     setState("connected");
 
     // Fast path (mobile): we already know which robot to talk to from
-    // the Bluetooth pairing step, so skip the robotsChanged wait and
-    // drive straight into startSession. If the id turns out to be
-    // stale / wrong, doStart → onFatalError will surface the error
-    // and the user can retry; we explicitly don't fall back to the
-    // picker flow here because picking a different robot on an
-    // account that owns several would contradict the Bluetooth
-    // selection and violate the least-surprise principle.
+    // the ScanScreen selection (central robot list), so skip the
+    // robotsChanged wait and drive straight into startSession. If the
+    // id turns out to be stale / wrong, doStart → onFatalError will
+    // surface the error and the user can retry; we explicitly don't
+    // fall back to the picker flow here because picking a different
+    // robot on an account that owns several would contradict the
+    // user's explicit selection and violate the least-surprise
+    // principle.
     if (preselectedRobotId) {
       session.setSelectedRobotId(preselectedRobotId);
       setState("auto-selecting");
@@ -843,18 +844,26 @@ async function doStart(): Promise<void> {
 async function runConversationParts(): Promise<void> {
   if (!robot || conversationStarted) return;
 
-  // OpenAI key gate. We get here when the host explicitly requested a
-  // conversation (`convoActiveRequested = true`); the WebRTC robot
-  // connection is already up and the DataChannel is carrying daemon
-  // proxy traffic, so all we'd lose by bailing is the Realtime
-  // pipeline. Surface a clear "Add OpenAI key" message via the host's
-  // settings callback and stay in `connected` so the user can still
-  // drive the robot via the daemon (wake/sleep, motors, …) while
-  // they go fix the configuration.
-  if (!settings.apiKey) {
+  // OpenAI access gate. We used to check a build-time-baked API key
+  // here; the mobile shell now mints per-user ephemeral keys against
+  // the website's `/api/openai/ephemeral` endpoint (see
+  // `./ephemeral-key.ts`), so the only failure mode pre-handshake
+  // is "the user isn't signed in to Hugging Face". That is normally
+  // impossible by the time the engine boots (the auth gate in
+  // `App.tsx` keeps the UI on the sign-in screen until a token is
+  // in `sessionStorage`), but we still defensively probe so a stale
+  // state or a token-expiry race surfaces as a clear UI message
+  // instead of a vague handshake failure two seconds later.
+  try {
+    await mintEphemeralKey();
+  } catch (err) {
+    const message =
+      err instanceof EphemeralKeyError && err.reason === "hf_token_missing"
+        ? "Sign in to Hugging Face to start a conversation"
+        : "Could not reach the OpenAI key service. Retry in a moment.";
     if (onErrorMessageChange) {
       try {
-        onErrorMessageChange("Add OpenAI key in settings");
+        onErrorMessageChange(message);
       } catch (callbackErr) {
         console.warn(
           "[conversation-engine] onErrorMessageChange threw:",
@@ -862,11 +871,12 @@ async function runConversationParts(): Promise<void> {
         );
       }
     }
+    console.warn("[conversation-engine] ephemeral key prefetch failed:", err);
     convoActiveRequested = false;
-    // No OpenAI key: drop back to `ready` so the user can retry
-    // (after fixing settings) by tapping the orb again. The robot
-    // side stays usable - DataChannel is alive, motors are enabled,
-    // wake-up has played - we just don't have an AI to talk to.
+    // The robot side stays usable - DataChannel is alive, motors are
+    // enabled, wake-up has played - so drop back to `ready` and let
+    // the user retry by tapping the orb again once they've fixed the
+    // upstream condition (signed in, network back, ...).
     if (currentState === "starting") setState("ready");
     return;
   }
@@ -1170,7 +1180,11 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 
 openaiBridge = createOpenaiBridge({
   getRobot: () => robot,
-  apiKey: settings.apiKey,
+  // Each handshake pulls a fresh-enough ephemeral key from the
+  // website server (`/api/openai/ephemeral`). The mint module
+  // owns its own cache + invalidation so the bridge can simply
+  // `await deps.getApiKey()` every connect/reconnect.
+  getApiKey: mintEphemeralKey,
   model: settings.model,
   // Resolve the voice lazily (re-read on every `buildClient()` so
   // a personality switch picks up the new voice on the next
@@ -1307,11 +1321,37 @@ openaiBridge = createOpenaiBridge({
 // The poller survives transparent reconnects naturally: the
 // `RealtimePort` it talks to keeps its subscriptions and re-attaches
 // listeners on every fresh `buildClient()` inside the bridge.
+// Passive scene-awareness is disabled for the App Store release.
+// Background: the VLM provider (`features/conversation/vision/`)
+// hits OpenAI's `/v1/chat/completions` endpoint with a plain
+// `gpt-4o-mini` model. That endpoint is NOT covered by the
+// Realtime ephemeral key pipeline (`/v1/realtime/client_secrets`
+// only mints session-scoped credentials for `/v1/realtime/calls`).
+//
+// We dropped the build-time OpenAI key during the App Store
+// readiness migration (server-side ephemeral keys via
+// `/api/openai/ephemeral`), so the vision module no longer has
+// a credential it can use. Passing an empty `openaiApiKey` makes
+// `attachVision` log a warning and return `null`, which is the
+// happy no-op path every call site below tolerates via optional
+// chaining.
+//
+// Re-enabling vision requires either:
+//   (a) adding a server-side proxy `/api/openai/vlm` that
+//       forwards `chat/completions` calls with the master key
+//       and per-user rate limiting, OR
+//   (b) switching the VLM provider to a Hugging Face Inference
+//       Providers route, authenticated with the user's HF token
+//       (the website's `HF_TOKEN` is already wired for the apps
+//       categorizer, this would mirror that path).
+//
+// Either is a follow-up; we'd rather ship without scene
+// awareness than ship with the master OpenAI key on the wire.
 const vision: VisionHandle | null = openaiBridge
   ? attachVision({
       realtime: openaiBridge.getRealtimePort(),
       getVideoStream: () => videoCache.get(),
-      openaiApiKey: settings.apiKey,
+      openaiApiKey: "",
     })
   : null;
 
@@ -1565,7 +1605,7 @@ async function boot(): Promise<void> {
   consumeTokenFromHash();
 
   robot = new window.ReachyMini({
-    appName: "Reachy Mini Minimal Voice",
+    appName: "Reachy Mini Mobile App",
     // No `clientId`: the SDK uses its own default, and the mobile
     // app handles HF OAuth itself via `useRemoteHfToken` /
     // `oauthLoopback` rather than letting the SDK initiate it.
@@ -1612,20 +1652,18 @@ async function boot(): Promise<void> {
     // central peer id for us (via /api/hf-auth/central-robot-status
     // on the daemon), drive the flow forward without a single tap.
     //
-    // We used to also gate this on `settings.apiKey` so new users
-    // would land on the "Add OpenAI key" nudge before any WebRTC
-    // negotiation, but that's wrong for the mobile shell:
-    //   * `doConnect()` only opens the SSE signaling channel and the
-    //     RTCPeerConnection / DataChannel; it does NOT touch OpenAI.
-    //   * Without that DataChannel the daemon proxy (`http_proxy`
-    //     over DC) is unreachable, so the daemon-status pill, the
-    //     wake/sleep choreography, the engine.bringup watchdog in
-    //     `useSessionController`, all stay stuck pending forever.
-    //   * The OpenAI key only matters for `doStart()` (Realtime API
-    //     handshake), and that branch already returns with an
-    //     "Add OpenAI key in settings" message at line ~846.
-    // → drive `doConnect()` whenever we have a preselected robot,
-    // regardless of OpenAI configuration.
+    // We drive `doConnect()` unconditionally whenever a robot is
+    // preselected: that path only opens the SSE signaling channel
+    // and the RTCPeerConnection / DataChannel (no OpenAI involvement),
+    // and without that DataChannel the daemon proxy (`http_proxy`
+    // over DC) is unreachable - the daemon-status pill, the wake /
+    // sleep choreography, and the engine.bringup watchdog in
+    // `useSessionController` would all stay stuck pending forever.
+    // OpenAI Realtime credentials are minted lazily inside
+    // `runConversationParts` (via `mintEphemeralKey`), so any
+    // upstream failure there surfaces as a clean fall-back to
+    // `ready` with a UI message - no need to gate the connect
+    // step on it.
     if (preselectedRobotId) {
       // Awaited (no longer fire-and-forget): the unmount path uses
       // the parent boot promise as a "boot still in flight" guard

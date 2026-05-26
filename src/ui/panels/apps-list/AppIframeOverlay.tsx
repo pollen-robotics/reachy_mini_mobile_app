@@ -85,6 +85,35 @@
  * suppress their own TopBar / chrome so the user sees a single,
  * coherent toolbar (ours). Apps that ignore the message keep
  * rendering whatever they already rendered - graceful degradation.
+ *
+ * `host:init` handover via postMessage (protocol v1)
+ * ─────────────────────────────────────────────────
+ * Apps that consume `connectToHost()` from
+ * `@reachy-mini/host/embed` post `embed:ready` once their iframe
+ * is alive and then `await` a `host:init` from us before resolving
+ * their boot. We reply with a protocol-v1 envelope:
+ *
+ *     {
+ *       source: 'reachy-mini',
+ *       type: 'host:init',
+ *       version: 1,
+ *       theme, signalingUrl, hfToken, userName,
+ *       robotPeerId, config, hostName, appName,
+ *     }
+ *
+ * The payload is byte-identical to what we already encoded into
+ * the URL hash via `buildEmbedCreds()` - both channels read from
+ * the same `EmbedCredsBundle`, so they cannot drift. Without this
+ * reply the embed's `awaitHostInit` falls back to its timeout
+ * (currently 2 s) before proceeding from the hash alone, adding a
+ * pure dead-time stall to every app open. The reply is bursted on
+ * the same 3-step schedule (immediate / +100 / +500 ms) as the
+ * token / theme / embed-config handovers to absorb the race
+ * between our `onLoad` and the embed installing its listener.
+ *
+ * Apps that don't run `connectToHost()` (e.g. legacy embeds that
+ * decode the hash themselves) ignore the message - it's a noop
+ * for them.
  */
 import {
   Box,
@@ -99,7 +128,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   buildAppEmbedUrl,
+  buildEmbedCreds,
   type AppEmbedContext,
+  type EmbedCredsBundle,
 } from '@/features/apps/buildEmbedUrl';
 import type { AppEntry } from '@/features/apps/types';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
@@ -108,11 +139,20 @@ import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
 
 /**
- * Hard timeout for the iframe load step. If the embed hasn't fired
- * `onLoad` within this window, we display an error overlay and let
- * the user fall back to the catalog.
+ * Hard timeout for the iframe load step (HTML + JS bundle parsed).
+ * If the embed hasn't fired `onLoad` within this window we display
+ * an error overlay and let the user fall back to the catalog.
  */
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
+
+/**
+ * Hard timeout for the embed boot step (`onLoad` fired but the app
+ * hasn't reached `phase: 'live'`). Covers `connectToHost()`'s wait
+ * for `host:init`, the WebRTC handshake, and the wake-up motion -
+ * so it has to be longer than just the iframe load (cold-starting
+ * an HF Space + ICE negotiation + initial trajectory all stack up).
+ */
+const EMBED_CONNECT_TIMEOUT_MS = 20_000;
 
 interface AppIframeOverlayProps {
   app: AppEntry;
@@ -138,7 +178,38 @@ interface AppIframeOverlayProps {
   onClose: () => void;
 }
 
-type LoadPhase = 'waiting-release' | 'loading' | 'ready' | 'error';
+/**
+ * Visible phases of the overlay, from mount to teardown:
+ *
+ *   waiting-release : we asked the host session to free the WebRTC
+ *                     slot; the iframe is still on `about:blank`.
+ *   loading         : iframe is dialing the HF Space and parsing
+ *                     the bundle. Ends on the iframe's `onLoad`.
+ *   connecting      : `onLoad` fired, but the embedded app is
+ *                     still inside `connectToHost()` (negotiating
+ *                     the session, waking the robot). The embed
+ *                     paints almost nothing during that window;
+ *                     without this phase the user stares at a
+ *                     blank iframe for several seconds.
+ *   ready           : the embed posted `embed:app-state` with
+ *                     `phase: 'live'`. Overlay disappears, the
+ *                     iframe is fully visible.
+ *   error           : either timeout or the embed posted a fatal
+ *                     `embed:error`. We render the catalog
+ *                     fallback view.
+ */
+type LoadPhase =
+  | 'waiting-release'
+  | 'loading'
+  | 'connecting'
+  | 'ready'
+  | 'error';
+
+/** Sub-step inside `connecting`, mirroring the protocol's
+ *  `AppConnectingStep`. Used to render a more accurate caption
+ *  ("Waking the robot…" beats "Loading…" when the user is one
+ *  motion away from interacting). */
+type ConnectingStep = 'link' | 'session' | 'wake' | null;
 
 export default function AppIframeOverlay({
   app,
@@ -153,6 +224,7 @@ export default function AppIframeOverlay({
   const isDark = theme.palette.mode === 'dark';
 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>('waiting-release');
+  const [connectingStep, setConnectingStep] = useState<ConnectingStep>(null);
 
   // Promote to `loading` as soon as the session has actually been
   // released. Before that, the embed's `startSession` would race
@@ -164,15 +236,29 @@ export default function AppIframeOverlay({
     }
   }, [sessionPhase, loadPhase]);
 
-  const url: string = useMemo(() => {
-    const ctx: AppEmbedContext = {
+  // Single source of truth for the embed context. Both the URL
+  // hash (`#creds=`) and the protocol-v1 `host:init` we post on
+  // iframe load read from the same `EmbedCredsBundle`, so the two
+  // channels can never drift on theme / signaling URL / config.
+  const embedCtx: AppEmbedContext = useMemo(
+    () => ({
       hfToken,
       hfUsername,
       robotPeerId,
       robotName,
       theme: isDark ? 'dark' : 'light',
-    };
-    const built = buildAppEmbedUrl(app.id, app.sdk, ctx);
+      appName: app.name,
+    }),
+    [hfToken, hfUsername, robotPeerId, robotName, isDark, app.name],
+  );
+
+  const credsBundle: EmbedCredsBundle = useMemo(
+    () => buildEmbedCreds(embedCtx, app.name),
+    [embedCtx, app.name],
+  );
+
+  const url: string = useMemo(() => {
+    const built = buildAppEmbedUrl(app.id, app.sdk, embedCtx);
     // Dev-only diagnostic: surface the full iframe URL (including the
     // `#hf_token=…` fragment) so the developer can copy-paste it into
     // a desktop browser to inspect the embedded app's console /
@@ -185,7 +271,7 @@ export default function AppIframeOverlay({
       );
     }
     return built;
-  }, [app.id, app.sdk, hfToken, hfUsername, robotPeerId, robotName, isDark]);
+  }, [app.id, app.sdk, embedCtx]);
 
   // Origin we'll target with `postMessage`. Derived from the
   // already-built embed URL so it stays in sync with the
@@ -234,6 +320,51 @@ export default function AppIframeOverlay({
       console.warn('[apps] hf-token postMessage failed:', err);
     }
   }, [hfToken, targetOrigin]);
+
+  /**
+   * Reply to the embed's `embed:ready` with a protocol-v1
+   * `host:init` carrying the same data we already serialised into
+   * the URL hash. The embedded `connectToHost()` resolves its
+   * `awaitHostInit` synchronously on receipt, so the boot doesn't
+   * sit on its `HOST_INIT_TIMEOUT_MS` fallback timer waiting for a
+   * message that, before this hook, never came (the mobile shell
+   * historically only spoke its own `reachy-mini-shell` protocol).
+   *
+   * Wire format MUST match `@reachy-mini/host/lib/protocol#HostInitMsg`:
+   *   - `source: 'reachy-mini'`
+   *   - `type:   'host:init'`
+   *   - `version: 1`
+   * The embed's `isProtocolMessage()` filter rejects anything else
+   * silently, so a typo here would re-introduce the 8s wait without
+   * any visible error.
+   */
+  const sendHostInitToIframe = useCallback((): void => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        {
+          source: 'reachy-mini',
+          type: 'host:init',
+          version: 1,
+          theme: credsBundle.theme,
+          signalingUrl: credsBundle.signalingUrl,
+          hfToken: credsBundle.hfToken,
+          userName: credsBundle.userName,
+          robotPeerId: credsBundle.robotPeerId,
+          config: credsBundle.config,
+          hostName: credsBundle.hostName,
+          appName: credsBundle.appName,
+        },
+        targetOrigin,
+      );
+    } catch (err) {
+      // Failing to send `host:init` is recoverable: the embed
+      // falls back through `HOST_INIT_TIMEOUT_MS` to the hash
+      // creds, which carry the same payload. Log + move on.
+      console.warn('[apps] host:init postMessage failed:', err);
+    }
+  }, [credsBundle, targetOrigin]);
 
   /**
    * Tell the iframe it's running inside us so it can suppress its
@@ -308,6 +439,104 @@ export default function AppIframeOverlay({
     sendThemeToIframe(isDark ? 'dark' : 'light');
   }, [isDark, loadPhase, sendThemeToIframe]);
 
+  /**
+   * Tracks whether the iframe ever posted a protocol-v1 envelope
+   * (typically `embed:ready` first, then `embed:app-state`). Used
+   * to distinguish modern apps that consume `connectToHost()`
+   * (and will eventually post `phase: 'live'`) from legacy
+   * hash-only embeds that paint pixels straight after `onLoad`
+   * and never speak the protocol. Without this we'd hold the
+   * spinner over an already-rendered legacy app for the full
+   * `EMBED_CONNECT_TIMEOUT_MS`, which is exactly the UX we're
+   * trying to avoid.
+   */
+  const sawProtocolMsgRef = useRef(false);
+
+  /**
+   * Listen to protocol-v1 lifecycle messages from the embed so we
+   * can keep the spinner up until the app is actually interactive
+   * (`phase: 'live'`). Without this, the iframe reveals a blank
+   * page between `onLoad` and the embed's first paint - the
+   * exact "did the app crash?" UX we're trying to avoid.
+   *
+   * Origin filter: the iframe runs on the HF Space subdomain, not
+   * on us; we trust messages whose `event.origin` matches the
+   * URL we mounted (same `targetOrigin` we already use for our
+   * outbound `postMessage` so it can never drift). Anything else
+   * is ignored - same defensive posture as the embed bridge.
+   */
+  useEffect(() => {
+    const onMessage = (event: MessageEvent): void => {
+      if (event.origin !== targetOrigin) return;
+      const data = event.data as
+        | {
+            source?: unknown;
+            type?: unknown;
+            version?: unknown;
+            phase?: unknown;
+            connectingStep?: unknown;
+            fatal?: unknown;
+          }
+        | null
+        | undefined;
+      if (!data || typeof data !== 'object') return;
+      if (data.source !== 'reachy-mini' || data.version !== 1) return;
+      sawProtocolMsgRef.current = true;
+
+      if (data.type === 'embed:app-state') {
+        const phase = data.phase;
+        const step = data.connectingStep;
+        if (phase === 'connecting') {
+          setLoadPhase((prev) =>
+            prev === 'waiting-release' || prev === 'error' ? prev : 'connecting',
+          );
+          if (step === 'link' || step === 'session' || step === 'wake') {
+            setConnectingStep(step);
+          } else {
+            setConnectingStep(null);
+          }
+        } else if (phase === 'live') {
+          setLoadPhase('ready');
+          setConnectingStep(null);
+        } else if (phase === 'error') {
+          setLoadPhase('error');
+        }
+      } else if (data.type === 'embed:error' && data.fatal === true) {
+        setLoadPhase('error');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [targetOrigin]);
+
+  /**
+   * Legacy fallback: if we entered `connecting` and after a short
+   * window the iframe still hasn't posted a single protocol-v1
+   * envelope, we conclude it's a hash-only embed that doesn't
+   * speak the protocol and reveal it immediately. The spinner
+   * was supposed to mask the connectToHost() void; without that
+   * void there's nothing to mask. 1.5 s is long enough that a
+   * modern app's `embed:ready` always lands first, short enough
+   * that legacy apps don't sit behind the overlay long enough to
+   * read as broken.
+   */
+  useEffect(() => {
+    if (loadPhase !== 'connecting') return;
+    const t = window.setTimeout(() => {
+      if (!sawProtocolMsgRef.current) {
+        setLoadPhase('ready');
+      }
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [loadPhase]);
+
+  // Reset the protocol-msg sentinel on every fresh load (the user
+  // can close + reopen an app, swapping the iframe `src`). The
+  // `url` dep already gates iframe re-navigations.
+  useEffect(() => {
+    sawProtocolMsgRef.current = false;
+  }, [url]);
+
   // Clean up any pending burst timers on unmount or when the embed
   // URL changes (which would invalidate the iframe contentWindow).
   useEffect(() => {
@@ -317,14 +546,24 @@ export default function AppIframeOverlay({
     };
   }, [url]);
 
-  // Hard timeout on iframe load. The HF Space cold-start can be
-  // slow but anything past 15 s is a reasonable failure cue.
+  // Hard timeouts for the two pre-`ready` phases. We split them
+  // because they have very different expected durations:
+  //   - `loading`    : HF Space cold-start (network + container
+  //                    spin-up + bundle parse). 15 s is generous
+  //                    for a cold Space, anything past that is a
+  //                    real failure cue.
+  //   - `connecting` : `connectToHost()` resolving (host:init,
+  //                    WebRTC handshake, ensureAwake motion).
+  //                    20 s covers slow ICE on phone networks +
+  //                    a fresh trajectory player init.
   const timeoutRef = useRef<number | null>(null);
   useEffect(() => {
-    if (loadPhase !== 'loading') return;
+    if (loadPhase !== 'loading' && loadPhase !== 'connecting') return;
+    const budget =
+      loadPhase === 'loading' ? IFRAME_LOAD_TIMEOUT_MS : EMBED_CONNECT_TIMEOUT_MS;
     timeoutRef.current = window.setTimeout(() => {
       setLoadPhase('error');
-    }, IFRAME_LOAD_TIMEOUT_MS);
+    }, budget);
     return () => {
       if (timeoutRef.current !== null) {
         window.clearTimeout(timeoutRef.current);
@@ -474,7 +713,26 @@ export default function AppIframeOverlay({
             //               are harmless until then.
             allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
-              if (loadPhase === 'loading') setLoadPhase('ready');
+              // Iframe done parsing the bundle - move to
+              // `connecting`. The overlay stays up; we'll only
+              // reveal the iframe once the embed posts
+              // `embed:app-state` with `phase: 'live'` (handled
+              // by the `message` listener above). Apps that
+              // don't run `connectToHost()` (legacy hash-only
+              // embeds) never post that event, so for those we
+              // rely on the `EMBED_CONNECT_TIMEOUT_MS` failsafe -
+              // OR they fall back to user-perceptible iframe
+              // content immediately after `onLoad`, which makes
+              // the spinner-on-top a non-issue.
+              if (loadPhase === 'loading') setLoadPhase('connecting');
+              // Burst the protocol-v1 `host:init` first so the
+              // embed's `awaitHostInit` resolves immediately
+              // instead of falling back through its timeout. Same
+              // 3-burst race mitigation (immediate / +100 / +500)
+              // we apply to every other handover message: the
+              // first send may land before `connectToHost()` has
+              // wired its `message` listener.
+              sendHostInitToIframe();
               // Burst the HF token over postMessage. The first
               // send may land before the embed's `main.js` has
               // installed its `message` listener (the listener
@@ -497,6 +755,8 @@ export default function AppIframeOverlay({
               // two stacked toolbars.
               sendEmbedConfigToIframe();
               burstTimersRef.current.push(
+                window.setTimeout(sendHostInitToIframe, 100),
+                window.setTimeout(sendHostInitToIframe, 500),
                 window.setTimeout(sendTokenToIframe, 100),
                 window.setTimeout(sendTokenToIframe, 500),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 100),
@@ -516,13 +776,13 @@ export default function AppIframeOverlay({
           />
         )}
 
-        {(loadPhase === 'waiting-release' || loadPhase === 'loading') && (
+        {(loadPhase === 'waiting-release' ||
+          loadPhase === 'loading' ||
+          loadPhase === 'connecting') && (
           <PhaseOverlay>
             <CircularProgress size={28} />
             <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-              {loadPhase === 'waiting-release'
-                ? 'Releasing the conversation session…'
-                : `Loading ${app.name}…`}
+              {phaseCaption(loadPhase, connectingStep, app.name)}
             </Typography>
           </PhaseOverlay>
         )}
@@ -548,6 +808,38 @@ export default function AppIframeOverlay({
       </Box>
     </Box>
   );
+}
+
+/**
+ * Caption shown next to the spinner. The phases map to user-
+ * legible language (avoid "connecting step: link" - what does
+ * "link" even mean to the user?). The connecting sub-steps come
+ * straight from the protocol's `AppConnectingStep`:
+ *   - link    : `host:init` exchanged, SDK calling connect()
+ *   - session : startSession() in flight (WebRTC handshake)
+ *   - wake    : ensureAwake() in flight (motors moving to neutral)
+ */
+function phaseCaption(
+  phase: Exclude<LoadPhase, 'ready' | 'error'>,
+  step: ConnectingStep,
+  appName: string,
+): string {
+  if (phase === 'waiting-release') {
+    return 'Releasing the conversation session…';
+  }
+  if (phase === 'loading') {
+    return `Loading ${appName}…`;
+  }
+  switch (step) {
+    case 'link':
+      return `Connecting ${appName} to the robot…`;
+    case 'session':
+      return 'Starting the video session…';
+    case 'wake':
+      return 'Waking the robot…';
+    default:
+      return `Starting ${appName}…`;
+  }
 }
 
 function PhaseOverlay({ children }: { children: React.ReactNode }) {

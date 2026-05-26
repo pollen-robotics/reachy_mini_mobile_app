@@ -27,12 +27,17 @@
  * grid's "edit mode" from the `Edit` button in the panel header,
  * which flips `editMode` on every tile. While editing:
  *
- *   - Each tile gains a small `✕` badge on the top-left corner of
+ *   - Each tile gains a small `✕` badge on the top-right corner of
  *     its glyph plate, mirroring the iOS Home Screen jiggle-mode
  *     delete affordance.
- *   - The whole cell wiggles subtly (~0.7° amplitude) to reinforce
- *     the "this is editable now" signal. The wiggle respects
- *     `prefers-reduced-motion`.
+ *   - The whole cell wiggles subtly (~1° amplitude with a tiny
+ *     vertical bob) to reinforce the "this is editable now"
+ *     signal. To avoid the "all tiles dance in lockstep" effect
+ *     that reads as a sync animation rather than an iOS-style
+ *     jiggle, each tile gets a per-id-derived phase offset, a
+ *     small duration jitter, and one of two mirrored keyframes
+ *     (clockwise-first vs counter-clockwise-first). All of this
+ *     respects `prefers-reduced-motion`.
  *   - Tapping the tile body is a no-op; only the `✕` removes the
  *     pin. Tap `Done` in the header to exit.
  *
@@ -41,13 +46,28 @@
  * the gesture existed without being told. The Edit/Done toggle
  * trades a tap for full discoverability.
  */
-import { memo, type KeyboardEvent, type MouseEvent } from 'react';
-import { Box, IconButton, Typography } from '@mui/material';
+import { memo, useMemo, type KeyboardEvent, type MouseEvent } from 'react';
+import { Box, IconButton, Typography, alpha } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
 import type { AppEntry } from '@/features/apps/types';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AppIcon from './AppIcon';
+
+/**
+ * Stable per-id 32-bit hash. Java-style polynomial rolling hash
+ * (`s = s * 31 + c`) — good enough distribution for the wiggle
+ * jitter derived below, and deterministic so the same pinned app
+ * picks the same phase / duration / variant on every render
+ * (re-toggling Edit doesn't shuffle the choreography).
+ */
+function tileSeed(id: string): number {
+  let s = 0;
+  for (let i = 0; i < id.length; i++) {
+    s = (s * 31 + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(s);
+}
 
 interface AppPinnedTileProps {
   app: AppEntry;
@@ -108,6 +128,31 @@ function AppPinnedTileImpl({
     onUnpin?.(app);
   };
 
+  // Per-tile wiggle choreography. Stable on `app.id` so the same
+  // tile picks the same phase / duration / variant every time edit
+  // mode flips on, but pseudo-random across the grid so we don't
+  // get a "synchronised dance" reading.
+  //
+  //   - `wiggleDelayMs` is NEGATIVE: CSS treats that as "the
+  //     animation started this many ms before now", so the tile
+  //     enters at a random phase of its loop instead of all tiles
+  //     starting at frame 0 together.
+  //   - `wiggleDurationMs` jitters ±20% around 560 ms so neighbouring
+  //     tiles drift in and out of phase over time even if their
+  //     starting offsets happen to land close. iOS does the same.
+  //   - `wiggleVariant` picks one of two mirrored keyframes — half
+  //     the grid leans clockwise first, the other half counter-
+  //     clockwise. Adds visual diversity without inventing extra
+  //     motion vocabulary.
+  const { wiggleDelayMs, wiggleDurationMs, wiggleVariant } = useMemo(() => {
+    const seed = tileSeed(app.id);
+    return {
+      wiggleDelayMs: -(seed % 560),
+      wiggleDurationMs: 480 + ((seed >>> 3) % 160),
+      wiggleVariant: seed % 2 === 0 ? 'a' : 'b',
+    } as const;
+  }, [app.id]);
+
   return (
     <Box
       role={editMode ? undefined : 'button'}
@@ -151,18 +196,43 @@ function AppPinnedTileImpl({
         // star kicks first, then the tile arrives, giving a
         // perceived sequence "click → reaction → result" without
         // needing a literal fly-to-dock transition.
+        //
+        // Wiggle: per-tile phase + duration + variant (see the
+        // `useMemo` above) so the grid reads as a crowd of
+        // independent jiggles, not a synchronised metronome.
         animation: editMode
-          ? 'pinned-tile-wiggle 480ms ease-in-out infinite'
+          ? `pinned-tile-wiggle-${wiggleVariant} ${wiggleDurationMs}ms ease-in-out ${wiggleDelayMs}ms infinite`
           : isNew
             ? 'pinned-tile-pop-in 240ms cubic-bezier(0.34, 1.56, 0.64, 1) 80ms both'
             : 'none',
+        // `transform-origin: center` so the small rotation pivots
+        // around the tile's geometric centre (default for blocks
+        // anyway, made explicit so a future caller's container
+        // styling can't accidentally shift the pivot off-axis and
+        // turn the jiggle into a wobble).
+        transformOrigin: 'center',
         '@keyframes pinned-tile-pop-in': {
           '0%': { opacity: 0, transform: 'scale(0.7)' },
           '100%': { opacity: 1, transform: 'scale(1)' },
         },
-        '@keyframes pinned-tile-wiggle': {
-          '0%, 100%': { transform: 'rotate(-0.7deg)' },
-          '50%': { transform: 'rotate(0.7deg)' },
+        // Two mirrored wiggle keyframes. Same amplitude envelope,
+        // same total energy, opposite starting direction. Each
+        // also includes a sub-pixel vertical bob in opposition to
+        // the rotation phase so the tile reads as "alive" rather
+        // than "rigidly rotating about its centre". The bob is
+        // 0.5 px max — any larger and tiles in a row start to
+        // collide visually with their captions.
+        '@keyframes pinned-tile-wiggle-a': {
+          '0%, 100%': { transform: 'rotate(-1deg) translateY(0)' },
+          '25%': { transform: 'rotate(1deg) translateY(-0.5px)' },
+          '50%': { transform: 'rotate(-0.7deg) translateY(0)' },
+          '75%': { transform: 'rotate(1deg) translateY(0.5px)' },
+        },
+        '@keyframes pinned-tile-wiggle-b': {
+          '0%, 100%': { transform: 'rotate(1deg) translateY(0)' },
+          '25%': { transform: 'rotate(-1deg) translateY(0.5px)' },
+          '50%': { transform: 'rotate(0.7deg) translateY(0)' },
+          '75%': { transform: 'rotate(-1deg) translateY(-0.5px)' },
         },
         // Accessibility: kill the wiggle for users who opted out
         // of system motion. The pop-in is short enough that we
@@ -244,10 +314,15 @@ function AppPinnedTileImpl({
 
       {/* Edit-mode unpin badge.
           ────────────────────
-          Sits half-off the glyph plate's top-left corner, matching
-          the iOS Home Screen jiggle-mode delete dot. The button is
-          the ONLY actionable element on the tile while editing;
-          the surrounding cell ignores clicks.
+          Sits half-off the glyph plate's top-right corner. We
+          deliberately diverge from iOS's top-LEFT placement here:
+          the user's thumb naturally rests on the right side of
+          the screen on a phone held one-handed, so a right-side
+          delete badge minimises hand travel between the Edit/Done
+          toggle (top-right of the panel) and the destructive
+          action on each tile. The button is the ONLY actionable
+          element on the tile while editing; the surrounding cell
+          ignores clicks.
 
           We render it after the glyph so it stacks above without
           needing an explicit z-index above the icon overflow (the
@@ -266,39 +341,42 @@ function AppPinnedTileImpl({
           sx={(theme) => ({
             position: 'absolute',
             top: -6,
-            left: -6,
+            right: -6,
             width: 22,
             height: 22,
             minWidth: 0,
             padding: 0,
-            // High-contrast pill: dark in light mode, light in
-            // dark mode. The badge must read clearly against
-            // ANY app icon (white logos, dark logos, photographic
-            // emoji), so we lean on a strong fill + a thin
-            // surface-coloured ring so it always pops off the
-            // plate underneath.
-            bgcolor:
-              theme.palette.mode === 'dark'
-                ? theme.palette.grey[100]
-                : theme.palette.grey[900],
-            color:
-              theme.palette.mode === 'dark'
-                ? theme.palette.grey[900]
-                : theme.palette.common.white,
-            border: `2px solid ${theme.palette.background.default}`,
-            boxShadow: theme.shadows[2],
+            // Primary-outlined pill, matching the Edit/Done toggle
+            // in the panel header so both halves of the unpin
+            // affordance (enter edit mode, then remove a tile)
+            // read as the same "primary action" family.
+            //
+            // We give the pill a surface fill (background.paper)
+            // rather than a transparent one because it floats on
+            // TOP of arbitrary app icons - photographic emoji,
+            // dark logos, white logos. Without an opaque fill,
+            // the icon's edge bleeds through the outline and the
+            // glyph stops reading as a tappable target.
+            bgcolor: 'background.paper',
+            color: 'primary.main',
+            border: `1.5px solid ${theme.palette.primary.main}`,
+            boxShadow: theme.shadows[1],
             zIndex: 2,
-            transition: theme.transitions.create(['transform', 'opacity'], {
-              duration: theme.transitions.duration.shortest,
-            }),
+            transition: theme.transitions.create(
+              ['transform', 'background-color'],
+              { duration: theme.transitions.duration.shortest },
+            ),
+            // Subtle primary tint on hover / press, mirroring
+            // MUI's outlined-Button feedback (`alpha(primary, 0.04)`
+            // hover, `0.12` press). Stronger on press so a finger
+            // tap registers visually even though the surrounding
+            // tile is also wiggling.
             '&:hover': {
-              bgcolor:
-                theme.palette.mode === 'dark'
-                  ? theme.palette.grey[200]
-                  : theme.palette.grey[800],
+              bgcolor: alpha(theme.palette.primary.main, 0.08),
             },
             '&:active': {
               transform: 'scale(0.9)',
+              bgcolor: alpha(theme.palette.primary.main, 0.16),
             },
           })}
         >

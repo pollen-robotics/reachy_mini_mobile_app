@@ -7,10 +7,9 @@
  *     tap and the WebView being ready. We do not control its
  *     timing; on cold start it can be ~300-700 ms.
  *   - **This React splash** - takes over at first paint of the
- *     WebView. It overlaps the auth-token probe + BLE listener
- *     init, then fades out. A short minimum visible time
- *     (`SPLASH_VISIBLE_MS`) prevents a perceptible flash when
- *     the WebView is already warm.
+ *     WebView. It overlaps the auth-token probe, then fades out.
+ *     A short minimum visible time (`SPLASH_VISIBLE_MS`) prevents
+ *     a perceptible flash when the WebView is already warm.
  *
  * The splash itself is intentionally featherweight: a centred
  * hero illustration, the product name, and a fade transition.

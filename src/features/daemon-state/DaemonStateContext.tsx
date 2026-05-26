@@ -2,7 +2,7 @@
  * Single-instance provider for the daemon-state surface.
  *
  *   <DaemonStateProvider session={session} enabled={hasReachedReady}>
- *     <RobotTabView />
+ *     <RobotInfoSheet />
  *     <ConversationPanel />
  *     <IdentityChipBar />
  *     ...all consume `useDaemonState()`

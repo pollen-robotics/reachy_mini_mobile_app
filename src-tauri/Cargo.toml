@@ -1,7 +1,7 @@
 [package]
 name = "reachy_mini_mobile_app"
 version = "0.3.1"
-description = "Minimal Tauri client for Reachy Mini (BLE discovery + conversation iframe)"
+description = "Minimal Tauri client for Reachy Mini (HF central discovery + conversation iframe)"
 authors = ["Thibaud Frere"]
 edition = "2021"
 rust-version = "1.77"
@@ -50,15 +50,6 @@ tauri-plugin-opener = "2"
 # That way HF-side configuration stays untouched.
 tauri-plugin-auth-session = "0.2"
 
-# BLE client plugin - exact same dependency the desktop app uses. The
-# plugin gives us a single-connection model that naturally fits the
-# "persistent session" pattern we need for WiFi provisioning, and ships
-# native Android support through the Tauri plugin system (on iOS, macOS,
-# Linux and Windows it delegates to btleplug the same way we used to do
-# directly). The bulk of the BLE logic now lives on the TS side, mirroring
-# `reachy_mini_desktop_app/src/hooks/bluetooth/useBluetooth.ts`.
-tauri-plugin-blec = "0.8"
-
 # Keep the device's screen awake while the user is mid-session.
 # Wraps `UIApplication.isIdleTimerDisabled` on iOS and the
 # `FLAG_KEEP_SCREEN_ON` window flag on Android. The plugin compiles
@@ -91,12 +82,3 @@ local-ip-address = "0.6"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Local patch for btleplug CoreBluetooth panic
-# "Got descriptors for a characteristic we don't know about".
-# See: https://github.com/deviceplug/btleplug/issues/397
-# Same patch the desktop app uses. `tauri-plugin-blec` transitively
-# pulls in btleplug on iOS / macOS / Linux / Windows, so we still need
-# this override until upstream is fixed.
-[patch.crates-io]
-btleplug = { path = "btleplug-patch" }

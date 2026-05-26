@@ -6,10 +6,7 @@
 //!   so the WebView never has to speak `http://` itself (which would be
 //!   blocked by the mixed-content policy on iOS/Android).
 //! * [`local_ips`] - IPv4 addresses of the device, used to tell whether the
-//!   phone is on the same subnet as the robot we just connected to over BLE.
-//!
-//! Everything BLE-related is handled on the TS side via
-//! `tauri-plugin-blec`. See `src/ble/useBleSession.ts`.
+//!   phone is on the same subnet as the robot it just connected to.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -131,13 +128,13 @@ pub async fn daemon_fetch(req: DaemonRequest) -> Result<DaemonResponse, CommandE
 /// Local IPv4 addresses, keyed by interface name.
 ///
 /// Useful for two things on the frontend:
-///   1. Tell whether the device is on the same `/24` as the robot IP we
-///      just read over BLE, so we can skip a "join this WiFi" prompt.
+///   1. Tell whether the device is on the same `/24` as the robot, so
+///      we can skip a "join this WiFi" prompt.
 ///   2. Display a debug banner in the dashboard screen.
 ///
-/// We deliberately filter to IPv4: the daemon advertises IPv4 addresses in
-/// its BLE `NETWORK_STATUS` characteristic, and the subnet comparison is
-/// trivial on /24 while it would require CIDR math for IPv6.
+/// We deliberately filter to IPv4: the daemon advertises IPv4 addresses
+/// and the subnet comparison is trivial on /24 while it would require
+/// CIDR math for IPv6.
 #[tauri::command]
 pub fn local_ips() -> Result<Vec<LocalInterface>, CommandError> {
     let raw = list_afinet_netifas().map_err(|e| CommandError::Network(e.to_string()))?;

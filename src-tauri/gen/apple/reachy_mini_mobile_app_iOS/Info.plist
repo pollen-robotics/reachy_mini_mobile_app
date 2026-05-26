@@ -36,10 +36,6 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode).</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Reachy Mini uses Bluetooth to discover your robot and read its network status.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

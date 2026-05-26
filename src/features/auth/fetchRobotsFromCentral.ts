@@ -2,31 +2,23 @@
  * Direct Hugging Face central signaling server access, no daemon
  * proxy needed.
  *
- * Why this exists alongside `fetchRobotPeerId`
- * ────────────────────────────────────────────
- * `fetchRobotPeerId` is the LAN happy path: the phone is on the
- * same Wi-Fi as the robot, BLE has just told us its IP, and we ask
- * THAT specific daemon "what id are you registered as on central?".
- * The daemon proxies to central and never lets the raw HF token
- * leave the device.
- *
- * Remote mode (this file) is the inverse: the phone has no LAN
- * line of sight to any robot. The user opens the app from another
- * city, on cellular, and we still need to:
+ * Why this file exists
+ * ────────────────────
+ * The mobile app has no LAN line of sight to any robot: the phone
+ * may be on another network entirely (or on cellular), and we still
+ * need to:
  *   1. Know which robot to talk to.
  *   2. Get its central peerId so we can `startSession()`.
  *
- * Both pieces are answered by the same endpoint we already proxy
- * (`/api/robot-status`), only this time we hit central directly
- * with the user-provided HF token. The token is held in memory /
- * localStorage on the phone; central never sees a daemon proxy.
+ * Both pieces are answered by the central's `/api/robot-status`
+ * endpoint, hit directly with the user-provided HF token. The token
+ * is held in memory / localStorage on the phone; no daemon proxy
+ * sits between us and central.
  *
- * Security note: this is no worse than what `daemon/fetchRobotPeerId`
- * already does — central enforces that a user can only see their
+ * Security note: central enforces that a user can only see their
  * own robots, so we cannot accidentally enumerate someone else's
- * fleet. The HF token simply moves from the daemon's keyring to
- * the phone's localStorage; the trust boundary stays at "whoever
- * owns the token controls the robot".
+ * fleet. The trust boundary is "whoever owns the HF token controls
+ * the robot".
  */
 
 import { CENTRAL_SIGNALING_URL } from '@/shared/env';
@@ -61,10 +53,9 @@ export interface CentralRobotEntry {
   peer_id?: string;
   /**
    * Wall-clock seconds since central last received a heartbeat from
-   * this producer (POST /send setPeerStatus). Used by the WiFi setup
-   * verifying phase to confirm a freshly-joined robot is actually
-   * online (a young value, < ~30 s) vs. about to be swept by the TTL
-   * sweeper. Older centrals don't emit this field.
+   * this producer (POST /send setPeerStatus). A young value (< ~30 s)
+   * means the robot is genuinely online; older values are about to be
+   * swept by the TTL sweeper. Older centrals don't emit this field.
    */
   last_seen_age_seconds?: number;
   /**
@@ -101,10 +92,10 @@ export interface CentralRobotEntry {
     simulation?: boolean;
     /**
      * `meta.hardware_id` (post-PR-1084): SHA-256 prefix of the Pollen
-     * audio device's USB serial. Stable per physical robot, identical
-     * to what the daemon advertises on BLE GATT and exposes via
-     * `GET /api/daemon/hardware-id`. Absent when the daemon has no
-     * Reachy attached, or when the daemon is older than PR-1084.
+     * audio device's USB serial. Stable per physical robot, same
+     * value the daemon exposes via `GET /api/daemon/hardware-id`.
+     * Absent when the daemon has no Reachy attached, or when the
+     * daemon is older than PR-1084.
      */
     hardware_id?: string;
   };

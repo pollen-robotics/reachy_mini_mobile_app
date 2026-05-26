@@ -44,21 +44,14 @@ name: Build mobile
 #   is pinned to ${{ github.run_number }} so each tag push gets a
 #   fresh code without manual coordination.
 #
-# ⚠️  TEMPORARY: OpenAI API key injection
-# ────────────────────────────────────────
-# All four release jobs (iOS sim, Android debug, iOS release, Android
-# release) currently bake `VITE_OPENAI_API_KEY` into the client
-# bundle at build time so the in-app conversation works
-# out-of-the-box on TestFlight / Play Internal devices without each
-# tester having to enter their own OpenAI key. This is a KNOWN
-# anti-pattern (anyone with the .ipa/.apk can extract the key) and
-# MUST be removed before any public release.
-#
-# To replace it: implement a proper architecture (server-side
-# ephemeral keys, per-user OAuth, …) and delete the four
-# "Inject OpenAI API key (TEMPORARY)" steps below.
-#
-# Required secret: `OPENAI_API_KEY` (raw `sk-proj-…`).
+# OpenAI access is brokered by the website Space's
+# `/api/openai/ephemeral` endpoint (see
+# `src/features/conversation/engine/ephemeral-key.ts` and the
+# `OPENAI_API_KEY` secret on the website Space). The mobile bundle
+# no longer carries a long-lived OpenAI key, so this workflow no
+# longer needs an `OPENAI_API_KEY` repo secret or any build-time
+# `VITE_OPENAI_API_KEY` injection - the equivalent step blocks
+# were removed alongside the website-side mint endpoint.
 on:
   push:
     tags:
@@ -122,27 +115,6 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
-
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: bake the OpenAI Realtime API key into the
-        # client bundle at build time so the in-app conversation
-        # works out-of-the-box on TestFlight / internal devices
-        # without each tester entering their own key. This is an
-        # ANTI-PATTERN: anyone with the .ipa/.apk can extract the
-        # key. To be removed once the proper architecture lands
-        # (server-side ephemeral keys, per-user OAuth, …). See the
-        # workflow header + `src/conversation/engine/settings.ts`
-        # for the full rationale.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built app will require manual key entry on first launch"
-          fi
 
       - name: Strip developmentTeam from tauri.conf.json (simulator only)
         # The simulator SDK doesn't need a signed binary, but Xcode
@@ -230,8 +202,8 @@ jobs:
         # only carries Tauri's defaults (orientations, launch
         # storyboard, etc.). We need to add:
         #   - All NSXxxUsageDescription keys our runtime triggers
-        #     (mic, BLE, local network) - without them iOS aborts
-        #     the corresponding API call AND the app gets rejected
+        #     (mic, local network) - without them iOS aborts the
+        #     corresponding API call AND the app gets rejected
         #     during App Store review.
         #   - ITSAppUsesNonExemptEncryption = NO so each TestFlight
         #     build doesn't surface "Missing Compliance" until a
@@ -248,12 +220,6 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          plutil -replace NSBluetoothAlwaysUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode)." \
-            "$INFO_PLIST"
-          plutil -replace NSBluetoothPeripheralUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status." \
-            "$INFO_PLIST"
           plutil -replace NSMicrophoneUsageDescription -string \
             "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
             "$INFO_PLIST"
@@ -277,30 +243,12 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Inject CoreBluetooth link + disable code signing in pbxproj
-        # `tauri-plugin-blec` calls into Apple's CoreBluetooth via the
-        # `btleplug` crate, but neither emits a link directive that
-        # the Xcode-driven final link picks up:
-        #
-        #   - `cargo:rustc-link-lib=framework=CoreBluetooth` (which we
-        #     do try in `src-tauri/build.rs`) only travels with the
-        #     final Rust binary, not with the `libapp.a` staticlib that
-        #     ends up consumed by Xcode. Xcode does NOT read the build-
-        #     script outputs of an upstream Cargo invocation.
-        #
-        #   - The plugin's README tells contributors to add
-        #     CoreBluetooth.framework manually via the Xcode UI, which
-        #     doesn't survive `tauri ios init` regeneration here.
-        #
-        # The robust fix is to inject `OTHER_LDFLAGS` directly into the
-        # pbxproj's XCBuildConfiguration build settings (both Debug and
-        # Release), preserving inherited flags.
-        #
-        # In the same pass we strip code-signing requirements: the
-        # simulator SDK doesn't need a signed binary, but Xcode still
-        # validates the project's `DEVELOPMENT_TEAM` against the
-        # runner's logged-in Apple IDs (none on a fresh CI runner).
-        # When that check fails we get:
+      - name: Disable code signing in pbxproj
+        # Strip code-signing requirements for the unsigned simulator
+        # build: the simulator SDK doesn't need a signed binary, but
+        # Xcode still validates the project's `DEVELOPMENT_TEAM`
+        # against the runner's logged-in Apple IDs (none on a fresh
+        # CI runner). When that check fails we get:
         #   error: No Accounts: Add a new account in Accounts settings.
         #   error: No profiles for 'com.pollen-robotics.reachy-mini' were found
         # Disabling signing for this job (only) avoids the check
@@ -314,14 +262,12 @@ jobs:
           path = sys.argv[1]
           with open(path, 'r') as f:
               content = f.read()
-          # Insert OTHER_LDFLAGS + signing disablers at the top of every
-          # buildSettings block. The pbxproj format wraps build settings
-          # in `buildSettings = {` ... `};` blocks; we anchor on the
+          # Insert signing disablers at the top of every buildSettings
+          # block. The pbxproj format wraps build settings in
+          # `buildSettings = {` ... `};` blocks; we anchor on the
           # opener so the injection lands in both Debug and Release
           # configurations of every target/project node.
-          # `$(inherited)` keeps any existing framework flags intact.
           injection = (
-              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
               '\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n'
               '\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n'
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
@@ -434,23 +380,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: see the workflow header for the full
-        # rationale. Bakes the OpenAI key into the client bundle
-        # so internal Android testers don't have to enter it
-        # manually. To be removed once a proper architecture
-        # (server-side ephemeral keys / per-user OAuth) lands.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built APK will require manual key entry on first launch"
-          fi
-
       - name: Initialize Android project (idempotent)
         run: |
           set -euxo pipefail
@@ -494,23 +423,6 @@ jobs:
                 echo "  synced: $dst"
               fi
             done
-          fi
-
-      - name: Bump minSdk to 26 (tauri-plugin-blec requirement)
-        # `tauri-plugin-blec` ships a manifest with `minSdk 26`; the
-        # generated Tauri Android project defaults to `minSdk 24`,
-        # which makes the manifest merger fail at build time with:
-        #   uses-sdk:minSdkVersion 24 cannot be smaller than version
-        #   26 declared in library [:tauri-plugin-blec]
-        # We patch the generated `build.gradle.kts` in CI rather than
-        # vendoring the whole gen/android tree, so the workflow stays
-        # self-contained and re-runs cleanly across Tauri CLI bumps.
-        run: |
-          set -euxo pipefail
-          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
-          if [ -f "$GRADLE_FILE" ]; then
-            sed -i 's/minSdk = 24/minSdk = 26/g' "$GRADLE_FILE"
-            grep -n 'minSdk' "$GRADLE_FILE" || true
           fi
 
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
@@ -730,23 +642,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # ⚠️ TEMPORARY: see the workflow header for the full
-        # rationale. Bakes the OpenAI key into the TestFlight
-        # build bundle. CRITICAL to remove before any App Store
-        # public release - until a proper architecture
-        # (server-side ephemeral keys / per-user OAuth) lands.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the TestFlight build will require manual key entry on first launch"
-          fi
-
       - name: Decode signing artifacts from secrets
         # We materialise the 3 binary secrets (cert, profile, API key)
         # as files under `signing/` because xcodebuild + altool both
@@ -859,12 +754,6 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          plutil -replace NSBluetoothAlwaysUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode)." \
-            "$INFO_PLIST"
-          plutil -replace NSBluetoothPeripheralUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status." \
-            "$INFO_PLIST"
           plutil -replace NSMicrophoneUsageDescription -string \
             "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
             "$INFO_PLIST"
@@ -888,30 +777,23 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Configure pbxproj for manual signing + CoreBluetooth link
-        # Two-fold patching for the release build:
-        #
-        # 1. CoreBluetooth.framework link (same as simulator job - see
-        #    that job's comment for the full reasoning on why
-        #    `cargo:rustc-link-lib=...` doesn't propagate through the
-        #    Tauri-built staticlib).
-        #
-        # 2. Force MANUAL code signing. Tauri's regenerated project
-        #    defaults to ProvisioningStyle = Automatic, which makes
-        #    Xcode try to fetch a Development provisioning profile
-        #    via App Store Connect API (impossible without a logged-in
-        #    Apple ID on the runner). The build fails before our
-        #    archive ever starts with:
-        #      error: No Accounts: Add a new account in Accounts settings.
-        #      error: No profiles for 'com.pollen-robotics.reachy-mini' were found
-        #    We override:
-        #      - TargetAttributes.ProvisioningStyle = Manual
-        #      - buildSettings.CODE_SIGN_STYLE = Manual
-        #      - buildSettings.PROVISIONING_PROFILE_SPECIFIER = "Reachy Mini App Store"
-        #        (matches the .mobileprovision name we created on Apple Dev)
-        #      - buildSettings.CODE_SIGN_IDENTITY = "Apple Distribution"
-        #        (matches the cert we imported from the .p12)
-        #      - buildSettings.DEVELOPMENT_TEAM = APPLE_TEAM_ID
+      - name: Configure pbxproj for manual signing
+        # Force MANUAL code signing. Tauri's regenerated project
+        # defaults to ProvisioningStyle = Automatic, which makes
+        # Xcode try to fetch a Development provisioning profile
+        # via App Store Connect API (impossible without a logged-in
+        # Apple ID on the runner). The build fails before our
+        # archive ever starts with:
+        #   error: No Accounts: Add a new account in Accounts settings.
+        #   error: No profiles for 'com.pollen-robotics.reachy-mini' were found
+        # We override:
+        #   - TargetAttributes.ProvisioningStyle = Manual
+        #   - buildSettings.CODE_SIGN_STYLE = Manual
+        #   - buildSettings.PROVISIONING_PROFILE_SPECIFIER = "Reachy Mini App Store"
+        #     (matches the .mobileprovision name we created on Apple Dev)
+        #   - buildSettings.CODE_SIGN_IDENTITY = "Apple Distribution"
+        #     (matches the cert we imported from the .p12)
+        #   - buildSettings.DEVELOPMENT_TEAM = APPLE_TEAM_ID
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           PROFILE_NAME: 'Reachy Mini App Store'
@@ -925,9 +807,8 @@ jobs:
           profile_name = os.environ['PROFILE_NAME']
           with open(path, 'r') as f:
               content = f.read()
-          # buildSettings injection: framework link + manual signing.
+          # buildSettings injection: manual signing.
           inj = (
-              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
               '\t\t\t\tCODE_SIGN_STYLE = Manual;\n'
               f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n'
               f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile_name}";\n'
@@ -1174,20 +1055,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Inject OpenAI API key (TEMPORARY - remove before public release)
-        # Same temporary key-baking as the iOS / Android-debug jobs.
-        # See workflow header for the rationale.
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -uo pipefail
-          if [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "VITE_OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.local
-            echo "✓ OpenAI key injected (TEMPORARY) into .env.local"
-          else
-            echo "⚠️ OPENAI_API_KEY secret not set - the built APK will require manual key entry on first launch"
-          fi
-
       - name: Decode keystore from secret
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -1278,10 +1145,7 @@ jobs:
           s = p.read_text()
           original = s
 
-          # 1. minSdk 24 -> 26 (tauri-plugin-blec requirement, same as debug job).
-          s = s.replace("minSdk = 24", "minSdk = 26")
-
-          # 2. applicationId rename for Play Console listing.
+          # 1. applicationId rename for Play Console listing.
           s2 = re.sub(
               r'applicationId\s*=\s*"com\.pollen_robotics\.reachy_mini"',
               'applicationId = "com.pollenrobotics.reachymini"',
@@ -1291,7 +1155,7 @@ jobs:
               print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
           s = s2
 
-          # 3. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
+          # 2. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
           run_no = int(os.environ["GITHUB_RUN_NUMBER"])
           s3 = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {run_no}', s, count=1)
           if s3 == s:
@@ -1304,7 +1168,7 @@ jobs:
               )
           s = s3
 
-          # 4. signingConfigs block — read from env at build time.
+          # 3. signingConfigs block — read from env at build time.
           signing_block = (
               "    signingConfigs {\n"
               "        create(\"release\") {\n"
@@ -1327,7 +1191,7 @@ jobs:
               sys.exit(1)
           s = s4
 
-          # 5. Wire the signingConfig into the release buildType.
+          # 4. Wire the signingConfig into the release buildType.
           # Tauri uses `getByName("release") {` — we add a line inside it.
           s5 = re.sub(
               r'(getByName\("release"\)\s*\{)',

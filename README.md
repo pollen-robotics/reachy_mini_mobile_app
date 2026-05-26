@@ -9,8 +9,10 @@ Sign in with Hugging Face, pick one of your robots, and:
   runs in a sandboxed iframe with the robot handed off seamlessly).
 - **Drive the head manually** with a virtual joystick + monitor camera +
   adjust speaker / microphone volume from a dedicated Robot tab.
-- **Bootstrap a fresh robot's Wi-Fi** over Bluetooth (PIN exchange,
-  network credentials, daemon health probe).
+
+The robot is expected to be already provisioned (on Wi-Fi, advertising
+itself on the HF central signaling Space). First-time Wi-Fi setup is
+handled outside this app.
 
 ## Status
 
@@ -27,7 +29,6 @@ out of the box on macOS / Linux / Windows.
 | Frontend | Vite 7 + React 19 + TypeScript + SWC | Fast dev loop, modern toolchain |
 | UI kit | MUI v7 + Emotion | Battle-tested on mobile WebViews |
 | Async state | TanStack Query v5 | Apps catalog + central robots fetching |
-| BLE | [`tauri-plugin-blec`](https://github.com/MnlPhlp/tauri-plugin-blec) (`@mnlphlp/plugin-blec`) | iOS + Android, based on `btleplug` |
 | WebRTC + AI | OpenAI Realtime API direct WebRTC | No backend, browser-side handshake |
 | Robot signaling | Hugging Face central Space (`pollen-robotics-reachy-mini-central.hf.space`) | Producer-consumer relay over WebSocket |
 | Tests | Vitest | Pure logic + parsing tests |
@@ -39,7 +40,7 @@ The codebase is split into two pillars:
 ```
 src/
 ├── ui/         All React UI: design system, widgets, panels, screens
-└── features/   All non-UI logic: auth, ble, wifi, apps, robot-session, conversation
+└── features/   All non-UI logic: auth, apps, robot-session, conversation
 ```
 
 The two key features:
@@ -62,14 +63,12 @@ folder structure, the import conventions, the layer rules, and a
 "where do I put X?" cheat sheet.
 
 For the deep specs:
-- [`docs/CONNECTION_FLOW.md`](./docs/CONNECTION_FLOW.md) - end-to-end
-  auth + discovery + session lifecycle
-- [`docs/VISION.md`](./docs/VISION.md) - design for a future
-  scene-awareness module (VLM)
 - [`docs/MCP_DESIGN.md`](./docs/MCP_DESIGN.md) - design draft for an MCP
   server wrapping the daemon
-- [`docs/WEBRTC_LOGS.md`](./docs/WEBRTC_LOGS.md) - PR plan for streaming
-  daemon journalctl over WebRTC
+- [`docs/APP_STORE_COMPLIANCE.md`](./docs/APP_STORE_COMPLIANCE.md) -
+  Apple / Google review checklist
+- [`docs/ANDROID_PERMISSIONS.md`](./docs/ANDROID_PERMISSIONS.md) -
+  runbook for iframe-delegated mic/camera/geolocation permissions on Android
 
 ## Setup
 
@@ -86,18 +85,23 @@ for your platform.
 
 ### Environment variables
 
-Copy `.env.example` to `.env.local` and fill in:
+The mobile bundle no longer ships with a long-lived OpenAI API
+key. Voice conversation works out of the box against the
+production website Space (`pollen-robotics-reachy-mini.hf.space`),
+which mints per-user OpenAI Realtime ephemeral keys via
+`/api/openai/ephemeral` once the user is signed in to Hugging Face.
+
+Copy `.env.example` to `.env.local` only if you need to override
+defaults (staging signaling or staging website host):
 
 ```env
-# OpenAI Realtime API key (required for the in-app voice conversation).
-# ⚠️ TEMPORARY: baked into the bundle at build time, extractable from
-# the .ipa / .apk - debug / internal-tester only. See AGENTS.md for the
-# proper-arch TODO.
-VITE_OPENAI_API_KEY=sk-proj-...
-
-# Optional: override the central signaling Space for staging.
+# Optional: override the HF central signaling Space for staging.
 # Defaults to the production pollen-robotics instance.
 # VITE_REACHY_CENTRAL_URL=https://my-staging-central.hf.space
+
+# Optional: override the Reachy Mini website host (mint endpoint).
+# Defaults to the production pollen-robotics website Space.
+# VITE_REACHY_WEBSITE_URL=https://my-staging-website.hf.space
 ```
 
 ### Install
@@ -130,28 +134,15 @@ Then:
 yarn ios:dev
 ```
 
-The first run launches Xcode. You'll need to:
-
-1. Confirm `NSBluetoothAlwaysUsageDescription` is in
-   `src-tauri/gen/apple/<app>_iOS/Info.plist` (CI patches this
-   automatically; for local dev it's already in the repo).
-2. Add the **CoreBluetooth.framework** under *Project → General →
-   Frameworks, Libraries, and Embedded Content*.
-3. Select a signing team (personal or organization).
+The first run launches Xcode. You'll need to select a signing team
+(personal or organization) before the build can sign the app for the
+simulator / device.
 
 ### Android
 
 ```bash
 yarn tauri android init   # once
 yarn android:dev
-```
-
-Required permissions in `AndroidManifest.xml`:
-
-```xml
-<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 ```
 
 Lock the activity to portrait so the orb / column layout doesn't get
@@ -188,9 +179,9 @@ The `lint` step enforces the layer rules from `AGENTS.md` via
 
 GitHub Actions builds iOS + Android tester bundles on every tag push.
 See `.github/workflows/build-mobile.yml` for the matrix. The workflow
-injects the OpenAI API key into the bundle from a repo secret
-(`OPENAI_API_KEY`) - same temporary mechanism as local dev, marked for
-replacement in `AGENTS.md`.
+no longer needs an `OPENAI_API_KEY` repo secret: voice conversation
+goes through the website Space's `/api/openai/ephemeral` mint endpoint
+at runtime, so the bundle is shipped without any OpenAI credential.
 
 ## License
 

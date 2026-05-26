@@ -1,11 +1,10 @@
 /**
- * Local-only Hugging Face token storage for remote mode.
+ * Local-only Hugging Face token storage.
  *
- * The default (BLE) flow has the daemon hold the OAuth token: the
- * phone never sees it, and the daemon's keyring takes care of
- * persistence. That breaks the moment the phone has no LAN line of
- * sight to the daemon (cellular, public Wi-Fi, away from home), so
- * remote mode falls back to a phone-resident token.
+ * The phone holds the OAuth token in localStorage. There is no
+ * daemon-mediated keyring path in the mobile shell: every connection
+ * is brokered through the HF central signaling Space, which expects
+ * a phone-resident bearer.
  *
  * Threat model
  * ────────────

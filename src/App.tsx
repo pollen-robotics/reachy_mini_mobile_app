@@ -5,21 +5,16 @@ import EulaConsentModal from '@/ui/screens/EulaConsentModal';
 import ScanScreen from '@/ui/screens/ScanScreen';
 import SplashScreen from '@/ui/screens/SplashScreen';
 import WelcomeBackScreen from '@/ui/screens/WelcomeBackScreen';
-import WifiSetupScreen from '@/ui/screens/WifiSetupScreen';
 import RemoteSignInScreen from '@/ui/screens/RemoteSignInScreen';
 import RobotSessionScreen, {
   type ConnectionTarget,
 } from '@/ui/screens/RobotSessionScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
-import {
-  useBleSession,
-  useInitBleListeners,
-} from '@/features/ble/useBleSession';
 import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
 import { useTosConsent } from '@/features/consent/useTosConsent';
 
-type Screen = 'scan' | 'session' | 'wifi-setup';
+type Screen = 'scan' | 'session';
 
 /**
  * Root component.
@@ -32,15 +27,15 @@ type Screen = 'scan' | 'session' | 'wifi-setup';
  * view. Sign-out clears the token, which immediately collapses
  * everything back to the gate.
  *
- * Three discovery sources, one connection path
- * ────────────────────────────────────────────
- * `ScanScreen` exposes three sections (Local USB / Wi-Fi BLE /
- * Distant Central). For the minimal app, only the Distant section
- * is connectable: the SDK signals through the central HF Space and
- * negotiates a single WebRTC + DataChannel session. Wi-Fi BLE rows
- * route into `WifiSetupScreen` for first-time provisioning. Local
- * USB is a placeholder until the daemon ships a loopback signaling
- * endpoint.
+ * Single discovery path
+ * ─────────────────────
+ * `ScanScreen` lists the user's robots as advertised by the HF central
+ * signaling Space. Tapping a row hands off to `RobotSessionScreen`,
+ * which negotiates the SDK's WebRTC + DataChannel session through the
+ * same central. First-time Wi-Fi provisioning and local USB bring-up
+ * are not part of the mobile shell - the assumption is the robot is
+ * already on Wi-Fi and registered with central before the user opens
+ * the app.
  */
 export default function App() {
   // Brand splash shown for ~1.2 s on every cold start, fading out
@@ -55,7 +50,6 @@ export default function App() {
   // mounted ScanScreen. Lets the data fetch warm up underneath
   // while the user reads "Hello, @username".
   const [justSignedIn, setJustSignedIn] = useState(false);
-  const { disconnectDevice, connectedAddress, selectDevice } = useBleSession();
   const { token, username, setToken, clear } = useRemoteHfToken();
   // First-launch EULA / privacy disclosure required by Apple
   // guideline 5.1.1 + Google Play UGC policy. The hook reads the
@@ -63,7 +57,6 @@ export default function App() {
   // never flashes on subsequent launches.
   const consent = useTosConsent();
 
-  useInitBleListeners();
   // Warm the apps catalog cache as soon as the app boots so the
   // Apps tab opens with the list already in place (no spinner on
   // first visit). The catalog endpoint is public, so it's safe to
@@ -71,18 +64,12 @@ export default function App() {
   // JS session and is naturally refreshed on cold start.
   usePrefetchApps();
 
-  const backToScan = async (): Promise<void> => {
-    if (connectedAddress) {
-      await disconnectDevice();
-    }
+  const backToScan = (): void => {
     setTarget(null);
     setScreen('scan');
   };
 
-  const handleSignOut = async (): Promise<void> => {
-    if (connectedAddress) {
-      await disconnectDevice();
-    }
+  const handleSignOut = (): void => {
     setTarget(null);
     setScreen('scan');
     clear();
@@ -151,13 +138,8 @@ export default function App() {
           target={target}
           token={token}
           username={username}
-          onBack={() => void backToScan()}
+          onBack={backToScan}
         />
-      );
-    }
-    if (screen === 'wifi-setup') {
-      return (
-        <WifiSetupScreen onBack={() => void backToScan()} token={token} />
       );
     }
     // `scan` is the default landing screen - we fall through here
@@ -167,21 +149,11 @@ export default function App() {
       <ScanScreen
         token={token}
         username={username}
-        onRobotPicked={(device) => {
-          // Stash the picked BLE device in the store BEFORE we
-          // navigate so `WifiSetupScreen` reads a non-null
-          // `selectedDevice` on first render. Without this, the
-          // setup screen lands on its `failed` phase with a
-          // misleading "No robot selected" message - the user has
-          // to tap "Try again" to actually reach the PIN flow.
-          selectDevice(device);
-          setScreen('wifi-setup');
-        }}
         onRemotePicked={(robot) => {
           setTarget({ kind: 'remote', robot });
           setScreen('session');
         }}
-        onSignOutRemote={() => void handleSignOut()}
+        onSignOutRemote={handleSignOut}
       />
     );
   })();

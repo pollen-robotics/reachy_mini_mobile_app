@@ -9,17 +9,16 @@
  * identical dimensions: same fixed icon size, same minHeight,
  * same MUI slider styling.
  *
- * No internal card chrome: the host (`<RobotPanel>` from
- * `RobotTabView`) already provides the surrounding card with its
- * own header strip; painting another border + paper bg here would
- * stack two cards, one inside the other. The component is now a
- * pure layout row (icon + slider), and the parent owns the
- * surface.
+ * No internal card chrome: the host surface (e.g. the audio strip
+ * under the orb in `<ConversationPanel>`) provides whatever frame
+ * it needs around the row; painting a border + paper bg here would
+ * stack two cards, one inside the other. The component is a pure
+ * layout row (icon + slider), and the parent owns the surface.
  *
  * Pure presentational. Volume + mute toggle handlers come from
  * the shared `useDaemonState()` context (mounted in
  * `RobotSessionScreen`), threaded through whichever surface
- * mounts the rows (typically `RobotTabView`).
+ * mounts the rows.
  */
 import { IconButton, Slider, Stack, alpha } from '@mui/material';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';

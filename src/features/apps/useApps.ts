@@ -46,7 +46,12 @@ import { useQuery } from '@tanstack/react-query';
 import { queryClient } from '@/queryClient';
 
 import { prefetchAppIcons } from './iconCache';
-import type { AppEntry, AppSdk, CategorizationMeta } from './types';
+import type {
+  ApiCategoryEntry,
+  AppEntry,
+  AppSdk,
+  CategorizationMeta,
+} from './types';
 
 const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/js-apps';
 
@@ -100,6 +105,13 @@ interface RawCatalogApp {
   [key: string]: unknown;
 }
 
+interface RawApiCategoryEntry {
+  slug?: string;
+  label?: string;
+  emoji?: string | null;
+  order?: number | null;
+}
+
 interface RawCategorizationMeta {
   enabled?: boolean;
   total?: number;
@@ -108,6 +120,7 @@ interface RawCategorizationMeta {
   inProgress?: boolean;
   dataset?: string | null;
   taxonomyVersion?: number | null;
+  taxonomy?: RawApiCategoryEntry[] | null;
 }
 
 interface RawCatalogPayload {
@@ -265,6 +278,39 @@ function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   };
 }
 
+/**
+ * Normalize the raw `categorization.taxonomy` array shipped by the
+ * server (`getPublicTaxonomy()`). Defensive: a pre-taxonomy build
+ * omits the field, a malformed payload may include entries with
+ * missing slugs - we drop those silently. Returns `null` when the
+ * server didn't ship a taxonomy at all so the consumer
+ * (`resolveTaxonomy()`) can fall back to the local snapshot.
+ */
+function normalizeTaxonomy(
+  raw: RawApiCategoryEntry[] | null | undefined,
+): readonly ApiCategoryEntry[] | null {
+  if (!Array.isArray(raw)) return null;
+  const seen = new Set<string>();
+  const out: ApiCategoryEntry[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry.slug !== 'string') continue;
+    const slug = entry.slug.trim();
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    const label =
+      typeof entry.label === 'string' && entry.label.trim().length > 0
+        ? entry.label
+        : slug;
+    out.push({
+      slug,
+      label,
+      emoji: typeof entry.emoji === 'string' ? entry.emoji : null,
+      order: typeof entry.order === 'number' ? entry.order : null,
+    });
+  }
+  return out.length > 0 ? out : null;
+}
+
 function normalizeCategorization(
   raw: RawCategorizationMeta | undefined,
 ): CategorizationMeta | null {
@@ -278,6 +324,7 @@ function normalizeCategorization(
     dataset: typeof raw.dataset === 'string' ? raw.dataset : null,
     taxonomyVersion:
       typeof raw.taxonomyVersion === 'number' ? raw.taxonomyVersion : null,
+    taxonomy: normalizeTaxonomy(raw.taxonomy),
   };
 }
 

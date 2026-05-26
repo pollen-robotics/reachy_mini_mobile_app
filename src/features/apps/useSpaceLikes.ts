@@ -17,17 +17,31 @@
  * ───────────
  * We hold two sets in the TanStack Query cache:
  *
- *   - `server`     - the last server-confirmed snapshot. Refreshed
- *                    on initial fetch and after every successful
- *                    like/unlike mutation.
+ *   - `server`     - the user's liked set as it was at hydration
+ *                    time (i.e. when `GET /api/users/{username}/likes`
+ *                    returned). Treated as **immutable** for the rest
+ *                    of the session: it is the baseline against which
+ *                    the catalog's `app.likes` count was minted, and
+ *                    therefore the reference point we diff against to
+ *                    compute the local +1 / -1 delta.
  *   - `optimistic` - the current UI state. Toggled instantly on
  *                    user tap; reverted to `server` on REST failure.
  *
  * The `displayedCount` delta is simply
  * `(optimistic.has - server.has)` applied to the catalog's
- * `app.likes` count, which keeps the heart and the counter
- * consistent without us having to refetch the entire catalog after
- * every tap.
+ * `app.likes` count.
+ *
+ * Why we never update `server` after a mutation
+ * ─────────────────────────────────────────────
+ * Earlier revisions of this hook promoted the optimistic value into
+ * `server` on `onSuccess`, with the intent of "the server now agrees
+ * with us". That broke the count: `app.likes` is a static snapshot
+ * coming from the catalog and is *not* refreshed mid-session, so
+ * collapsing the delta to 0 after a successful POST made the counter
+ * drop back to the catalog value (e.g. 5 → 6 on tap → 5 right after
+ * the 200), giving the impression that the like had failed. Keeping
+ * `server` frozen at the hydration snapshot makes the +1 stick after
+ * confirmation, which is what the user expects.
  *
  * Auth & graceful degradation
  * ──────────────────────────
@@ -153,21 +167,11 @@ export function useSpaceLikes() {
         queryClient.setQueryData<LikedSpacesCache>(queryKey, EMPTY_CACHE);
       }
     },
-    onSuccess: (_data, { appId, nextState }) => {
-      // Promote the optimistic state to "server-confirmed" so the
-      // counter delta collapses back to 0 (heart stays filled,
-      // counter stops over-counting).
-      queryClient.setQueryData<LikedSpacesCache>(queryKey, (prev) => {
-        const baseline = prev ?? EMPTY_CACHE;
-        const nextServer = new Set(baseline.server);
-        if (nextState === 'liked') nextServer.add(appId);
-        else nextServer.delete(appId);
-        return {
-          server: nextServer,
-          optimistic: new Set(baseline.optimistic),
-        };
-      });
-    },
+    // No `onSuccess` cache write: `server` is the hydration snapshot
+    // and stays frozen for the session, so the `(optimistic - server)`
+    // delta keeps reflecting the user's local +1/-1 even after the
+    // REST call confirms. The `onMutate` write is already the final
+    // state for a successful mutation.
   });
 
   const isLiked = useCallback(
@@ -177,8 +181,11 @@ export function useSpaceLikes() {
 
   /**
    * Compute the local `+1 / 0 / -1` delta the UI should apply to the
-   * catalog's like count for this app. Stays at 0 once a mutation is
-   * promoted to the server snapshot.
+   * catalog's like count for this app. Computed as
+   * `optimistic.has - server.has`, where `server` is the hydration
+   * snapshot (frozen for the session). So a freshly liked app keeps
+   * showing `+1` until the next hydration, which is when the catalog
+   * count itself gets re-fetched too.
    */
   const countDelta = useCallback(
     (appId: string): number => {

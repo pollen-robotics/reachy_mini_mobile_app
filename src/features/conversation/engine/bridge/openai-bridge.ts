@@ -79,7 +79,19 @@ export interface OpenaiBridgeDeps {
   getRobot: () => ReachyMiniInstance | null;
 
   // ─── Construction settings ──────────────────────────────────────────
-  apiKey: string;
+  /**
+   * Async getter for an OpenAI Realtime ephemeral key. Forwarded
+   * verbatim to `OpenaiRealtimeClient.RealtimeOptions.getApiKey`,
+   * which calls it once per SDP handshake. The mobile shell wires
+   * this to `mintEphemeralKey` in
+   * `features/conversation/engine/ephemeral-key.ts`.
+   *
+   * We deliberately accept a function (not a string) here so the
+   * bridge stays alive across the ~10-minute ephemeral lifetime
+   * window: a reconnect that crosses the boundary mints a fresh
+   * key without rebuilding the whole bridge.
+   */
+  getApiKey: () => Promise<string>;
   model: string;
   /**
    * OpenAI voice id. Accepts either a static string OR a getter
@@ -187,7 +199,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     robotMicTrack: MediaStreamTrack,
   ): OpenaiRealtimeClient => {
     const next = new OpenaiRealtimeClient({
-      apiKey: deps.apiKey,
+      getApiKey: deps.getApiKey,
       model: deps.model,
       voice: typeof deps.voice === 'function' ? deps.voice() : deps.voice,
       instructions: deps.composeInstructions(),
