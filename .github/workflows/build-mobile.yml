@@ -1,8 +1,13 @@
 name: Build mobile
 
 # Triggered on:
-#   - push to a `v*` tag         → builds iOS + Android, uploads to the matching release
-#   - manual dispatch            → builds iOS + Android as artifacts (no release attach)
+#   - push to a `v*` tag                  → builds iOS + Android, uploads to the matching release
+#   - push to `release/ios-submission`    → builds ALL jobs (simulator + signed release)
+#                                            without consuming a `v*` tag. Used to iterate on
+#                                            App Store / TestFlight submissions without polluting
+#                                            `main` or burning a version tag for every drift fix.
+#                                            See section 0 of `docs/APP_STORE_AUDIT_2026-05.md`.
+#   - manual dispatch                     → builds iOS + Android as artifacts (no release attach)
 #
 # What this workflow builds today
 # ───────────────────────────────
@@ -56,6 +61,16 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      # Dedicated submission branch. We keep iOS / Android CI work
+      # off `main` so the default branch stays focused on app feature
+      # development and so a stray commit on `main` can't burn a
+      # TestFlight or Play Internal slot. Every push to this branch
+      # runs the full pipeline (simulator + signed release) - mirror
+      # of a tag push, minus the GitHub Release attach. Rename or
+      # delete the branch once App Store / TestFlight has accepted
+      # a build, then start a fresh one for the next submission.
+      - 'release/ios-submission'
   workflow_dispatch:
     inputs:
       android_release:
@@ -220,8 +235,14 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
+          # Microphone string mirrors `src-tauri/Info.plist`. The phone's
+          # mic is only opened during the WebRTC handshake (see
+          # `features/conversation/permissions/iosMicUnlock.ts`); the
+          # user's voice itself is captured by the robot's onboard mic.
+          # Keep both copies in sync - App Review reads whichever the
+          # final bundle ships with.
           plutil -replace NSMicrophoneUsageDescription -string \
-            "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
+            "Reachy Mini briefly opens the microphone on this device to establish a WebRTC connection with the robot. Your voice is captured by Reachy Mini's own microphone, not this device; no phone audio is recorded or transmitted." \
             "$INFO_PLIST"
           plutil -replace NSLocalNetworkUsageDescription -string \
             "Reachy Mini needs local network access to talk to the robot daemon on port 8000." \
@@ -229,6 +250,16 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
+          # NOTE: NSCameraUsageDescription and NSLocationWhenInUseUsageDescription
+          # are intentionally NOT patched in. They were previously used to
+          # authorise iframe-hosted HF Spaces (vision demos, geolocation)
+          # to surface their own `navigator.*` prompts, but the Apps tab
+          # is gated behind `APPS_TAB_ENABLED = false` in
+          # `src/ui/screens/RobotSessionScreen.tsx`, so no iframe ever
+          # mounts. Apple flags orphan usage strings as "permission
+          # requested without a functional reason" - re-add these `plutil`
+          # lines in lockstep with `src-tauri/Info.plist` when the Apps
+          # tab ships back on.
           # Background-audio capability: needed so the OpenAI Realtime
           # WebRTC session + WKWebView keep running when the user
           # locks the screen / backgrounds the app mid-conversation.
@@ -242,6 +273,36 @@ jobs:
             "$INFO_PLIST"
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
+
+      - name: Inject Privacy Manifest into xcodeproj
+        # Apple requires `PrivacyInfo.xcprivacy` at the root of the
+        # app bundle since May 2024 (App Store + TestFlight). Missing
+        # the file triggers an automatic rejection with
+        # ITMS-91053 / ITMS-91056 before App Review ever sees the
+        # build.
+        #
+        # `tauri ios init` (above) regenerated the xcodeproj from a
+        # fresh `project.yml`, which DOES scan the iOS source folder
+        # recursively but - on the runner's pinned xcodegen - does
+        # not always attach `.xcprivacy` files to "Copy Bundle
+        # Resources" (the extension was added to xcodegen's default
+        # resource list only in v2.42, 2024-06).
+        #
+        # The ruby helper at `src-tauri/scripts/inject-privacy-manifest.rb`
+        # is idempotent: it copies the manifest into the iOS source
+        # folder, adds the file reference, and appends it to the
+        # target's Resources phase. See the script header for the
+        # full rationale.
+        run: |
+          set -euxo pipefail
+          cp src-tauri/PrivacyInfo.xcprivacy \
+             src-tauri/gen/apple/reachy_mini_mobile_app_iOS/PrivacyInfo.xcprivacy
+          gem install --user-install xcodeproj --no-document
+          # `gem install --user-install` puts the gem under
+          # `~/.gem/ruby/<ver>/`; require_paths are exposed via
+          # the `Gem.user_dir` Ruby API, so calling `ruby` directly
+          # (rather than `gem exec`) picks them up via Rubygems.
+          ruby src-tauri/scripts/inject-privacy-manifest.rb
 
       - name: Disable code signing in pbxproj
         # Strip code-signing requirements for the unsigned simulator
@@ -522,12 +583,17 @@ jobs:
 
   ios-release:
     name: iOS (signed, TestFlight)
-    # Tag pushes always run this. Manual `workflow_dispatch` runs
-    # only when the operator explicitly opts in via the
-    # `ios_release` input — releasing every push to main would burn
-    # TestFlight build slots and invite Apple-side rate-limiting.
+    # Runs on:
+    #   - `v*` tag pushes (canonical releases)
+    #   - pushes to the dedicated `release/ios-submission` branch
+    #     (drives every submission iteration without burning a tag)
+    #   - manual `workflow_dispatch` with the `ios_release` input
+    # Plain pushes to `main` deliberately do NOT trigger this job -
+    # we don't want feature merges to consume TestFlight build slots
+    # or get rate-limited by Apple.
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
+      github.ref == 'refs/heads/release/ios-submission' ||
       (github.event_name == 'workflow_dispatch' && inputs.ios_release)
     # We don't `needs: ios` because the unsigned simulator build
     # already runs in parallel and a green simulator job doesn't
@@ -754,8 +820,11 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
+          # See the simulator job for why the mic string was rephrased
+          # to reflect actual usage (WebRTC handshake, not user-voice
+          # capture from the phone).
           plutil -replace NSMicrophoneUsageDescription -string \
-            "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
+            "Reachy Mini briefly opens the microphone on this device to establish a WebRTC connection with the robot. Your voice is captured by Reachy Mini's own microphone, not this device; no phone audio is recorded or transmitted." \
             "$INFO_PLIST"
           plutil -replace NSLocalNetworkUsageDescription -string \
             "Reachy Mini needs local network access to talk to the robot daemon on port 8000." \
@@ -763,6 +832,9 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
+          # Camera + Location usage strings intentionally not patched -
+          # see the simulator job above for the Apps-tab kill-switch
+          # rationale. Re-add in lockstep when `APPS_TAB_ENABLED` flips.
           # Background-audio capability: needed so the OpenAI Realtime
           # WebRTC session + WKWebView keep running when the user
           # locks the screen / backgrounds the app mid-conversation.
@@ -776,6 +848,20 @@ jobs:
             "$INFO_PLIST"
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
+
+      - name: Inject Privacy Manifest into xcodeproj
+        # Mirror of the step in the simulator job. The release job
+        # also wipes `gen/apple/` before running `tauri ios init`,
+        # so the xcodeproj needs the same idempotent patch to add
+        # `PrivacyInfo.xcprivacy` to "Copy Bundle Resources" or App
+        # Store Connect will reject the upload with ITMS-91053
+        # before the build reaches App Review.
+        run: |
+          set -euxo pipefail
+          cp src-tauri/PrivacyInfo.xcprivacy \
+             src-tauri/gen/apple/reachy_mini_mobile_app_iOS/PrivacyInfo.xcprivacy
+          gem install --user-install xcodeproj --no-document
+          ruby src-tauri/scripts/inject-privacy-manifest.rb
 
       - name: Configure pbxproj for manual signing
         # Force MANUAL code signing. Tauri's regenerated project
@@ -984,13 +1070,18 @@ jobs:
 
   android-release:
     name: Android (signed, Play Internal)
-    # Tag pushes always run this. Manual `workflow_dispatch` runs
-    # only when the operator opts in via `android_release` — without
-    # the gate, every push to main would burn a Play versionCode and
-    # spam internal testers with update prompts. Same shape as
-    # `ios-release`.
+    # Symmetric with `ios-release`: tag pushes, the dedicated
+    # `release/ios-submission` branch, or manual dispatch with the
+    # `android_release` input. Plain pushes to `main` deliberately
+    # skip this job so feature merges don't burn Play versionCodes
+    # or spam internal testers with update prompts. NOTE: despite
+    # the branch name being iOS-flavoured we keep it as the
+    # canonical submission branch for both stores - rename later
+    # if the Android pipeline lives long enough to deserve its
+    # own branch.
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
+      github.ref == 'refs/heads/release/ios-submission' ||
       (github.event_name == 'workflow_dispatch' && inputs.android_release)
     # No `needs:` — the unsigned debug APK runs in parallel and a
     # green debug build doesn't add real signal for the signed path
