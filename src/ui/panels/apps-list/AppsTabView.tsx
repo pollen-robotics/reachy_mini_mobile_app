@@ -70,8 +70,10 @@ import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import AppCompactTile from './AppCompactTile';
+import AppCreateYourOwnTile from './AppCreateYourOwnTile';
 import AppPinnedTile from './AppPinnedTile';
 import AppRail from './AppRail';
+import AppsCreateFooter from './AppsCreateFooter';
 
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
@@ -453,9 +455,39 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                             onTogglePin={handleTogglePin}
                           />
                         ))}
+                        {/* CTA tile pinned to the right of every
+                            rail: same width branch as the app
+                            tiles so the "1 + 30 % peek" framing
+                            stays consistent, dashed primary
+                            border to signal it's an affordance
+                            rather than another app. */}
+                        <AppCreateYourOwnTile />
                       </AppRail>
                     </Box>
                   ))}
+
+                {/* End-of-list "Want to create your own?" footer.
+                    Mounted only in browse mode (no search query,
+                    no focused category) so it acts as a soft
+                    landing after the last rail, mirroring the
+                    desktop app's discover-Footer + CreateAppTutorial
+                    pattern. The rails-only check keeps it hidden
+                    when the catalog is empty or the user has hidden
+                    the only contributing authors (no rails → no
+                    footer either, the empty-state placeholder
+                    already covers that case).
+                    ────────────────
+                    The footer is a self-contained tinted card
+                    (own gradient bg + rounded border), so we
+                    skip `PANEL_SX` here and just re-constrain
+                    to the centred column with a top spacer big
+                    enough to detach it visually from the last
+                    rail. */}
+                {!filtered.isSearching && filtered.rails.length > 0 && (
+                  <Box sx={{ ...COLUMN_SX, pt: 5, pb: 1 }}>
+                    <AppsCreateFooter />
+                  </Box>
+                )}
               </>
             )}
 
@@ -605,21 +637,30 @@ function IntroPanel() {
             // (24 px), so each cell is `(100% - 2 × 24px) / 3`.
             width: 'calc((100% - 48px) / 3)',
             aspectRatio: '1 / 1',
-            overflow: 'hidden',
+            // No `overflow: hidden`: the carousel's `zoom > 1` is
+            // intentionally allowed to spill past the square so the
+            // sticker reads larger than its slot. The transparent
+            // alpha margin around each WebP keeps the spillover
+            // invisible in practice.
             boxSizing: 'border-box',
             minWidth: 0,
-            // Hero punch-up: the illustration is the panel's only
-            // visual, so we let it breathe a touch past its layout
-            // slot via a pure transform (no reflow, the text
-            // column stays put). The slight negative `translateY`
-            // lifts the carousel into the visual centre of the
-            // heading + paragraph cluster rather than the row's
-            // geometric centre, which reads more "hero-ish".
-            transform: 'scale(1.12) translateY(-4px)',
-            transformOrigin: 'center',
           }}
         >
-          <ReachiesCarousel zoom={1.4} verticalAlign="60%" />
+          {/* Framing tuned for the canvas-centred WebP set produced by
+              `scripts/build-reachies-top-sided.py`. Those frames have
+              the robot face at ~62 % of the image height (consistent
+              across every persona) and a uniform transparent margin
+              around the sticker. The earlier 1.12 scale wrapper +
+              `zoom={1.4}` + `verticalAlign="60%"` triplet was a stack
+              of workarounds for the legacy small-top-sided pngs whose
+              cropping was inconsistent.
+              `zoom={1.6}` (≈ +1/3 vs the prior `1.2`) overflows the
+              wrapper square by design - the carousel no longer clips
+              (see `ReachiesCarousel` and the wrapper above), and the
+              WebP padding fraction keeps the spillover transparent,
+              so the sticker reads larger than its slot without
+              eating into the "Discover apps" column. */}
+          <ReachiesCarousel zoom={1.6} verticalAlign="42%" />
         </Box>
 
         <Stack spacing={1} sx={{ flex: 1, minWidth: 0 }}>

@@ -10,29 +10,39 @@
  * opacity so the hero never reads as 100 % saturated.
  *
  * Sources are auto-loaded from
- * `src/assets/reachies/small-top-sided/*.png` via `import.meta.glob`
- * (Vite eager-import); add a PNG there and it lights up in the
- * carousel without any code change.
+ * `src/assets/reachies/top-sided/*.webp` via `import.meta.glob`
+ * (Vite eager-import); add a WebP there and it lights up in the
+ * carousel without any code change. The folder is produced by
+ * `scripts/build-reachies-top-sided.py`, which reframes the
+ * canonical 1024x1024 source PNGs (in the website repo, under
+ * `reachy-mini-website/src/assets/reachies/original/`) on their
+ * alpha bbox, resizes to 768x768 and encodes WebP@q88 to keep the
+ * 24-persona rotation under ~1.1 MB total.
  *
  * Mobile-side adaptation: the host layout is fluid (the IntroPanel
  * hero box is sized via `aspect-ratio: 1/1` on a viewport-relative
  * grid cell), so we drop the desktop's pixel `width` / `height`
  * props and let the carousel fill its parent (`width: 100%,
- * height: 100%`). The `zoom` factor that used to be applied via
- * `width = width * zoom` is now applied via `transform: scale(zoom)`
- * which is equivalent visually but doesn't depend on resolved
- * pixel dimensions.
+ * height: 100%`). The `zoom` factor is applied to the rendered
+ * `width` / `height` of each `<img>` (e.g. `width: 160%` when
+ * `zoom = 1.6`) so the browser rasterises straight to the final
+ * pixel size from the 768 × 768 source. An earlier revision used
+ * `transform: scale(zoom)` for the same fluid-mode behaviour, but
+ * that path upsamples the box's bitmap and reads as blur the
+ * moment `zoom > 1` - swap back at your peril.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, useTheme } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-// Eager-load every PNG in `small-top-sided/`. Vite hashes them
-// at build time and the bundler tree-shakes anything we don't
-// reference. Adding or removing a sticker is a drop-in: no
-// import to update here, no manual array to maintain.
+// Eager-load every WebP in `top-sided/`. Vite hashes them at build
+// time and the bundler tree-shakes anything we don't reference.
+// Adding or removing a sticker is a drop-in: no import to update
+// here, no manual array to maintain. Re-generate this folder via
+// `scripts/build-reachies-top-sided.py` after updating the source
+// PNG set in `reachy-mini-website/.../reachies/original/`.
 const imageModules = import.meta.glob(
-  '@/assets/reachies/small-top-sided/*.png',
+  '@/assets/reachies/top-sided/*.webp',
   { eager: true },
 );
 
@@ -45,10 +55,12 @@ export interface ReachiesCarouselProps {
   fadeOutDuration?: number;
   /**
    * Visual scale of each frame relative to the container. `1`
-   * fits each image inside the container; `> 1` zooms in and
-   * relies on the parent's `overflow: hidden` to clip the
-   * overflow. Defaults to `1.8`, matching the desktop empty-state
-   * framing.
+   * fits each image inside the container; `> 1` lets each frame
+   * spill past the container's edges (no internal clipping - see
+   * the container `sx` below). The canvas-centred WebP set keeps
+   * the spillover transparent, so the visible sticker just reads
+   * larger than its slot. Defaults to `1.8`, matching the desktop
+   * empty-state framing.
    */
   zoom?: number;
   /**
@@ -175,11 +187,13 @@ export default function ReachiesCarousel({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        // Clip the `scale > 1` overflow so the carousel reads as
-        // a tightly framed hero. The parent IntroPanel box also
-        // applies its own `overflow: hidden`, this is belt &
-        // suspenders.
-        overflow: 'hidden',
+        // No `overflow: hidden`: with the canvas-centred WebP set
+        // the spill from `scale > 1` is just transparent margin
+        // around the sticker, so letting it bleed past the
+        // container makes the hero read larger without leaking
+        // any visible pixels into the surrounding layout. Re-add
+        // a clip here if a future caller drives `zoom` high
+        // enough to push opaque content past the box edges.
         ...(sx as object),
       }}
     >
@@ -209,16 +223,28 @@ export default function ReachiesCarousel({
               position: 'absolute',
               left: '50%',
               top: topValue,
-              width: '100%',
-              height: '100%',
+              // Drive the zoom through the rendered `width` /
+              // `height` rather than `transform: scale(zoom)`.
+              // Scaling a transform upsamples the already-
+              // rasterised bitmap (the browser paints the image
+              // at the box's pixel size first, then scales the
+              // pixel grid), which reads as blur as soon as
+              // `zoom > 1`. By contrast, asking for a `160%`
+              // wide `<img>` lets the browser rasterise the
+              // source WebP straight to the final pixel size -
+              // sharp, no upsampling, no extra memory cost since
+              // the source frames are already 768 × 768.
+              width: `${100 * zoom}%`,
+              height: `${100 * zoom}%`,
               objectFit: 'cover',
               objectPosition: 'center top',
               opacity,
-              // Combined translate (centring) + scale (zoom).
-              // `transform: scale(zoom)` is the fluid-mode
-              // equivalent of the desktop's `width = width * zoom`
-              // pattern - works without a resolved pixel size.
-              transform: `translate(-50%, ${transformY}) scale(${zoom})`,
+              // Translate is now centring-only - the `-50%` is
+              // relative to the rendered element box (now
+              // `100 * zoom %` of the parent), so the resulting
+              // shift matches what the old `scale(zoom)` + same
+              // `translate(-50%, ...)` produced visually.
+              transform: `translate(-50%, ${transformY})`,
               transition,
               pointerEvents: 'none',
               zIndex: isActive ? 2 : isPrevious ? 1 : 0,
