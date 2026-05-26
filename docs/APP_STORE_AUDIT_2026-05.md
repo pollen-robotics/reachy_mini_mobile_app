@@ -7,6 +7,67 @@
 > (which lays out the policy framework and the pre-submission action
 > plan)
 
+## 0. Status update - 2026-05-26 (TestFlight Internal unblock pass)
+
+Working pass focused on getting an **internal TestFlight** build
+through App Store Connect validation. The four hard blockers in
+section 2 are NOT all resolved yet, but the *bundle itself* is now
+clean enough to pass automated validation. The remaining hard
+blockers are operational (catalog kill switch, moderation pipeline,
+ASC paperwork) and can be addressed in parallel with TF testing.
+
+Changes landed:
+
+- **(2.1) OpenAI key off the bundle**: build-time `VITE_OPENAI_API_KEY`
+  removed from `.env*`, CI workflow, `settings.ts`. The client now
+  mints short-lived OpenAI Realtime ephemeral keys at runtime from
+  `reachy-mini.com` using the user's HF token. See
+  `src/features/conversation/engine/ephemeral-key.ts`.
+- **UGC surface gated for first submission**: the Apps tab is hidden
+  behind `APPS_TAB_ENABLED = false` in
+  `src/ui/screens/RobotSessionScreen.tsx`. The tab button, the body,
+  and `AppIframeOverlay` are all skipped at render time. The
+  `useHiddenAuthors` flow, the report deeplink, and the catalog
+  endpoints are kept in code so the next submission can flip the
+  flag once 2.2 / 2.3 are done.
+- **(1.4 follow-up) Orphan permission strings removed**:
+  `NSCameraUsageDescription` and `NSLocationWhenInUseUsageDescription`
+  removed from `src-tauri/Info.plist` and from the CI `plutil`
+  patch. Both keys were only ever for iframe-delegated capabilities;
+  with the Apps tab disabled they would have been "permission
+  requested without a functional reason", an App Review red flag.
+- **(NEW) Privacy Manifest added**:
+  `src-tauri/PrivacyInfo.xcprivacy` is the canonical source. The CI
+  pipeline copies it into `gen/apple/.../` after `tauri ios init`
+  and runs `src-tauri/scripts/inject-privacy-manifest.rb` to attach
+  it to "Copy Bundle Resources" - without this file App Store Connect
+  auto-rejects with ITMS-91053. Declares 4 required-reason APIs
+  (UserDefaults, FileTimestamp, SystemBootTime, DiskSpace) and zero
+  tracking/data collection, matching the EULA modal.
+- **EULA modal honesty pass**:
+  `EulaConsentModal.tsx` no longer claims phone audio is sent to
+  OpenAI (it's the robot's onboard mic) and no longer mentions the
+  Apps tab while the tab is gated. The mic usage string in
+  `Info.plist` and the CI patch were rephrased to match.
+
+What this means for submission:
+
+| Blocker | TF Internal | TF External / App Review |
+|---|---|---|
+| 2.1 Ephemeral keys | done | done |
+| 2.2 Catalog kill switch | n/a (Apps tab hidden) | required before re-enabling |
+| 2.3 Pre-publication moderation | n/a (Apps tab hidden) | required before re-enabling |
+| 2.4 ASC paperwork | nutrition label still TODO | required |
+| Privacy Manifest | done | done |
+| Info.plist hygiene | done | done |
+
+Section 1.4 below is no longer accurate (the orphan keys have been
+removed) - kept as-is for the audit trail; section 4 still lists the
+remaining open work.
+
+---
+
+
 This document answers a different question from the compliance plan:
 
 > **Where do we stand TODAY against the 2026-05-10 checklist, and
