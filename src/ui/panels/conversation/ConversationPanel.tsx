@@ -270,29 +270,35 @@ export function ConversationPanel({
           position: 'relative',
         }}
       >
-        <Stack
-          alignItems="center"
-          justifyContent="center"
-          spacing={2}
+        {/* Three-row grid (`1fr auto 1fr`) so the orb itself is
+            vertically centered in the body slot, not the
+            "orb + caption + toast" block as a whole. The two
+            `1fr` spacer rows above and below the orb take equal
+            shares of the remaining space, which mathematically
+            anchors the orb's centre on the slot's centre line.
+            The caption + toast sit at the TOP of the third row
+            (`alignSelf: 'start'`), so they hang just under the
+            orb without pulling its centre upwards.
+            Prior layout was a single column flex with
+            `justifyContent: 'center'` and `spacing={2}`, which
+            centred the whole stack (orb + caption + toast) and
+            therefore placed the orb visibly above the geometric
+            centre of the slot - the bug the user reported. */}
+        <Box
           sx={{
             flex: 1,
             minHeight: 0,
             width: '100%',
-            // Asymmetric padding: small `pt` so the orb sits close
-            // to the persona sub-header (no awkward gap once the
-            // user has selected who's talking), but a generous
-            // `pb` so the caption / tool-toast under the orb don't
-            // crowd the bottom navigation.
             pt: 1.5,
             pb: 3,
-            // Hide the orb area while the picker is open. Mount is
-            // preserved so the orb's `<button>` keeps providing
-            // `audioLevelsTarget` to the engine - flipping `display`
-            // is much cheaper (and safer) than unmounting + re-
-            // mounting the whole orb chrome on every picker toggle.
-            display: pickerOpen ? 'none' : 'flex',
+            display: pickerOpen ? 'none' : 'grid',
+            gridTemplateRows: '1fr auto 1fr',
+            justifyItems: 'center',
           }}
         >
+          {/* Top spacer: balances the third row so the orb stays
+              centred regardless of caption / toast content. */}
+          <Box />
           <Stack
             direction="row"
             alignItems="center"
@@ -312,9 +318,21 @@ export function ConversationPanel({
             />
             <StopSideButton live={live} onStop={handleStop} />
           </Stack>
-          <ConversationCaption state={orbState} message={session.errorMessage} />
-          <ConversationToolToast label={session.toolToastLabel} />
-        </Stack>
+          {/* Caption + toast anchored at the top of the bottom
+              spacer row, just under the orb. `alignSelf: 'start'`
+              keeps them flush to the orb's bottom edge (plus the
+              `mt` breathing room) while the spacer row absorbs
+              the leftover vertical space, so a longer caption or
+              a toast appearing doesn't push the orb around. */}
+          <Stack
+            alignItems="center"
+            spacing={1}
+            sx={{ alignSelf: 'start', mt: 2 }}
+          >
+            <ConversationCaption state={orbState} message={session.errorMessage} />
+            <ConversationToolToast label={session.toolToastLabel} />
+          </Stack>
+        </Box>
 
         {/* Bottom audio strip: speaker + microphone sliders. Lives
             inside the body box as a sibling of the orb's centered

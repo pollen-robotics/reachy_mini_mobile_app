@@ -1555,7 +1555,7 @@ async function boot(): Promise<void> {
   consumeTokenFromHash();
 
   robot = new window.ReachyMini({
-    appName: "Reachy Mini Minimal Voice",
+    appName: "Reachy Mini Mobile App",
     // No `clientId`: the SDK uses its own default, and the mobile
     // app handles HF OAuth itself via `useRemoteHfToken` /
     // `oauthLoopback` rather than letting the SDK initiate it.
