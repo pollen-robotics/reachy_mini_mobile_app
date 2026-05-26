@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3E6CE36C204A501C2D7D98D5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1354005BBF658AD6DEDB9EE6 /* PrivacyInfo.xcprivacy */; };
 		6C8142930119D1DA3D0F2AE6 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E9375BEF65576CDA5A041BFA /* LaunchScreen.storyboard */; };
 		72B046DAA618362BD4249C97 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6CE97E2ED160B943A227663 /* MetalKit.framework */; };
 		793E513574B4D402BB6875B3 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = CBB82F3E92A51A02146AC107 /* main.mm */; };
@@ -23,6 +24,7 @@
 
 /* Begin PBXFileReference section */
 		0FDF5300F421F386E18493EE /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		1354005BBF658AD6DEDB9EE6 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		3E898BC87981DDCFF37BE25A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		4A3374C4249B8F54AC164F98 /* reachy_mini_mobile_app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = reachy_mini_mobile_app_iOS.entitlements; sourceTree = "<group>"; };
 		579ED7F640CF23E0B7881DDE /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
@@ -138,6 +140,7 @@
 			children = (
 				6A8B419C5F8A5F4B19B08A21 /* Info.plist */,
 				4A3374C4249B8F54AC164F98 /* reachy_mini_mobile_app_iOS.entitlements */,
+				1354005BBF658AD6DEDB9EE6 /* PrivacyInfo.xcprivacy */,
 			);
 			path = reachy_mini_mobile_app_iOS;
 			sourceTree = "<group>";
@@ -171,8 +174,6 @@
 			dependencies = (
 			);
 			name = reachy_mini_mobile_app_iOS;
-			packageProductDependencies = (
-			);
 			productName = reachy_mini_mobile_app_iOS;
 			productReference = C5CF03AD24E5601F1A5AA0D2 /* Reachy Mini.app */;
 			productType = "com.apple.product-type.application";
@@ -213,6 +214,7 @@
 				FA47719D6FDB9B5037F097C7 /* Assets.xcassets in Resources */,
 				6C8142930119D1DA3D0F2AE6 /* LaunchScreen.storyboard in Resources */,
 				8D1213716647D4354521C4F0 /* assets in Resources */,
+				3E6CE36C204A501C2D7D98D5 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,7 +320,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "4KLHP7L6KP";
+				DEVELOPMENT_TEAM = 4KLHP7L6KP;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -344,7 +346,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.pollen-robotics.reachy-mini;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pollen-robotics.reachy-mini";
 				PRODUCT_NAME = "Reachy Mini";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -423,7 +425,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "4KLHP7L6KP";
+				DEVELOPMENT_TEAM = 4KLHP7L6KP;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -449,7 +451,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.pollen-robotics.reachy-mini;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pollen-robotics.reachy-mini";
 				PRODUCT_NAME = "Reachy Mini";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";

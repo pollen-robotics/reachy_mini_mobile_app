@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Apple Privacy Manifest - source of truth.
+
+  Apple has required this file at the root of every iOS app bundle
+  since May 1, 2024 (App Store and TestFlight). A submission without
+  it is rejected automatically with ITMS-91053 / ITMS-91056. See
+  https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
+  and https://developer.apple.com/documentation/bundleresources/describing_use_of_required_reason_api
+
+  This is the canonical copy. The CI workflow (`.github/workflows/build-mobile.yml`)
+  copies it into `src-tauri/gen/apple/reachy_mini_mobile_app_iOS/`
+  after every `tauri ios init` and patches the regenerated
+  xcodeproj so the file lands in "Copy Bundle Resources". A
+  duplicate is also committed at that gen path so local Xcode
+  builds (which don't re-run `tauri ios init`) pick it up too -
+  keep the two in sync on every edit.
+
+  What we declare
+  ───────────────
+  * NSPrivacyTracking            -> false. We don't follow the user
+                                    across apps/sites and don't pass
+                                    any identifier to a data broker.
+  * NSPrivacyTrackingDomains     -> empty. No tracking endpoints.
+  * NSPrivacyCollectedDataTypes  -> empty. The app talks to:
+      - the robot's local daemon (LAN, never leaves the network)
+      - reachy-mini.com to mint short-lived OpenAI ephemeral keys
+        (HF token in, ephemeral key out, no PII stored serverside)
+      - OpenAI Realtime over WebRTC for the voice conversation
+        (audio captured by the robot, not by the phone; OpenAI's
+        own privacy practices declared in their manifest)
+    None of those flows persist user data on a server we control,
+    so the declaration is the empty array - matching the EULA modal
+    and the App Store privacy section.
+
+  Required-Reason APIs we touch
+  ─────────────────────────────
+  Conservative cover for a Tauri + WKWebView + Rust app. Each
+  category is opt-in: leaving one out triggers ITMS-91053 only if
+  the binary actually exercises the API. Including a category we
+  don't touch is harmless. We include four because:
+
+  * UserDefaults       -> WKWebView/Tauri persist UI/session state
+                          via NSUserDefaults under the hood.
+                          Reason CA92.1: access app-internal info.
+  * FileTimestamp      -> Tauri's `fs` plugin reads modification
+                          dates when listing/syncing local files.
+                          Reason C617.1: provide file functionality
+                          to the user.
+  * SystemBootTime     -> Rust's `Instant::now()` and the Tauri
+                          runtime call `mach_absolute_time`, which
+                          derives from system boot time. Reason
+                          35F9.1: measure elapsed time between
+                          events inside the app.
+  * DiskSpace          -> WKWebView's storage layer checks free
+                          disk before caching responses. Reason
+                          85F4.1: check whether enough disk space
+                          is available before writing.
+
+  Codes come from Apple's required-reason API matrix. If a future
+  feature adds another category (e.g. ActiveKeyboards for a
+  custom IME), add a new dict here AND verify the actual code path
+  triggers the API - over-declaring is fine, under-declaring is
+  the rejection vector.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>35F9.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>85F4.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
