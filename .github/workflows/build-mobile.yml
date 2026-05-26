@@ -251,57 +251,13 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          # CFBundleVersion = monotonic build number = github.run_number.
-          # Marketing version (`CFBundleShortVersionString`) stays at
-          # what `tauri.conf.json` declares (currently 0.6.5) - that's
-          # the "0.6.5" the user sees on the TestFlight build list and
-          # in the App Store listing. CFBundleVersion is the opaque
-          # build number Apple uses to decide whether a build is newer
-          # than the previously uploaded one; pinning it to the GitHub
-          # Actions run number guarantees every CI run produces a
-          # strictly greater value than the previous one, so we never
-          # again hit ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE on
-          # repeated TestFlight uploads of the same marketing version.
-          # Same pattern Android already uses for versionCode further
-          # down in this workflow.
-          #
-          # We patch BOTH `Info.plist` (via plutil) AND `project.yml`
-          # (via the small Python snippet below) because
-          # `tauri ios build` re-invokes xcodegen before
-          # `xcodebuild archive`, and xcodegen rewrites Info.plist
-          # from project.yml. Without the project.yml patch the
-          # plutil change would be silently overwritten and altool
-          # would reject the upload with
-          # `previousBundleVersion = 0.6.5`. The plutil step still
-          # matters for any code path that reads Info.plist before
-          # xcodegen runs (privacy manifest injection, etc.).
-          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$INFO_PLIST"
-          # cargo-mobile2 regenerates project.yml on every
-          # `tauri ios init` and writes the version from
-          # `tauri.conf.json` into
-          # `targets.<iOS target>.info.properties.CFBundleVersion`
-          # as a quoted string. Replace just that one occurrence
-          # with the github.run_number so xcodegen emits the
-          # monotonic build number when it rewrites Info.plist
-          # later in `tauri ios build`.
-          GITHUB_RUN_NUMBER="${{ github.run_number }}" python3 - <<'PY'
-          import os, pathlib, re, sys
-          path = pathlib.Path("src-tauri/gen/apple/project.yml")
-          original = path.read_text()
-          patched, n = re.subn(
-              r'(CFBundleVersion:\s*)"[^"]+"',
-              rf'\1"{os.environ["GITHUB_RUN_NUMBER"]}"',
-              original,
-              count=1,
-          )
-          if n != 1:
-              sys.exit(
-                  "project.yml CFBundleVersion replacement failed; "
-                  "expected exactly one match"
-              )
-          path.write_text(patched)
-          print(f'project.yml CFBundleVersion -> {os.environ["GITHUB_RUN_NUMBER"]}')
-          PY
+          # NOTE: CFBundleVersion (the build number) is NOT patched here.
+          # The release job sets it via `tauri ios build --config
+          # '{"bundle":{"iOS":{"bundleVersion":"<run_number>"}}}'`,
+          # which is the officially-supported Tauri 2.5+ mechanism.
+          # The simulator job does not upload to TestFlight, so its
+          # build number doesn't matter - we leave whatever Tauri
+          # derives from `tauri.conf.json:version` (e.g. 0.6.5).
           # Microphone string mirrors `src-tauri/Info.plist`. The phone's
           # mic is only opened during the WebRTC handshake (see
           # `features/conversation/permissions/iosMicUnlock.ts`); the
@@ -885,29 +841,15 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          # CFBundleVersion = github.run_number. See the simulator job
-          # for the full rationale (including why we patch BOTH
-          # Info.plist and project.yml - tauri ios build re-invokes
-          # xcodegen, which rewrites Info.plist from project.yml).
-          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$INFO_PLIST"
-          GITHUB_RUN_NUMBER="${{ github.run_number }}" python3 - <<'PY'
-          import os, pathlib, re, sys
-          path = pathlib.Path("src-tauri/gen/apple/project.yml")
-          original = path.read_text()
-          patched, n = re.subn(
-              r'(CFBundleVersion:\s*)"[^"]+"',
-              rf'\1"{os.environ["GITHUB_RUN_NUMBER"]}"',
-              original,
-              count=1,
-          )
-          if n != 1:
-              sys.exit(
-                  "project.yml CFBundleVersion replacement failed; "
-                  "expected exactly one match"
-              )
-          path.write_text(patched)
-          print(f'project.yml CFBundleVersion -> {os.environ["GITHUB_RUN_NUMBER"]}')
-          PY
+          # NOTE: CFBundleVersion (the build number) is NOT patched here.
+          # It's set via `tauri ios build --config
+          # '{"bundle":{"iOS":{"bundleVersion":"<run_number>"}}}'`
+          # in the "Archive signed iOS app" step below - the officially
+          # supported Tauri 2.5+ mechanism that propagates through
+          # xcodegen + agvtool + Info.plist + the .xcarchive into the
+          # final IPA. Don't re-introduce `plutil -replace
+          # CFBundleVersion` here: agvtool overwrites it during
+          # `tauri ios build` anyway, so it had no effect.
           # See the simulator job for why the mic string was rephrased
           # to reflect actual usage (WebRTC handshake, not user-voice
           # capture from the phone).
