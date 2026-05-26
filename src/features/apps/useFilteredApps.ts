@@ -39,10 +39,10 @@ import type { AppEntry } from './types';
 export const MIN_RAIL_SIZE = 3;
 
 /**
- * Synthetic descriptor for the "Pollen Certified" rail, prepended
+ * Synthetic descriptor for the "Official apps" rail, prepended
  * before the LLM-driven taxonomy. Lives outside `CATEGORY_TAXONOMY`
- * on purpose: certified is a curatorial *facet* on top of the
- * sematic categories (an app is `motion` because of what it does,
+ * on purpose: official is a curatorial *facet* on top of the
+ * semantic categories (an app is `motion` because of what it does,
  * `official` because of who blesses it), and we don't want to
  * pollute the LLM-driven taxonomy with an editorial flag.
  *
@@ -54,12 +54,12 @@ export const MIN_RAIL_SIZE = 3;
 export const OFFICIAL_RAIL_ID = 'official' as const;
 const OFFICIAL_RAIL_DESCRIPTOR: CategoryDescriptor = {
   id: OFFICIAL_RAIL_ID,
-  label: 'Pollen Certified',
+  label: 'Official apps',
 };
 
 /**
- * Minimum number of apps for the "Pollen Certified" rail to be
- * rendered. Lower than the generic threshold because the certified
+ * Minimum number of apps for the "Official apps" rail to be
+ * rendered. Lower than the generic threshold because the official
  * set is small by design (curated by hand) and the rail carries
  * editorial weight that justifies showing even a single tile -
  * unlike a sparse semantic bucket, an "official" rail with one app
@@ -69,8 +69,8 @@ const MIN_OFFICIAL_RAIL_SIZE = 1;
 
 /**
  * Synthetic descriptor for the "Most liked" rail, slotted between
- * the certified rail and the LLM-driven semantic rails. Like the
- * certified facet, popularity is orthogonal to the semantic
+ * the official rail and the LLM-driven semantic rails. Like the
+ * official facet, popularity is orthogonal to the semantic
  * taxonomy (an app is `music` because of what it does, "most
  * liked" because of how many ❤s it has on the Hub), so it lives
  * outside `CATEGORY_TAXONOMY` and uses a distinct id namespace
@@ -205,9 +205,9 @@ export function useFilteredApps({
     // buckets to keep the home focused on rails worth scrolling.
     const rails: CategoryBucket[] = [];
 
-    // "Pollen Certified" rail goes first when non-empty. We sort by
+    // "Official apps" rail goes first when non-empty. We sort by
     // likes (same rule as the rest of the rails) so the most loved
-    // certified apps surface at the head. Apps in this rail also
+    // official apps surface at the head. Apps in this rail also
     // appear in their semantic rail below if they have one - that
     // overlap is intentional, the home is a discovery surface and
     // double exposure is good for browsing.
@@ -218,14 +218,14 @@ export function useFilteredApps({
       rails.push({ descriptor: OFFICIAL_RAIL_DESCRIPTOR, apps: officialBucket });
     }
 
-    // "Most liked" rail slots in right below the certified one and
-    // above the semantic taxonomy: certified is editorial ("Pollen
+    // "Most liked" rail slots in right below the official one and
+    // above the semantic taxonomy: official is editorial ("Pollen
     // says so"), popularity is community-driven ("the crowd says
     // so"), and both deserve to sit above the topical buckets as
     // discovery surfaces. We take the top N apps by like count
     // (with a ≥ 1 floor so 0-like entries don't slip in), then cap
-    // to keep the rail focused. Overlap with certified / semantic
-    // rails is intentional, as it is for the certified rail above.
+    // to keep the rail focused. Overlap with official / semantic
+    // rails is intentional, as it is for the official rail above.
     const mostLikedBucket = apps
       .filter((app) => (app.likes || 0) >= MOST_LIKED_MIN_LIKES)
       .sort(sortByLikesDesc)
