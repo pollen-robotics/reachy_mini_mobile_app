@@ -3,32 +3,46 @@
  * the file started life as iOS-only but the call is now run on every
  * platform).
  *
- * iOS WKWebView. Safari/WKWebView deliberately omit LAN host candidates
- * (`192.168.x.x`) from `RTCIceCandidate` until any media permission
- * has been granted, to avoid leaking the user's local IP - see
- * https://webkit.org/blog/7763/a-closer-look-into-webrtc/. Without that
- * grant the iPhone's `RTCPeerConnection` advertises **zero** host
- * candidates and ICE cannot find a LAN path to the robot.
+ * Why we open the mic at all
+ * ──────────────────────────
+ * The phone's microphone is NOT used as an audio source: the user's
+ * voice is captured by the robot's onboard mic and pushed over the
+ * SDK's `RTCPeerConnection`. We still need to `getUserMedia({audio:true})`
+ * on the phone for two platform-specific reasons:
  *
- * Android (Tauri / wry). `getUserMedia({audio:true})` triggers wry's
- * `RustWebChromeClient.onPermissionRequest`, which in turn calls
- * `permissionLauncher.launch([RECORD_AUDIO, MODIFY_AUDIO_SETTINGS])`
- * and surfaces the system prompt. Both permissions are declared in the
- * generated `AndroidManifest.xml` via `tauri-build::update_android_manifest`
- * (see `src-tauri/build.rs`). Without this call the user never sees the
- * prompt and `getUserMedia` rejects with `NotAllowedError`.
+ *   - **iOS WKWebView**. Safari/WKWebView deliberately omit LAN host
+ *     candidates (`192.168.x.x`) from `RTCIceCandidate` until any
+ *     media permission has been granted, to avoid leaking the user's
+ *     local IP - see
+ *     https://webkit.org/blog/7763/a-closer-look-into-webrtc/. Without
+ *     that grant the iPhone's `RTCPeerConnection` advertises **zero**
+ *     host candidates and ICE cannot find a LAN path to the robot.
  *
- * In both cases we don't actually need the phone's microphone (audio
- * is captured on the robot, the phone only renders the OpenAI track):
- * we immediately stop the returned tracks. The function is idempotent
- * - subsequent calls are no-ops once the first grant has gone through.
+ *   - **Android (Tauri / wry)**. `getUserMedia({audio:true})` triggers
+ *     wry's `RustWebChromeClient.onPermissionRequest`, which in turn
+ *     calls `permissionLauncher.launch([RECORD_AUDIO,
+ *     MODIFY_AUDIO_SETTINGS])` and surfaces the system prompt. Without
+ *     this call the user never sees the prompt and `getUserMedia`
+ *     rejects with `NotAllowedError`.
  *
- * This module is the single source of truth for that unlock so it can
- * be invoked from both the up-front permissions onboarding screen
- * (preferred path - happens once at first launch, in the user-gesture
- * frame of the "Continue" button) and the conversation engine's
- * `doConnect()` (defensive fallback in case onboarding was skipped or
- * the prompt was denied earlier).
+ *     Status today: the Tauri Android target isn't initialised in this
+ *     repo and the two `*_AUDIO` permissions are not declared anywhere
+ *     (no `android.permissions` in `tauri.conf.json`, no manifest patch
+ *     in CI). The full Android bring-up runbook lives in
+ *     `docs/ANDROID_PERMISSIONS.md`; until that's executed, this call
+ *     is a no-op on Android.
+ *
+ * In both cases we immediately stop the returned tracks. The function
+ * is idempotent: subsequent calls are no-ops once the first grant has
+ * gone through.
+ *
+ * Where it's called from
+ * ──────────────────────
+ * The single caller today is the conversation engine's `doConnect()`,
+ * which runs after the user taps a robot row on the ScanScreen and
+ * before the SDK's `connect()` kicks off ICE gathering. We don't have
+ * an up-front permissions onboarding screen, so this is also the call
+ * site that surfaces the OS prompt the very first time.
  */
 
 let unlocked = false;
