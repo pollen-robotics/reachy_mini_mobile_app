@@ -235,6 +235,20 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
+          # CFBundleVersion = monotonic build number = github.run_number.
+          # Marketing version (`CFBundleShortVersionString`) stays at
+          # what `tauri.conf.json` declares (currently 0.6.5) - that's
+          # the "0.6.5" the user sees on the TestFlight build list and
+          # in the App Store listing. CFBundleVersion is the opaque
+          # build number Apple uses to decide whether a build is newer
+          # than the previously uploaded one; pinning it to the GitHub
+          # Actions run number guarantees every CI run produces a
+          # strictly greater value than the previous one, so we never
+          # again hit ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE on
+          # repeated TestFlight uploads of the same marketing version.
+          # Same pattern Android already uses for versionCode further
+          # down in this workflow.
+          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$INFO_PLIST"
           # Microphone string mirrors `src-tauri/Info.plist`. The phone's
           # mic is only opened during the WebRTC handshake (see
           # `features/conversation/permissions/iosMicUnlock.ts`); the
@@ -818,6 +832,12 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
+          # CFBundleVersion = github.run_number. See the simulator job
+          # for the full rationale - this is what unblocks repeated
+          # TestFlight uploads of the same marketing version (0.6.5)
+          # without manually bumping `tauri.conf.json` after every
+          # altool rejection.
+          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$INFO_PLIST"
           # See the simulator job for why the mic string was rephrased
           # to reflect actual usage (WebRTC handshake, not user-voice
           # capture from the phone).
