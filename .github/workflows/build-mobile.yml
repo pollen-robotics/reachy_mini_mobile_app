@@ -1043,6 +1043,37 @@ jobs:
           echo "Found archive at: $XCARCHIVE"
           echo "xcarchive=$XCARCHIVE" >> "$GITHUB_OUTPUT"
 
+      - name: Override CFBundleVersion in archived .app
+        # cargo-mobile2 invokes `agvtool new-version -all <version>`
+        # mid-build, sourcing the version from `tauri.conf.json:version`
+        # (currently "0.6.5"). That call CLOBBERS any earlier patch on
+        # `gen/apple/.../Info.plist` and on `project.yml`, leaving the
+        # archived .app with `CFBundleVersion = 0.6.5`. App Store
+        # Connect then rejects the upload as a duplicate on every
+        # subsequent run with ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE.
+        #
+        # We patch the Info.plist INSIDE the .xcarchive AFTER agvtool
+        # has finished (i.e. after `tauri ios build` exits) and BEFORE
+        # `xcodebuild -exportArchive` re-packages + re-signs the .app
+        # into the IPA. Because `-exportArchive` re-signs the bundle
+        # with our manual provisioning profile, the modified Info.plist
+        # is included in the signed payload and altool sees a fresh,
+        # monotonically increasing CFBundleVersion (= github.run_number).
+        # CFBundleShortVersionString (marketing version, displayed on
+        # the App Store page) is left untouched at "0.6.5".
+        run: |
+          set -euxo pipefail
+          APP_PLIST=$(find "${{ steps.archive.outputs.xcarchive }}/Products/Applications" -maxdepth 3 -name 'Info.plist' -type f | head -1)
+          if [ -z "$APP_PLIST" ]; then
+            echo "::error::Could not find Info.plist inside .xcarchive"
+            find "${{ steps.archive.outputs.xcarchive }}" -name 'Info.plist' -type f
+            exit 1
+          fi
+          echo "Patching $APP_PLIST"
+          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$APP_PLIST"
+          echo '--- archived Info.plist after patch ---'
+          plutil -p "$APP_PLIST" | grep -E 'CFBundleVersion|CFBundleShortVersionString' || true
+
       - name: Write exportOptions.plist for manual signing
         # Tauri's generated exportOptions.plist works for automatic
         # signing but doesn't populate `provisioningProfiles` for
