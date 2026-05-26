@@ -95,8 +95,24 @@ on:
         default: false
 
 concurrency:
+  # Group key includes the workflow + the ref so each branch / tag
+  # runs in its own concurrency lane. Pushing twice to the same
+  # branch in quick succession therefore funnels both runs into
+  # the same group, and the older one is auto-cancelled.
+  #
+  # `cancel-in-progress: true` is the default for any
+  # iteration-heavy branch: while we're churning through
+  # release/ios-submission we routinely push 3-4 fix commits in
+  # a few minutes, and we don't want two `ios-release` jobs
+  # racing to upload to TestFlight with different
+  # `CFBundleVersion = github.run_number` values (the older one
+  # would still successfully upload an outdated build that
+  # testers might accidentally install).
+  #
+  # Tag pushes (`v*`) also fall under this rule. That's fine -
+  # a re-pushed tag should always supersede the previous run.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   ios:
