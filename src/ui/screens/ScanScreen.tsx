@@ -9,8 +9,8 @@
  * Layout (Option C - "compte en haut, robots au centre")
  * ──────────────────────────────────────────────────────
  *   ┌──────────────────────────────────────────┐
- *   │  ◉ tfrere                          [⎋]   │  ← HfAccountBar (top)
- *   │  ----------------------------------------│
+ *   │  [◉ tfrere  · Sign out]            [?]   │  ← HfAccountBar (top)
+ *   │  ────────────────────────────────────────│
  *   │                                          │
  *   │              ╭──╮                        │
  *   │             (·_·)    ← reachy-buste     │
@@ -32,10 +32,21 @@
  *   │              ↻ Refresh                   │  ← sticky bottom bar
  *   └──────────────────────────────────────────┘
  *
- *   - HF account bar: physically separated from the robot list
- *     (top of viewport, divider underneath) so the sign-out
- *     gesture is unambiguous and never confused with "disconnect
- *     from this robot".
+ *   - HF account bar: avatar + username + Sign out grouped on
+ *     the left as ONE auth block (so "what account am I signed
+ *     in as?" and "how do I leave?" are physically adjacent).
+ *     The Help (?) button sits alone on the right, away from the
+ *     auth cluster - it's not an account-level action. A bottom
+ *     divider anchors the bar so when the Help overlay opens
+ *     below, the topbar reads as the persistent chrome.
+ *   - Help overlay: mounted in the same idiom as the session
+ *     `RobotInfoPanel` - a `position: fixed` overlay pinned BELOW
+ *     the topbar, covering body + sticky refresh bar but NOT the
+ *     topbar itself. The Help (?) glyph swaps to (✕) while the
+ *     overlay is open, so a second tap in the same spot dismisses
+ *     it. We deliberately moved away from the earlier bottom-sheet
+ *     `Drawer` so the user keeps eye contact with the auth block
+ *     (and the close affordance) while reading the support panel.
  *   - Hero illustration: the reachy-buste from the splash, 95%
  *     opaque, gives the screen a brand identity beyond the cards.
  *   - Refresh: pinned at the bottom (with safe-area inset), out
@@ -69,6 +80,7 @@ import {
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import LockIcon from '@mui/icons-material/Lock';
 import LogoutIcon from '@mui/icons-material/Logout';
@@ -89,7 +101,7 @@ import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { TransportChip } from '@/ui/design/TransportChip';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
-import HelpAndSupportSheet from './scan/HelpAndSupportSheet';
+import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
@@ -134,14 +146,20 @@ export default function ScanScreen({
   // state (loading → empty → 1 robot → N robots → error).
   const isRefreshing = remote.state.kind === 'loading';
 
-  // Help & Support sheet is the contact-information surface required
-  // by Apple guideline 1.2 (UGC) and Google Play's UGC policy. It's
-  // mounted from this screen because `ScanScreen` is the lobby the
-  // user lands on every time the app boots (no in-flight session to
-  // disrupt), and because the `HfAccountBar` already groups
-  // "account-level" affordances which is the natural place for
-  // settings / contact entries to live.
+  // Help & Support overlay is the contact-information surface
+  // required by Apple guideline 1.2 (UGC) and Google Play's UGC
+  // policy. It's hosted from this screen because `ScanScreen` is
+  // the lobby the user lands on every time the app boots (no
+  // in-flight session to disrupt), and because the `HfAccountBar`
+  // up here is the natural anchor for settings / contact entries.
+  // The state lives here (not inside the bar) so the topbar can
+  // mirror the overlay's open state (icon swap `?` -> `✕`) and
+  // the host can mount the overlay as a `position: fixed` sibling
+  // below the bar, same idiom as `RobotInfoPanel` in the session
+  // screen.
   const [helpOpen, setHelpOpen] = useState(false);
+  const toggleHelp = () => setHelpOpen((open) => !open);
+  const closeHelp = () => setHelpOpen(false);
 
   return (
     <Stack
@@ -149,13 +167,15 @@ export default function ScanScreen({
         height: '100%',
         width: '100%',
         bgcolor: 'background.default',
+        position: 'relative',
       }}
     >
       <HfAccountBar
         username={displayName}
         avatarUrl={profile.avatarUrl}
         onSignOut={onSignOutRemote}
-        onOpenHelp={() => setHelpOpen(true)}
+        onToggleHelp={toggleHelp}
+        isHelpOpen={helpOpen}
       />
 
       {/* Inner scroll container. `m: 'auto'` on the column distributes
@@ -251,29 +271,115 @@ export default function ScanScreen({
         isRefreshing={isRefreshing}
       />
 
-      {/* App-Store-1.2 compliance: Help & Support sheet reachable
+      {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
-          Google-mandated contact channels for UGC-bearing apps. */}
-      <HelpAndSupportSheet
-        open={helpOpen}
-        onClose={() => setHelpOpen(false)}
-      />
+          Google-mandated contact channels for UGC-bearing apps.
+          Mounted as a `position: fixed` overlay pinned BELOW the
+          `HfAccountBar` so the topbar (avatar + username + Sign
+          out + the help-icon-turned-cross) stays visible while
+          the overlay is up. Same idiom as `RobotInfoPanel` in
+          the session screen.
+            - `top: max(64px, safe-area + 64px)` matches the
+              total height of the `HfAccountBar`:
+                safe-area-top + 12 (pt) + 38 (avatar) + 12 (pb)
+                + 1 (divider) ≈ safe-area + 63 px on iPhones,
+                64 px on no-notch platforms.
+            - zIndex 1200 keeps the overlay above the body /
+              sticky refresh bar but below any future
+              full-screen transition layer (1300+). */}
+      {helpOpen && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 'max(64px, calc(env(safe-area-inset-top, 0px) + 64px))',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1200,
+          }}
+        >
+          <HelpAndSupportOverlay onClose={closeHelp} />
+        </Box>
+      )}
     </Stack>
   );
 }
 
 /* --- HF account top bar --------------------------------------------- */
 
+/**
+ * Top bar.
+ *
+ * Two clusters separated by a flex gap so the user reads "auth"
+ * on the left and "support" on the right:
+ *
+ *   ┌──────────────────────────────────────────────────────┐
+ *   │       SIGNED IN AS                                   │
+ *   │ [◉]  @tfrere               [ ⎋ ]              [ ? ]  │
+ *   │ ────────────────────────────────────────────────────│
+ *   └──────────────────────────────────────────────────────┘
+ *
+ * Left "auth cluster"
+ * ───────────────────
+ * Avatar + a two-line identity column ("Signed in as" kicker +
+ * `@username`) + a sign-out icon, all sitting flush on the topbar
+ * with NO surrounding pill / card chrome - on a bar this small a
+ * nested rounded container just adds visual noise. Grouping is
+ * carried by simple proximity (everything on the same row at
+ * `spacing={1}`).
+ *
+ * The kicker frames the row below as the account name in one
+ * glance - without it the cluster reads as just "@tfrere [⎋]"
+ * and new users have to infer the meaning from the avatar alone.
+ *
+ * The sign-out icon is a borderless `IconButton`; primary tint
+ * on the glyph is the only colour cue that this is the
+ * actionable element. Significantly lighter than the earlier
+ * outlined-primary `[Sign out]` button while keeping the logout
+ * affordance visible AND unambiguous: it lives RIGHT next to the
+ * identity it terminates, so it can't be misread as "disconnect
+ * from the robot list" like the old toolbar icon could.
+ *
+ * Right "support" slot
+ * ────────────────────
+ * Single `?` icon, on its own (no container). The visual contrast
+ * between the contained left pill and the free-floating right
+ * icon helps the two clusters read as different categories of
+ * action (account vs help). The icon toggles the
+ * `HelpAndSupportOverlay` and swaps to `✕` while the overlay is
+ * open, matching the session screen's info-button idiom: same
+ * slot for open AND close.
+ *
+ * Bottom divider
+ * ──────────────
+ * Conditional hairline: only visible while the help overlay is
+ * open. The closed-state topbar already sits on the same
+ * `background.default` as the body below it, so the divider
+ * would just add visual noise without serving any anchoring
+ * role. When the overlay opens, however, its matte body would
+ * otherwise melt into the topbar - the hairline fades in to
+ * reinforce the "the help panel is a layer on top of the lobby"
+ * mental model. The border slot stays in the box model at all
+ * times (transparent ↔ divider colour) so toggling help never
+ * shifts the topbar's height nor the overlay's `top` offset.
+ */
 function HfAccountBar({
   username,
   avatarUrl,
   onSignOut,
-  onOpenHelp,
+  onToggleHelp,
+  isHelpOpen,
 }: {
   username: string | null;
   avatarUrl: string | null;
   onSignOut: () => void;
-  onOpenHelp: () => void;
+  onToggleHelp: () => void;
+  /**
+   * Mirror of the host's `helpOpen` state. Drives the icon swap
+   * (`?` -> `✕`) and the aria-label so the same button reads as
+   * "Open" when closed and "Close" when open.
+   */
+  isHelpOpen: boolean;
 }) {
   // First letter of the username for the fallback avatar (used
   // while the whoami-v2 request is in flight, when the user has
@@ -284,93 +390,163 @@ function HfAccountBar({
       direction="row"
       alignItems="center"
       justifyContent="space-between"
+      spacing={1.5}
       sx={{
         width: '100%',
         pt: `calc(${LAYOUT.safeAreaTop} + 12px)`,
         pb: 1.5,
-        px: 2.5,
+        px: 2,
         bgcolor: 'background.default',
+        // 1 px hairline always present (transparent when the help
+        // overlay is closed, divider colour when it's open). Kept
+        // in the box model at all times so the topbar's height -
+        // and therefore the overlay's `top` offset - never shifts
+        // when help is toggled. Only the colour transitions.
+        borderBottom: theme =>
+          `1px solid ${isHelpOpen ? theme.palette.divider : 'transparent'}`,
+        transition: theme =>
+          theme.transitions.create('border-bottom-color', {
+            duration: theme.transitions.duration.shortest,
+          }),
+        // Stay above the help overlay so the topbar remains the
+        // persistent chrome the user closes the overlay from. The
+        // overlay's zIndex is 1200; we sit just above.
+        position: 'relative',
+        zIndex: 1201,
       }}
     >
+      {/* Auth cluster. Sits flush on the topbar with no surrounding
+          card / pill chrome: the topbar itself is already the
+          container, and a nested pill on a bar this small read as
+          visual noise. The grouping is now carried by simple
+          proximity (avatar + identity column + sign-out icon all
+          on the same row at `spacing={1}`). */}
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1.5}
-        sx={{ minWidth: 0, flex: 1 }}
+        spacing={1}
+        sx={{
+          minWidth: 0,
+          flexShrink: 1,
+        }}
       >
         <Avatar
           src={avatarUrl ?? undefined}
           alt={username ?? 'Hugging Face user'}
           sx={{
-            width: 38,
-            height: 38,
+            width: 32,
+            height: 32,
             flexShrink: 0,
-            fontSize: TYPO.body,
+            fontSize: TYPO.sm,
             fontWeight: FONT_WEIGHT.semibold,
             bgcolor: theme =>
               theme.palette.mode === 'dark'
                 ? 'rgba(255,255,255,0.08)'
                 : 'rgba(0,0,0,0.06)',
             color: 'text.secondary',
-            border: theme => `1px solid ${theme.palette.divider}`,
           }}
         >
           {initial ?? (
             <AccountCircleIcon
-              sx={{ color: 'text.secondary', fontSize: 28 }}
+              sx={{ color: 'text.secondary', fontSize: 24 }}
             />
           )}
         </Avatar>
-        <Stack sx={{ minWidth: 0 }} spacing={0.25}>
+        {/* Two-line identity column inside the pill.
+            Row 1 is the "Signed in as" label, styled exactly
+            like every other label in the app (cf. `Section`'s
+            header: TYPO.tiny, semibold, secondary, uppercase,
+            letterSpacing 0.6 px). Aligning on this canonical
+            label style means the eye reads the kicker as "this
+            is a label, not content" without any extra cognitive
+            tax. Row 2 carries the `@handle` itself - same `@`
+            prefix convention as `RobotInfoPanel`'s "Signed in"
+            row. Tight `lineHeight` on both lines keeps the
+            column compact enough to fit the pill's vertical
+            rhythm without bloating the topbar. */}
+        <Stack
+          spacing={0}
+          sx={{ minWidth: 0, flexShrink: 1, pr: 0.5 }}
+        >
           <Typography
             sx={{
-              fontSize: TYPO.md,
+              // `nano` is the floor of the type scale, reserved
+              // for kicker labels living INSIDE a chip / pill.
+              // `Section`'s canonical free-standing header label
+              // uses `tiny` (0.7rem), one step smaller is `micro`
+              // (0.65rem), and `nano` (0.6rem) is the dedicated
+              // size for "label that subtitles a single line of
+              // content inside an already-bounded container."
+              // Anything bigger here visually competes with the
+              // `@handle` instead of framing it.
+              fontSize: TYPO.nano,
+              fontWeight: FONT_WEIGHT.semibold,
+              color: 'text.secondary',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase',
+              lineHeight: 1.2,
+            }}
+            noWrap
+          >
+            Signed in as
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: TYPO.sm,
               fontWeight: FONT_WEIGHT.semibold,
               color: 'text.primary',
               lineHeight: 1.2,
             }}
             noWrap
           >
-            {username ?? 'Hugging Face'}
-          </Typography>
-          <Typography
-            sx={{
-              fontSize: TYPO.xs,
-              color: 'text.secondary',
-              lineHeight: 1.2,
-            }}
-            noWrap
-          >
-            Signed in via Hugging Face
+            {username ? `@${username}` : 'Hugging Face'}
           </Typography>
         </Stack>
+        {/* Sign-out icon. Lives INSIDE the auth pill so the
+            affordance is unambiguous - "leave THIS account."
+            Compact IconButton, no border, no label, no extra
+            visual weight. The primary tint on the glyph is the
+            only colour cue that this is an actionable item. No
+            tooltip on mobile (touch users would need to long-
+            press to surface it, which nobody discovers); the
+            `aria-label` still feeds screen readers. */}
+        <IconButton
+          aria-label="Sign out of Hugging Face"
+          onClick={onSignOut}
+          size="small"
+          color="primary"
+          sx={{
+            flexShrink: 0,
+            p: 0.5,
+          }}
+        >
+          <LogoutIcon sx={{ fontSize: 18 }} />
+        </IconButton>
       </Stack>
-      {/* Account-level affordance cluster. Help is left of Logout
-          so the user reads "support" before "exit"; the order
-          matches macOS / iOS conventions where destructive /
-          terminal actions sit in the rightmost slot. */}
-      <Stack direction="row" alignItems="center" spacing={0.5}>
-        <Tooltip title="Help &amp; support">
-          <IconButton
-            aria-label="Open help and support"
-            onClick={onOpenHelp}
-            color="primary"
-            sx={{ p: 1 }}
-          >
-            <HelpOutlineIcon sx={{ fontSize: 22 }} />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Sign out">
-          <IconButton
-            aria-label="Sign out of Hugging Face"
-            onClick={onSignOut}
-            color="primary"
-            sx={{ p: 1 }}
-          >
-            <LogoutIcon sx={{ fontSize: 22 }} />
-          </IconButton>
-        </Tooltip>
-      </Stack>
+
+      {/* Help (?) / close (✕) toggle. Free-floating on the right,
+          deliberately NOT wrapped in a pill so it reads as a
+          different category of action (support, not account).
+          No tooltip - the `?` glyph is universal and the dynamic
+          icon swap on open (`?` -> `✕`) already telegraphs the
+          state change. `aria-label` carries the wording for
+          screen readers. */}
+      <IconButton
+        aria-label={
+          isHelpOpen
+            ? 'Close help and support'
+            : 'Open help and support'
+        }
+        onClick={onToggleHelp}
+        color="primary"
+        sx={{ p: 1, flexShrink: 0 }}
+      >
+        {isHelpOpen ? (
+          <CloseIcon sx={{ fontSize: 22 }} />
+        ) : (
+          <HelpOutlineIcon sx={{ fontSize: 22 }} />
+        )}
+      </IconButton>
     </Stack>
   );
 }
