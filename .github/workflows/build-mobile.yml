@@ -1043,101 +1043,105 @@ jobs:
           echo "Found archive at: $XCARCHIVE"
           echo "xcarchive=$XCARCHIVE" >> "$GITHUB_OUTPUT"
 
-      - name: Override CFBundleVersion in archived .app
-        # cargo-mobile2 invokes `agvtool new-version -all <version>`
-        # mid-build, sourcing the version from `tauri.conf.json:version`
-        # (currently "0.6.5"). That call CLOBBERS any earlier patch on
-        # `gen/apple/.../Info.plist` and on `project.yml`, leaving the
-        # archived .app with `CFBundleVersion = 0.6.5`. App Store
-        # Connect then rejects the upload as a duplicate on every
-        # subsequent run with ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE.
+      - name: Patch CFBundleVersion, re-sign, and build IPA manually
+        # We do NOT use `xcodebuild -exportArchive` here. Here's why:
         #
-        # We patch the Info.plist INSIDE the .xcarchive AFTER agvtool
-        # has finished (i.e. after `tauri ios build` exits) and BEFORE
-        # `xcodebuild -exportArchive` re-packages + re-signs the .app
-        # into the IPA. Because `-exportArchive` re-signs the bundle
-        # with our manual provisioning profile, the modified Info.plist
-        # is included in the signed payload and altool sees a fresh,
-        # monotonically increasing CFBundleVersion (= github.run_number).
-        # CFBundleShortVersionString (marketing version, displayed on
-        # the App Store page) is left untouched at "0.6.5".
-        run: |
-          set -euxo pipefail
-          # IMPORTANT: target the .app bundle's TOP-LEVEL Info.plist, NOT
-          # the embedded ones (LaunchScreen.storyboardc/Info.plist,
-          # Pods bundles, etc). Earlier versions of this step used
-          # `find ... -name 'Info.plist' | head -1` and matched
-          # `LaunchScreen.storyboardc/Info.plist`, leaving CFBundleVersion
-          # of the actual app bundle untouched at 0.6.5 - which still
-          # triggered the altool duplicate-version rejection.
-          APP_BUNDLE=$(find "${{ steps.archive.outputs.xcarchive }}/Products/Applications" -mindepth 1 -maxdepth 2 -name '*.app' -type d | head -1)
-          if [ -z "$APP_BUNDLE" ]; then
-            echo "::error::Could not locate .app bundle inside .xcarchive"
-            find "${{ steps.archive.outputs.xcarchive }}" -maxdepth 4 -type d
-            exit 1
-          fi
-          APP_PLIST="$APP_BUNDLE/Info.plist"
-          if [ ! -f "$APP_PLIST" ]; then
-            echo "::error::Expected Info.plist not found at $APP_PLIST"
-            ls -la "$APP_BUNDLE"
-            exit 1
-          fi
-          echo "Patching $APP_PLIST"
-          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$APP_PLIST"
-          echo '--- archived Info.plist after patch ---'
-          plutil -p "$APP_PLIST" | grep -E 'CFBundleVersion|CFBundleShortVersionString' || true
-
-      - name: Write exportOptions.plist for manual signing
-        # Tauri's generated exportOptions.plist works for automatic
-        # signing but doesn't populate `provisioningProfiles` for
-        # manual signing. We write our own to map the bundle id
-        # explicitly to the profile name we installed earlier.
+        # The mid-build `agvtool new-version -all <tauri.conf.json:version>`
+        # call (invoked by cargo-mobile2) bakes `CFBundleVersion =
+        # 0.6.5` into the .app's Info.plist, AND seals that value into
+        # the codesign payload (CodeResources hashes). If we then
+        # patch the Info.plist and run `xcodebuild -exportArchive`,
+        # xcodebuild detects the signature mismatch and restores the
+        # original Info.plist from the sealed payload before zipping
+        # the IPA, leaving us with `CFBundleVersion = 0.6.5` and the
+        # ASC "DUPLICATE" rejection (we have logs proving this race -
+        # the patch shows up in the archived .app but disappears from
+        # the exported .ipa).
+        #
+        # Workaround: patch the Info.plist, re-sign the .app so the
+        # CodeResources hashes match the new contents, then build the
+        # IPA by hand (`zip Payload/<App>.app`). The .app inside the
+        # .xcarchive is already signed with our Distribution identity
+        # and embedded.mobileprovision (manual signing is configured
+        # in `Configure pbxproj for manual signing` above), so an IPA
+        # built directly from it is upload-ready without any further
+        # work from xcodebuild.
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euxo pipefail
-          cat > exportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>app-store-connect</string>
-            <key>destination</key>
-            <string>export</string>
-            <key>teamID</key>
-            <string>${APPLE_TEAM_ID}</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>signingCertificate</key>
-            <string>Apple Distribution</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>com.pollen-robotics.reachy-mini</key>
-              <string>Reachy Mini App Store</string>
-            </dict>
-            <key>uploadSymbols</key>
-            <true/>
-            <key>compileBitcode</key>
-            <false/>
-          </dict>
-          </plist>
-          EOF
-          echo "--- exportOptions.plist ---"
-          cat exportOptions.plist
+          XCARCHIVE="${{ steps.archive.outputs.xcarchive }}"
 
-      - name: Export IPA from archive
-        # Re-run the export step with our hand-crafted plist. This
-        # produces the .ipa next to the archive in `exported/`.
-        run: |
-          set -euxo pipefail
+          # Locate the .app bundle (NOT embedded plists like
+          # LaunchScreen.storyboardc/Info.plist).
+          APP_BUNDLE=$(find "$XCARCHIVE/Products/Applications" -mindepth 1 -maxdepth 2 -name '*.app' -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::Could not locate .app bundle inside .xcarchive"
+            find "$XCARCHIVE" -maxdepth 4 -type d
+            exit 1
+          fi
+          APP_PLIST="$APP_BUNDLE/Info.plist"
+          test -f "$APP_PLIST"
+          APP_NAME=$(basename "$APP_BUNDLE" .app)
+
+          # 1. Snapshot the entitlements baked into the existing
+          #    signature so we can re-apply them on re-sign.
+          #    `-d --entitlements :- --xml` writes a plain XML plist
+          #    (no leading 8-byte magic) to stdout.
+          codesign -d --entitlements :- --xml "$APP_BUNDLE" > /tmp/entitlements.plist 2>/dev/null
+          test -s /tmp/entitlements.plist
+          echo '--- entitlements snapshot ---'
+          plutil -p /tmp/entitlements.plist | head -20
+
+          # 2. Patch the CFBundleVersion in the app's Info.plist.
+          #    CFBundleShortVersionString is left untouched, so the
+          #    marketing version on the App Store page stays at the
+          #    value declared in tauri.conf.json (e.g. 0.6.5).
+          plutil -replace CFBundleVersion -string "${{ github.run_number }}" "$APP_PLIST"
+          echo '--- Info.plist after patch ---'
+          plutil -p "$APP_PLIST" | grep -E 'CFBundleVersion|CFBundleShortVersionString'
+
+          # 3. Find the Apple Distribution identity in the keychain
+          #    (imported earlier from APPLE_CERTIFICATE_BASE64).
+          SIGN_IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Distribution/{print $2; exit}')
+          if [ -z "$SIGN_IDENTITY" ]; then
+            echo "::error::No 'Apple Distribution' identity found in keychain"
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+          echo "Re-signing with identity: $SIGN_IDENTITY"
+
+          # 4. Re-sign the .app (--force overrides existing signature,
+          #    --preserve-metadata keeps the identifier/flags/runtime
+          #    flags that match the original signature). `codesign`
+          #    will also regenerate CodeResources hashes to match the
+          #    patched Info.plist.
+          codesign --force --sign "$SIGN_IDENTITY" \
+            --entitlements /tmp/entitlements.plist \
+            --preserve-metadata=identifier,flags,runtime \
+            "$APP_BUNDLE"
+
+          # 5. Verify the new signature.
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+          # 6. Build the IPA manually: an IPA is just a zip of
+          #    `Payload/<App>.app/`. The .app already contains its
+          #    embedded.mobileprovision (added by xcodebuild during
+          #    archive), so no further xcodebuild work is needed.
           mkdir -p exported
-          xcodebuild -exportArchive \
-            -archivePath "${{ steps.archive.outputs.xcarchive }}" \
-            -exportOptionsPlist exportOptions.plist \
-            -exportPath exported \
-            -allowProvisioningUpdates
+          rm -f "exported/${APP_NAME}.ipa"
+          PAYLOAD_PARENT=$(mktemp -d)
+          mkdir -p "$PAYLOAD_PARENT/Payload"
+          cp -R "$APP_BUNDLE" "$PAYLOAD_PARENT/Payload/"
+          (cd "$PAYLOAD_PARENT" && zip -qry "$GITHUB_WORKSPACE/exported/${APP_NAME}.ipa" Payload)
+          rm -rf "$PAYLOAD_PARENT"
+
+          # 7. Final verification: peek at the IPA's Info.plist to
+          #    confirm CFBundleVersion stuck.
           ls -la exported/
+          echo '--- final IPA Info.plist ---'
+          unzip -p "exported/${APP_NAME}.ipa" "Payload/${APP_NAME}.app/Info.plist" > /tmp/final.plist
+          plutil -p /tmp/final.plist | grep -E 'CFBundleVersion|CFBundleShortVersionString'
 
       - name: Locate IPA
         id: pack
