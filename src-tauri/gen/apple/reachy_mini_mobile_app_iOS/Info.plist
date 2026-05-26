@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.6.5</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<string>0.6.5</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -44,7 +44,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Reachy Mini briefly opens the microphone on this device to establish a WebRTC connection with the robot. Your voice is captured by Reachy Mini’s own microphone, not this device; no phone audio is recorded or transmitted.</string>
+	<string>Reachy Mini briefly opens the microphone on this device to establish a WebRTC connection with the robot. Your voice is captured by Reachy Mini\u2019s own microphone, not this device; no phone audio is recorded or transmitted.</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>

@@ -320,7 +320,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 4KLHP7L6KP;
+				DEVELOPMENT_TEAM = "4KLHP7L6KP";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -346,7 +346,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.pollen-robotics.reachy-mini";
+				PRODUCT_BUNDLE_IDENTIFIER = com.pollen-robotics.reachy-mini;
 				PRODUCT_NAME = "Reachy Mini";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -425,7 +425,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 4KLHP7L6KP;
+				DEVELOPMENT_TEAM = "4KLHP7L6KP";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -451,7 +451,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.pollen-robotics.reachy-mini";
+				PRODUCT_BUNDLE_IDENTIFIER = com.pollen-robotics.reachy-mini;
 				PRODUCT_NAME = "Reachy Mini";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";

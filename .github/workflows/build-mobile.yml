@@ -134,15 +134,10 @@ jobs:
         run: rustup target add aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-ios-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-ios-
+          workspaces: src-tauri -> target
+          shared-key: ios-sim
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -228,6 +223,26 @@ jobs:
                   print(f'flattened {path}')
           PY
 
+      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+        # Tauri 2.10's `tauri.conf.json > bundle.iOS` exposes only
+        # `developmentTeam`, `minimumSystemVersion`, `frameworks` and
+        # `bundleVersion` - there is no field for the device family.
+        # The default `tauri ios init` ships an "Universal" project
+        # (TARGETED_DEVICE_FAMILY = "1,2", iPhone + iPad), which would
+        # have App Store Connect advertise iPad availability we don't
+        # support. We rewrite the build setting to "1" (iPhone only)
+        # so the IPA's final Info.plist carries `UIDeviceFamily = [1]`
+        # and ASC's device matrix correctly hides iPad.
+        # Sed is idempotent: re-runs on an already-patched project
+        # are no-ops (the "1,2" pattern is gone). We only touch the
+        # main app project, not Pods.xcodeproj - CocoaPods frameworks
+        # stay Universal so their precompiled slices remain usable.
+        run: |
+          set -euxo pipefail
+          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
+          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
+
       - name: Patch Info.plist for app permissions + Export Compliance
         # `tauri ios init` regenerates a barebones Info.plist that
         # only carries Tauri's defaults (orientations, launch
@@ -297,7 +312,7 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Inject Privacy Manifest into xcodeproj
+      - name: Patch regenerated xcodeproj (privacy manifest + frameworks)
         # Apple requires `PrivacyInfo.xcprivacy` at the root of the
         # app bundle since May 2024 (App Store + TestFlight). Missing
         # the file triggers an automatic rejection with
@@ -311,11 +326,17 @@ jobs:
         # Resources" (the extension was added to xcodegen's default
         # resource list only in v2.42, 2024-06).
         #
-        # The ruby helper at `src-tauri/scripts/inject-privacy-manifest.rb`
-        # is idempotent: it copies the manifest into the iOS source
-        # folder, adds the file reference, and appends it to the
-        # target's Resources phase. See the script header for the
-        # full rationale.
+        # We also link `AuthenticationServices.framework` here:
+        # `tauri-plugin-auth-session` declares the framework via its
+        # build.rs for `aarch64-apple-ios` but NOT for
+        # `aarch64-apple-ios-sim`, so the simulator build fails at
+        # link time with:
+        #   Undefined symbols for arch arm64:
+        #     "_ASWebAuthenticationSessionErrorDomain"
+        # Adding the framework at the xcodeproj level fixes it for
+        # both device and simulator (ld de-duplicates).
+        #
+        # Both ruby helpers are idempotent (see script headers).
         run: |
           set -euxo pipefail
           cp src-tauri/PrivacyInfo.xcprivacy \
@@ -326,6 +347,7 @@ jobs:
           # the `Gem.user_dir` Ruby API, so calling `ruby` directly
           # (rather than `gem exec`) picks them up via Rubygems.
           ruby src-tauri/scripts/inject-privacy-manifest.rb
+          ruby src-tauri/scripts/inject-frameworks.rb
 
       - name: Disable code signing in pbxproj
         # Strip code-signing requirements for the unsigned simulator
@@ -413,6 +435,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Free up disk space
+        # ubuntu-latest runners ship with ~14 GiB free, not enough
+        # for the Android build chain: NDK 27 (~2 GiB), four Rust
+        # archs of intermediates (~6 GiB), Gradle caches (~3 GiB),
+        # JNI libs merge (~2 GiB). Without this step the build
+        # crashes during `mergeUniversalDebugJniLibFolders` with:
+        #   java.nio.file.FileSystemException: ... No space left
+        #   on device  (writing libreachy_mini_mobile_app_lib.so)
+        # This action reclaims ~20 GiB by removing toolchains we
+        # don't use (dotnet, haskell, pre-installed large packages,
+        # docker images, swap). `android: false` preserves the
+        # Android SDK that `setup-android` would otherwise have
+        # to redownload. Tool-cache is preserved so the Node/Java
+        # caches stay warm.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -451,15 +497,10 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-android-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-android-
+          workspaces: src-tauri -> target
+          shared-key: android-debug
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -716,15 +757,10 @@ jobs:
         run: rustup target add aarch64-apple-ios
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-ios-device-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-ios-device-
+          workspaces: src-tauri -> target
+          shared-key: ios-device
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -832,6 +868,16 @@ jobs:
                   print(f'flattened {path}')
           PY
 
+      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+        # Mirror of the simulator job's step. See the matching step
+        # above for the rationale (Tauri exposes no field for this,
+        # default is Universal, ASC needs iPhone-only).
+        run: |
+          set -euxo pipefail
+          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
+          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
+
       - name: Patch Info.plist for app permissions + Export Compliance
         # See the matching step in the simulator job for full reasoning.
         # We replicate it here because the release job also goes through
@@ -879,19 +925,23 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Inject Privacy Manifest into xcodeproj
+      - name: Patch regenerated xcodeproj (privacy manifest + frameworks)
         # Mirror of the step in the simulator job. The release job
         # also wipes `gen/apple/` before running `tauri ios init`,
-        # so the xcodeproj needs the same idempotent patch to add
-        # `PrivacyInfo.xcprivacy` to "Copy Bundle Resources" or App
-        # Store Connect will reject the upload with ITMS-91053
-        # before the build reaches App Review.
+        # so the xcodeproj needs the same idempotent patches to:
+        #   1. add `PrivacyInfo.xcprivacy` to "Copy Bundle Resources"
+        #      (or App Store Connect rejects the upload with
+        #      ITMS-91053 before the build reaches App Review);
+        #   2. link `AuthenticationServices.framework` to fix the
+        #      simulator linker error (see sim job for rationale).
+        # Both ruby helpers are idempotent.
         run: |
           set -euxo pipefail
           cp src-tauri/PrivacyInfo.xcprivacy \
              src-tauri/gen/apple/reachy_mini_mobile_app_iOS/PrivacyInfo.xcprivacy
           gem install --user-install xcodeproj --no-document
           ruby src-tauri/scripts/inject-privacy-manifest.rb
+          ruby src-tauri/scripts/inject-frameworks.rb
 
       - name: Configure pbxproj for manual signing
         # Force MANUAL code signing. Tauri's regenerated project
@@ -1172,6 +1222,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Free up disk space
+        # See the rationale in the debug Android job: the signed
+        # release build needs even more disk (R8 shrinker, AAB
+        # bundling, signing intermediates) so we reclaim ~20 GiB
+        # before anything else runs. `android: false` preserves
+        # the SDK / NDK that `setup-android` reuses below.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -1210,20 +1276,14 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          # Distinct cache key from the debug job: release artefacts
+          # Distinct shared-key from the debug job: release artefacts
           # have different rustc fingerprints (codegen-units, opt-level,
-          # debug=false) so sharing a cache evicts both jobs' deps on
-          # every run.
-          key: ${{ runner.os }}-rust-android-release-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-android-release-
-            ${{ runner.os }}-rust-android-
+          # debug=false) so sharing a cache would evict both jobs' deps
+          # on every run.
+          workspaces: src-tauri -> target
+          shared-key: android-release
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
