@@ -18,12 +18,18 @@
  *
  * What it discloses
  * ─────────────────
- * Three short bullets, each anchored to a real feature of the app
+ * Two short bullets, each anchored to a real feature of the app
  * so the modal reads as "what to expect" rather than legalese:
  *
- *   1. Voice conversations    -> mic + OpenAI Realtime
- *   2. Third-party apps       -> HF Spaces in WebView + report flow
- *   3. Hugging Face sign-in   -> token storage on device
+ *   1. Voice conversations    -> robot mic + OpenAI Realtime
+ *   2. Hugging Face sign-in   -> token storage on device
+ *
+ * (A third bullet about third-party Hugging Face Space apps used
+ * to live here, mirroring the in-app Apps tab. It was removed
+ * alongside `APPS_TAB_ENABLED = false` in `RobotSessionScreen.tsx`
+ * so the disclosure matches what the user actually sees today.
+ * Restore it from git history when the Apps tab ships back on -
+ * the original body still applies verbatim.)
  *
  * The Privacy Policy + Terms of Service URLs sit directly under
  * the primary CTA so the user who wants the legal text can read
@@ -38,15 +44,14 @@
  * does fullscreen-from-the-root via that pattern.
  *
  * Layout: a centred title block, a single divider-list card that
- * holds the four disclosures (iOS Settings pattern, much more
- * compact than the previous four-cards-stacked layout - the
- * full set fits without scrolling on an iPhone 14-class viewport
- * in dynamic-type-default), and a sticky action plate that owns
- * both the primary CTA and the legal links.
+ * holds the disclosures (iOS Settings pattern, much more compact
+ * than a cards-stacked layout - the full set fits without
+ * scrolling on an iPhone 14-class viewport in dynamic-type-default),
+ * and a sticky action plate that owns both the primary CTA and
+ * the legal links.
  */
 import { useCallback } from 'react';
 import { Box, Button, Divider, Stack, Typography } from '@mui/material';
-import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import GraphicEqOutlinedIcon from '@mui/icons-material/GraphicEqOutlined';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 
@@ -81,19 +86,13 @@ const BULLETS: readonly DisclosureBullet[] = [
     icon: GraphicEqOutlinedIcon,
     title: 'Voice conversations',
     body:
-      'Your microphone audio is sent to OpenAI Realtime to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
-  },
-  {
-    icon: AppsOutlinedIcon,
-    title: 'Third-party apps',
-    body:
-      'The Apps tab lists experiences from third parties on Hugging Face. They run in a sandboxed WebView, and you can report or hide any of them.',
+      'Reachy Mini captures your voice with its onboard microphone and streams it to OpenAI Realtime to generate its replies. Your phone\u2019s microphone is briefly opened only to negotiate the WebRTC connection - no phone audio is recorded or sent. Audio is not stored on our servers.',
   },
   {
     icon: VerifiedUserOutlinedIcon,
     title: 'Hugging Face sign-in',
     body:
-      'You sign in with Hugging Face. Your access token is stored on this device and used to load apps from the Hub.',
+      'You sign in with Hugging Face. Your access token is stored on this device and used to mint short-lived OpenAI access on your behalf via the Reachy Mini website.',
   },
 ];
 
@@ -163,10 +162,10 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
           {/* Hero: the "locked Reachy" sticker - a bare Reachy
               head wearing a small padlock badge. The lock signals
               that this surface is about privacy / data boundaries,
-              which is exactly what the four bullets below cover
-              (mic audio, sandboxed apps, BLE / Wi-Fi scope, HF
-              token storage). The asset is a vector SVG so it
-              stays crisp at any size and adds zero raster weight.
+              which is exactly what the bullets below cover
+              (voice conversations, HF token storage). The asset
+              is a vector SVG so it stays crisp at any size and
+              adds zero raster weight.
               Static (not the carousel) because motion on a
               consent surface = distraction while the user is
               reading. */}
