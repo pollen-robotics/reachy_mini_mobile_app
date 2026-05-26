@@ -223,25 +223,49 @@ jobs:
                   print(f'flattened {path}')
           PY
 
-      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+      - name: Restrict app to iPhone-only (no iPad / Mac / Vision Pro)
         # Tauri 2.10's `tauri.conf.json > bundle.iOS` exposes only
         # `developmentTeam`, `minimumSystemVersion`, `frameworks` and
-        # `bundleVersion` - there is no field for the device family.
-        # The default `tauri ios init` ships an "Universal" project
-        # (TARGETED_DEVICE_FAMILY = "1,2", iPhone + iPad), which would
-        # have App Store Connect advertise iPad availability we don't
-        # support. We rewrite the build setting to "1" (iPhone only)
-        # so the IPA's final Info.plist carries `UIDeviceFamily = [1]`
-        # and ASC's device matrix correctly hides iPad.
-        # Sed is idempotent: re-runs on an already-patched project
-        # are no-ops (the "1,2" pattern is gone). We only touch the
-        # main app project, not Pods.xcodeproj - CocoaPods frameworks
-        # stay Universal so their precompiled slices remain usable.
+        # `bundleVersion` - no field for the device family or for the
+        # "Designed for iPhone/iPad" cross-platform availability
+        # toggles. We patch the regenerated xcodeproj directly so the
+        # IPA only advertises iPhone.
+        #
+        # Three build settings, all on each (debug + release) config:
+        #
+        #   * TARGETED_DEVICE_FAMILY = "1"
+        #     Default after `tauri ios init` is "1,2" (iPhone + iPad).
+        #     Xcode auto-populates `UIDeviceFamily` in the final
+        #     Info.plist from this, so flipping to "1" hides iPad
+        #     from App Store Connect's device matrix.
+        #
+        #   * SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO
+        #     Implicit Xcode default = YES since iOS 14, which makes
+        #     every iPhone app installable on Apple Silicon Macs as
+        #     "Designed for iPhone". Setting NO drops Mac from the
+        #     Distribution > Availability matrix in ASC.
+        #
+        #   * SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO
+        #     Implicit Xcode default = YES since Xcode 15, which
+        #     advertises every iPhone app as "Compatible with Apple
+        #     Vision Pro" by default. NO opts out.
+        #
+        # Apple Watch is irrelevant: the project has no watchOS
+        # target, so the app cannot ship on watchOS regardless.
+        #
+        # Both edits are idempotent because the CI wipes gen/apple
+        # before `tauri ios init`, but we double-guard the SUPPORTS_*
+        # insertion with `grep -q` so a hand-run on a patched project
+        # stays a no-op.
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
           sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
-          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
+          if ! grep -q 'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD' "$PBXPROJ"; then
+            perl -i -pe 's/(\t+TARGETED_DEVICE_FAMILY = "1";)/$1\n\t\t\t\tSUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;\n\t\t\t\tSUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;/g' "$PBXPROJ"
+          fi
+          echo "--- pbxproj device-family settings after patch ---"
+          grep -nE 'TARGETED_DEVICE_FAMILY|SUPPORTS_MAC_DESIGNED|SUPPORTS_XR_DESIGNED' "$PBXPROJ"
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # `tauri ios init` regenerates a barebones Info.plist that
@@ -868,15 +892,20 @@ jobs:
                   print(f'flattened {path}')
           PY
 
-      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+      - name: Restrict app to iPhone-only (no iPad / Mac / Vision Pro)
         # Mirror of the simulator job's step. See the matching step
-        # above for the rationale (Tauri exposes no field for this,
-        # default is Universal, ASC needs iPhone-only).
+        # above for the rationale (Tauri exposes no field for the
+        # device family or cross-platform availability toggles, so
+        # we patch the regenerated xcodeproj directly).
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
           sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
-          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
+          if ! grep -q 'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD' "$PBXPROJ"; then
+            perl -i -pe 's/(\t+TARGETED_DEVICE_FAMILY = "1";)/$1\n\t\t\t\tSUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;\n\t\t\t\tSUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;/g' "$PBXPROJ"
+          fi
+          echo "--- pbxproj device-family settings after patch ---"
+          grep -nE 'TARGETED_DEVICE_FAMILY|SUPPORTS_MAC_DESIGNED|SUPPORTS_XR_DESIGNED' "$PBXPROJ"
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # See the matching step in the simulator job for full reasoning.
