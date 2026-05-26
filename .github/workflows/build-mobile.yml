@@ -1120,14 +1120,26 @@ jobs:
         run: |
           set -euxo pipefail
           IPA_PATH=$(find exported -maxdepth 2 -name '*.ipa' -type f | head -1)
-          APP_NAME=$(unzip -l "$IPA_PATH" | awk '/Payload\/[^\/]+\.app\/Info\.plist$/{print $NF; exit}' | sed 's|Payload/||;s|/Info\.plist$||')
+          test -n "$IPA_PATH"
           echo "IPA: $IPA_PATH"
-          echo "App: $APP_NAME"
-          unzip -p "$IPA_PATH" "Payload/$APP_NAME/Info.plist" > /tmp/final.plist
+          # Unpack to a temp dir so we can `find` the .app bundle by
+          # name (robust to spaces, e.g. `Reachy Mini.app`, which a
+          # naive `awk $NF` parse of `unzip -l` would mangle).
+          TEMP_DIR=$(mktemp -d)
+          unzip -q "$IPA_PATH" -d "$TEMP_DIR"
+          APP_BUNDLE=$(find "$TEMP_DIR/Payload" -mindepth 1 -maxdepth 1 -name '*.app' -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::Could not locate .app bundle inside IPA"
+            find "$TEMP_DIR" -maxdepth 3 -type d
+            exit 1
+          fi
+          echo "App: $(basename "$APP_BUNDLE")"
+          INFO_PLIST="$APP_BUNDLE/Info.plist"
           echo '--- final IPA Info.plist (version fields) ---'
-          plutil -p /tmp/final.plist | grep -E 'CFBundleVersion|CFBundleShortVersionString'
-          ACTUAL_BV=$(plutil -extract CFBundleVersion raw /tmp/final.plist)
+          plutil -p "$INFO_PLIST" | grep -E 'CFBundleVersion|CFBundleShortVersionString'
+          ACTUAL_BV=$(plutil -extract CFBundleVersion raw "$INFO_PLIST")
           EXPECTED_BV="${{ github.run_number }}"
+          rm -rf "$TEMP_DIR"
           if [ "$ACTUAL_BV" != "$EXPECTED_BV" ]; then
             echo "::error::CFBundleVersion mismatch: got '$ACTUAL_BV', expected '$EXPECTED_BV'."
             echo "::error::The --config bundleVersion override didn't propagate. Check tauri-cli version (>=2.5.0)."
