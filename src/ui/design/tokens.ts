@@ -10,6 +10,13 @@
  */
 
 export const TYPO = {
+  // New floor of the scale. Introduced for "kicker" labels that
+  // live INSIDE a chip / pill (cf. `HfAccountBar`'s "SIGNED IN
+  // AS" sub-label) where even `micro` reads too loud next to the
+  // content it's framing. Don't use `nano` for free-standing
+  // labels above a card - those should stay at `tiny` to keep
+  // matching `Section`'s canonical header style.
+  nano: '0.6rem',
   micro: '0.65rem',
   tiny: '0.7rem',
   xs: '0.75rem',
