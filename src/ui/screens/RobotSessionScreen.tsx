@@ -454,12 +454,18 @@ function ConnectedSession({
             buttons visually grouped (they're both "session-level
             controls") while remaining distinct tap targets - MUI's
             default `IconButton` has its own internal padding so
-            they don't visually touch. */}
+            they don't visually touch.
+            No `mr` on the wrapper: the rightmost button uses MUI's
+            canonical `edge="end"` prop instead (see below). That
+            keeps the wrapper's own bounds inside `px: 3` so the
+            "info" button still aligns naturally on its inner edge,
+            while only the trailing power button is allowed to
+            visually overshoot toward the screen edge. */}
         <Stack
           direction="row"
           alignItems="center"
           spacing={0.25}
-          sx={{ flexShrink: 0, mr: -0.5 }}
+          sx={{ flexShrink: 0 }}
         >
           {/* Info button. Same slot, swappable glyph:
                 - closed : `ⓘ` invites the user to open the panel.
@@ -484,11 +490,24 @@ function ConnectedSession({
               <InfoOutlinedIcon sx={{ fontSize: 24 }} />
             )}
           </IconButton>
+          {/* `edge="end"` is the MUI-canonical way to neutralise the
+              IconButton's intrinsic right padding so the glyph
+              optically aligns with content edges above/below
+              rather than sitting with a double-padding gap
+              (cf. https://mui.com/material-ui/api/icon-button/
+              #icon-button-prop-edge). Applies `marginRight: -12`
+              to the button itself, pulling its hitbox closer to
+              the screen edge while preserving the 40 × 40 tap
+              target and its circular ripple. Only the trailing
+              power button gets this treatment - the leading info
+              button keeps its natural inner-edge spacing so the
+              pair still reads as a tight cluster. */}
           <IconButton
             aria-label="End session"
             onClick={handleLeave}
             color="primary"
             disabled={leaving}
+            edge="end"
             sx={{ flexShrink: 0 }}
           >
             <PowerSettingsNewIcon sx={{ fontSize: 24 }} />

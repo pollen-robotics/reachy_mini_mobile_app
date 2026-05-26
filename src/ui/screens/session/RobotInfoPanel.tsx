@@ -103,7 +103,8 @@ import type {
 } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
-import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
+import Section from '@/ui/design/Section';
+import { FONT_WEIGHT, LAYOUT, STATUS, TYPO } from '@/ui/design/tokens';
 
 /**
  * Per-kind label + dot colour. Mirrors what the old
@@ -328,27 +329,27 @@ export default function RobotInfoPanel({
               spacing={0.5}
               sx={{ flexShrink: 0 }}
             >
-              <Tooltip title="Copy all lines to clipboard" arrow>
-                <span>
-                  <IconButton
-                    aria-label="Copy logs"
-                    onClick={handleCopyLogs}
-                    disabled={logs.entries.length === 0}
-                    size="small"
-                  >
-                    <ContentCopyIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Tooltip title="Collapse logs" arrow>
-                <IconButton
-                  aria-label="Collapse logs"
-                  onClick={() => setLogsFullscreen(false)}
-                  size="small"
-                >
-                  <CloseFullscreenIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </Tooltip>
+              {/* Icon-only actions, no Tooltip: this is a mobile
+                  surface where tooltip would only surface on
+                  long-press (undiscoverable). The `aria-label`
+                  carries the wording for screen readers; the
+                  glyphs (`⧉` copy, `⤓` collapse) are universal
+                  enough on their own. */}
+              <IconButton
+                aria-label="Copy logs"
+                onClick={handleCopyLogs}
+                disabled={logs.entries.length === 0}
+                size="small"
+              >
+                <ContentCopyIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+              <IconButton
+                aria-label="Collapse logs"
+                onClick={() => setLogsFullscreen(false)}
+                size="small"
+              >
+                <CloseFullscreenIcon sx={{ fontSize: 18 }} />
+              </IconButton>
             </Stack>
           </Stack>
           <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -570,29 +571,25 @@ export default function RobotInfoPanel({
           subtitle="Live daemon journal"
           actions={
             <>
-              <Tooltip title="Expand logs to full screen" arrow>
-                <IconButton
-                  aria-label="Expand logs"
-                  onClick={() => setLogsFullscreen(true)}
-                  size="small"
-                  sx={{ width: 24, height: 24, p: 0.25 }}
-                >
-                  <OpenInFullIcon sx={{ fontSize: 12 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Copy all lines to clipboard" arrow>
-                <span>
-                  <IconButton
-                    aria-label="Copy logs"
-                    onClick={handleCopyLogs}
-                    disabled={logs.entries.length === 0}
-                    size="small"
-                    sx={{ width: 24, height: 24, p: 0.25 }}
-                  >
-                    <ContentCopyIcon sx={{ fontSize: 12 }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
+              {/* Same rationale as the fullscreen header: mobile
+                  surface, no Tooltip, `aria-label` for AT. */}
+              <IconButton
+                aria-label="Expand logs"
+                onClick={() => setLogsFullscreen(true)}
+                size="small"
+                sx={{ width: 24, height: 24, p: 0.25 }}
+              >
+                <OpenInFullIcon sx={{ fontSize: 12 }} />
+              </IconButton>
+              <IconButton
+                aria-label="Copy logs"
+                onClick={handleCopyLogs}
+                disabled={logs.entries.length === 0}
+                size="small"
+                sx={{ width: 24, height: 24, p: 0.25 }}
+              >
+                <ContentCopyIcon sx={{ fontSize: 12 }} />
+              </IconButton>
             </>
           }
           noBodyChrome
@@ -651,49 +648,6 @@ function StatusDotLabel({ color, label }: { color: string; label: string }) {
       >
         {label}
       </Typography>
-    </Stack>
-  );
-}
-
-/**
- * Grouped section header + framed body. The header label is the
- * small uppercase / spaced tag we use everywhere else in this app
- * (cf. `RobotPanel.title`, `HelpAndSupportSheet` subheaders) so the
- * three sections read as one consistent visual rhythm.
- */
-function Section({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Stack spacing={0.75}>
-      <Typography
-        component="h3"
-        sx={{
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.secondary',
-          letterSpacing: '0.6px',
-          textTransform: 'uppercase',
-          lineHeight: 1.2,
-          pl: 0.25,
-        }}
-      >
-        {label}
-      </Typography>
-      <Box
-        sx={(theme) => ({
-          borderRadius: `${RADIUS.lg}px`,
-          border: `1px solid ${theme.palette.divider}`,
-          bgcolor: theme.palette.background.paper,
-          overflow: 'hidden',
-        })}
-      >
-        {children}
-      </Box>
     </Stack>
   );
 }
@@ -862,16 +816,17 @@ function MetadataRow({
           value
         )}
         {copyable && stringValue && (
-          <Tooltip title="Copy to clipboard" arrow>
-            <IconButton
-              aria-label={`Copy ${label.toLowerCase()}`}
-              size="small"
-              onClick={handleCopy}
-              sx={{ width: 24, height: 24, p: 0.25 }}
-            >
-              <ContentCopyIcon sx={{ fontSize: 12 }} />
-            </IconButton>
-          </Tooltip>
+          // Icon-only copy affordance, no Tooltip on mobile (same
+          // rationale as the logs header). `aria-label` carries
+          // the per-row wording for screen readers.
+          <IconButton
+            aria-label={`Copy ${label.toLowerCase()}`}
+            size="small"
+            onClick={handleCopy}
+            sx={{ width: 24, height: 24, p: 0.25 }}
+          >
+            <ContentCopyIcon sx={{ fontSize: 12 }} />
+          </IconButton>
         )}
       </Box>
     </Stack>
