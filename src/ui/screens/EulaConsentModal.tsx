@@ -50,7 +50,7 @@ import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import GraphicEqOutlinedIcon from '@mui/icons-material/GraphicEqOutlined';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 
-import reachyHeroUrl from '@/assets/reachy-standard.webp';
+import reachyHeroUrl from '@/assets/locked-reachy.svg';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
@@ -160,14 +160,16 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
             textAlign: 'center',
           }}
         >
-          {/* Hero: the plain "Reachy standard" sticker (no persona
-              overlay). A bare robot reads as a neutral welcome -
-              an HF smiley or a costumed persona would speak to one
-              specific bullet (sign-in / a single app) and miss the
-              other three. The asset is a vector SVG so it stays
-              crisp at any size and adds zero raster weight. Static
-              (not the carousel) because motion on a consent
-              surface = distraction while the user is reading. */}
+          {/* Hero: the "locked Reachy" sticker - a bare Reachy
+              head wearing a small padlock badge. The lock signals
+              that this surface is about privacy / data boundaries,
+              which is exactly what the four bullets below cover
+              (mic audio, sandboxed apps, BLE / Wi-Fi scope, HF
+              token storage). The asset is a vector SVG so it
+              stays crisp at any size and adds zero raster weight.
+              Static (not the carousel) because motion on a
+              consent surface = distraction while the user is
+              reading. */}
           <Box
             component="img"
             src={reachyHeroUrl}
