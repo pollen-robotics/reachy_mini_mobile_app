@@ -48,12 +48,8 @@
  * Parked surfaces
  * ───────────────
  * Earlier revisions also exposed a "Local USB" section (loopback
- * daemon probe) and a "Bluetooth (LAN)" section (BLE rescan).
- * They are intentionally NOT rendered in the mobile shell right
- * now - the focus is the Central listing path. The Wi-Fi setup
- * flow downstream (`WifiSetupScreen`) and its `onRobotPicked`
- * prop on this screen are kept wired so the BLE section can be
- * restored without churning the parent contract.
+ * daemon probe). It is intentionally NOT rendered in the mobile
+ * shell right now - the focus is the Central listing path.
  */
 
 import { useState } from 'react';
@@ -78,7 +74,6 @@ import LockIcon from '@mui/icons-material/Lock';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
-import type { ReachyBleDevice } from '@/features/ble/useBleSession';
 import reachyBusteSvg from '@/assets/reachy-buste.svg';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import {
@@ -97,13 +92,6 @@ import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportSheet from './scan/HelpAndSupportSheet';
 
 interface ScanScreenProps {
-  /**
-   * Wired but unused right now: the BLE picker section is parked.
-   * Restoring it means rendering a `BluetoothSection` in this file
-   * and calling this callback when the user taps a row - no change
-   * needed in the parent.
-   */
-  onRobotPicked: (device: ReachyBleDevice) => void;
   onRemotePicked: (robot: CentralRobotEntry) => void;
   onSignOutRemote: () => void;
   /**
@@ -117,7 +105,6 @@ interface ScanScreenProps {
 }
 
 export default function ScanScreen({
-  onRobotPicked: _onRobotPicked,
   onRemotePicked,
   onSignOutRemote,
   token,

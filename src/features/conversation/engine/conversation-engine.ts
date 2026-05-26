@@ -534,11 +534,11 @@ function syncMotorModeForState(next: AppState): void {
  * Handle the HF central's `robotsChanged` event.
  *
  * The Space original rendered a "Choose a Reachy" picker here. The
- * mobile app is always paired to a specific robot over Bluetooth just
- * before this engine mounts, so the user has already decided which
- * robot they want - a picker would only create ambiguity if the
- * account lists several robots. We therefore auto-select the first
- * robot that appears and let `doStart` drive the rest.
+ * mobile app always knows which specific robot to talk to before
+ * this engine mounts (the user picked it on the ScanScreen from the
+ * central robot list), so a picker would only create ambiguity if
+ * the account lists several robots. We therefore auto-select the
+ * first robot that appears and let `doStart` drive the rest.
  *
  * If the list ever changes mid-session we keep the currently selected
  * robot: churn in the central's view is not a reason to retarget a
@@ -686,13 +686,14 @@ async function doConnect(): Promise<void> {
     setState("connected");
 
     // Fast path (mobile): we already know which robot to talk to from
-    // the Bluetooth pairing step, so skip the robotsChanged wait and
-    // drive straight into startSession. If the id turns out to be
-    // stale / wrong, doStart → onFatalError will surface the error
-    // and the user can retry; we explicitly don't fall back to the
-    // picker flow here because picking a different robot on an
-    // account that owns several would contradict the Bluetooth
-    // selection and violate the least-surprise principle.
+    // the ScanScreen selection (central robot list), so skip the
+    // robotsChanged wait and drive straight into startSession. If the
+    // id turns out to be stale / wrong, doStart → onFatalError will
+    // surface the error and the user can retry; we explicitly don't
+    // fall back to the picker flow here because picking a different
+    // robot on an account that owns several would contradict the
+    // user's explicit selection and violate the least-surprise
+    // principle.
     if (preselectedRobotId) {
       session.setSelectedRobotId(preselectedRobotId);
       setState("auto-selecting");

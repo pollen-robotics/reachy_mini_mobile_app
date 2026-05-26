@@ -230,8 +230,8 @@ jobs:
         # only carries Tauri's defaults (orientations, launch
         # storyboard, etc.). We need to add:
         #   - All NSXxxUsageDescription keys our runtime triggers
-        #     (mic, BLE, local network) - without them iOS aborts
-        #     the corresponding API call AND the app gets rejected
+        #     (mic, local network) - without them iOS aborts the
+        #     corresponding API call AND the app gets rejected
         #     during App Store review.
         #   - ITSAppUsesNonExemptEncryption = NO so each TestFlight
         #     build doesn't surface "Missing Compliance" until a
@@ -248,12 +248,6 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          plutil -replace NSBluetoothAlwaysUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode)." \
-            "$INFO_PLIST"
-          plutil -replace NSBluetoothPeripheralUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status." \
-            "$INFO_PLIST"
           plutil -replace NSMicrophoneUsageDescription -string \
             "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
             "$INFO_PLIST"
@@ -277,30 +271,12 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Inject CoreBluetooth link + disable code signing in pbxproj
-        # `tauri-plugin-blec` calls into Apple's CoreBluetooth via the
-        # `btleplug` crate, but neither emits a link directive that
-        # the Xcode-driven final link picks up:
-        #
-        #   - `cargo:rustc-link-lib=framework=CoreBluetooth` (which we
-        #     do try in `src-tauri/build.rs`) only travels with the
-        #     final Rust binary, not with the `libapp.a` staticlib that
-        #     ends up consumed by Xcode. Xcode does NOT read the build-
-        #     script outputs of an upstream Cargo invocation.
-        #
-        #   - The plugin's README tells contributors to add
-        #     CoreBluetooth.framework manually via the Xcode UI, which
-        #     doesn't survive `tauri ios init` regeneration here.
-        #
-        # The robust fix is to inject `OTHER_LDFLAGS` directly into the
-        # pbxproj's XCBuildConfiguration build settings (both Debug and
-        # Release), preserving inherited flags.
-        #
-        # In the same pass we strip code-signing requirements: the
-        # simulator SDK doesn't need a signed binary, but Xcode still
-        # validates the project's `DEVELOPMENT_TEAM` against the
-        # runner's logged-in Apple IDs (none on a fresh CI runner).
-        # When that check fails we get:
+      - name: Disable code signing in pbxproj
+        # Strip code-signing requirements for the unsigned simulator
+        # build: the simulator SDK doesn't need a signed binary, but
+        # Xcode still validates the project's `DEVELOPMENT_TEAM`
+        # against the runner's logged-in Apple IDs (none on a fresh
+        # CI runner). When that check fails we get:
         #   error: No Accounts: Add a new account in Accounts settings.
         #   error: No profiles for 'com.pollen-robotics.reachy-mini' were found
         # Disabling signing for this job (only) avoids the check
@@ -314,14 +290,12 @@ jobs:
           path = sys.argv[1]
           with open(path, 'r') as f:
               content = f.read()
-          # Insert OTHER_LDFLAGS + signing disablers at the top of every
-          # buildSettings block. The pbxproj format wraps build settings
-          # in `buildSettings = {` ... `};` blocks; we anchor on the
+          # Insert signing disablers at the top of every buildSettings
+          # block. The pbxproj format wraps build settings in
+          # `buildSettings = {` ... `};` blocks; we anchor on the
           # opener so the injection lands in both Debug and Release
           # configurations of every target/project node.
-          # `$(inherited)` keeps any existing framework flags intact.
           injection = (
-              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
               '\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n'
               '\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n'
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
@@ -494,23 +468,6 @@ jobs:
                 echo "  synced: $dst"
               fi
             done
-          fi
-
-      - name: Bump minSdk to 26 (tauri-plugin-blec requirement)
-        # `tauri-plugin-blec` ships a manifest with `minSdk 26`; the
-        # generated Tauri Android project defaults to `minSdk 24`,
-        # which makes the manifest merger fail at build time with:
-        #   uses-sdk:minSdkVersion 24 cannot be smaller than version
-        #   26 declared in library [:tauri-plugin-blec]
-        # We patch the generated `build.gradle.kts` in CI rather than
-        # vendoring the whole gen/android tree, so the workflow stays
-        # self-contained and re-runs cleanly across Tauri CLI bumps.
-        run: |
-          set -euxo pipefail
-          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
-          if [ -f "$GRADLE_FILE" ]; then
-            sed -i 's/minSdk = 24/minSdk = 26/g' "$GRADLE_FILE"
-            grep -n 'minSdk' "$GRADLE_FILE" || true
           fi
 
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
@@ -859,12 +816,6 @@ jobs:
           set -euxo pipefail
           INFO_PLIST="src-tauri/gen/apple/reachy_mini_mobile_app_iOS/Info.plist"
           plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$INFO_PLIST"
-          plutil -replace NSBluetoothAlwaysUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode)." \
-            "$INFO_PLIST"
-          plutil -replace NSBluetoothPeripheralUsageDescription -string \
-            "Reachy Mini uses Bluetooth to discover your robot and read its network status." \
-            "$INFO_PLIST"
           plutil -replace NSMicrophoneUsageDescription -string \
             "Reachy Mini needs microphone access to let you talk to the robot through voice conversations." \
             "$INFO_PLIST"
@@ -888,30 +839,23 @@ jobs:
           echo '--- Info.plist after patch ---'
           plutil -p "$INFO_PLIST"
 
-      - name: Configure pbxproj for manual signing + CoreBluetooth link
-        # Two-fold patching for the release build:
-        #
-        # 1. CoreBluetooth.framework link (same as simulator job - see
-        #    that job's comment for the full reasoning on why
-        #    `cargo:rustc-link-lib=...` doesn't propagate through the
-        #    Tauri-built staticlib).
-        #
-        # 2. Force MANUAL code signing. Tauri's regenerated project
-        #    defaults to ProvisioningStyle = Automatic, which makes
-        #    Xcode try to fetch a Development provisioning profile
-        #    via App Store Connect API (impossible without a logged-in
-        #    Apple ID on the runner). The build fails before our
-        #    archive ever starts with:
-        #      error: No Accounts: Add a new account in Accounts settings.
-        #      error: No profiles for 'com.pollen-robotics.reachy-mini' were found
-        #    We override:
-        #      - TargetAttributes.ProvisioningStyle = Manual
-        #      - buildSettings.CODE_SIGN_STYLE = Manual
-        #      - buildSettings.PROVISIONING_PROFILE_SPECIFIER = "Reachy Mini App Store"
-        #        (matches the .mobileprovision name we created on Apple Dev)
-        #      - buildSettings.CODE_SIGN_IDENTITY = "Apple Distribution"
-        #        (matches the cert we imported from the .p12)
-        #      - buildSettings.DEVELOPMENT_TEAM = APPLE_TEAM_ID
+      - name: Configure pbxproj for manual signing
+        # Force MANUAL code signing. Tauri's regenerated project
+        # defaults to ProvisioningStyle = Automatic, which makes
+        # Xcode try to fetch a Development provisioning profile
+        # via App Store Connect API (impossible without a logged-in
+        # Apple ID on the runner). The build fails before our
+        # archive ever starts with:
+        #   error: No Accounts: Add a new account in Accounts settings.
+        #   error: No profiles for 'com.pollen-robotics.reachy-mini' were found
+        # We override:
+        #   - TargetAttributes.ProvisioningStyle = Manual
+        #   - buildSettings.CODE_SIGN_STYLE = Manual
+        #   - buildSettings.PROVISIONING_PROFILE_SPECIFIER = "Reachy Mini App Store"
+        #     (matches the .mobileprovision name we created on Apple Dev)
+        #   - buildSettings.CODE_SIGN_IDENTITY = "Apple Distribution"
+        #     (matches the cert we imported from the .p12)
+        #   - buildSettings.DEVELOPMENT_TEAM = APPLE_TEAM_ID
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           PROFILE_NAME: 'Reachy Mini App Store'
@@ -925,9 +869,8 @@ jobs:
           profile_name = os.environ['PROFILE_NAME']
           with open(path, 'r') as f:
               content = f.read()
-          # buildSettings injection: framework link + manual signing.
+          # buildSettings injection: manual signing.
           inj = (
-              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
               '\t\t\t\tCODE_SIGN_STYLE = Manual;\n'
               f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n'
               f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile_name}";\n'
@@ -1278,10 +1221,7 @@ jobs:
           s = p.read_text()
           original = s
 
-          # 1. minSdk 24 -> 26 (tauri-plugin-blec requirement, same as debug job).
-          s = s.replace("minSdk = 24", "minSdk = 26")
-
-          # 2. applicationId rename for Play Console listing.
+          # 1. applicationId rename for Play Console listing.
           s2 = re.sub(
               r'applicationId\s*=\s*"com\.pollen_robotics\.reachy_mini"',
               'applicationId = "com.pollenrobotics.reachymini"',
@@ -1291,7 +1231,7 @@ jobs:
               print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
           s = s2
 
-          # 3. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
+          # 2. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
           run_no = int(os.environ["GITHUB_RUN_NUMBER"])
           s3 = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {run_no}', s, count=1)
           if s3 == s:
@@ -1304,7 +1244,7 @@ jobs:
               )
           s = s3
 
-          # 4. signingConfigs block — read from env at build time.
+          # 3. signingConfigs block — read from env at build time.
           signing_block = (
               "    signingConfigs {\n"
               "        create(\"release\") {\n"
@@ -1327,7 +1267,7 @@ jobs:
               sys.exit(1)
           s = s4
 
-          # 5. Wire the signingConfig into the release buildType.
+          # 4. Wire the signingConfig into the release buildType.
           # Tauri uses `getByName("release") {` — we add a line inside it.
           s5 = re.sub(
               r'(getByName\("release"\)\s*\{)',

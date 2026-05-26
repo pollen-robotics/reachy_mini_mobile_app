@@ -381,8 +381,9 @@ export interface ConversationEngineHandle {
 export interface ConversationEngineOptions {
   /**
    * Peer id the mobile app already knows for the specific Reachy the
-   * user paired via Bluetooth. When set, the engine takes a direct
-   * path instead of the Space app's public flow:
+   * user picked on the ScanScreen (from the central robot list).
+   * When set, the engine takes a direct path instead of the Space
+   * app's public flow:
    *
    *   authenticate() ─▶ robot.connect() ─▶ robot.startSession(id)
    *                    (no user tap)       (no wait on robotsChanged)

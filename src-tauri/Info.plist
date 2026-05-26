@@ -3,21 +3,6 @@
 <plist version="1.0">
 <dict>
     <!--
-        Required for `btleplug` to call `CBCentralManager`. If this key is
-        missing, macOS silently denies the very first scan attempt and
-        every subsequent call fails with "Channel closed".
-    -->
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Reachy Mini uses Bluetooth to discover your robot and read its network status (IP address, WiFi mode).</string>
-
-    <!--
-        Used on iOS 12 and earlier. Harmless on modern macOS / iOS but
-        recommended for App Store submissions to avoid reviewer questions.
-    -->
-    <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>Reachy Mini uses Bluetooth to discover your robot and read its network status.</string>
-
-    <!--
         The app talks to the daemon over plain HTTP on the local network
         (daemon:8000). Without this the WebView would silently block
         `daemon_fetch` despite the request going through the Rust side.

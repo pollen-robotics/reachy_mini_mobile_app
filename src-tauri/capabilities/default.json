@@ -9,7 +9,6 @@
     "os:allow-platform",
     "os:allow-version",
     "os:allow-os-type",
-    "blec:default",
     "auth-session:default",
     "keep-screen-on:default",
     {

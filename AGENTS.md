@@ -13,12 +13,11 @@ signs in with Hugging Face, picks a robot from their account, and gets:
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
 3. A robot tab with camera feed + audio sliders + manual head joystick.
 
-Plus a Wi-Fi setup flow over BLE for first-time provisioning.
+The robot is assumed to be already provisioned (on Wi-Fi, advertising
+itself on the HF central signaling Space). First-time Wi-Fi setup is
+handled outside this app for now.
 
-For the full lifecycle / connection model, read
-[`docs/CONNECTION_FLOW.md`](./docs/CONNECTION_FLOW.md). For the
-roadmap, read [`docs/ROADMAP.md`](./docs/ROADMAP.md). Other design
-docs live in `docs/`.
+Design docs live in `docs/`.
 
 ## Architecture (read this before making changes)
 
@@ -49,8 +48,6 @@ src/
 ```
 features/
 ├── auth/           HF OAuth + token storage + central robot listing
-├── ble/            BLE plugin wrapper + advert parsing + network status
-├── wifi/           Wi-Fi setup over BLE (humanize errors, types, hook)
 ├── apps/           HF Hub app catalog fetching + embed URL builder
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
 └── conversation/   OpenAI Realtime engine + audio bridge + motion + tools + memory
@@ -103,7 +100,7 @@ ui/
 ├── design/        Tokens + atomic primitives (TransportChip, RobotAvatar, ScreenTransition, ErrorBoundary, ...)
 ├── widgets/       Composable bricks reused across panels (video-feed, audio-controls, head-control, camera-overlay)
 ├── panels/        Feature compositions mounted into screens (conversation, apps-list, robot)
-└── screens/       Top-level routes (Splash, RemoteSignIn, WelcomeBack, Scan, WifiSetup, RobotSession)
+└── screens/       Top-level routes (Splash, RemoteSignIn, WelcomeBack, Scan, RobotSession)
 ```
 
 ### `shared/` - cross-cutting helpers

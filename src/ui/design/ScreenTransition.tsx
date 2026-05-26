@@ -2,7 +2,7 @@
  * Animated screen swap powered by Motion's `AnimatePresence`.
  *
  * The host (`App.tsx`) computes which screen should be on top
- * (`scan`, `session`, `wifi-setup`, …) and feeds the corresponding
+ * (`scan`, `session`, …) and feeds the corresponding
  * element + a stable `screenKey`. We orchestrate the cross-fade +
  * subtle vertical lift between them so navigation feels physical
  * instead of a hard cut.
@@ -22,8 +22,8 @@
  * ──────────────────────
  * The two screens never overlap. The outgoing screen finishes its
  * exit animation BEFORE the incoming one mounts. That avoids:
- *   - double-mounting cost (BLE listeners, query subscriptions,
- *     WebRTC engines) when transitioning between heavy screens
+ *   - double-mounting cost (query subscriptions, WebRTC engines)
+ *     when transitioning between heavy screens
  *   - z-index headaches (no need for absolute positioning math)
  * The trade-off is a slightly longer perceived navigation - we
  * compensate with a snappy 0.22 s duration so it still feels

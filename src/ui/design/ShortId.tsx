@@ -2,16 +2,14 @@
  * Five-character monospace tag for a robot's stable identity.
  *
  * Renders the first 5 chars of the daemon-reported `hardware_id`
- * (sourced from `meta.hardware_id` on central listings, parsed
- * from BLE manufacturer data on advertisements). A user can use
- * this to recognise a specific robot across sessions even when
- * other ids (peer id, BLE address) rotate.
+ * (sourced from `meta.hardware_id` on central listings). A user can
+ * use this to recognise a specific robot across sessions even when
+ * other ids (peer id) rotate.
  *
  * Falls back to the first 5 chars of `fallbackId` (typically the
  * `peerId` for central listings) when `hardware_id` is unavailable
  * - daemons older than PR-1084 don't advertise it. Renders nothing
- * when neither id is present (e.g. a BLE card pre-connect, before
- * the manufacturer-data parse has resolved).
+ * when neither id is present.
  *
  * 5 chars on a SHA-256 prefix = 20 bits of entropy, more than
  * enough to disambiguate the robots in a personal fleet without

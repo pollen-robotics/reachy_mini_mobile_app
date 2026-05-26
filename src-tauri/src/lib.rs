@@ -2,12 +2,6 @@
 //!
 //! The Rust side stays deliberately thin:
 //!
-//!   * BLE is delegated to `tauri-plugin-blec`. Scan, connect, read and
-//!     write are all driven from the TypeScript side (see
-//!     `src/ble/useBleSession.ts`). That mirrors the desktop app's
-//!     architecture exactly and lets us share one persistent BLE
-//!     connection per user session, which is the pattern macOS
-//!     CoreBluetooth is happiest with.
 //!   * `daemon_fetch` - proxies an HTTP request to the robot daemon,
 //!     side-stepping the mixed-content block that mobile WebViews apply
 //!     to plain `http://` calls from `https://tauri.localhost`.
@@ -16,7 +10,8 @@
 //!
 //! Everything else (daemon lifecycle, USB, permissions, updates, code
 //! signing) lives elsewhere: this repo deliberately assumes the daemon is
-//! already running on a Reachy Mini somewhere nearby.
+//! already running on a Reachy Mini somewhere nearby, reachable via the
+//! HF central signaling Space.
 
 mod commands;
 mod oauth;
@@ -35,7 +30,7 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,btleplug=warn")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(true)
         .with_line_number(false)
@@ -52,19 +47,6 @@ pub fn run() {
         // localhost callback to the `reachymini://` scheme this plugin
         // intercepts.
         .plugin(tauri_plugin_auth_session::init())
-        // BLE: the plugin init panics when Bluetooth is unavailable on
-        // the host (no adapter in some macOS headless setups). Catch
-        // the panic so the app still boots in daemon-less dev modes,
-        // matching what the desktop app does.
-        .plugin(match std::panic::catch_unwind(tauri_plugin_blec::init) {
-            Ok(plugin) => plugin,
-            Err(_) => {
-                tracing::warn!(
-                    "tauri-plugin-blec init panicked; BLE features will be disabled"
-                );
-                tauri_plugin_blec::init()
-            }
-        })
         // Keep-screen-on: disables the OS idle timer while the JS
         // layer requests it (active conversation or open iframe app).
         // No-op on desktop; the JS wrapper falls back to the Web

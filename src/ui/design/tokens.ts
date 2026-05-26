@@ -56,8 +56,8 @@ export const DURATION = {
 } as const;
 
 /**
- * Max width used by all centred "card-in-screen" layouts (scan, transition,
- * wifi-setup). Matches the desktop's 420px content card width.
+ * Max width used by all centred "card-in-screen" layouts (scan, transition).
+ * Matches the desktop's 420px content card width.
  */
 export const LAYOUT = {
   contentMaxWidth: 420,

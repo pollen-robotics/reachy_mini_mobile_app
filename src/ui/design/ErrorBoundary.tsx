@@ -28,6 +28,35 @@ import {
   type ReactNode,
 } from 'react';
 
+/**
+ * Mirror of `features/theme-preference/storage.ts`.
+ *
+ * `ui/design/` is an atomic-primitives layer that cannot import
+ * from `features/` (enforced by `no-restricted-imports`), and
+ * the boundary deliberately lives outside the `ThemeProvider` so
+ * a failure inside MUI itself still has a fallback to render. We
+ * therefore read the same localStorage slot the store writes to,
+ * with a defensive set of allowed values so a corrupted cell
+ * never crashes the fallback. Keep this in sync with the
+ * feature's `THEME_MODE_KEY` and `ThemeMode` union if either
+ * changes.
+ */
+const THEME_MODE_KEY = 'reachyMini.themeMode';
+type SavedMode = 'system' | 'light' | 'dark';
+
+function readSavedMode(): SavedMode {
+  try {
+    if (typeof localStorage === 'undefined') return 'system';
+    const raw = localStorage.getItem(THEME_MODE_KEY);
+    if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
+  } catch {
+    // Private mode / quota / blocked storage. Fall through to
+    // the system default - the boundary is a best-effort surface
+    // and we never want to compound the original failure.
+  }
+  return 'system';
+}
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   /**
@@ -63,9 +92,9 @@ export class ErrorBoundary extends Component<
   private readonly handleReload = (): void => {
     // Hard reload of the WebView. We deliberately don't try a
     // soft `setState({ error: null })` retry: by the time we get
-    // here the conversation engine, BLE listeners, etc. may all
-    // be in inconsistent states, and a fresh JS context is the
-    // only thing we can safely guarantee.
+    // here the conversation engine and other long-lived listeners
+    // may all be in inconsistent states, and a fresh JS context is
+    // the only thing we can safely guarantee.
     if (typeof window !== 'undefined') {
       window.location.reload();
     }
@@ -85,10 +114,21 @@ function Fallback({
   error: Error;
   onReload: () => void;
 }) {
-  const isDark =
+  // Honour the user's saved theme pick even when the React tree
+  // crashed: the boundary lives outside the `ThemeProvider`, so
+  // we replay the same resolution logic the store does
+  // (`light`/`dark` overrides win over the OS, `system` falls
+  // back to `prefers-color-scheme`). Reading is sync + side-
+  // effect-free, so there's no risk of compounding the original
+  // failure.
+  const savedMode = readSavedMode();
+  const osPrefersDark =
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark =
+    savedMode === 'dark' ||
+    (savedMode === 'system' && osPrefersDark);
 
   const palette = isDark
     ? {

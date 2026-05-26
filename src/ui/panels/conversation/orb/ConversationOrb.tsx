@@ -22,7 +22,8 @@
  * `AppState` union: `signed-out`, `authenticated`, `connected` and
  * `auto-selecting` look identical to the user (idle ring breathing or
  * yellow spinner) and never need their own UI on mobile, where auth
- * is gated upstream and robot selection is done via Bluetooth.
+ * is gated upstream and the robot has already been picked on the
+ * ScanScreen by the time the engine mounts.
  *
  * Audio reactivity
  * ────────────────

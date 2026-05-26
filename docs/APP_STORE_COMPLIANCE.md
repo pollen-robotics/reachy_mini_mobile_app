@@ -247,8 +247,6 @@ Standard work, but specific items to check:
   - `NSMicrophoneUsageDescription` - already needed for the voice
     conversation; mention it covers third-party apps too.
   - `NSCameraUsageDescription` - same.
-  - `NSBluetoothAlwaysUsageDescription` - already present (Wi-Fi
-    setup).
   - `NSLocalNetworkUsageDescription` - if the daemon ever speaks
     over LAN HTTP.
 - **Privacy nutrition label** must declare: HF account info, robot
