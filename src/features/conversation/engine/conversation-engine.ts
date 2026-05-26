@@ -96,7 +96,6 @@ import {
   type BackgroundAudioKeeper,
 } from "../background-audio-keeper";
 import { AiLevelMonitor, MicLevelMonitor } from "./audioLevelMonitor";
-import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
 import { EphemeralKeyError, mintEphemeralKey } from "./ephemeral-key";
@@ -791,16 +790,6 @@ async function doStart(): Promise<void> {
       performance.now() - tBeforeWake,
     )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
   );
-
-  // Apply the tuned XVF3800 audio-board parameters now that the
-  // DataChannel is live. This mirrors `apply_audio_startup_config`
-  // in reachy_mini_conversation_app — without it the mic gain is
-  // too low for the Realtime voice loop. Best-effort: a missing
-  // audio board (Lite / dev) just warns and returns false. See
-  // issue #21 / upstream PR #1058.
-  if (robot) {
-    await applyAudioStartupConfig(robot);
-  }
 
   // Mark the SDK / DataChannel as ready BEFORE deciding whether to
   // continue with the conversation parts. The mobile app gates the
