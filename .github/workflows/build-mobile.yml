@@ -1063,10 +1063,23 @@ jobs:
         # the App Store page) is left untouched at "0.6.5".
         run: |
           set -euxo pipefail
-          APP_PLIST=$(find "${{ steps.archive.outputs.xcarchive }}/Products/Applications" -maxdepth 3 -name 'Info.plist' -type f | head -1)
-          if [ -z "$APP_PLIST" ]; then
-            echo "::error::Could not find Info.plist inside .xcarchive"
-            find "${{ steps.archive.outputs.xcarchive }}" -name 'Info.plist' -type f
+          # IMPORTANT: target the .app bundle's TOP-LEVEL Info.plist, NOT
+          # the embedded ones (LaunchScreen.storyboardc/Info.plist,
+          # Pods bundles, etc). Earlier versions of this step used
+          # `find ... -name 'Info.plist' | head -1` and matched
+          # `LaunchScreen.storyboardc/Info.plist`, leaving CFBundleVersion
+          # of the actual app bundle untouched at 0.6.5 - which still
+          # triggered the altool duplicate-version rejection.
+          APP_BUNDLE=$(find "${{ steps.archive.outputs.xcarchive }}/Products/Applications" -mindepth 1 -maxdepth 2 -name '*.app' -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::Could not locate .app bundle inside .xcarchive"
+            find "${{ steps.archive.outputs.xcarchive }}" -maxdepth 4 -type d
+            exit 1
+          fi
+          APP_PLIST="$APP_BUNDLE/Info.plist"
+          if [ ! -f "$APP_PLIST" ]; then
+            echo "::error::Expected Info.plist not found at $APP_PLIST"
+            ls -la "$APP_BUNDLE"
             exit 1
           fi
           echo "Patching $APP_PLIST"
