@@ -527,10 +527,21 @@ function HfAccountBar({
       {/* Help (?) / close (✕) toggle. Free-floating on the right,
           deliberately NOT wrapped in a pill so it reads as a
           different category of action (support, not account).
-          No tooltip - the `?` glyph is universal and the dynamic
-          icon swap on open (`?` -> `✕`) already telegraphs the
-          state change. `aria-label` carries the wording for
-          screen readers. */}
+          No tooltip - the glyph is universal and the dynamic icon
+          swap on open (`?` → `✕`) already telegraphs the state
+          change. `aria-label` carries the wording for screen
+          readers.
+          ────────────────
+          Pattern mirrors the session screen's info / close
+          toggle (cf. `RobotSessionScreen`): the "open" state
+          uses the *outlined ringed* glyph that has the circle
+          baked into the SVG itself (`HelpOutline` here,
+          `InfoOutlined` there), and the "close" state uses the
+          bare `Close` glyph (no ring). Same `fontSize: 22` on
+          both glyphs keeps the box footprint identical between
+          states, so the only visual delta on toggle is the ring
+          fading in / out alongside the `?` ↔ `✕` swap - no
+          width / height jump. */}
       <IconButton
         aria-label={
           isHelpOpen
