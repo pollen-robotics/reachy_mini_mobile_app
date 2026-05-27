@@ -11,9 +11,15 @@
  *   reads the phase to gate its iframe `src`: the embed only dials
  *   out once the phase has reached `released`, so central has had
  *   time to free the producer slot.
- * - On close we just call `onClose()`, which flips the host state
- *   and triggers `session.reacquire()` upstream. The iframe is
- *   unmounted as part of the close.
+ * - On close the user's tap on `×` doesn't call `onClose()`
+ *   immediately. We first flip into a 1 s "closing" beat that
+ *   paints a `Closing ${app.name}…` spinner on top of the iframe
+ *   (locks the close button, ignores follow-up activity messages
+ *   from the embed). Once the beat ends we call `onClose()`, the
+ *   host flips its state, `session.reacquire()` runs upstream,
+ *   and the iframe is unmounted. The intermediate beat absorbs
+ *   the reacquire latency so the user doesn't see a jarring
+ *   mid-frame disappearance.
  *
  * The host owns the handoff lifecycle; this component is dumb-pipe
  * UI on top of it.
@@ -115,14 +121,7 @@
  * decode the hash themselves) ignore the message - it's a noop
  * for them.
  */
-import {
-  Box,
-  CircularProgress,
-  IconButton,
-  Stack,
-  Typography,
-  useTheme,
-} from '@mui/material';
+import { Box, CircularProgress, IconButton, Stack, Typography, useTheme } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -133,26 +132,19 @@ import {
   type EmbedCredsBundle,
 } from '@/features/apps/buildEmbedUrl';
 import type { AppEntry } from '@/features/apps/types';
+import { APP_HANDOFF_TIMINGS } from '@/features/robot-session/timings';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
 
 /**
- * Hard timeout for the iframe load step (HTML + JS bundle parsed).
- * If the embed hasn't fired `onLoad` within this window we display
- * an error overlay and let the user fall back to the catalog.
+ * Timeouts come from the centralised `APP_HANDOFF_TIMINGS` (see
+ * `features/robot-session/timings.ts` for the full rationale +
+ * audit). Aliased locally so the call sites below stay terse.
  */
-const IFRAME_LOAD_TIMEOUT_MS = 15_000;
-
-/**
- * Hard timeout for the embed boot step (`onLoad` fired but the app
- * hasn't reached `phase: 'live'`). Covers `connectToHost()`'s wait
- * for `host:init`, the WebRTC handshake, and the wake-up motion -
- * so it has to be longer than just the iframe load (cold-starting
- * an HF Space + ICE negotiation + initial trajectory all stack up).
- */
-const EMBED_CONNECT_TIMEOUT_MS = 20_000;
+const IFRAME_LOAD_TIMEOUT_MS = APP_HANDOFF_TIMINGS.iframeLoadTimeoutMs;
+const EMBED_CONNECT_TIMEOUT_MS = APP_HANDOFF_TIMINGS.embedConnectTimeoutMs;
 
 interface AppIframeOverlayProps {
   app: AppEntry;
@@ -198,12 +190,7 @@ interface AppIframeOverlayProps {
  *                     `embed:error`. We render the catalog
  *                     fallback view.
  */
-type LoadPhase =
-  | 'waiting-release'
-  | 'loading'
-  | 'connecting'
-  | 'ready'
-  | 'error';
+type LoadPhase = 'waiting-release' | 'loading' | 'connecting' | 'ready' | 'error';
 
 /** Sub-step inside `connecting`, mirroring the protocol's
  *  `AppConnectingStep`. Used to render a more accurate caption
@@ -225,6 +212,47 @@ export default function AppIframeOverlay({
 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>('waiting-release');
   const [connectingStep, setConnectingStep] = useState<ConnectingStep>(null);
+
+  // "Closing" beat. Sits orthogonal to `loadPhase` because the
+  // user can request a close from any phase (waiting-release,
+  // loading, connecting, ready, error). Once flipped, the
+  // PhaseOverlay below paints a `Closing ${appName}…` spinner on
+  // top of everything else, and a 1 s timer drives `onClose()` so
+  // the parent can unmount us. The intermediate beat avoids the
+  // jarring "press × → screen vanishes mid-frame" effect that
+  // makes the shell feel like it crashed; it also gives the user
+  // a moment to register that their tap registered.
+  //
+  // Why 1000 ms and not a tighter window: the upstream
+  // `session.reacquire()` (kicked off by the host once we
+  // unmount) usually takes ~300-800 ms before the conversation
+  // surface is paintable again, so a 1 s closing beat overlaps
+  // with that reacquire latency rather than tacking onto it.
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const requestClose = useCallback(() => {
+    // Idempotent: double-tapping the close button (or hitting it
+    // while the actions menu's onAfterHideAuthor also fires)
+    // should not stack timers or shorten the beat.
+    if (isClosing) return;
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      onClose();
+    }, APP_HANDOFF_TIMINGS.closingBeatMs);
+  }, [isClosing, onClose]);
+
+  // Clear the pending teardown if we unmount for any other reason
+  // (parent decides to drop us, hot-reload, etc.) so we don't fire
+  // `onClose()` against a stale parent.
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Promote to `loading` as soon as the session has actually been
   // released. Before that, the embed's `startSession` would race
@@ -249,12 +277,12 @@ export default function AppIframeOverlay({
       theme: isDark ? 'dark' : 'light',
       appName: app.name,
     }),
-    [hfToken, hfUsername, robotPeerId, robotName, isDark, app.name],
+    [hfToken, hfUsername, robotPeerId, robotName, isDark, app.name]
   );
 
   const credsBundle: EmbedCredsBundle = useMemo(
     () => buildEmbedCreds(embedCtx, app.name),
-    [embedCtx, app.name],
+    [embedCtx, app.name]
   );
 
   const url: string = useMemo(() => {
@@ -266,9 +294,7 @@ export default function AppIframeOverlay({
     // carries an HF access token; do NOT enable this in production
     // builds.
     if (import.meta.env.DEV) {
-      console.info(
-        `[app-iframe] embed URL for ${app.id}\n${built}`,
-      );
+      console.info(`[app-iframe] embed URL for ${app.id}\n${built}`);
     }
     return built;
   }, [app.id, app.sdk, embedCtx]);
@@ -310,7 +336,7 @@ export default function AppIframeOverlay({
           kind: 'hf-token',
           token: hfToken,
         },
-        targetOrigin,
+        targetOrigin
       );
     } catch (err) {
       // postMessage can throw on serialization failures or if the
@@ -356,7 +382,7 @@ export default function AppIframeOverlay({
           hostName: credsBundle.hostName,
           appName: credsBundle.appName,
         },
-        targetOrigin,
+        targetOrigin
       );
     } catch (err) {
       // Failing to send `host:init` is recoverable: the embed
@@ -392,7 +418,7 @@ export default function AppIframeOverlay({
           // a stacked-chrome look.
           chrome: 'host-provided',
         },
-        targetOrigin,
+        targetOrigin
       );
     } catch (err) {
       // A failed embed-config is purely cosmetic (the embedded
@@ -418,7 +444,7 @@ export default function AppIframeOverlay({
             kind: 'theme',
             theme: mode,
           },
-          targetOrigin,
+          targetOrigin
         );
       } catch (err) {
         // Failing to ship a theme update is purely cosmetic - the
@@ -426,7 +452,7 @@ export default function AppIframeOverlay({
         console.warn('[apps] theme postMessage failed:', err);
       }
     },
-    [targetOrigin],
+    [targetOrigin]
   );
 
   // Propagate runtime theme changes to the iframe (the user toggled
@@ -487,8 +513,8 @@ export default function AppIframeOverlay({
         const phase = data.phase;
         const step = data.connectingStep;
         if (phase === 'connecting') {
-          setLoadPhase((prev) =>
-            prev === 'waiting-release' || prev === 'error' ? prev : 'connecting',
+          setLoadPhase(prev =>
+            prev === 'waiting-release' || prev === 'error' ? prev : 'connecting'
           );
           if (step === 'link' || step === 'session' || step === 'wake') {
             setConnectingStep(step);
@@ -526,7 +552,7 @@ export default function AppIframeOverlay({
       if (!sawProtocolMsgRef.current) {
         setLoadPhase('ready');
       }
-    }, 1500);
+    }, APP_HANDOFF_TIMINGS.legacyEmbedRevealMs);
     return () => window.clearTimeout(t);
   }, [loadPhase]);
 
@@ -559,8 +585,7 @@ export default function AppIframeOverlay({
   const timeoutRef = useRef<number | null>(null);
   useEffect(() => {
     if (loadPhase !== 'loading' && loadPhase !== 'connecting') return;
-    const budget =
-      loadPhase === 'loading' ? IFRAME_LOAD_TIMEOUT_MS : EMBED_CONNECT_TIMEOUT_MS;
+    const budget = loadPhase === 'loading' ? IFRAME_LOAD_TIMEOUT_MS : EMBED_CONNECT_TIMEOUT_MS;
     timeoutRef.current = window.setTimeout(() => {
       setLoadPhase('error');
     }, budget);
@@ -599,9 +624,9 @@ export default function AppIframeOverlay({
        */}
       <Stack
         direction="row"
-        alignItems="center"
         spacing={1.25}
         sx={{
+          alignItems: 'center',
           px: 2,
           pt: `calc(${LAYOUT.safeAreaTop} + 8px)`,
           pb: 1,
@@ -656,11 +681,18 @@ export default function AppIframeOverlay({
           app={app}
           ariaLabel={`Actions for ${app.name}`}
           buttonSx={{ p: 0.5 }}
-          onAfterHideAuthor={onClose}
+          onAfterHideAuthor={requestClose}
         />
         <IconButton
           aria-label="Close app"
-          onClick={onClose}
+          onClick={requestClose}
+          // While the closing beat is running the button is a
+          // visual no-op (the timer is already scheduled), but we
+          // disable it explicitly so accessibility tooling
+          // doesn't announce it as actionable and so a tap doesn't
+          // produce a phantom ripple after the spinner has taken
+          // over.
+          disabled={isClosing}
           edge="end"
           size="small"
           color="primary"
@@ -668,7 +700,6 @@ export default function AppIframeOverlay({
           <CloseIcon />
         </IconButton>
       </Stack>
-
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {loadPhase !== 'error' && (
           <iframe
@@ -762,7 +793,7 @@ export default function AppIframeOverlay({
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 100),
                 window.setTimeout(() => sendThemeToIframe(currentTheme), 500),
                 window.setTimeout(sendEmbedConfigToIframe, 100),
-                window.setTimeout(sendEmbedConfigToIframe, 500),
+                window.setTimeout(sendEmbedConfigToIframe, 500)
               );
             }}
             style={{
@@ -776,9 +807,27 @@ export default function AppIframeOverlay({
           />
         )}
 
-        {(loadPhase === 'waiting-release' ||
-          loadPhase === 'loading' ||
-          loadPhase === 'connecting') && (
+        {/* Closing beat takes precedence over every other
+            PhaseOverlay branch below: once the user has asked to
+            close, we want them looking at a single, stable
+            "Closing ${app.name}…" spinner — not an error screen,
+            not a stale "Loading" caption, not a flash of the
+            iframe. The 1 s timer kicked off by `requestClose` is
+            already running; this overlay just provides the
+            visual placeholder until the parent unmounts us. */}
+        {isClosing && (
+          <PhaseOverlay>
+            <CircularProgress size={28} />
+            <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
+              {`Closing ${app.name}…`}
+            </Typography>
+          </PhaseOverlay>
+        )}
+
+        {!isClosing &&
+          (loadPhase === 'waiting-release' ||
+            loadPhase === 'loading' ||
+            loadPhase === 'connecting') && (
           <PhaseOverlay>
             <CircularProgress size={28} />
             <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
@@ -787,7 +836,7 @@ export default function AppIframeOverlay({
           </PhaseOverlay>
         )}
 
-        {loadPhase === 'error' && (
+        {!isClosing && loadPhase === 'error' && (
           <PhaseOverlay>
             <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
               {app.name} didn't load
@@ -800,8 +849,8 @@ export default function AppIframeOverlay({
                 maxWidth: 320,
               }}
             >
-              The app's Hugging Face Space may be cold-starting or temporarily
-              unavailable. Close this view and try again in a moment.
+              The app's Hugging Face Space may be cold-starting or temporarily unavailable. Close
+              this view and try again in a moment.
             </Typography>
           </PhaseOverlay>
         )}
@@ -822,19 +871,22 @@ export default function AppIframeOverlay({
 function phaseCaption(
   phase: Exclude<LoadPhase, 'ready' | 'error'>,
   step: ConnectingStep,
-  appName: string,
+  appName: string
 ): string {
-  if (phase === 'waiting-release') {
-    return 'Releasing the conversation session…';
-  }
-  if (phase === 'loading') {
+  // `waiting-release` (host freeing the WebRTC slot) and
+  // `loading` (iframe dialing the Space) are internal beats the
+  // user shouldn't have to reason about; from their POV they
+  // both belong to the same "the app I just tapped is starting
+  // up" moment, so we paint the same `Loading ${appName}…`
+  // caption across the pair.
+  if (phase === 'waiting-release' || phase === 'loading') {
     return `Loading ${appName}…`;
   }
   switch (step) {
     case 'link':
       return `Connecting ${appName} to the robot…`;
     case 'session':
-      return 'Starting the video session…';
+      return 'Starting the session…';
     case 'wake':
       return 'Waking the robot…';
     default:
