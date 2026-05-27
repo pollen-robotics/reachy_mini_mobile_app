@@ -66,30 +66,24 @@ import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
-import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import MailOutlineIcon from '@mui/icons-material/MailOutlineOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import SettingsBrightnessOutlinedIcon from '@mui/icons-material/SettingsBrightnessOutlined';
 
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
-import {
-  setThemeMode,
-  useThemeMode,
-  type ThemeMode,
-} from '@/features/theme-preference';
+import { setThemeMode, useThemeMode, type ThemeMode } from '@/features/theme-preference';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import Section from '@/ui/design/Section';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 const SUPPORT_EMAIL = 'support@pollen-robotics.com';
-const TROUBLESHOOTING_URL =
-  'https://huggingface.co/docs/reachy_mini/troubleshooting';
+const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
 const DOCUMENTATION_URL = 'https://huggingface.co/docs/reachy_mini/index';
 const DISCORD_URL = 'https://discord.gg/2bAhWfXme9';
 const GITHUB_URL = 'https://github.com/pollen-robotics';
-const PRIVACY_POLICY_URL =
-  'https://www.pollen-robotics.com/personal-data-protection-charter/';
+const PRIVACY_POLICY_URL = 'https://www.pollen-robotics.com/personal-data-protection-charter/';
 const TERMS_OF_SERVICE_URL =
   'https://www.pollen-robotics.com/general-terms-and-conditions-of-sales/';
 
@@ -104,9 +98,7 @@ interface HelpAndSupportOverlayProps {
   onClose: () => void;
 }
 
-export default function HelpAndSupportOverlay({
-  onClose,
-}: HelpAndSupportOverlayProps) {
+export default function HelpAndSupportOverlay({ onClose }: HelpAndSupportOverlayProps) {
   const hiddenAuthors = useHiddenAuthors();
   const themeMode = useThemeMode();
 
@@ -119,7 +111,7 @@ export default function HelpAndSupportOverlay({
       if (next === null) return;
       setThemeMode(next);
     },
-    [],
+    []
   );
 
   const handleContact = useCallback(async () => {
@@ -139,7 +131,7 @@ export default function HelpAndSupportOverlay({
         `App version: ${__APP_VERSION__}`,
         'Device: ',
         'OS: ',
-      ].join('\n'),
+      ].join('\n')
     );
     const mailto = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
     try {
@@ -167,7 +159,7 @@ export default function HelpAndSupportOverlay({
       }
       onClose();
     },
-    [onClose],
+    [onClose]
   );
 
   return (
@@ -330,9 +322,11 @@ export default function HelpAndSupportOverlay({
             <Box sx={{ p: 1.5 }}>
               <Stack
                 direction="row"
-                alignItems="center"
-                justifyContent="space-between"
-                sx={{ mb: 1 }}
+                sx={{
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  mb: 1,
+                }}
               >
                 <Typography
                   sx={{
@@ -363,7 +357,7 @@ export default function HelpAndSupportOverlay({
                   gap: 0.75,
                 }}
               >
-                {hiddenAuthors.ids.map((author) => (
+                {hiddenAuthors.ids.map(author => (
                   <Chip
                     key={author}
                     label={author}
@@ -439,13 +433,13 @@ function ActionRow({
       tabIndex={0}
       aria-label={caption ? `${label} (${caption})` : label}
       onClick={onTap}
-      onKeyDown={(e) => {
+      onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onTap();
         }
       }}
-      sx={(theme) => ({
+      sx={theme => ({
         display: 'flex',
         alignItems: 'center',
         gap: 1.25,
@@ -531,4 +525,3 @@ function ActionRow({
     </Box>
   );
 }
-

@@ -35,13 +35,7 @@
  * `categoryTaxonomy.ts`); the slug list is never mirrored by hand.
  * See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -57,7 +51,7 @@ import {
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
-import StarOutlineIcon from '@mui/icons-material/StarOutline';
+import StarOutlineIcon from '@mui/icons-material/StarBorder';
 
 import ReachiesCarousel from '@/ui/widgets/reachies-carousel/ReachiesCarousel';
 
@@ -130,8 +124,7 @@ const PINNED_HEADER_MIN_HEIGHT = 28;
  */
 const PANEL_SX = {
   py: 2,
-  borderBottom: (theme: { palette: { divider: string } }) =>
-    `1px solid ${theme.palette.divider}`,
+  borderBottom: (theme: { palette: { divider: string } }) => `1px solid ${theme.palette.divider}`,
 } as const;
 
 const RAIL_PANEL_SX = {
@@ -153,7 +146,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   // bail-out skips the deeper work on unrelated re-renders.
   const apps = useMemo<AppEntry[]>(() => {
     if (hiddenAuthors.set.size === 0) return state.apps;
-    return state.apps.filter((app) => !hiddenAuthors.isHidden(app.author));
+    return state.apps.filter(app => !hiddenAuthors.isHidden(app.author));
   }, [state.apps, hiddenAuthors]);
 
   const isLoading = state.kind === 'loading';
@@ -184,7 +177,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   // server build).
   const taxonomy = useMemo(
     () => resolveTaxonomy(state.categorization?.taxonomy ?? null),
-    [state.categorization],
+    [state.categorization]
   );
 
   const filtered = useFilteredApps({
@@ -207,13 +200,13 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
         setSnackbar(`You can pin up to ${MAX_PINNED} apps. Unpin one first.`);
       }
     },
-    [pinnedApps],
+    [pinnedApps]
   );
 
   // Derived current focused bucket (null in browse / search modes).
   const focusedBucket = useMemo(() => {
     if (!focusedCategoryId) return null;
-    return filtered.rails.find((r) => r.descriptor.id === focusedCategoryId) ?? null;
+    return filtered.rails.find(r => r.descriptor.id === focusedCategoryId) ?? null;
   }, [focusedCategoryId, filtered.rails]);
 
   // Auto-exit focus mode when the focused category vanishes (e.g.
@@ -256,9 +249,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               Couldn't reach the Hub
             </Typography>
-            <Typography
-              sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}
-            >
+            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}>
               {state.kind === 'error' ? state.reason : ''}
             </Typography>
             <Button
@@ -280,9 +271,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               No apps yet
             </Typography>
-            <Typography
-              sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}
-            >
+            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}>
               The Reachy Mini catalog is empty - check back soon.
             </Typography>
           </CenteredHint>
@@ -332,9 +321,13 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               <Box sx={PANEL_SX}>
                 <Stack
                   direction="row"
-                  alignItems="center"
                   spacing={1}
-                  sx={{ ...COLUMN_SX, py: 0.25, minHeight: 36 }}
+                  sx={{
+                    alignItems: 'center',
+                    ...COLUMN_SX,
+                    py: 0.25,
+                    minHeight: 36,
+                  }}
                 >
                   <IconButton
                     size="small"
@@ -354,9 +347,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     >
                       {focusedBucket.descriptor.label}
                     </Typography>
-                    <Typography
-                      sx={{ fontSize: TYPO.tiny, color: 'text.secondary' }}
-                    >
+                    <Typography sx={{ fontSize: TYPO.tiny, color: 'text.secondary' }}>
                       {focusedBucket.apps.length} app
                       {focusedBucket.apps.length === 1 ? '' : 's'}
                     </Typography>
@@ -375,7 +366,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                       apps={filtered.pinned}
                       recentlyAddedId={pinnedApps.recentlyAddedId}
                       onOpen={onOpen}
-                      onUnpin={(app) => pinnedApps.unpin(app.id)}
+                      onUnpin={app => pinnedApps.unpin(app.id)}
                     />
                   </Box>
                 ) : (
@@ -437,16 +428,14 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     glance. Sparse buckets (< MIN_RAIL_SIZE) were
                     already filtered out by `useFilteredApps`. */}
                 {!filtered.isSearching &&
-                  filtered.rails.map((bucket) => (
+                  filtered.rails.map(bucket => (
                     <Box key={bucket.descriptor.id} sx={RAIL_PANEL_SX}>
                       <AppRail
                         label={bucket.descriptor.label}
                         count={bucket.apps.length}
-                        onSeeAll={() =>
-                          setFocusedCategoryId(bucket.descriptor.id)
-                        }
+                        onSeeAll={() => setFocusedCategoryId(bucket.descriptor.id)}
                       >
-                        {bucket.apps.map((app) => (
+                        {bucket.apps.map(app => (
                           <AppCompactTile
                             key={app.id}
                             app={app}
@@ -524,7 +513,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                   ...COLUMN_SX,
                 }}
               >
-                {flatList.map((app) => (
+                {flatList.map(app => (
                   <AppCompactTile
                     key={app.id}
                     app={app}
@@ -539,7 +528,6 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
           </>
         )}
       </Box>
-
       <Snackbar
         open={snackbar !== null}
         autoHideDuration={3500}
@@ -613,9 +601,13 @@ function IntroPanel() {
           minHeight: PINNED_HEADER_MIN_HEIGHT,
         }}
       />
-
-
-      <Stack direction="row" spacing={2} alignItems="center">
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{
+          alignItems: 'center',
+        }}
+      >
         {/* Hero column. Mirrors the WIDTH of a single
             `AppPinnedTile` (same `1fr` share of the 3-column
             grid). The caption phantom that pads the pinned tile's
@@ -696,7 +688,6 @@ function IntroPanel() {
           </Typography>
         </Stack>
       </Stack>
-
       {/* Phantom caption row: same vertical footprint as the
           `AppPinnedTile`'s name caption (`mt: 0.75` + a
           `TYPO.tiny / lineHeight 1.2` line ≈ 20 px). Sits below
@@ -782,9 +773,12 @@ function PinnedGrid({
     <Box sx={COLUMN_SX}>
       <Stack
         direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ mb: 1.5, minHeight: PINNED_HEADER_MIN_HEIGHT }}
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 1.5,
+          minHeight: PINNED_HEADER_MIN_HEIGHT,
+        }}
       >
         <Typography
           sx={{
@@ -797,10 +791,7 @@ function PinnedGrid({
           }}
         >
           Pinned apps
-          <Box
-            component="span"
-            sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}
-          >
+          <Box component="span" sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}>
             · {apps.length}
           </Box>
         </Typography>
@@ -816,7 +807,7 @@ function PinnedGrid({
           variant="outlined"
           color="primary"
           size="small"
-          onClick={() => setEditMode((prev) => !prev)}
+          onClick={() => setEditMode(prev => !prev)}
           aria-pressed={editMode}
           aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
           sx={{
@@ -856,7 +847,7 @@ function PinnedGrid({
           rowGap: 2,
         }}
       >
-        {apps.map((app) => (
+        {apps.map(app => (
           <AppPinnedTile
             key={app.id}
             app={app}
@@ -888,39 +879,38 @@ function SearchInput({
       // input padding overrides below so the bar reads as a
       // primary input on mobile rather than a chrome filter.
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={e => onChange(e.target.value)}
       placeholder={`Search ${total} app${total === 1 ? '' : 's'}, authors...`}
       autoComplete="off"
       autoCorrect="off"
       spellCheck={false}
-      InputProps={{
-        startAdornment: (
-          <InputAdornment position="start">
-            <SearchIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary' }} />
-          </InputAdornment>
-        ),
-        endAdornment:
-          value.length > 0 ? (
-            <InputAdornment position="end">
-              <IconButton
-                size="small"
-                aria-label="Clear search"
-                onClick={() => onChange('')}
-                edge="end"
-              >
-                <CloseIcon sx={{ fontSize: TYPO.lg }} />
-              </IconButton>
+      slotProps={{
+        input: {
+          startAdornment: (
+            <InputAdornment position="start">
+              <SearchIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary' }} />
             </InputAdornment>
-          ) : undefined,
-        sx: {
-          fontSize: TYPO.md,
-          borderRadius: `${RADIUS.lg}px`,
-          bgcolor: 'background.paper',
-          // Bump the input itself a bit so the bar feels weighty
-          // enough to be the primary affordance once it pins to
-          // the top of the body.
-          '& input': {
-            py: 1.75,
+          ),
+          endAdornment:
+            value.length > 0 ? (
+              <InputAdornment position="end">
+                <IconButton
+                  size="small"
+                  aria-label="Clear search"
+                  onClick={() => onChange('')}
+                  edge="end"
+                >
+                  <CloseIcon sx={{ fontSize: TYPO.lg }} />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined,
+          sx: {
+            fontSize: TYPO.md,
+            borderRadius: `${RADIUS.lg}px`,
+            bgcolor: 'background.paper',
+            '& input': {
+              py: 1.75,
+            },
           },
         },
       }}
@@ -931,9 +921,9 @@ function SearchInput({
 function CenteredHint({ children }: { children: React.ReactNode }) {
   return (
     <Stack
-      alignItems="center"
       spacing={1}
       sx={{
+        alignItems: 'center',
         py: 3,
         px: 2,
         borderRadius: 2,

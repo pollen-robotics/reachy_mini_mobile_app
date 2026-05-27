@@ -26,8 +26,7 @@ import ArrowOutwardRoundedIcon from '@mui/icons-material/ArrowOutwardRounded';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
-const CREATE_GUIDE_URL =
-  'https://huggingface.co/docs/reachy_mini/index#-apps--ecosystem';
+const CREATE_GUIDE_URL = 'https://huggingface.co/docs/reachy_mini/index#-apps--ecosystem';
 
 interface AppCreateYourOwnTileProps {
   /**
@@ -39,9 +38,7 @@ interface AppCreateYourOwnTileProps {
   fullWidth?: boolean;
 }
 
-export default function AppCreateYourOwnTile({
-  fullWidth = false,
-}: AppCreateYourOwnTileProps) {
+export default function AppCreateYourOwnTile({ fullWidth = false }: AppCreateYourOwnTileProps) {
   const handleOpen = () => {
     void openExternalUrl(CREATE_GUIDE_URL);
   };
@@ -52,21 +49,19 @@ export default function AppCreateYourOwnTile({
       tabIndex={0}
       aria-label="Create your own Reachy Mini app"
       onClick={handleOpen}
-      onKeyDown={(e) => {
+      onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           handleOpen();
         }
       }}
-      sx={(theme) => ({
+      sx={theme => ({
         flexShrink: 0,
         // Mirror `AppCompactTile`'s width branches so the CTA
         // tile slots into the rail without breaking the
         // "1 + 30 % peek" formula. See AppCompactTile for the
         // derivation.
-        width: fullWidth
-          ? '100%'
-          : 'clamp(208px, calc((100vw - 72px) / 1.3), 320px)',
+        width: fullWidth ? '100%' : 'clamp(208px, calc((100vw - 72px) / 1.3), 320px)',
         height: 'auto',
         // Stretch vertically to match the tallest sibling tile
         // in the rail - the rail uses `display: flex` on its
@@ -106,8 +101,10 @@ export default function AppCreateYourOwnTile({
       <Stack
         direction="row"
         spacing={1.5}
-        alignItems="center"
-        sx={{ minHeight: 64 }}
+        sx={{
+          alignItems: 'center',
+          minHeight: 64,
+        }}
       >
         {/* Icon plate. Same 64×64 footprint as `AppCompactTile`
             so the CTA tile aligns visually with the sibling
@@ -115,7 +112,7 @@ export default function AppCreateYourOwnTile({
             background + filled `+` glyph to signal "new" rather
             than "app icon". */}
         <Box
-          sx={(theme) => ({
+          sx={theme => ({
             width: 64,
             height: 64,
             flexShrink: 0,
@@ -137,12 +134,14 @@ export default function AppCreateYourOwnTile({
         <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.25}>
           <Stack
             direction="row"
-            alignItems="center"
             spacing={0.5}
-            sx={{ minWidth: 0 }}
+            sx={{
+              alignItems: 'center',
+              minWidth: 0,
+            }}
           >
             <Typography
-              sx={(theme) => ({
+              sx={theme => ({
                 fontSize: TYPO.lg,
                 fontWeight: FONT_WEIGHT.bold,
                 color: theme.palette.primary.main,
@@ -156,7 +155,7 @@ export default function AppCreateYourOwnTile({
               Create your own
             </Typography>
             <ArrowOutwardRoundedIcon
-              sx={(theme) => ({
+              sx={theme => ({
                 fontSize: TYPO.md,
                 color: theme.palette.primary.main,
                 flexShrink: 0,

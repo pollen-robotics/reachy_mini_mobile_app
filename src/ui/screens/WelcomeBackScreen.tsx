@@ -65,10 +65,7 @@ interface WelcomeBackScreenProps {
   onDone: () => void;
 }
 
-export default function WelcomeBackScreen({
-  username,
-  onDone,
-}: WelcomeBackScreenProps) {
+export default function WelcomeBackScreen({ username, onDone }: WelcomeBackScreenProps) {
   const [show, setShow] = useState(true);
 
   useEffect(() => {
@@ -107,7 +104,12 @@ export default function WelcomeBackScreen({
             animation: `${popInKeyframes} 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both`,
           }}
         />
-        <Stack alignItems="center" spacing={0.5}>
+        <Stack
+          spacing={0.5}
+          sx={{
+            alignItems: 'center',
+          }}
+        >
           <Typography
             component="h1"
             sx={{

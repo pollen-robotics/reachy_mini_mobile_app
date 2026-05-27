@@ -81,7 +81,7 @@ import {
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import LockIcon from '@mui/icons-material/Lock';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -158,7 +158,7 @@ export default function ScanScreen({
   // below the bar, same idiom as `RobotInfoPanel` in the session
   // screen.
   const [helpOpen, setHelpOpen] = useState(false);
-  const toggleHelp = () => setHelpOpen((open) => !open);
+  const toggleHelp = () => setHelpOpen(open => !open);
   const closeHelp = () => setHelpOpen(false);
 
   return (
@@ -177,7 +177,6 @@ export default function ScanScreen({
         onToggleHelp={toggleHelp}
         isHelpOpen={helpOpen}
       />
-
       {/* Inner scroll container. `m: 'auto'` on the column distributes
           free space equally on all four sides → fully centred (both
           axes) when the cards fit within the viewport, and falls back
@@ -202,13 +201,14 @@ export default function ScanScreen({
             py: 4,
           }}
         >
-          <Stack alignItems="center" spacing={2}>
+          <Stack
+            spacing={2}
+            sx={{
+              alignItems: 'center',
+            }}
+          >
             <HeroBuste />
-            <RobotsHeader
-              state={remote.state.kind}
-              count={robots.length}
-              hasRobots={hasRobots}
-            />
+            <RobotsHeader state={remote.state.kind} count={robots.length} hasRobots={hasRobots} />
           </Stack>
 
           {hasRobots ? (
@@ -259,18 +259,13 @@ export default function ScanScreen({
           )}
         </Stack>
       </Stack>
-
       {/* Sticky bottom action bar. Sits outside the scrollable area
           so the refresh stays one tap away regardless of how many
           robots are listed. Always mounted, so the available
           height of the centred content above never changes - the
           button just spins + disables in place during any fetch
           (initial load, refresh, poll). */}
-      <StickyRefreshBar
-        onRefresh={() => void remote.refresh()}
-        isRefreshing={isRefreshing}
-      />
-
+      <StickyRefreshBar onRefresh={() => void remote.refresh()} isRefreshing={isRefreshing} />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
           Google-mandated contact channels for UGC-bearing apps.
@@ -388,30 +383,33 @@ function HfAccountBar({
   return (
     <Stack
       direction="row"
-      alignItems="center"
-      justifyContent="space-between"
       spacing={1.5}
       sx={{
+        alignItems: 'center',
+        justifyContent: 'space-between',
         width: '100%',
         pt: `calc(${LAYOUT.safeAreaTop} + 12px)`,
         pb: 1.5,
         px: 2,
         bgcolor: 'background.default',
+
         // 1 px hairline always present (transparent when the help
         // overlay is closed, divider colour when it's open). Kept
         // in the box model at all times so the topbar's height -
         // and therefore the overlay's `top` offset - never shifts
         // when help is toggled. Only the colour transitions.
-        borderBottom: theme =>
-          `1px solid ${isHelpOpen ? theme.palette.divider : 'transparent'}`,
+        borderBottom: theme => `1px solid ${isHelpOpen ? theme.palette.divider : 'transparent'}`,
+
         transition: theme =>
           theme.transitions.create('border-bottom-color', {
             duration: theme.transitions.duration.shortest,
           }),
+
         // Stay above the help overlay so the topbar remains the
         // persistent chrome the user closes the overlay from. The
         // overlay's zIndex is 1200; we sit just above.
         position: 'relative',
+
         zIndex: 1201,
       }}
     >
@@ -423,9 +421,9 @@ function HfAccountBar({
           on the same row at `spacing={1}`). */}
       <Stack
         direction="row"
-        alignItems="center"
         spacing={1}
         sx={{
+          alignItems: 'center',
           minWidth: 0,
           flexShrink: 1,
         }}
@@ -440,17 +438,11 @@ function HfAccountBar({
             fontSize: TYPO.sm,
             fontWeight: FONT_WEIGHT.semibold,
             bgcolor: theme =>
-              theme.palette.mode === 'dark'
-                ? 'rgba(255,255,255,0.08)'
-                : 'rgba(0,0,0,0.06)',
+              theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
             color: 'text.secondary',
           }}
         >
-          {initial ?? (
-            <AccountCircleIcon
-              sx={{ color: 'text.secondary', fontSize: 24 }}
-            />
-          )}
+          {initial ?? <AccountCircleIcon sx={{ color: 'text.secondary', fontSize: 24 }} />}
         </Avatar>
         {/* Two-line identity column inside the pill.
             Row 1 is the "Signed in as" label, styled exactly
@@ -464,10 +456,7 @@ function HfAccountBar({
             row. Tight `lineHeight` on both lines keeps the
             column compact enough to fit the pill's vertical
             rhythm without bloating the topbar. */}
-        <Stack
-          spacing={0}
-          sx={{ minWidth: 0, flexShrink: 1, pr: 0.5 }}
-        >
+        <Stack spacing={0} sx={{ minWidth: 0, flexShrink: 1, pr: 0.5 }}>
           <Typography
             sx={{
               // `nano` is the floor of the type scale, reserved
@@ -523,7 +512,6 @@ function HfAccountBar({
           <LogoutIcon sx={{ fontSize: 18 }} />
         </IconButton>
       </Stack>
-
       {/* Help (?) / close (✕) toggle. Free-floating on the right,
           deliberately NOT wrapped in a pill so it reads as a
           different category of action (support, not account).
@@ -543,11 +531,7 @@ function HfAccountBar({
           fading in / out alongside the `?` ↔ `✕` swap - no
           width / height jump. */}
       <IconButton
-        aria-label={
-          isHelpOpen
-            ? 'Close help and support'
-            : 'Open help and support'
-        }
+        aria-label={isHelpOpen ? 'Close help and support' : 'Open help and support'}
         onClick={onToggleHelp}
         color="primary"
         sx={{ p: 1, flexShrink: 0 }}
@@ -672,8 +656,8 @@ function StickyRefreshBar({
 
   return (
     <Stack
-      alignItems="center"
       sx={{
+        alignItems: 'center',
         width: '100%',
         flexShrink: 0,
         pt: 1.5,
@@ -757,7 +741,13 @@ function RobotsHeader({
   })();
 
   return (
-    <Stack alignItems="center" spacing={0.5} sx={{ width: '100%' }}>
+    <Stack
+      spacing={0.5}
+      sx={{
+        alignItems: 'center',
+        width: '100%',
+      }}
+    >
       <Typography
         component="h1"
         sx={{
@@ -863,9 +853,11 @@ function RemoteRobotCard({
     >
       <Stack
         direction="row"
-        alignItems="center"
         spacing={2}
-        sx={{ width: '100%' }}
+        sx={{
+          alignItems: 'center',
+          width: '100%',
+        }}
       >
         <CardAvatar />
         {/* Two-row identity grid, both rows left-aligned hugging
@@ -878,9 +870,11 @@ function RemoteRobotCard({
         <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.25}>
           <Stack
             direction="row"
-            alignItems="center"
             spacing={1}
-            sx={{ minWidth: 0 }}
+            sx={{
+              alignItems: 'center',
+              minWidth: 0,
+            }}
           >
             <Typography
               sx={{
@@ -910,9 +904,7 @@ function RemoteRobotCard({
               fontSize: TYPO.xs,
               fontFamily: 'monospace',
               color: theme =>
-                theme.palette.mode === 'dark'
-                  ? 'rgba(255,255,255,0.40)'
-                  : 'rgba(0,0,0,0.36)',
+                theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.36)',
               whiteSpace: 'nowrap',
             }}
           >
@@ -929,14 +921,9 @@ function RemoteRobotCard({
             "who's holding it" without us blowing up the card height
             with a chip. */}
         {busy ? (
-          <Tooltip
-            title={activeApp ? `In use · ${activeApp}` : 'In use'}
-            placement="left"
-          >
+          <Tooltip title={activeApp ? `In use · ${activeApp}` : 'In use'} placement="left">
             <LockIcon
-              aria-label={
-                activeApp ? `In use - ${activeApp}` : 'In use'
-              }
+              aria-label={activeApp ? `In use - ${activeApp}` : 'In use'}
               sx={{
                 color: 'text.disabled',
                 flexShrink: 0,
@@ -1030,9 +1017,11 @@ function LoadingState() {
   return (
     <StateCard>
       <Stack
-        alignItems="center"
         spacing={1.5}
-        sx={{ color: 'text.secondary' }}
+        sx={{
+          alignItems: 'center',
+          color: 'text.secondary',
+        }}
       >
         <CircularProgress size={24} sx={{ color: 'text.secondary' }} />
         <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
@@ -1052,19 +1041,13 @@ function LoadingState() {
  * paragraph. Content is centred on both axes by `StateCard`;
  * the inner Stack just owns the typographic stack.
  */
-function CenteredMessageState({
-  title,
-  subtitle,
-}: {
-  title: string;
-  subtitle?: string;
-}) {
+function CenteredMessageState({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <StateCard>
       <Stack
-        alignItems="center"
         spacing={0.75}
         sx={{
+          alignItems: 'center',
           textAlign: 'center',
           maxWidth: 280,
         }}

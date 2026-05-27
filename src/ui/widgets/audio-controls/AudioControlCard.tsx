@@ -61,16 +61,13 @@ const ICONS: Record<AudioKind, { on: ReactNode; off: ReactNode }> = {
   },
 };
 
-const LABELS: Record<
-  AudioKind,
-  { muteAria: (isOn: boolean) => string; sliderAria: string }
-> = {
+const LABELS: Record<AudioKind, { muteAria: (isOn: boolean) => string; sliderAria: string }> = {
   speaker: {
-    muteAria: (isOn) => (isOn ? 'Mute speaker' : 'Unmute speaker'),
+    muteAria: isOn => (isOn ? 'Mute speaker' : 'Unmute speaker'),
     sliderAria: 'Speaker volume',
   },
   microphone: {
-    muteAria: (isOn) => (isOn ? 'Mute microphone' : 'Unmute microphone'),
+    muteAria: isOn => (isOn ? 'Mute microphone' : 'Unmute microphone'),
     sliderAria: 'Microphone volume',
   },
 };
@@ -89,39 +86,43 @@ export default function AudioControlCard({
   return (
     <Stack
       direction="row"
-      alignItems="center"
       spacing={1}
-      sx={(theme) => ({
-        opacity: disabled ? 0.5 : 1,
-        transition: theme.transitions.create('opacity', {
-          duration: theme.transitions.duration.short,
+      sx={[
+        {
+          alignItems: 'center',
+        },
+        theme => ({
+          opacity: disabled ? 0.5 : 1,
+          transition: theme.transitions.create('opacity', {
+            duration: theme.transitions.duration.short,
+          }),
+          minWidth: 0,
+          width: '100%',
+          minHeight: ROW_MIN_HEIGHT,
+          // No own background: the host (`<RobotPanel>`) already
+          // paints `background.paper` on the surrounding card, so
+          // a second paper layer here would either be redundant
+          // (no visible change) or, with `opacity: 0.5` on the
+          // disabled state, create a subtle muddied tint where
+          // both faded papers blend over the parent. Inheriting
+          // the panel's surface keeps the row clean in both
+          // light + dark modes. If you ever drop this widget
+          // outside a `<RobotPanel>`, wrap it in a paper surface
+          // at the call site.
+          // Extra right padding so the slider's thumb has room to
+          // breathe before the card edge. The mute icon button on
+          // the left already absorbs its own visual gutter via the
+          // IconButton's hit area, so we only pad the right side.
+          pr: 2,
         }),
-        minWidth: 0,
-        width: '100%',
-        minHeight: ROW_MIN_HEIGHT,
-        // No own background: the host (`<RobotPanel>`) already
-        // paints `background.paper` on the surrounding card, so
-        // a second paper layer here would either be redundant
-        // (no visible change) or, with `opacity: 0.5` on the
-        // disabled state, create a subtle muddied tint where
-        // both faded papers blend over the parent. Inheriting
-        // the panel's surface keeps the row clean in both
-        // light + dark modes. If you ever drop this widget
-        // outside a `<RobotPanel>`, wrap it in a paper surface
-        // at the call site.
-        // Extra right padding so the slider's thumb has room to
-        // breathe before the card edge. The mute icon button on
-        // the left already absorbs its own visual gutter via the
-        // IconButton's hit area, so we only pad the right side.
-        pr: 2,
-      })}
+      ]}
     >
       <IconButton
         aria-label={muteAria(isOn)}
         onClick={onToggleMute}
         disabled={disabled}
         size="small"
-        sx={(theme) => ({
+        sx={theme => ({
           width: ICON_BTN_SIZE,
           height: ICON_BTN_SIZE,
           flexShrink: 0,
@@ -134,14 +135,13 @@ export default function AudioControlCard({
       >
         {icon}
       </IconButton>
-
       <Slider
         value={value}
         onChange={(_, val) => onChange(val as number)}
         disabled={disabled}
         size="small"
         aria-label={sliderAria}
-        sx={(theme) => ({
+        sx={theme => ({
           color: theme.palette.primary.main,
           flex: 1,
           '& .MuiSlider-thumb': {
@@ -151,10 +151,7 @@ export default function AudioControlCard({
             border: `1.5px solid ${theme.palette.background.paper}`,
             boxShadow: 'none',
             '&:hover, &.Mui-focusVisible, &.Mui-active': {
-              boxShadow: `0 0 0 6px ${alpha(
-                theme.palette.primary.main,
-                0.16,
-              )}`,
+              boxShadow: `0 0 0 6px ${alpha(theme.palette.primary.main, 0.16)}`,
             },
           },
           '& .MuiSlider-track': {
@@ -164,9 +161,7 @@ export default function AudioControlCard({
           },
           '& .MuiSlider-rail': {
             backgroundColor:
-              theme.palette.mode === 'dark'
-                ? 'rgba(255,255,255,0.12)'
-                : 'rgba(0,0,0,0.12)',
+              theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)',
             height: 1.5,
             opacity: 1,
           },

@@ -44,11 +44,11 @@
  *                     pixels). Defaults to false (= sensible
  *                     padding for inline content like sliders).
  */
-import { Box, Stack, Typography } from "@mui/material";
-import type { SxProps, Theme } from "@mui/material/styles";
-import type { ReactNode } from "react";
+import { Box, Stack, Typography } from '@mui/material';
+import type { SxProps, Theme } from '@mui/material/styles';
+import type { ReactNode } from 'react';
 
-import { FONT_WEIGHT, RADIUS, TYPO } from "@/ui/design/tokens";
+import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface RobotPanelProps {
   /**
@@ -88,15 +88,15 @@ export default function RobotPanel({
   return (
     <Box
       sx={[
-        (theme) => ({
-          display: "flex",
-          flexDirection: "column",
+        theme => ({
+          display: 'flex',
+          flexDirection: 'column',
           borderRadius: `${RADIUS.lg}px`,
           border: `1px solid ${theme.palette.divider}`,
           bgcolor: theme.palette.background.paper,
           // `overflow: hidden` so the inner content respects the
           // parent's bottom radius (camera video, log scroll, etc.).
-          overflow: "hidden",
+          overflow: 'hidden',
         }),
         ...(Array.isArray(sx) ? sx : [sx ?? false]),
       ]}
@@ -104,32 +104,34 @@ export default function RobotPanel({
       {title !== undefined && (
         <Stack
           direction="row"
-          alignItems="center"
           spacing={1}
-          sx={(theme) => ({
-            flexShrink: 0,
-            minHeight: HEADER_MIN_HEIGHT,
-            px: 1.25,
-            py: 0.5,
-            borderBottom: `1px solid ${theme.palette.divider}`,
-            // Subtle tint so the header strip reads as "chrome" vs
-            // the content below. Tuned to be barely visible on
-            // light, slightly more present on dark (where pure
-            // paper/paper has very little contrast).
-            bgcolor:
-              theme.palette.mode === "dark"
-                ? "rgba(255,255,255,0.03)"
-                : "rgba(0,0,0,0.02)",
-          })}
+          sx={[
+            {
+              alignItems: 'center',
+            },
+            theme => ({
+              flexShrink: 0,
+              minHeight: HEADER_MIN_HEIGHT,
+              px: 1.25,
+              py: 0.5,
+              borderBottom: `1px solid ${theme.palette.divider}`,
+              // Subtle tint so the header strip reads as "chrome" vs
+              // the content below. Tuned to be barely visible on
+              // light, slightly more present on dark (where pure
+              // paper/paper has very little contrast).
+              bgcolor:
+                theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            }),
+          ]}
         >
           <Typography
             sx={{
               fontSize: TYPO.micro,
               fontWeight: FONT_WEIGHT.semibold,
-              color: "text.secondary",
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
-              whiteSpace: "nowrap",
+              color: 'text.secondary',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+              whiteSpace: 'nowrap',
               flexShrink: 0,
               lineHeight: 1.2,
             }}
@@ -144,11 +146,11 @@ export default function RobotPanel({
                 flex: 1,
                 minWidth: 0,
                 fontSize: TYPO.micro,
-                color: "text.secondary",
+                color: 'text.secondary',
                 opacity: 0.65,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
                 lineHeight: 1.2,
               }}
             >
@@ -161,8 +163,8 @@ export default function RobotPanel({
           {actions && (
             <Box
               sx={{
-                display: "flex",
-                alignItems: "center",
+                display: 'flex',
+                alignItems: 'center',
                 gap: 0.25,
                 flexShrink: 0,
               }}
@@ -172,13 +174,12 @@ export default function RobotPanel({
           )}
         </Stack>
       )}
-
       <Box
         sx={{
           flex: 1,
           minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
+          display: 'flex',
+          flexDirection: 'column',
           // Padding is only applied for "inline content" sections
           // (e.g. audio sliders). Surfaces that draw their own
           // pixels edge-to-edge (camera video, log terminal) opt

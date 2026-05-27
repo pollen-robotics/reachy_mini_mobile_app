@@ -44,14 +44,7 @@
  *     menu item.
  */
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
-import {
-  IconButton,
-  ListItemIcon,
-  ListItemText,
-  Menu,
-  MenuItem,
-  Typography,
-} from '@mui/material';
+import { IconButton, ListItemIcon, ListItemText, Menu, MenuItem, Typography } from '@mui/material';
 import { useCallback, useState, type MouseEvent as ReactMouseEvent } from 'react';
 
 import {
@@ -133,11 +126,8 @@ export function LanguageFlagPicker({ disabled = false }: LanguageFlagPickerProps
           },
         }}
       >
-        <span style={{ fontSize: FLAG_FONT_SIZE, lineHeight: 1 }}>
-          {active.flag}
-        </span>
+        <span style={{ fontSize: FLAG_FONT_SIZE, lineHeight: 1 }}>{active.flag}</span>
       </IconButton>
-
       <Menu
         id="language-picker-menu"
         anchorEl={anchorEl}
@@ -145,7 +135,6 @@ export function LanguageFlagPicker({ disabled = false }: LanguageFlagPickerProps
         onClose={handleClose}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        MenuListProps={{ dense: true, 'aria-label': 'Conversation language' }}
         slotProps={{
           paper: {
             elevation: 6,
@@ -161,9 +150,11 @@ export function LanguageFlagPicker({ disabled = false }: LanguageFlagPickerProps
               },
             },
           },
+
+          list: { dense: true, 'aria-label': 'Conversation language' },
         }}
       >
-        {LANGUAGES.map((lang) => {
+        {LANGUAGES.map(lang => {
           const isActive = lang.id === active.id;
           return (
             <MenuItem
@@ -182,9 +173,7 @@ export function LanguageFlagPicker({ disabled = false }: LanguageFlagPickerProps
                 {isActive ? (
                   <CheckRoundedIcon sx={{ fontSize: TYPO.lg }} />
                 ) : (
-                  <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>
-                    {lang.flag}
-                  </span>
+                  <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>{lang.flag}</span>
                 )}
               </ListItemIcon>
               <ListItemText

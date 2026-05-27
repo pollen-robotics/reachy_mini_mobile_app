@@ -61,8 +61,7 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
  * a coherent story if Help & Support is later moved or reworked.
  * Update both files in one pass on the next legal revision.
  */
-const PRIVACY_POLICY_URL =
-  'https://www.pollen-robotics.com/personal-data-protection-charter/';
+const PRIVACY_POLICY_URL = 'https://www.pollen-robotics.com/personal-data-protection-charter/';
 const TERMS_OF_SERVICE_URL =
   'https://www.pollen-robotics.com/general-terms-and-conditions-of-sales/';
 
@@ -80,20 +79,17 @@ const BULLETS: readonly DisclosureBullet[] = [
   {
     icon: GraphicEqOutlinedIcon,
     title: 'Voice conversations',
-    body:
-      'Your microphone audio is sent to OpenAI Realtime to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
+    body: 'Your microphone audio is sent to OpenAI Realtime to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
   },
   {
     icon: AppsOutlinedIcon,
     title: 'Third-party apps',
-    body:
-      'The Apps tab lists experiences from third parties on Hugging Face. They run in a sandboxed WebView, and you can report or hide any of them.',
+    body: 'The Apps tab lists experiences from third parties on Hugging Face. They run in a sandboxed WebView, and you can report or hide any of them.',
   },
   {
     icon: VerifiedUserOutlinedIcon,
     title: 'Hugging Face sign-in',
-    body:
-      'You sign in with Hugging Face. Your access token is stored on this device and used to load apps from the Hub.',
+    body: 'You sign in with Hugging Face. Your access token is stored on this device and used to load apps from the Hub.',
   },
 ];
 
@@ -151,8 +147,8 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
       >
         <Stack
           spacing={1}
-          alignItems="center"
           sx={{
+            alignItems: 'center',
             pt: 0.5,
             pb: 3,
             maxWidth: 360,
@@ -203,8 +199,7 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
               color: 'text.secondary',
             }}
           >
-            Here&apos;s what Reachy Mini Mobile does, and what we ask of
-            your device.
+            Here&apos;s what Reachy Mini Mobile does, and what we ask of your device.
           </Typography>
         </Stack>
 
@@ -233,8 +228,11 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
               key={title}
               direction="row"
               spacing={1.5}
-              alignItems="flex-start"
-              sx={{ px: 1.75, py: 1.5 }}
+              sx={{
+                alignItems: 'flex-start',
+                px: 1.75,
+                py: 1.5,
+              }}
             >
               <Icon
                 sx={{
@@ -269,7 +267,6 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
           ))}
         </Stack>
       </Box>
-
       {/* Sticky action plate. `borderTop` paints a soft divider so
           the bar reads as a separate surface from the scrolling
           body. The Privacy / Terms links sit BELOW the CTA in a
@@ -320,9 +317,11 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
         <Stack
           direction="row"
           spacing={0.5}
-          justifyContent="center"
-          alignItems="center"
-          sx={{ pt: 0.75 }}
+          sx={{
+            justifyContent: 'center',
+            alignItems: 'center',
+            pt: 0.75,
+          }}
         >
           <Button
             variant="text"
@@ -339,11 +338,7 @@ export default function EulaConsentModal({ onAccept }: EulaConsentModalProps) {
           >
             Privacy Policy
           </Button>
-          <Box
-            aria-hidden
-            component="span"
-            sx={{ fontSize: TYPO.xs, color: 'text.disabled' }}
-          >
+          <Box aria-hidden component="span" sx={{ fontSize: TYPO.xs, color: 'text.disabled' }}>
             ·
           </Box>
           <Button

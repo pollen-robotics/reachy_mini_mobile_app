@@ -79,28 +79,16 @@
  *                       while the engine hasn't reached `ready`.
  */
 import { useCallback, useState } from 'react';
-import {
-  Box,
-  IconButton,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/material';
+import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/material';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 
-import {
-  formatEntriesForCopy,
-  useDaemonLogs,
-} from '@/features/daemon-logs';
+import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
 import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
-import type {
-  RobotSessionHandle,
-  SessionPhase,
-} from '@/features/robot-session/useRobotSession';
+import type { RobotSessionHandle, SessionPhase } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
 import Section from '@/ui/design/Section';
@@ -133,10 +121,7 @@ const KIND_META = {
  * (`bringing-up` / `reacquiring` / `tearing-down`) which reads
  * like internal jargon to a non-developer user.
  */
-const PHASE_META: Record<
-  SessionPhase,
-  { label: string; color: string }
-> = {
+const PHASE_META: Record<SessionPhase, { label: string; color: string }> = {
   idle: { label: 'Idle', color: STATUS.info },
   'bringing-up': { label: 'Connecting', color: STATUS.info },
   live: { label: 'Live', color: STATUS.success },
@@ -283,21 +268,27 @@ export default function RobotInfoPanel({
         <>
           <Stack
             direction="row"
-            alignItems="center"
-            justifyContent="space-between"
-            sx={(theme) => ({
-              flexShrink: 0,
-              px: 2,
-              py: 1.25,
-              minHeight: 48,
-              borderBottom: `1px solid ${theme.palette.divider}`,
-            })}
+            sx={[
+              {
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              },
+              theme => ({
+                flexShrink: 0,
+                px: 2,
+                py: 1.25,
+                minHeight: 48,
+                borderBottom: `1px solid ${theme.palette.divider}`,
+              }),
+            ]}
           >
             <Stack
               direction="row"
-              alignItems="baseline"
               spacing={1}
-              sx={{ minWidth: 0 }}
+              sx={{
+                alignItems: 'baseline',
+                minWidth: 0,
+              }}
             >
               <Typography
                 component="h2"
@@ -325,9 +316,11 @@ export default function RobotInfoPanel({
             </Stack>
             <Stack
               direction="row"
-              alignItems="center"
               spacing={0.5}
-              sx={{ flexShrink: 0 }}
+              sx={{
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
             >
               {/* Icon-only actions, no Tooltip: this is a mobile
                   surface where tooltip would only surface on
@@ -369,25 +362,25 @@ export default function RobotInfoPanel({
            squashing the LOGS panel. The LOGS panel itself uses
            `flex: 1, minHeight: …` to eat the leftover vertical
            space and scrolls internally. */
-      <Box
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          px: 2,
-          pt: 2,
-          // Bottom safe-area padding so the LOGS panel's bottom
-          // edge isn't hidden under the iOS home indicator (we
-          // cover the BottomNavigation, which normally provided
-          // its own safe-area inset).
-          pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
-          overflowY: 'auto',
-        }}
-      >
-        <Section label="Connection">
-          {/* Physical `Transport` (Wi-Fi / USB) used to live here
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            px: 2,
+            pt: 2,
+            // Bottom safe-area padding so the LOGS panel's bottom
+            // edge isn't hidden under the iOS home indicator (we
+            // cover the BottomNavigation, which normally provided
+            // its own safe-area inset).
+            pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
+            overflowY: 'auto',
+          }}
+        >
+          <Section label="Connection">
+            {/* Physical `Transport` (Wi-Fi / USB) used to live here
               as its own row, but it's already surfaced by the
               chip in the hero card above; the section is now
               focused on the WebRTC-level signals (kind / IP /
@@ -403,85 +396,75 @@ export default function RobotInfoPanel({
               its own `MetadataRow` because it carries the copy
               affordance and a value (an IPv4 string) that needs
               room. */}
-          <Stack
-            direction="row"
-            alignItems="stretch"
-            sx={(theme) => ({
-              px: 1.5,
-              py: 1,
-              minHeight: 40,
-              '&:not(:last-of-type)': {
-                borderBottom: `1px solid ${theme.palette.divider}`,
-              },
-            })}
-          >
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                display: 'flex',
-                alignItems: 'center',
-              }}
+            <Stack
+              direction="row"
+              sx={[
+                {
+                  alignItems: 'stretch',
+                },
+                theme => ({
+                  px: 1.5,
+                  py: 1,
+                  minHeight: 40,
+                  '&:not(:last-of-type)': {
+                    borderBottom: `1px solid ${theme.palette.divider}`,
+                  },
+                }),
+              ]}
             >
-              {webrtcMeta ? (
-                <StatusDotLabel
-                  color={webrtcMeta.color}
-                  label={webrtcMeta.label}
-                />
-              ) : (
-                <Typography
-                  component="span"
-                  sx={{ fontSize: TYPO.sm, color: 'text.disabled' }}
-                >
-                  —
-                </Typography>
-              )}
-            </Box>
-            <Box
-              sx={(theme) => ({
-                width: '1px',
-                alignSelf: 'stretch',
-                mx: 1.5,
-                my: 0.25,
-                bgcolor: theme.palette.divider,
-              })}
-            />
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-              }}
-            >
-              <Typography
-                component="span"
+              <Box
                 sx={{
-                  fontSize: TYPO.sm,
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                  color: bitrate ? 'text.primary' : 'text.disabled',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  flex: 1,
+                  minWidth: 0,
+                  display: 'flex',
+                  alignItems: 'center',
                 }}
               >
-                {bitrate ?? '—'}
-              </Typography>
-            </Box>
-          </Stack>
-          {remoteIp && (
-            <MetadataRow
-              label="Remote IP"
-              value={remoteIp}
-              mono
-              copyable
-            />
-          )}
-        </Section>
-
-        {/* Software section. Both version numbers (daemon firmware
+                {webrtcMeta ? (
+                  <StatusDotLabel color={webrtcMeta.color} label={webrtcMeta.label} />
+                ) : (
+                  <Typography component="span" sx={{ fontSize: TYPO.sm, color: 'text.disabled' }}>
+                    —
+                  </Typography>
+                )}
+              </Box>
+              <Box
+                sx={theme => ({
+                  width: '1px',
+                  alignSelf: 'stretch',
+                  mx: 1.5,
+                  my: 0.25,
+                  bgcolor: theme.palette.divider,
+                })}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                }}
+              >
+                <Typography
+                  component="span"
+                  sx={{
+                    fontSize: TYPO.sm,
+                    fontFamily:
+                      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                    color: bitrate ? 'text.primary' : 'text.disabled',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {bitrate ?? '—'}
+                </Typography>
+              </Box>
+            </Stack>
+            {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
+          </Section>
+          {/* Software section. Both version numbers (daemon firmware
             + this mobile app) are surfaced together on ONE row,
             split into two equal cells by a hairline divider. The
             section header ("SOFTWARE") already names the group,
@@ -490,38 +473,30 @@ export default function RobotInfoPanel({
             visual weight - which is what the user actually copies
             into a bug report ("daemon X, app Y"). The version
             strings stay monospaced for legibility / line-up. */}
-        <Section label="Software">
-          <Stack
-            direction="row"
-            // `center` (not the flex default `stretch`) so the
-            // text pair inside each `VersionCell` sits on the
-            // row's vertical centre line. With `stretch`, the
-            // cell grew to the row's `minHeight: 40` and the
-            // baseline-aligned label+value pair anchored to the
-            // top, leaving an off-balance ~8 px gap at the
-            // bottom of the card.
-            alignItems="center"
-            sx={{
-              px: 1.5,
-              py: 1,
-              minHeight: 40,
-            }}
-          >
-            <VersionCell label="Daemon" value={versionLabel} />
-            <Box
-              sx={(theme) => ({
-                width: '1px',
-                alignSelf: 'stretch',
-                mx: 1.5,
-                my: 0.25,
-                bgcolor: theme.palette.divider,
-              })}
-            />
-            <VersionCell label="App" value={`v${__APP_VERSION__}`} />
-          </Stack>
-        </Section>
-
-        {/* Account section. Two everyday-grade signals that don't
+          <Section label="Software">
+            <Stack
+              direction="row"
+              sx={{
+                alignItems: 'center',
+                px: 1.5,
+                py: 1,
+                minHeight: 40,
+              }}
+            >
+              <VersionCell label="Daemon" value={versionLabel} />
+              <Box
+                sx={theme => ({
+                  width: '1px',
+                  alignSelf: 'stretch',
+                  mx: 1.5,
+                  my: 0.25,
+                  bgcolor: theme.palette.divider,
+                })}
+              />
+              <VersionCell label="App" value={`v${__APP_VERSION__}`} />
+            </Stack>
+          </Section>
+          {/* Account section. Two everyday-grade signals that don't
             belong elsewhere:
               - HF username: reassurance about which account is
                 signed in (and what the support team will see
@@ -534,31 +509,30 @@ export default function RobotInfoPanel({
                 way as the WebRTC row above so a glance at the
                 panel surfaces the two main "is the link healthy"
                 signals at the same vertical level. */}
-        <Section label="Account">
-          <MetadataRow
-            label="Signed in"
-            value={username ? `@${username}` : '—'}
-            mono={Boolean(username)}
-          />
-          <MetadataRow
-            label="Session"
-            info={
-              'Lifecycle state of the link to the robot ' +
-              '(connection, conversation, hand-off to an app, ' +
-              'teardown). Mostly Live; the other values show up ' +
-              'briefly when the link is being brought up or ' +
-              'reacquired.'
-            }
-            value={
-              <StatusDotLabel
-                color={PHASE_META[sessionPhase].color}
-                label={PHASE_META[sessionPhase].label}
-              />
-            }
-          />
-        </Section>
-
-        {/* LOGS panel. Eats the leftover vertical space via
+          <Section label="Account">
+            <MetadataRow
+              label="Signed in"
+              value={username ? `@${username}` : '—'}
+              mono={Boolean(username)}
+            />
+            <MetadataRow
+              label="Session"
+              info={
+                'Lifecycle state of the link to the robot ' +
+                '(connection, conversation, hand-off to an app, ' +
+                'teardown). Mostly Live; the other values show up ' +
+                'briefly when the link is being brought up or ' +
+                'reacquired.'
+              }
+              value={
+                <StatusDotLabel
+                  color={PHASE_META[sessionPhase].color}
+                  label={PHASE_META[sessionPhase].label}
+                />
+              }
+            />
+          </Section>
+          {/* LOGS panel. Eats the leftover vertical space via
             `flex: 1, minHeight: …` so the user gets a generous live
             tail. Body has no padding so the terminal-style console
             paints its own dim bg edge-to-edge; the actions slot
@@ -566,43 +540,43 @@ export default function RobotInfoPanel({
             either lift the logs to a dedicated full-screen view
             (`OpenInFullIcon`) or copy the buffer to the clipboard
             in one tap. */}
-        <RobotPanel
-          title="Logs"
-          subtitle="Live daemon journal"
-          actions={
-            <>
-              {/* Same rationale as the fullscreen header: mobile
+          <RobotPanel
+            title="Logs"
+            subtitle="Live daemon journal"
+            actions={
+              <>
+                {/* Same rationale as the fullscreen header: mobile
                   surface, no Tooltip, `aria-label` for AT. */}
-              <IconButton
-                aria-label="Expand logs"
-                onClick={() => setLogsFullscreen(true)}
-                size="small"
-                sx={{ width: 24, height: 24, p: 0.25 }}
-              >
-                <OpenInFullIcon sx={{ fontSize: 12 }} />
-              </IconButton>
-              <IconButton
-                aria-label="Copy logs"
-                onClick={handleCopyLogs}
-                disabled={logs.entries.length === 0}
-                size="small"
-                sx={{ width: 24, height: 24, p: 0.25 }}
-              >
-                <ContentCopyIcon sx={{ fontSize: 12 }} />
-              </IconButton>
-            </>
-          }
-          noBodyChrome
-          sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
-        >
-          <DaemonLogConsole
-            entries={logs.entries}
-            status={logs.status}
-            errorMessage={logs.errorMessage}
-            enabled={isLive}
-          />
-        </RobotPanel>
-      </Box>
+                <IconButton
+                  aria-label="Expand logs"
+                  onClick={() => setLogsFullscreen(true)}
+                  size="small"
+                  sx={{ width: 24, height: 24, p: 0.25 }}
+                >
+                  <OpenInFullIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+                <IconButton
+                  aria-label="Copy logs"
+                  onClick={handleCopyLogs}
+                  disabled={logs.entries.length === 0}
+                  size="small"
+                  sx={{ width: 24, height: 24, p: 0.25 }}
+                >
+                  <ContentCopyIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+              </>
+            }
+            noBodyChrome
+            sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
+          >
+            <DaemonLogConsole
+              entries={logs.entries}
+              status={logs.status}
+              errorMessage={logs.errorMessage}
+              enabled={isLive}
+            />
+          </RobotPanel>
+        </Box>
       )}
     </Stack>
   );
@@ -624,9 +598,11 @@ function StatusDotLabel({ color, label }: { color: string; label: string }) {
   return (
     <Stack
       direction="row"
-      alignItems="center"
       spacing={0.75}
-      sx={{ minWidth: 0 }}
+      sx={{
+        alignItems: 'center',
+        minWidth: 0,
+      }}
     >
       <Box
         aria-hidden
@@ -668,9 +644,12 @@ function VersionCell({ label, value }: { label: string; value: string }) {
   return (
     <Stack
       direction="row"
-      alignItems="baseline"
       spacing={1}
-      sx={{ flex: 1, minWidth: 0 }}
+      sx={{
+        alignItems: 'baseline',
+        flex: 1,
+        minWidth: 0,
+      }}
     >
       <Typography
         component="span"
@@ -687,8 +666,7 @@ function VersionCell({ label, value }: { label: string; value: string }) {
         sx={{
           fontSize: TYPO.sm,
           color: 'text.primary',
-          fontFamily:
-            'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
           minWidth: 0,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -745,22 +723,28 @@ function MetadataRow({
   return (
     <Stack
       direction="row"
-      alignItems="center"
       spacing={1}
-      sx={(theme) => ({
-        px: 1.5,
-        py: 1,
-        minHeight: 40,
-        '&:not(:last-of-type)': {
-          borderBottom: `1px solid ${theme.palette.divider}`,
+      sx={[
+        {
+          alignItems: 'center',
         },
-      })}
+        theme => ({
+          px: 1.5,
+          py: 1,
+          minHeight: 40,
+          '&:not(:last-of-type)': {
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          },
+        }),
+      ]}
     >
       <Stack
         direction="row"
-        alignItems="center"
         spacing={0.5}
-        sx={{ flexShrink: 0 }}
+        sx={{
+          alignItems: 'center',
+          flexShrink: 0,
+        }}
       >
         <Typography
           component="span"
@@ -840,13 +824,10 @@ function MetadataRow({
  * an empty string when the row has nothing meaningful to show
  * (caller checks truthiness to drop the row entirely).
  */
-function formatRemoteIp(
-  webrtc: ConversationTransportInfo | null | undefined,
-): string {
+function formatRemoteIp(webrtc: ConversationTransportInfo | null | undefined): string {
   if (!webrtc || !webrtc.remoteIp) return '';
   const normalised = webrtc.remoteIp.toLowerCase();
-  const isMdns =
-    normalised.endsWith('.local') || normalised.endsWith('.local.');
+  const isMdns = normalised.endsWith('.local') || normalised.endsWith('.local.');
   if (isMdns && webrtc.kind === 'lan') return '';
   return webrtc.remoteIp;
 }

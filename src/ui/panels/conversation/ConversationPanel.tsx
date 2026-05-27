@@ -40,10 +40,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
-import {
-  MuteSideButton,
-  StopSideButton,
-} from './orb/ConversationSideButtons';
+import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
 import { useDaemonState } from '@/features/daemon-state';
@@ -72,10 +69,7 @@ export interface ConversationPanelProps {
   orbRef: RefObject<HTMLButtonElement | null>;
 }
 
-export function ConversationPanel({
-  session,
-  orbRef,
-}: ConversationPanelProps) {
+export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   const orbState = mapAppStateToOrb(session.engineState);
   const live =
     session.engineState === 'listening' ||
@@ -118,7 +112,7 @@ export function ConversationPanel({
   }, [pickerOpen, live, session.engineState]);
 
   const togglePicker = useCallback(() => {
-    setPickerOpen((prev) => !prev);
+    setPickerOpen(prev => !prev);
   }, []);
   const closePicker = useCallback(() => {
     setPickerOpen(false);
@@ -141,7 +135,7 @@ export function ConversationPanel({
     if (previous === null) return; // first render, nothing to restart
     if (previous === activePersonalityId) return; // no actual change
     if (!live) return; // not in conversation, will be picked up on next start
-    void restartConversation().catch((err) => {
+    void restartConversation().catch(err => {
       console.warn('[conversation-panel] restartConversation threw:', err);
     });
   }, [activePersonalityId, live, restartConversation]);
@@ -171,7 +165,7 @@ export function ConversationPanel({
     if (previous === null) return;
     if (previous === activeLanguageId) return;
     if (!live) return;
-    void restartConversation().catch((err) => {
+    void restartConversation().catch(err => {
       console.warn('[conversation-panel] restartConversation (language) threw:', err);
     });
   }, [activeLanguageId, live, restartConversation]);
@@ -195,23 +189,23 @@ export function ConversationPanel({
    * teardown + navigate away).
    */
   const handleStop = (): void => {
-    void session.stopConversation().catch((err) => {
+    void session.stopConversation().catch(err => {
       console.warn('[conversation-panel] stopConversation threw:', err);
     });
   };
 
   const handleOrbClick = (): void => {
-    void session.triggerOrbAction().catch((err) => {
+    void session.triggerOrbAction().catch(err => {
       console.warn('[conversation-panel] triggerOrbAction threw:', err);
     });
   };
 
   return (
     <Stack
-      alignItems="center"
-      justifyContent="center"
       spacing={0}
       sx={{
+        alignItems: 'center',
+        justifyContent: 'center',
         flex: 1,
         minHeight: 0,
         width: '100%',
@@ -244,14 +238,9 @@ export function ConversationPanel({
               why it's locked. The user can stop the conversation
               from the orb's stop button (or finish naturally) to
               re-enable the picker. */}
-          <PersonalityPill
-            open={pickerOpen}
-            onToggle={togglePicker}
-            disabled={live}
-          />
+          <PersonalityPill open={pickerOpen} onToggle={togglePicker} disabled={live} />
         </Box>
       </Box>
-
       {/* BODY SLOT: either the orb area or the persona picker grid.
           They share the same flex slot below the sub-header so the
           grid takes EXACTLY the same vertical real estate the orb
@@ -301,9 +290,11 @@ export function ConversationPanel({
           <Box />
           <Stack
             direction="row"
-            alignItems="center"
-            justifyContent="center"
             spacing={1.25}
+            sx={{
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
           >
             <MuteSideButton
               live={live}
@@ -325,9 +316,12 @@ export function ConversationPanel({
               the leftover vertical space, so a longer caption or
               a toast appearing doesn't push the orb around. */}
           <Stack
-            alignItems="center"
             spacing={1}
-            sx={{ alignSelf: 'start', mt: 2 }}
+            sx={{
+              alignItems: 'center',
+              alignSelf: 'start',
+              mt: 2,
+            }}
           >
             <ConversationCaption state={orbState} message={session.errorMessage} />
             <ConversationToolToast label={session.toolToastLabel} />
@@ -407,8 +401,10 @@ export function ConversationPanel({
               <Stack
                 direction="row"
                 spacing={0}
-                alignItems="stretch"
-                sx={{ width: '100%' }}
+                sx={{
+                  alignItems: 'stretch',
+                  width: '100%',
+                }}
               >
                 <Box
                   sx={{
@@ -420,9 +416,7 @@ export function ConversationPanel({
                     py: STRIP_CELL_PY,
                   }}
                 >
-                  <LanguageFlagPicker
-                    disabled={session.engineState === 'error'}
-                  />
+                  <LanguageFlagPicker disabled={session.engineState === 'error'} />
                 </Box>
                 <StripDivider />
                 <Box
@@ -469,15 +463,11 @@ export function ConversationPanel({
 
         {pickerOpen && <PersonalityGrid onClose={closePicker} />}
       </Box>
-
       {/* The engine-host inert div used to live here for legacy
           API compat with `mountConversation(root, opts)`. The hook
           now creates its own detached root so the panel doesn't
           need to expose any DOM to the engine. */}
-      <Box
-        aria-hidden="true"
-        sx={{ display: 'none' }}
-      />
+      <Box aria-hidden="true" sx={{ display: 'none' }} />
     </Stack>
   );
 }
@@ -530,13 +520,7 @@ const STRIP_CELL_PX = 1.5;
  * its bottom edge, framing each cell as its own column.
  */
 function StripDivider() {
-  return (
-    <Divider
-      orientation="vertical"
-      flexItem
-      sx={{ borderColor: 'divider' }}
-    />
-  );
+  return <Divider orientation="vertical" flexItem sx={{ borderColor: 'divider' }} />;
 }
 
 /**

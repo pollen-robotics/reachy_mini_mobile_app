@@ -46,17 +46,19 @@ export default function SessionErrorView({
 }: SessionErrorViewProps) {
   return (
     <Stack
-      alignItems="center"
-      justifyContent="center"
       sx={{
+        alignItems: 'center',
+        justifyContent: 'center',
         flex: 1,
         minHeight: 0,
         width: '100%',
+
         // Outer breathing room so the Paper card doesn't kiss the
         // screen edges on small viewports. The host places us inside
         // a `px: 3` column already; this adds a vertical margin and
         // a touch of extra horizontal margin for the card itself.
         px: 1,
+
         py: 2,
       }}
     >
@@ -136,11 +138,7 @@ export default function SessionErrorView({
           </Typography>
         ) : null}
 
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{ width: '100%', mt: 1, justifyContent: 'center' }}
-        >
+        <Stack direction="row" spacing={1} sx={{ width: '100%', mt: 1, justifyContent: 'center' }}>
           <Button
             variant="outlined"
             color="primary"

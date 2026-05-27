@@ -42,10 +42,15 @@ import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 export default function LeavingView() {
   return (
     <Stack
-      alignItems="center"
-      justifyContent="center"
       spacing={2}
-      sx={{ flex: 1, minHeight: 0, width: '100%', px: 3 }}
+      sx={{
+        alignItems: 'center',
+        justifyContent: 'center',
+        flex: 1,
+        minHeight: 0,
+        width: '100%',
+        px: 3,
+      }}
     >
       {/* Discreet, thin-stroked spinner. Size + thickness tuned to
           read as "a small ambient activity indicator" rather than
@@ -53,11 +58,7 @@ export default function LeavingView() {
           colouring keeps it muted against both light and dark
           backgrounds; the underlying CSS animation already gives
           enough motion to register as a loading state. */}
-      <CircularProgress
-        size={22}
-        thickness={2.4}
-        sx={{ color: 'text.secondary' }}
-      />
+      <CircularProgress size={22} thickness={2.4} sx={{ color: 'text.secondary' }} />
       <Typography
         sx={{
           fontSize: TYPO.md,

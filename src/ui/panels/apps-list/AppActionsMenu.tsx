@@ -75,10 +75,7 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
 
-import {
-  buildSpaceCardUrl,
-  buildSpaceReportUrl,
-} from '@/features/apps/buildSpaceUrls';
+import { buildSpaceCardUrl, buildSpaceReportUrl } from '@/features/apps/buildSpaceUrls';
 import type { AppEntry } from '@/features/apps/types';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
@@ -160,7 +157,7 @@ export default function AppActionsMenu({
         console.warn('[apps] report deeplink failed:', err);
       }
     },
-    [app, handleClose],
+    [app, handleClose]
   );
 
   const handleViewOnHf = useCallback(
@@ -173,7 +170,7 @@ export default function AppActionsMenu({
         console.warn('[apps] hf deeplink failed:', err);
       }
     },
-    [app, handleClose],
+    [app, handleClose]
   );
 
   const handleHideAuthor = useCallback(
@@ -185,7 +182,7 @@ export default function AppActionsMenu({
       hideAuthor(author);
       onAfterHideAuthor?.(author);
     },
-    [app.author, handleClose, hideAuthor, onAfterHideAuthor],
+    [app.author, handleClose, hideAuthor, onAfterHideAuthor]
   );
 
   return (
@@ -238,7 +235,9 @@ export default function AppActionsMenu({
             <ListItemText
               primary={`Hide apps from ${app.author}`}
               secondary="You can undo this from Help & Support"
-              secondaryTypographyProps={{ sx: { fontSize: '0.7rem' } }}
+              slotProps={{
+                secondary: { sx: { fontSize: '0.7rem' } },
+              }}
             />
           </MenuItem>
         )}

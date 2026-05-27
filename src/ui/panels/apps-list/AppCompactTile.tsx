@@ -50,14 +50,9 @@
  *   the card); pressing Enter targets the launch action.
  */
 import { memo, useState } from 'react';
-import {
-  Box,
-  Button,
-  Typography,
-  alpha,
-} from '@mui/material';
+import { Box, Button, Typography, alpha } from '@mui/material';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
-import StarOutlineIcon from '@mui/icons-material/StarOutline';
+import StarOutlineIcon from '@mui/icons-material/StarBorder';
 import StarRoundedIcon from '@mui/icons-material/StarRounded';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
@@ -113,20 +108,20 @@ function AppCompactTileImpl({
   const [pulseKey, setPulseKey] = useState(0);
 
   const handleTogglePin = () => {
-    setPulseKey((k) => k + 1);
+    setPulseKey(k => k + 1);
     onTogglePin(app);
   };
 
   return (
     <Box
       tabIndex={0}
-      onKeyDown={(e) => {
+      onKeyDown={e => {
         if (e.key === 'Enter') {
           e.preventDefault();
           onOpen(app);
         }
       }}
-      sx={(theme) => ({
+      sx={theme => ({
         flexShrink: 0,
         // Width branch: in `fullWidth` mode the tile is rendered
         // one-per-row inside a padded column (search results,
@@ -138,9 +133,7 @@ function AppCompactTileImpl({
         //
         // (24 px column padding + 24 px rail gap; see
         // `docs/APPS_TAB_REDESIGN.md` Section 4.3.)
-        width: fullWidth
-          ? '100%'
-          : 'clamp(208px, calc((100vw - 72px) / 1.3), 320px)',
+        width: fullWidth ? '100%' : 'clamp(208px, calc((100vw - 72px) / 1.3), 320px)',
         // Height is content-driven in both modes so a tile with
         // a 1-line description doesn't pad itself out to match a
         // 2-line tile - the cards then read with the same
@@ -186,7 +179,7 @@ function AppCompactTileImpl({
             few pixels past the plate's border - it's sized
             larger than the plate on purpose (see below). */}
         <Box
-          sx={(theme) => ({
+          sx={theme => ({
             width: 64,
             height: 64,
             flexShrink: 0,
@@ -377,9 +370,7 @@ function AppCompactTileImpl({
                 // render so the tile doesn't pulse on initial
                 // mount.
                 animation:
-                  pulseKey > 0
-                    ? 'star-pulse 250ms cubic-bezier(0.34, 1.56, 0.64, 1)'
-                    : 'none',
+                  pulseKey > 0 ? 'star-pulse 250ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
                 '@keyframes star-pulse': {
                   '0%': { transform: 'scale(1)' },
                   '40%': { transform: 'scale(1.35)' },
@@ -389,7 +380,7 @@ function AppCompactTileImpl({
             />
           }
           onClick={handleTogglePin}
-          sx={(theme) => ({
+          sx={theme => ({
             minWidth: 0,
             px: 1.25,
             py: 0.5,
@@ -403,14 +394,10 @@ function AppCompactTileImpl({
             // "Pinned" label do most of the state-cue work; the
             // background is just there to whisper "this is the
             // on state" without shouting at the rest of the card.
-            bgcolor: isPinned
-              ? alpha(theme.palette.primary.main, 0.06)
-              : 'transparent',
+            bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.06) : 'transparent',
             '&:hover': {
               borderWidth: 1.5,
-              bgcolor: isPinned
-                ? alpha(theme.palette.primary.main, 0.1)
-                : 'action.hover',
+              bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.1) : 'action.hover',
             },
             '&:active': {
               borderWidth: 1.5,
@@ -425,10 +412,7 @@ function AppCompactTileImpl({
               swaps freely without any reflow, which keeps the
               star pulse perfectly visible at the same
               x-position. */}
-          <Box
-            component="span"
-            sx={{ display: 'inline-grid', placeItems: 'center' }}
-          >
+          <Box component="span" sx={{ display: 'inline-grid', placeItems: 'center' }}>
             <Box
               component="span"
               aria-hidden
@@ -441,10 +425,7 @@ function AppCompactTileImpl({
             >
               Pinned
             </Box>
-            <Box
-              component="span"
-              sx={{ gridColumn: 1, gridRow: 1, whiteSpace: 'nowrap' }}
-            >
+            <Box component="span" sx={{ gridColumn: 1, gridRow: 1, whiteSpace: 'nowrap' }}>
               {isPinned ? 'Pinned' : 'Pin'}
             </Box>
           </Box>

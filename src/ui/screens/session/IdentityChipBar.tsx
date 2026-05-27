@@ -89,14 +89,16 @@ export default function IdentityChipBar({
   return (
     <Stack
       direction="row"
-      alignItems="center"
       spacing={1.25}
-      sx={{ minWidth: 0, flex: 1 }}
+      sx={{
+        alignItems: 'center',
+        minWidth: 0,
+        flex: 1,
+      }}
     >
       <Box sx={{ mt: `${TOPBAR_AVATAR_VERTICAL_NUDGE_PX}px`, flexShrink: 0 }}>
         <RobotAvatar size={TOPBAR_AVATAR_SIZE} />
       </Box>
-
       {/* Two-row column hugging the avatar. Row 1: name + transport
           chip side by side, with the name allowed to ellipsis if
           the screen is too narrow so the chip stays visible. Row 2:
@@ -105,9 +107,11 @@ export default function IdentityChipBar({
       <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
         <Stack
           direction="row"
-          alignItems="center"
           spacing={1}
-          sx={{ minWidth: 0 }}
+          sx={{
+            alignItems: 'center',
+            minWidth: 0,
+          }}
         >
           <Typography
             sx={{
@@ -141,10 +145,8 @@ export default function IdentityChipBar({
           sx={{
             fontSize: TYPO.xs,
             fontFamily: 'monospace',
-            color: (theme) =>
-              theme.palette.mode === 'dark'
-                ? 'rgba(255,255,255,0.40)'
-                : 'rgba(0,0,0,0.36)',
+            color: theme =>
+              theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.36)',
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',

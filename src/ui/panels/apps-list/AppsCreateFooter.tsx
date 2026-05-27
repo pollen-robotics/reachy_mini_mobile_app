@@ -45,8 +45,7 @@ import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 // tutorial points at would throw silently on mobile. The HF page
 // already deep-links to the SDK section via the anchor, so the
 // destination is equivalent for the user.
-const CREATE_GUIDE_URL =
-  'https://huggingface.co/docs/reachy_mini/index#-apps--ecosystem';
+const CREATE_GUIDE_URL = 'https://huggingface.co/docs/reachy_mini/index#-apps--ecosystem';
 
 // Gentle float for the hero illustration. Matches the other
 // hero illustrations across the app (`HeroIllustration` uses
@@ -73,20 +72,24 @@ export default function AppsCreateFooter() {
   return (
     <Stack
       spacing={2.5}
-      alignItems="center"
-      sx={(theme) => ({
-        pt: 4,
-        pb: 4,
-        px: 3,
-        width: '100%',
-        borderRadius: `${RADIUS.xxl}px`,
-        // Plain paper surface (white in light mode, near-black
-        // in dark mode) so the section reads as a clean panel
-        // and the outlined-primary CTA carries the colour weight.
-        bgcolor: 'background.paper',
-        border: `1px solid ${theme.palette.divider}`,
-        textAlign: 'center',
-      })}
+      sx={[
+        {
+          alignItems: 'center',
+        },
+        theme => ({
+          pt: 4,
+          pb: 4,
+          px: 3,
+          width: '100%',
+          borderRadius: `${RADIUS.xxl}px`,
+          // Plain paper surface (white in light mode, near-black
+          // in dark mode) so the section reads as a clean panel
+          // and the outlined-primary CTA carries the colour weight.
+          bgcolor: 'background.paper',
+          border: `1px solid ${theme.palette.divider}`,
+          textAlign: 'center',
+        }),
+      ]}
     >
       <Box
         sx={{
@@ -113,7 +116,6 @@ export default function AppsCreateFooter() {
           }}
         />
       </Box>
-
       <Stack spacing={1} sx={{ maxWidth: 340 }}>
         <Typography
           sx={{
@@ -136,7 +138,6 @@ export default function AppsCreateFooter() {
           Build, share and publish your own apps for Reachy Mini.
         </Typography>
       </Stack>
-
       <Button
         variant="outlined"
         color="primary"

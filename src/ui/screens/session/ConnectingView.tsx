@@ -54,10 +54,7 @@ import { useEffect, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 
 import connectionUrl from '@/assets/connection.svg';
-import type {
-  ConversationConnectionAttempt,
-  ConversationState,
-} from '@/features/conversation';
+import type { ConversationConnectionAttempt, ConversationState } from '@/features/conversation';
 import StepsProgressIndicator from '@/ui/design/StepsProgressIndicator';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
@@ -105,7 +102,7 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
     console.log(
       `[DIAG][ConnectingView] render state=${state} attempt=${
         attempt ? `${attempt.attempt}/${attempt.maxAttempts}` : 'null'
-      } inWakePhase=${inWakePhase} currentStep=${currentStep}`,
+      } inWakePhase=${inWakePhase} currentStep=${currentStep}`
     );
   }, [state, attempt, inWakePhase, currentStep]);
 
@@ -116,10 +113,15 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
 
   return (
     <Stack
-      alignItems="center"
-      justifyContent="center"
       spacing={3.5}
-      sx={{ flex: 1, minHeight: 0, width: '100%', px: 3 }}
+      sx={{
+        alignItems: 'center',
+        justifyContent: 'center',
+        flex: 1,
+        minHeight: 0,
+        width: '100%',
+        px: 3,
+      }}
     >
       {/* Illustration anchors the view above the stepper, mirroring
           the visual identity used by `SessionErrorView`. Hidden from
@@ -144,20 +146,19 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
           }}
         />
       </Box>
-
       {/* Stepper takes the visual lead; capped width so the dots
           stay close enough together to read as a single
           progression. The desktop component is designed to fill its
           parent, so we constrain it here at the call site. */}
       <Stack sx={{ width: '100%', maxWidth: 340 }}>
-        <StepsProgressIndicator
-          steps={[...STEPS]}
-          currentStep={currentStep}
-          accent={isRetrying}
-        />
+        <StepsProgressIndicator steps={[...STEPS]} currentStep={currentStep} accent={isRetrying} />
       </Stack>
-
-      <Stack alignItems="center" spacing={0.75}>
+      <Stack
+        spacing={0.75}
+        sx={{
+          alignItems: 'center',
+        }}
+      >
         <Typography
           sx={{
             fontSize: TYPO.lg,
@@ -280,7 +281,7 @@ function captionFor({
  */
 function useReachedWakePhase(
   state: ConversationState,
-  connectionAttempt: ConversationConnectionAttempt | null,
+  connectionAttempt: ConversationConnectionAttempt | null
 ): boolean {
   const [reached, setReached] = useState(false);
 

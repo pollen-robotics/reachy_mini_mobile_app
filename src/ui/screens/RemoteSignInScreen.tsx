@@ -7,21 +7,10 @@
  * lights up with the user's robots) and pops back to the scan view.
  */
 import { useCallback, useState, type ReactNode } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  Stack,
-  Typography,
-} from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, Stack, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
-import {
-  cancelLoginFlow,
-  loginWithHuggingFace,
-} from '@/features/auth/oauthLoopback';
+import { cancelLoginFlow, loginWithHuggingFace } from '@/features/auth/oauthLoopback';
 import hfLogoUrl from '@/assets/hf-logo.svg';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
@@ -35,10 +24,7 @@ interface RemoteSignInScreenProps {
   onBack?: () => void;
 }
 
-export default function RemoteSignInScreen({
-  onSignedIn,
-  onBack,
-}: RemoteSignInScreenProps) {
+export default function RemoteSignInScreen({ onSignedIn, onBack }: RemoteSignInScreenProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,8 +35,7 @@ export default function RemoteSignInScreen({
       const result = await loginWithHuggingFace();
       onSignedIn(result.token, result.username);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Sign-in failed';
+      const message = err instanceof Error ? err.message : 'Sign-in failed';
       setError(friendlyAuthError(message));
     } finally {
       setBusy(false);
@@ -67,9 +52,9 @@ export default function RemoteSignInScreen({
       {onBack ? (
         <Stack
           direction="row"
-          alignItems="center"
           spacing={1}
           sx={{
+            alignItems: 'center',
             px: 2,
             py: 1,
             pt: LAYOUT.safeAreaTop,
@@ -77,11 +62,7 @@ export default function RemoteSignInScreen({
             flexShrink: 0,
           }}
         >
-          <IconButton
-            onClick={() => void handleBack()}
-            size="small"
-            aria-label="Back"
-          >
+          <IconButton onClick={() => void handleBack()} size="small" aria-label="Back">
             <ArrowBackIcon fontSize="small" />
           </IconButton>
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
@@ -89,7 +70,6 @@ export default function RemoteSignInScreen({
           </Typography>
         </Stack>
       ) : null}
-
       <Stack
         spacing={3}
         sx={{
@@ -142,10 +122,9 @@ export default function RemoteSignInScreen({
             lineHeight: 1.5,
           }}
         >
-          This is how we'll detect the{' '}
-          <EmphasizedSpan>Reachies</EmphasizedSpan> linked to your{' '}
-          <EmphasizedSpan>Hugging Face account</EmphasizedSpan> and let you
-          connect to them from anywhere on your network.
+          This is how we'll detect the <EmphasizedSpan>Reachies</EmphasizedSpan> linked to your{' '}
+          <EmphasizedSpan>Hugging Face account</EmphasizedSpan> and let you connect to them from
+          anywhere on your network.
         </Typography>
 
         {error ? (
@@ -219,7 +198,6 @@ export default function RemoteSignInScreen({
         >
           {busy ? 'Waiting for Hugging Face…' : 'Continue with Hugging Face'}
         </Button>
-
       </Stack>
     </Stack>
   );
@@ -233,10 +211,7 @@ export default function RemoteSignInScreen({
  */
 function EmphasizedSpan({ children }: { children: ReactNode }) {
   return (
-    <Box
-      component="span"
-      sx={{ fontWeight: FONT_WEIGHT.semibold, color: 'text.primary' }}
-    >
+    <Box component="span" sx={{ fontWeight: FONT_WEIGHT.semibold, color: 'text.primary' }}>
       {children}
     </Box>
   );
