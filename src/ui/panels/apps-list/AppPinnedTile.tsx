@@ -46,13 +46,37 @@
  * the gesture existed without being told. The Edit/Done toggle
  * trades a tap for full discoverability.
  */
-import { memo, useMemo, type KeyboardEvent, type MouseEvent } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  type ForwardRefExoticComponent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type RefAttributes,
+} from 'react';
 import { Box, IconButton, Typography, alpha } from '@mui/material';
+import TouchRippleRaw, {
+  type TouchRippleActions,
+  type TouchRippleProps,
+} from '@mui/material/ButtonBase/TouchRipple';
 import CloseIcon from '@mui/icons-material/Close';
 
 import type { AppEntry } from '@/features/apps/types';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AppIcon from './AppIcon';
+
+// MUI ships `TouchRipple` as a `ForwardRefRenderFunction` rather than
+// a `ForwardRefExoticComponent`, which TypeScript refuses to treat as
+// a JSX element type. Cast through to the runtime-equivalent
+// component shape so we can `<TouchRipple ref={...} />` without TS
+// complaining. This is a known MUI typing gap (see e.g.
+// mui/material-ui#33174); the runtime behaviour is unaffected.
+const TouchRipple = TouchRippleRaw as unknown as ForwardRefExoticComponent<
+  TouchRippleProps & RefAttributes<TouchRippleActions>
+>;
 
 /**
  * Stable per-id 32-bit hash. Java-style polynomial rolling hash
@@ -106,18 +130,99 @@ function AppPinnedTileImpl({
   onOpen,
   onUnpin,
 }: AppPinnedTileProps) {
+  // Material-style ripple, scoped to the glyph plate via the
+  // `position: relative + overflow: hidden` slot below. We drive
+  // it manually (instead of swapping the wrapper for `ButtonBase`)
+  // for two reasons:
+  //   1. `ButtonBase` rips its own ripple as a sibling of the
+  //      child tree; that ripple would extend to the caption
+  //      under the square and read as a rectangular flash instead
+  //      of an iOS-style icon press.
+  //   2. The outer cell already owns its own `role="button"` +
+  //      keyboard handling, focus styles, wiggle animation,
+  //      pop-in animation, and active-scale on the glyph plate.
+  //      A bare `<TouchRipple>` lets us layer the ripple in
+  //      without re-deriving any of that machinery from
+  //      `ButtonBase`.
+  const rippleRef = useRef<TouchRippleActions>(null);
+
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (editMode) return;
+    rippleRef.current?.start(e);
+  };
+
+  const handlePointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    rippleRef.current?.stop(e);
+  };
+
+  // Cancel the wave if the pointer leaves the tile mid-press; the
+  // alternative (let it complete) reads as "the system reacted to
+  // a tap I aborted", which is the exact opposite of the
+  // touch-cancel UX users expect on iOS.
+  const handlePointerLeave = (e: PointerEvent<HTMLDivElement>) => {
+    rippleRef.current?.stop(e);
+  };
+
+  // Delay between the user's tap and the actual `onOpen` so the
+  // ripple wave has time to draw before the host swaps the
+  // current view for the iframe overlay. Without this gap, the
+  // overlay paints on top of the still-expanding ripple within
+  // a frame or two and the press feels "swallowed". ~220 ms is
+  // the sweet spot we found in mobile usability passes: long
+  // enough to read the wave as a "your tap was registered" cue,
+  // short enough that the open still feels immediate.
+  const OPEN_AFTER_RIPPLE_MS = 220;
+  const openTimerRef = useRef<number | null>(null);
+
+  // Clear a pending open if the tile unmounts (parent re-renders
+  // the grid, edit mode flips, hot reload) so we don't fire
+  // `onOpen` against a stale app reference.
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current !== null) {
+        window.clearTimeout(openTimerRef.current);
+        openTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleClick = () => {
     // Edit mode disables opening; the only actionable element on
     // an editing tile is the badge below.
     if (editMode) return;
-    onOpen(app);
+    // Idempotent: a double-tap during the ripple window should
+    // not queue a second open. The first tap already armed the
+    // timer; subsequent taps are no-ops until it resolves.
+    if (openTimerRef.current !== null) return;
+    openTimerRef.current = window.setTimeout(() => {
+      openTimerRef.current = null;
+      onOpen(app);
+    }, OPEN_AFTER_RIPPLE_MS);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (editMode) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      onOpen(app);
+      if (openTimerRef.current !== null) return;
+      // Centered ripple on keyboard activation: we have no pointer
+      // coordinates to anchor against, so a centered wave is the
+      // honest representation of "the tile was activated".
+      rippleRef.current?.start(
+        // `TouchRipple.start` accepts a synthetic stub with just
+        // the `clientX/clientY` fields it reads. We pass zeros and
+        // ignore them via `{ center: true }`.
+        { clientX: 0, clientY: 0 } as unknown as PointerEvent<HTMLDivElement>,
+        { center: true },
+      );
+      // Stop the ripple just before we open so the wave's fade-out
+      // overlaps with the host swap, mirroring what the pointer
+      // path naturally gets via `onPointerUp`.
+      openTimerRef.current = window.setTimeout(() => {
+        openTimerRef.current = null;
+        rippleRef.current?.stop({} as PointerEvent<HTMLDivElement>);
+        onOpen(app);
+      }, OPEN_AFTER_RIPPLE_MS);
     }
   };
 
@@ -159,6 +264,10 @@ function AppPinnedTileImpl({
       tabIndex={editMode ? -1 : 0}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
+      onPointerCancel={handlePointerLeave}
       sx={(theme) => ({
         // Cell content stack: square glyph + caption name.
         // Width is left to the parent grid cell so the tile
@@ -262,7 +371,28 @@ function AppPinnedTileImpl({
           aspectRatio: '1 / 1',
           borderRadius: `${RADIUS.lg}px`,
           bgcolor: 'background.paper',
-          border: `1px solid ${theme.palette.divider}`,
+          // Subtle primary tint on the border so a pinned tile
+          // reads as "user-curated / first-class" against the
+          // divider-grey of generic surfaces, without screaming
+          // for attention (full primary at 1 px would compete
+          // with the icon's own colour). Alpha kept on the
+          // lighter side of "outlined primary button" so it
+          // stays readable on both light and dark backgrounds
+          // via alpha-on-current-bg composition.
+          //
+          // Edit mode falls back to neutral `divider`: the
+          // primary tint signals "this app is a user-curated
+          // pin", which is only meaningful in the calm reading
+          // state. In edit mode every tile is wiggling under a
+          // `✕` badge and we want the whole grid to read as a
+          // single editing surface rather than as a row of
+          // accented buttons.
+          border: `1px solid ${editMode ? theme.palette.divider : alpha(theme.palette.primary.main, 0.6)}`,
+          // `position: relative` so the ripple slot below can
+          // attach as an absolute child clipped to the plate's
+          // rounded square (without affecting the icon's
+          // `overflow: visible` bleed).
+          position: 'relative',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -310,6 +440,49 @@ function AppPinnedTileImpl({
                 internal padding; the bleed treatment that flatters
                 a padded PNG reads as oversized on an SVG. */}
         <AppIcon app={app} size={44} imageSize={117} svgImageSize={72} />
+
+        {/* Ripple slot.
+            ───────────
+            Dedicated absolute layer over the glyph plate that
+            owns the Material `TouchRipple`. We host it here (not
+            on the outer wrapper) for two reasons:
+              - `overflow: hidden` on this slot clips the wave to
+                the exact rounded square of the plate, so the
+                ripple never bleeds onto the caption below.
+              - The outer wrapper keeps `overflow: visible` so
+                the icon can continue to bleed past the plate's
+                border (see `imageSize: 117` comment above).
+            `pointerEvents: none` so the slot itself stays
+            transparent to hit-testing — clicks still resolve on
+            the outer button. `zIndex: 1` lays the wave just
+            above the icon so a tap on a photographic logo still
+            reads as a press; the wave's own alpha (~0.3) keeps
+            the icon legible underneath. Suppressed in edit mode:
+            the tile body is non-interactive then, so a ripple
+            would be a phantom signal. */}
+        {!editMode && (
+          <Box
+            aria-hidden
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: `${RADIUS.lg}px`,
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              zIndex: 1,
+              // Tint the ripple wave with the primary palette.
+              // MUI's `TouchRipple` paints the wave in
+              // `currentColor`, so setting `color` on the slot
+              // is enough — no need to override
+              // `TouchRippleProps.classes`. Matches the primary
+              // border above so the press echoes the same
+              // "user-curated / first-class" colour family.
+              color: 'primary.main',
+            }}
+          >
+            <TouchRipple ref={rippleRef} center={false} />
+          </Box>
+        )}
       </Box>
 
       {/* Edit-mode unpin badge.
