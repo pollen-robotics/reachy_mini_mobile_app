@@ -23,6 +23,12 @@
  * we immediately stop the returned tracks. The function is idempotent
  * - subsequent calls are no-ops once the first grant has gone through.
  *
+ * Desktop. Neither quirk applies, and grabbing the host mic in
+ * `yarn tauri:dev` evicts Discord / Zoom / etc. from the system input.
+ * `shared/desktop-mic-shim.ts` rejects the `getUserMedia` call at the
+ * navigator level so the `catch` branch below trips: we log a warn
+ * and abandon, exactly like the iOS-denied path in production.
+ *
  * This module is the single source of truth for that unlock so it can
  * be invoked from both the up-front permissions onboarding screen
  * (preferred path - happens once at first launch, in the user-gesture
