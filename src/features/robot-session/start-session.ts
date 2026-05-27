@@ -35,30 +35,17 @@
  */
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import type { ConversationConnectionAttempt } from '@/features/conversation/engine/types';
+import { SESSION_TIMINGS } from './timings';
 
 /**
- * Per-attempt timeout. Healthy LAN handshakes complete in 1-3 s,
- * so 8 s is a generous upper bound that detects the silent
- * daemon death without holding the user hostage. Was 15 s in the
- * single-shot version; 8 s is FASTER on the happy path.
+ * Defaults are sourced from `SESSION_TIMINGS` (centralised in
+ * `./timings.ts`) so the worst-case bring-up latency can be audited
+ * from a single file. Each option can still be overridden per-call
+ * for tests / experiments.
  */
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 8_000;
-
-/**
- * Wait between retries. Sized to comfortably exceed the measured
- * daemon recovery window (13-16 s) MINUS the 8 s already spent on
- * attempt 1, so the 2nd attempt typically lands on a freshly
- * restarted daemon, not on the half-resurrected one.
- */
-const DEFAULT_RETRY_GAP_MS = 12_000;
-
-/**
- * Total attempts (1st + retries). One retry is enough: the libnice
- * crash is a true random race, two crashes in a row with a 12 s
- * gap is vanishingly rare. Worst-case latency = 8 + 12 + 8 = 28 s
- * before we surface a fatal error.
- */
-const DEFAULT_MAX_ATTEMPTS = 2;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = SESSION_TIMINGS.startAttemptTimeoutMs;
+const DEFAULT_RETRY_GAP_MS = SESSION_TIMINGS.startRetryGapMs;
+const DEFAULT_MAX_ATTEMPTS = SESSION_TIMINGS.startMaxAttempts;
 
 export interface StartRobotSessionOptions {
   /** Live SDK instance returned by `new ReachyMini(...)`. */

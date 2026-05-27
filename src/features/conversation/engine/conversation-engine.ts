@@ -105,6 +105,7 @@ import { getActivePersonality } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
+import { SESSION_TIMINGS } from "@/features/robot-session/timings";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createWobblerControl } from "./motion-control/wobbler-control";
 import { createAntennasControl } from "./motion-control/antennas-control";
@@ -126,15 +127,11 @@ import type {
 } from "./types";
 
 /**
- * Duration (ms) of the smooth ease-out from the wobbler / antennas
- * last animated pose back to neutral when the user stops the
- * conversation (or hands off to an iframe). Long enough to feel
- * intentional - the user perceives the robot "settling down" - but
- * short enough that the post-stop motor-mode switch lands within a
- * second of the tap. 700 ms ≈ 21 frames at the wobbler's 30 Hz
- * stream rate, well above the perception threshold for "abrupt".
+ * Local alias for `SESSION_TIMINGS.glideToNeutralMs`. See
+ * `features/robot-session/timings.ts` for the full rationale +
+ * audit-friendly grouping with the other session budgets.
  */
-const GLIDE_TO_NEUTRAL_MS = 700;
+const GLIDE_TO_NEUTRAL_MS = SESSION_TIMINGS.glideToNeutralMs;
 
 // Public-types re-exports so the prior import path keeps working.
 // New code should pull these straight from `./types`.
@@ -659,9 +656,12 @@ async function doConnect(): Promise<void> {
     // WebKit privacy quirk on iOS: get the LAN host candidates flowing
     // *before* we kick off the SDK's `connect()` (which immediately
     // starts ICE gathering). This is also where Android first surfaces
-    // the RECORD_AUDIO prompt. Idempotent and a no-op on desktop. See
+    // the RECORD_AUDIO prompt. Idempotent. On desktop the call still
+    // runs but `shared/desktop-mic-shim.ts` rejects the underlying
+    // `getUserMedia({audio:true})`, so it boils down to a noisy warn
+    // and no actual mic capture. See
     // `features/conversation/permissions/iosMicUnlock.ts` for the full
-    // rationale.
+    // rationale of the mobile path.
     await unlockIosMicForWebRtc().catch(() => undefined);
 
     // The SDK refuses a second `connect()` when already in `connected` /
@@ -1355,36 +1355,94 @@ const vision: VisionHandle | null = openaiBridge
     })
   : null;
 
-async function teardown(): Promise<void> {
-  // Stop the vision poller early: its `start()` was paired with the
-  // OpenAI handshake in `runConversationParts`, so the matching
-  // shutdown belongs at the top of the teardown. Idempotent; the
-  // handle stays alive (we only `dispose()` on `unmount`).
-  vision?.stop();
+/**
+ * Common tear-down of the conversation pipeline (D layer).
+ *
+ * Three orchestration paths all need to stop the vision poller,
+ * tool-call handler, antennas / wobbler, OpenAI bridge, pose
+ * dispatcher, audio monitors and background audio keeper in the
+ * exact same order:
+ *
+ *   - `stopConversation()`         park in `ready`, glide head to neutral
+ *   - `releaseSessionKeepAwake()`  step 1, glide, then release + park `released`
+ *   - `teardown()`                 no glide (gotoSleep owns the head trajectory)
+ *
+ * Before this helper existed the three blocks were copy-pasted and
+ * drifted on every change (a new motion controller, a new gate to
+ * reset). Centralising them here means a new actor in the pipeline
+ * is added exactly once, in the right order, for every consumer.
+ *
+ * Behaviour
+ * ─────────
+ * Idempotent: no-op when `conversationStarted` is already false.
+ *
+ * `glide` controls whether we play the 700 ms ease-out to neutral
+ * before stopping the pose dispatcher. `true` for the gentle stops
+ * (the user sees the robot settle); `false` for the power-off path
+ * where `gotoSleep` is about to take over the head + antennas
+ * trajectory and any glide frame would just fight the daemon-side
+ * sleep animation.
+ *
+ * Side effects (in order):
+ *   1. clear `convoActiveRequested` so a concurrent
+ *      `startConversation()` doesn't race the tear-down;
+ *   2. stop vision / tools / wobbler / antennas synchronously;
+ *   3. close the OpenAI bridge (awaited in parallel with the glide
+ *      when `glide === true`);
+ *   4. stop the pose dispatcher, level monitors, background keeper;
+ *   5. mute the robot mic so any in-flight audio doesn't leak;
+ *   6. clear `conversationStarted`.
+ *
+ * Post-pipeline tail (park ready / release / sleep+stopSession) is
+ * the responsibility of each caller - this helper stays
+ * agnostic of the surrounding orchestration.
+ */
+async function tearDownConversationPipeline({
+  glide,
+}: {
+  glide: boolean;
+}): Promise<void> {
+  if (!conversationStarted) return;
 
-  // Cancel any in-flight tool-call choreography + pose-restore timer
-  // before we let the wobbler / antennas tear down. The handler stops
-  // the `MovePlayer` it owns; we still flip our local `movePlaying`
-  // gate because subsequent ticks read it directly.
+  // Clear the convo-gate first: a stale `startConversation()` call
+  // racing the tear-down could otherwise resurrect the pipeline
+  // mid-shutdown. The other paths (teardown, release) also benefit
+  // from a clean slate for the next bring-up cycle.
+  convoActiveRequested = false;
+
+  vision?.stop();
   toolCallHandler.stop();
   movePlaying = false;
-
-  // Same ordering rule as `stopConversation`: kill the 30 Hz pose
-  // streams BEFORE awaiting the long-running OpenAI close. See the
-  // comment in stopConversation for why a late wobbler/antennas tick
-  // is enough to wedge the Dynamixel bus on the way out.
+  // Order matters: kill the 30 Hz pose streams synchronously BEFORE
+  // any await, otherwise the wobbler / antennas keep ticking through
+  // the bridge close and can race the trajectory gate. A late
+  // wobbler / antennas write is enough to wedge the Dynamixel bus
+  // on the way out.
   wobblerControl.stop();
   antennasControl.stop();
-  // Stop the pose dispatcher's coalesced flush. We don't run the
-  // glide here (gotoSleep takes over the head/antennas trajectory)
-  // so any pending dirty values would be wasted bus traffic
-  // immediately fighting the daemon-side sleep animation.
-  poseDispatcher.stop();
 
-  // Bridge owns the OpenAI client, audio sink and reconnect counter
-  // teardown - including the hidden `<audio>` element used to pump
-  // data through the inbound track.
-  await openaiBridge?.close();
+  if (glide) {
+    // Gentle exit: ease the head + antennas to neutral in parallel
+    // with the OpenAI bridge close so the iframe (or the next
+    // conversation) takes over a calmly-posed robot rather than a
+    // frozen-mid-motion one. The glide flushes its final neutral
+    // frame through the dispatcher, so we stop the dispatcher AFTER
+    // it lands.
+    const glidePromise = Promise.all([
+      wobblerControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
+      antennasControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
+    ]);
+    await openaiBridge?.close();
+    await glidePromise;
+  } else {
+    // Power-off path: `gotoSleep` is about to take over the head /
+    // antennas trajectory, so any glide frame here would only fight
+    // the daemon-side sleep animation. We still await the bridge
+    // close so the OpenAI side is fully gone before the SDK
+    // session tears down underneath it.
+    await openaiBridge?.close();
+  }
+  poseDispatcher.stop();
   openaiBridge?.resetReconnectCounter();
 
   stopMicLevelMonitor();
@@ -1394,6 +1452,26 @@ async function teardown(): Promise<void> {
   // behaviour. Safe to call when not running.
   backgroundAudioKeeper.stop();
 
+  // Mute the robot mic so any in-flight audio frames don't leak
+  // through to the speakers while the OpenAI client is gone. Safe
+  // on the power-off path too - the session is about to be torn
+  // down anyway; `handleHostStop` unmutes again after `teardown()`
+  // returns when it's a stop-not-power-off.
+  try {
+    robot?.setMicMuted(true);
+  } catch {
+    // ignored
+  }
+
+  conversationStarted = false;
+}
+
+async function teardown(): Promise<void> {
+  // Pipeline tear-down WITHOUT glide: gotoSleep is about to play
+  // its own head + antennas trajectory and we don't want our 700ms
+  // ease-out fighting it on the bus.
+  await tearDownConversationPipeline({ glide: false });
+
   // Capture the session flag BEFORE resetting it - we need it to
   // decide whether to run the goto-sleep dance below. Resetting
   // first (the previous version did exactly that) made the
@@ -1402,10 +1480,10 @@ async function teardown(): Promise<void> {
   // the head/antennas frozen wherever the last frame put them.
   const wasSessionEstablished = session.isEstablished();
 
-  // Reset the convo-gate bookkeeping so a subsequent
-  // `connect → startSession → startConversation` cycle behaves
-  // identically to the first one.
-  conversationStarted = false;
+  // `conversationStarted` is already false (cleared inside
+  // `tearDownConversationPipeline`); we just need to flip the
+  // session flag here so the next `connect → startSession →
+  // startConversation` cycle starts from a clean slate.
   session.setEstablished(false);
 
   // Self-contained: play the goto-sleep trajectory + release motors
@@ -1782,18 +1860,19 @@ const handle: ConversationEngineHandle = {
     // path inside `doStart`) before tearing down - both end states
     // leave central in a consistent slot we can stopSession on.
     //
-    // The 6 s upper bound is a defensive escape hatch: bootChain
+    // The upper bound is a defensive escape hatch: bootChain
     // already has its own 15 s timeout inside `doStart` for a
     // wedged daemon, but we don't want unmount to block longer
     // than the user can tolerate (a tap on Back / power-off should
-    // feel instantaneous). 6 s covers the common cases (auth +
-    // connect + a brief startSession) without sitting through the
-    // worst-case 15 s timeout.
+    // feel instantaneous). The current budget covers the common
+    // cases (auth + connect + a brief startSession) without
+    // sitting through the worst-case 15 s timeout. Value lives in
+    // `SESSION_TIMINGS.bootChainUnmountTimeoutMs` for audit.
     try {
       await Promise.race([
         bootChain,
         new Promise<void>((resolve) =>
-          window.setTimeout(resolve, 6_000),
+          window.setTimeout(resolve, SESSION_TIMINGS.bootChainUnmountTimeoutMs),
         ),
       ]);
     } catch {
@@ -1851,56 +1930,13 @@ const handle: ConversationEngineHandle = {
 
   stopConversation: async () => {
     if (unmounted) return;
-    convoActiveRequested = false;
-    if (!conversationStarted) return;
-    // "Lite" teardown: stop the conversation pipeline but leave the
-    // SDK / DataChannel alive so the daemon proxy keeps working.
-    // Mirrors the head of `teardown()` but skips `robot.stopSession()`.
-    //
-    // Landing sequence (designed for a smooth, calm exit):
-    //   1. `toolCallHandler.stop()` cancels any in-flight choreography
-    //      / pose-restore timer.
-    //   2. `movePlaying = false` SYNC reset so the wobbler / antennas
-    //      gates don't suppress the glide frames below.
-    //   3. `controls.stop()` clears the wobbler / oscillator timers
-    //      WITHOUT pushing a final (0, 0, 0) - that snap is what we're
-    //      eliminating.
-    //   4. `glideToNeutral(GLIDE_TO_NEUTRAL_MS)` runs an ease-out
-    //      cubic at 30 Hz from the last animated pose to neutral.
-    //      Run in parallel with the OpenAI bridge close to keep the
-    //      total stop latency under a second on a healthy link.
-    //   5. Once both have landed, switch to `ready` - which auto-flips
-    //      the motor mode to `gravity_compensation` via
-    //      `syncMotorModeForState`. Servos hold the neutral pose
-    //      passively, no PID buzz.
-    vision?.stop();
-    toolCallHandler.stop();
-    movePlaying = false;
-    wobblerControl.stop();
-    antennasControl.stop();
-    const glide = Promise.all([
-      wobblerControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-      antennasControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-    ]);
-    await openaiBridge?.close();
-    await glide;
-    // Glide is done (final (0,0,0) + (0,0) flushed via flushNow on
-    // each axis). Stop the dispatcher's tick - no more pose pushes
-    // will arrive until the next conversation starts and brings it
-    // back up.
-    poseDispatcher.stop();
-    openaiBridge?.resetReconnectCounter();
-    stopMicLevelMonitor();
-    stopAiLevelMonitor();
-    backgroundAudioKeeper.stop();
-    // Mute the robot mic so any in-flight audio frames don't leak
-    // through to the speakers while the OpenAI client is gone.
-    try {
-      robot?.setMicMuted(true);
-    } catch {
-      // ignored
-    }
-    conversationStarted = false;
+    // "Lite" teardown: stop the conversation pipeline (D layer) but
+    // leave the SDK / DataChannel alive so the daemon proxy keeps
+    // working. The helper takes care of the convo gate, motion
+    // controllers, OpenAI bridge, audio monitors and gentle
+    // ease-out to neutral. It is also idempotent when no
+    // conversation is currently running.
+    await tearDownConversationPipeline({ glide: true });
     // Drop back to the "session up, no convo" parking state so the
     // host can call `startConversation()` again later without the
     // engine's UI lying about its current capabilities. `ready`
@@ -1972,47 +2008,11 @@ const handle: ConversationEngineHandle = {
       return;
     }
 
-    // Step 1 - stop any running conversation parts (engine concern,
-    // mirrors the body of `stopConversation()` minus the parking-
-    // state side effect: we set our own state at the end). Order
-    // matters: kill the 30 Hz pose streams synchronously BEFORE any
-    // await, otherwise the wobbler / antennas keep ticking through
-    // the bridge close and can race the trajectory gate.
-    if (conversationStarted) {
-      convoActiveRequested = false;
-      vision?.stop();
-      toolCallHandler.stop();
-      // Same landing sequence as the host-facing `stopConversation`:
-      // sync `movePlaying = false`, drop the controls' tick timers
-      // without snapping, then ease the head + antennas to neutral
-      // in parallel with the OpenAI bridge close so the iframe
-      // takes over a calmly-posed robot rather than a frozen-mid-
-      // motion one.
-      movePlaying = false;
-      wobblerControl.stop();
-      antennasControl.stop();
-      const glide = Promise.all([
-        wobblerControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-        antennasControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-      ]);
-      await openaiBridge?.close();
-      await glide;
-      // Glide is done; the dispatcher has flushed the final neutral
-      // frame. Stop its tick so the iframe-bound consumer below
-      // gets a clean handover (no stale dispatcher writes racing
-      // its first commands).
-      poseDispatcher.stop();
-      openaiBridge?.resetReconnectCounter();
-      stopMicLevelMonitor();
-      stopAiLevelMonitor();
-      backgroundAudioKeeper.stop();
-      try {
-        robot.setMicMuted(true);
-      } catch {
-        // ignored
-      }
-      conversationStarted = false;
-    }
+    // Step 1 - stop the running conversation pipeline (D layer)
+    // with the gentle ease-out so the iframe takes over a
+    // calmly-posed robot. Helper is idempotent when no
+    // conversation is currently active.
+    await tearDownConversationPipeline({ glide: true });
 
     // Step 2 - release the WebRTC session at central. The session
     // class encapsulates: setEstablished(false), reset motor cache,

@@ -93,6 +93,17 @@ tool-call handler, audio level monitors), and the host-facing handle
 session for everything session-related (start, wakeUp, release, …)
 and parks the FSM around the session's transitions.
 
+**Extension point**: `tearDownConversationPipeline({ glide })` inside
+the engine is the single place every "stop the D layer" path goes
+through (`stopConversation`, `releaseSessionKeepAwake`, `teardown`).
+Adding a new pipeline actor (vision module, motion controller, audio
+helper) means wiring it there once instead of in three call-sites.
+
+**Audit point**: every timing budget that drives the session
+lifecycle and the iframe handoff lives in
+`features/robot-session/timings.ts` (`SESSION_TIMINGS`,
+`APP_HANDOFF_TIMINGS`). Retuning a budget is a one-file edit.
+
 ### `ui/` - the React UI layer
 
 ```
