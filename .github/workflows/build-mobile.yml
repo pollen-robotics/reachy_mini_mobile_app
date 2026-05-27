@@ -80,8 +80,23 @@ on:
         default: false
 
 concurrency:
+  # Group key includes the workflow + the ref so each branch / tag
+  # runs in its own concurrency lane. Pushing twice to the same
+  # branch in quick succession therefore funnels both runs into
+  # the same group, and the older one is auto-cancelled.
+  #
+  # `cancel-in-progress: true` is the safe default for an
+  # iteration-heavy mobile pipeline: during release crunch we
+  # routinely push 3-4 fix commits in a few minutes, and we don't
+  # want two `ios-release` jobs racing to upload to TestFlight
+  # with different `CFBundleVersion = github.run_number` values
+  # (the older one would still successfully upload an outdated
+  # build that testers might accidentally install).
+  #
+  # Tag pushes (`v*`) also fall under this rule. That's fine -
+  # a re-pushed tag should always supersede the previous run.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   ios:
@@ -103,15 +118,18 @@ jobs:
         run: rustup target add aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        # `Swatinem/rust-cache` is the canonical Rust action: it
+        # hashes Cargo.lock + target fingerprints, prunes stale
+        # intermediates, and persists `~/.cargo/{registry,git}`
+        # plus `<workspace>/target` automatically. Distinct
+        # `shared-key`s per job class (ios-sim / ios-device /
+        # android-debug / android-release) prevent cross-job cache
+        # eviction since they have different rustc fingerprints
+        # (codegen-units, opt-level, debug/release).
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-ios-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-ios-
+          workspaces: src-tauri -> target
+          shared-key: ios-sim
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -329,6 +347,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Free up disk space
+        # ubuntu-latest runners ship with ~14 GiB free, not enough
+        # for the Android build chain: NDK 27 (~2 GiB), four Rust
+        # archs of intermediates (~6 GiB), Gradle caches (~3 GiB),
+        # JNI libs merge (~2 GiB). Without this step the build
+        # crashes during `mergeUniversalDebugJniLibFolders` with:
+        #   java.nio.file.FileSystemException: ... No space left
+        #   on device  (writing libreachy_mini_mobile_app_lib.so)
+        # This action reclaims ~20 GiB by removing toolchains we
+        # don't use (dotnet, haskell, pre-installed large packages,
+        # docker images, swap). `android: false` preserves the
+        # Android SDK that `setup-android` would otherwise have
+        # to redownload. Tool-cache is preserved so the Node/Java
+        # caches stay warm.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -367,15 +409,12 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        # See the ios job for the rationale on using
+        # Swatinem/rust-cache instead of the generic actions/cache.
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-android-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-android-
+          workspaces: src-tauri -> target
+          shared-key: android-debug
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -393,26 +432,24 @@ jobs:
           # with the Reachy brand icon. Idempotent.
           yarn tauri icon src-tauri/icons/icon.png || true
 
-      - name: Pad Android adaptive-icon foregrounds (safe-zone fix)
-        # `tauri icon` generates `ic_launcher_foreground.png` by simply
-        # rescaling `icon.png` to each mipmap size with no extra
-        # padding. Android adaptive icons (`mipmap-anydpi-v26/ic_launcher.xml`)
-        # only guarantee the central 66dp out of 108dp foreground is
-        # visible after the launcher mask (circle/squircle/teardrop)
-        # is applied, so any brand icon whose design fills its canvas
-        # ends up clipped on the home screen (Reachy's antennas were
-        # being shaved off). This step shrinks each foreground PNG so
-        # its content sits inside the safe zone. Idempotent and
-        # forward-compatible with future `tauri icon` regenerations.
+      - name: Sync padded Android adaptive-icon foregrounds into gen/
+        # Source-of-truth foregrounds in `src-tauri/icons/android/` are
+        # pre-padded to fit the Android adaptive-icon 66/108dp safe
+        # zone (the launcher mask would otherwise shave off Reachy's
+        # antennas on circle/squircle/teardrop devices). Padding is
+        # baked into the source PNGs by
+        # `scripts/recompose-platform-icons.py` and committed under
+        # `src-tauri/icons/android/` - we no longer pad in CI.
+        # However `tauri android init` + `tauri icon` repopulate
+        # `gen/android/app/src/main/res/mipmap-*/` with simple
+        # rescales of `icon.png` (no padding). This step copies the
+        # already-padded source foregrounds over the regenerated
+        # rescales so the shipped APK uses the safe-zone version.
+        # Idempotent. Re-run `scripts/recompose-platform-icons.py`
+        # locally and commit the regenerated PNGs whenever the
+        # source icon changes.
         run: |
           set -euxo pipefail
-          python3 -m pip install --quiet --disable-pip-version-check Pillow
-          python3 scripts/pad-android-foreground.py \
-            --icons-dir src-tauri/icons/android
-          # Re-sync the patched foregrounds from src-tauri/icons/android/
-          # into the generated gen/android/app/src/main/res/ tree, in
-          # case `tauri android init` already copied the unpadded
-          # versions before this step ran.
           GEN_RES="src-tauri/gen/android/app/src/main/res"
           if [ -d "$GEN_RES" ]; then
             for d in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
@@ -629,15 +666,12 @@ jobs:
         run: rustup target add aarch64-apple-ios
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        # See the ios (simulator) job for the rationale on using
+        # Swatinem/rust-cache instead of the generic actions/cache.
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-rust-ios-device-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-ios-device-
+          workspaces: src-tauri -> target
+          shared-key: ios-device
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -846,11 +880,30 @@ jobs:
         # The archive itself is fine - we re-export it manually with
         # our own exportOptions.plist in the next step. We trap the
         # failure so the workflow continues to that step.
+        #
+        # CFBundleVersion = github.run_number via `--config`:
+        # Tauri 2.5+ supports a dedicated `bundle.iOS.bundleVersion`
+        # field that maps to `CFBundleVersion` independently of
+        # `tauri.conf.json:version` (which maps to the marketing
+        # `CFBundleShortVersionString`). We override it inline via
+        # `--config` so each CI run uploads with a unique, monotonic
+        # build number to App Store Connect, without bumping the
+        # marketing version. App Store Connect rejects an upload
+        # that reuses an existing (CFBundleShortVersionString,
+        # CFBundleVersion) pair, so pinning to `github.run_number`
+        # is the canonical pattern to unblock repeat TestFlight
+        # uploads from the same marketing version. This is the
+        # officially-documented Tauri mechanism - see
+        # https://v2.tauri.app/distribute/app-store/.
         env:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -uxo pipefail
-          yarn tauri ios build --target aarch64 --export-method app-store-connect || \
+          BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" '{bundle:{iOS:{bundleVersion:$bv}}}')
+          echo "Injecting Tauri config override: $BUNDLE_VERSION_CONFIG"
+          yarn tauri ios build --target aarch64 \
+            --export-method app-store-connect \
+            --config "$BUNDLE_VERSION_CONFIG" || \
             echo "Tauri export step failed (expected; manual re-export follows)"
 
       - name: Locate xcarchive
@@ -920,6 +973,44 @@ jobs:
             -exportPath exported \
             -allowProvisioningUpdates
           ls -la exported/
+
+      - name: Verify CFBundleVersion in exported IPA
+        # Sanity check: the `bundle.iOS.bundleVersion` config override
+        # we passed to `tauri ios build --config ...` should have
+        # propagated to the .app's Info.plist via xcodegen + agvtool,
+        # and from there to the exported .ipa. If this prints anything
+        # other than `CFBundleVersion = <run_number>`, the override
+        # was not honoured - check tauri-cli version (>= 2.5.0
+        # required) and the `--config` argument.
+        run: |
+          set -euxo pipefail
+          IPA_PATH=$(find exported -maxdepth 2 -name '*.ipa' -type f | head -1)
+          test -n "$IPA_PATH"
+          echo "IPA: $IPA_PATH"
+          # Unpack to a temp dir so we can `find` the .app bundle by
+          # name (robust to spaces, e.g. `Reachy Mini.app`, which a
+          # naive `awk $NF` parse of `unzip -l` would mangle).
+          TEMP_DIR=$(mktemp -d)
+          unzip -q "$IPA_PATH" -d "$TEMP_DIR"
+          APP_BUNDLE=$(find "$TEMP_DIR/Payload" -mindepth 1 -maxdepth 1 -name '*.app' -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "::error::Could not locate .app bundle inside IPA"
+            find "$TEMP_DIR" -maxdepth 3 -type d
+            exit 1
+          fi
+          echo "App: $(basename "$APP_BUNDLE")"
+          INFO_PLIST="$APP_BUNDLE/Info.plist"
+          echo '--- final IPA Info.plist (version fields) ---'
+          plutil -p "$INFO_PLIST" | grep -E 'CFBundleVersion|CFBundleShortVersionString'
+          ACTUAL_BV=$(plutil -extract CFBundleVersion raw "$INFO_PLIST")
+          EXPECTED_BV="${{ github.run_number }}"
+          rm -rf "$TEMP_DIR"
+          if [ "$ACTUAL_BV" != "$EXPECTED_BV" ]; then
+            echo "::error::CFBundleVersion mismatch: got '$ACTUAL_BV', expected '$EXPECTED_BV'."
+            echo "::error::The --config bundleVersion override didn't propagate. Check tauri-cli version (>=2.5.0)."
+            exit 1
+          fi
+          echo "OK - CFBundleVersion = $ACTUAL_BV"
 
       - name: Locate IPA
         id: pack
@@ -999,6 +1090,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Free up disk space
+        # See the rationale in the debug Android job: the signed
+        # release build needs even more disk (R8 shrinker, AAB
+        # bundling, signing intermediates) so we reclaim ~20 GiB
+        # before anything else runs. `android: false` preserves
+        # the SDK / NDK that `setup-android` reuses below.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -1037,20 +1144,16 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
       - name: Cache Rust target dir
-        uses: actions/cache@v4
+        # See the ios (simulator) job for the rationale on using
+        # Swatinem/rust-cache. Distinct `shared-key` from the
+        # android debug job because release artefacts have
+        # different rustc fingerprints (codegen-units, opt-level,
+        # debug=false) - sharing a cache would evict both jobs'
+        # deps on every run.
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          # Distinct cache key from the debug job: release artefacts
-          # have different rustc fingerprints (codegen-units, opt-level,
-          # debug=false) so sharing a cache evicts both jobs' deps on
-          # every run.
-          key: ${{ runner.os }}-rust-android-release-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-android-release-
-            ${{ runner.os }}-rust-android-
+          workspaces: src-tauri -> target
+          shared-key: android-release
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -1088,17 +1191,15 @@ jobs:
           fi
           yarn tauri icon src-tauri/icons/icon.png || true
 
-      - name: Pad Android adaptive-icon foregrounds (safe-zone fix)
-        # See the matching step in the debug job for the full
-        # rationale. Without this, the Reachy logo's antennas get
-        # shaved off by the launcher mask on Pixel/Samsung/MIUI
-        # devices because `tauri icon` doesn't apply the 66/108dp
-        # safe-zone padding the Android adaptive-icon spec requires.
+      - name: Sync padded Android adaptive-icon foregrounds into gen/
+        # See the matching step in the debug job. The source
+        # foregrounds under `src-tauri/icons/android/` are pre-padded
+        # to the 66/108dp safe zone by
+        # `scripts/recompose-platform-icons.py`; this step just
+        # propagates them into the regenerated res/ tree because
+        # `tauri icon` writes back un-padded rescales there.
         run: |
           set -euxo pipefail
-          python3 -m pip install --quiet --disable-pip-version-check Pillow
-          python3 scripts/pad-android-foreground.py \
-            --icons-dir src-tauri/icons/android
           GEN_RES="src-tauri/gen/android/app/src/main/res"
           if [ -d "$GEN_RES" ]; then
             for d in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
