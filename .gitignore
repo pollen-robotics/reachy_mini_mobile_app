@@ -21,6 +21,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# App Store screenshot captures - locally-generated PNGs that get
+# drag-dropped into App Store Connect after each capture session.
+# The scripts under `scripts/` (capture.sh, take-store-screenshots.sh,
+# capture-mac.sh) regenerate them from the live UI on demand, so we
+# don't version-control the artefacts themselves.
+app-store-screenshots/
+
 # ──────────────────────────────────────────────────────────────────────
 # Signing secrets - NEVER commit these.
 #
