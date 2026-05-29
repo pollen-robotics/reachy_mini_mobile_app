@@ -1,13 +1,13 @@
 /**
  * Catalog entry for a Reachy Mini app, after normalization from the
- * canonical website endpoint:
+ * canonical API endpoint:
  *
- *   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
+ *   GET https://pollen-robotics-reachy-mini-api.hf.space/api/js-apps
  *
  * The endpoint returns JS apps already pre-filtered server-side (no
  * more client-side `reachy_mini_js_app` tag filter) and attaches a
  * `categories` array per app, classified by an LLM running on the
- * website Space. The shape below is the *minimum* we rely on in the
+ * API Space. The shape below is the *minimum* we rely on in the
  * mobile app - additional fields are kept on `extra` for future use
  * without forcing another normalization pass.
  *
@@ -112,7 +112,7 @@ export interface AppEntry {
 /**
  * One entry of the server-published category taxonomy. Mirrors
  * the shape returned by `getPublicTaxonomy()` in
- * `reachy-mini-website/server/categories.js`. We deliberately
+ * `reachy_mini_api/server/categories.js`. We deliberately
  * keep the shape minimal: `slug` and `label` are required for UI
  * rendering, `emoji` and `order` are nice-to-haves the server
  * always ships today but the client tolerates missing.
@@ -143,7 +143,7 @@ export interface CategorizationMeta {
   classified: number;
   pending: number;
   inProgress: boolean;
-  /** HF Hub dataset id where the LLM cache lives (e.g. `tfrere/reachy-mini-app-categories`). */
+  /** HF Hub dataset id where the LLM cache lives (e.g. `pollen-robotics/reachy_mini_store_data`). */
   dataset: string | null;
   /** Server-side taxonomy version. Increments when categories ids change. */
   taxonomyVersion: number | null;

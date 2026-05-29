@@ -1,9 +1,10 @@
 /**
  * Category taxonomy resolver.
  *
- * The canonical source of truth lives on the website server
- * (`reachy-mini-website/server/categories.js`) and is now shipped
- * to clients in TWO ways:
+ * The canonical source of truth is the store dataset's
+ * `config/taxonomy.json`, loaded by the API server
+ * (`reachy_mini_api/server/categories.js`) and shipped to clients
+ * in TWO ways:
  *
  *   1. `GET /api/js-apps` → `categorization.taxonomy` (preferred:
  *      one call returns apps + taxonomy together).
@@ -74,24 +75,23 @@ const LABEL_OVERRIDES: Readonly<Record<string, string>> = {
 
 /**
  * Cold-start fallback. Mirrors the live server taxonomy
- * (`TAXONOMY_VERSION = 4` at the time of this snapshot) in the
- * same render order so the first paint already looks right.
- *
- * Render order rationale: consumer-facing rails first (voice →
- * motion → music → stories → vision → companion → kids → games),
- * then `dev-tools` at the bottom because it's the largest but
- * least consumer-friendly bucket and we don't want it leading
- * the home view.
+ * (`config/taxonomy.json`, version 4 at the time of this snapshot)
+ * in the SAME render order, so the first paint matches what the
+ * user sees post-hydration (no rail re-ordering flash). The render
+ * order is owned by the server: it's the order of the categories in
+ * `config/taxonomy.json` (`music → motion → voice → storytelling →
+ * kids → games → vision → companion → dev-tools`). Keep this array
+ * in lockstep with that order when you bump the dataset taxonomy.
  */
 const FALLBACK_TAXONOMY: ReadonlyArray<CategoryDescriptor> = [
-  { id: 'voice', label: 'Voice & Chat' },
-  { id: 'motion', label: 'Motion' },
   { id: 'music', label: 'Music' },
+  { id: 'motion', label: 'Motion' },
+  { id: 'voice', label: 'Voice & Chat' },
   { id: 'storytelling', label: 'Stories' },
-  { id: 'vision', label: 'Vision' },
-  { id: 'companion', label: 'Companions' },
   { id: 'kids', label: 'Kids' },
   { id: 'games', label: 'Games' },
+  { id: 'vision', label: 'Vision' },
+  { id: 'companion', label: 'Companions' },
   { id: 'dev-tools', label: 'Demos & Dev' },
 ] as const;
 
