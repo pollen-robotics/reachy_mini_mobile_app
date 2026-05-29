@@ -2,9 +2,9 @@
  * Apps catalog hook (TanStack Query).
  *
  * Single source: the curated catalog served by the public Reachy
- * Mini website Space:
+ * Mini API Space (host centralized in `@/shared/env`):
  *
- *   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
+ *   GET https://pollen-robotics-reachy-mini-api.hf.space/api/js-apps
  *
  * The endpoint pre-filters JS apps server-side (so we no longer
  * filter on the `reachy_mini_js_app` tag client-side) and attaches
@@ -73,6 +73,7 @@ import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { queryClient } from '@/queryClient';
+import { WEBSITE_API_URL } from '@/shared/env';
 
 import { prefetchAppIcons } from './iconCache';
 import type {
@@ -82,7 +83,7 @@ import type {
   CategorizationMeta,
 } from './types';
 
-const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/js-apps';
+const CATALOG_ENDPOINT = `${WEBSITE_API_URL}/api/js-apps`;
 
 /**
  * TanStack Query cache key for the catalog. Stable, no params.
@@ -108,7 +109,7 @@ export const APPS_QUERY_KEY = ['js-apps-catalog'] as const;
  */
 const APPS_STALE_TIME_MS = 5 * 60 * 1000;
 
-interface RawCatalogApp {
+export interface RawCatalogApp {
   id?: string;
   name?: string;
   description?: string;
@@ -235,7 +236,7 @@ function resolveAppId(raw: RawCatalogApp): string | null {
   return author ? `${author}/${bare}` : bare;
 }
 
-function normalizeApp(raw: RawCatalogApp): AppEntry | null {
+export function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   const id = resolveAppId(raw);
   if (!id) return null;
   const author =
@@ -404,7 +405,7 @@ export function normalizeCatalog(payload: unknown): CatalogPayload {
 }
 
 async function fetchAppsCatalog(): Promise<CatalogPayload> {
-  const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
+  const res = await fetch(CATALOG_ENDPOINT, { credentials: 'omit' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const payload = (await res.json()) as unknown;
   const catalog = normalizeCatalog(payload);

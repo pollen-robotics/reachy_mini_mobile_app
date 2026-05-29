@@ -60,6 +60,7 @@ import type { AppEntry } from '@/features/apps/types';
 import { useApps } from '@/features/apps/useApps';
 import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
+import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
@@ -165,6 +166,12 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
 
   const pinnedApps = usePinnedApps();
+
+  // "Your apps" rail data: the user's own Reachy JS apps (private
+  // repos included), fetched straight from the HF Hub. Independent
+  // of the public catalog above, so it stays empty for signed-out
+  // users and never blocks the browse layout from rendering.
+  const myApps = useMyApps();
 
   // Resolve the live taxonomy from the catalog payload. The server
   // ships the slug list under `categorization.taxonomy`, so the
@@ -420,6 +427,30 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     />
                   </Box>
                 </Box>
+
+                {/* "Your apps" rail: the user's own Reachy apps from
+                    their HF account (private included). Rendered as
+                    the FIRST swiper, just above the category rails.
+                    Hidden in search mode (like the category rails)
+                    and omitted entirely when the user has no such
+                    apps / is signed out, so it never adds empty
+                    chrome. No dedup with the catalog rails by
+                    design. */}
+                {!filtered.isSearching && myApps.apps.length > 0 && (
+                  <Box sx={RAIL_PANEL_SX}>
+                    <AppRail label="Your apps" count={myApps.apps.length}>
+                      {myApps.apps.map(app => (
+                        <AppCompactTile
+                          key={app.id}
+                          app={app}
+                          isPinned={pinnedApps.set.has(app.id)}
+                          onOpen={onOpen}
+                          onTogglePin={handleTogglePin}
+                        />
+                      ))}
+                    </AppRail>
+                  </Box>
+                )}
 
                 {/* Browse rails. Hidden during search mode (the
                     search results take over the body). The bucket

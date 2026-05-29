@@ -32,24 +32,32 @@ export const CENTRAL_SIGNALING_URL: string =
   'https://pollen-robotics-reachy-mini-central.hf.space';
 
 /**
- * Reachy Mini website API host.
+ * Reachy Mini backend API host.
  *
- * Hosts the server-side endpoints the mobile shell consumes without
- * a robot in the loop. Today:
+ * Hosts every server-side endpoint the mobile shell consumes:
  *
+ *   - `GET  /api/js-apps`          - curated app catalog (see
+ *     `features/apps/useApps.ts`).
  *   - `POST /api/openai/ephemeral` - mints per-user OpenAI Realtime
  *     ephemeral session keys (replaces the deprecated build-time
  *     `VITE_OPENAI_API_KEY` injection). See
  *     `features/conversation/engine/ephemeral-key.ts`.
  *
+ * This used to be the combined website Space
+ * (`pollen-robotics-reachy-mini.hf.space`). The API has since been
+ * split into its own dedicated Space; the showcase website is now a
+ * separate static deploy. The env var keeps its historical name
+ * (`VITE_REACHY_WEBSITE_URL`) for backward compatibility.
+ *
  * Override at build time via `VITE_REACHY_WEBSITE_URL` (e.g. when
  * developing against a staging Space). Defaults to the production
- * pollen-robotics Space; the mint endpoint requires the master
+ * pollen-robotics API Space; the mint endpoint requires the master
  * `OPENAI_API_KEY` in that Space's secrets to actually return a key.
  *
  * Consumers:
+ *   - `features/apps/useApps.ts`
  *   - `features/conversation/engine/ephemeral-key.ts`
  */
 export const WEBSITE_API_URL: string =
   (import.meta.env.VITE_REACHY_WEBSITE_URL as string | undefined) ??
-  'https://pollen-robotics-reachy-mini.hf.space';
+  'https://pollen-robotics-reachy-mini-api.hf.space';
