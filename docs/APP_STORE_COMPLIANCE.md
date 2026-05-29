@@ -1,10 +1,10 @@
 # App Store & Play Store Compliance
 
 > Status: research / pre-submission analysis
-> Last reviewed: 2026-05-10
+> Last reviewed: 2026-05-29
 > Owner: mobile team
-> Scope: the in-app "Apps" tab that lists Hugging Face Spaces tagged
-> `reachy_mini_js_app` and embeds them in a WebView iframe.
+> Scope: the in-app "Apps" tab that lists Hugging Face Spaces (JS
+> apps, pre-filtered server-side) and embeds them in a WebView iframe.
 
 This document answers a single question: **can the in-app catalog of
 third-party Reachy Mini apps pass review on Apple App Store and Google
@@ -29,12 +29,15 @@ let us first write down precisely what the Apps tab does today.
    fetches a public, unauthenticated JSON catalog:
 
    ```
-   GET https://pollen-robotics-reachy-mini.hf.space/api/apps
+   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
    ```
 
-2. The hook keeps only entries tagged `reachy_mini_js_app` and
-   normalizes them into `AppEntry { id, name, description, spaceUrl,
-   author, isOfficial, sdk, emoji, tags, likes, ... }`.
+2. The endpoint already pre-filters JS apps server-side (the client
+   no longer filters on the `reachy_mini_js_app` tag itself) and
+   attaches an LLM-classified `categories` array per app. The hook
+   normalizes entries into `AppEntry { id, name, description,
+   spaceUrl, author, isOfficial, sdk, emoji, iconUrl, tags, likes,
+   categories, ... }`.
 
 3. `AppsTabView` renders a virtualized list of `AppCard`s. Tapping
    one calls `onOpen(app)`.
@@ -51,9 +54,17 @@ let us first write down precisely what the Apps tab does today.
    ```
 
 5. The overlay mounts a single `<iframe src="https://*.hf.space/...">`
-   with `allow="microphone; camera; autoplay; clipboard-read;
-   clipboard-write"` and posts the HF access token over `postMessage`
-   so the embedded app can skip its own OAuth round-trip.
+   with the capabilities scoped to the iframe's own origin (`'src'`):
+
+   ```
+   allow="microphone 'src'; camera 'src'; geolocation 'src';
+          autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
+   ```
+
+   It then hands the embedded app context over `postMessage` (HF
+   access token, theme, embed-config, and the SDK `host:init`
+   payload) so the app can skip its own OAuth round-trip and match
+   the shell's look. See § 2.4 for the full message contract.
 
 ### 1.2 Crucial properties for the review
 
@@ -63,7 +74,7 @@ let us first write down precisely what the Apps tab does today.
 | Bytecode / WASM download | **No** | 4.7 / 2.5.2 compliance |
 | JS-only mini-apps in WebView | **Yes** | Explicitly allowed by 4.7 |
 | Iframes are sandboxed (cross-origin) | **Yes** | Default browser sandbox |
-| Bridge API exposed to mini-apps | `postMessage` only, single message type (`hf-token`) | Auditable, finite |
+| Bridge API exposed to mini-apps | `postMessage` only, four host -> iframe message kinds (see § 2.4) | Auditable, finite |
 | Tauri plugins reachable from mini-apps | **No** (different origin) | No native escape hatch |
 | Free for users | **Yes** | No IAP requirement triggered |
 
@@ -155,16 +166,30 @@ review will check that:
 - No `eval()` over downloaded blobs in the host shell.
 - No dynamic Tauri plugin loading.
 - The bridge between mini-apps and the host is finite and documented.
-  Today: a single `postMessage` shape (`{ source: 'reachy-mini-shell',
-  kind: 'hf-token', token }`) flowing **host → iframe** only. No
-  iframe → host messages are consumed today.
-- The iframe `allow` list is reasonable and matches the feature set.
-  Today: `microphone; camera; autoplay; clipboard-read; clipboard-write`.
-  Each of these maps to a real feature (voice apps, camera-based
-  apps, autoplay for music apps, clipboard for code-snippet apps).
+  Today it is **four** message shapes, all flowing **host → iframe**
+  only. No iframe → host messages are consumed:
 
-**Verdict on 2.5.2**: we comply, but we should keep the `postMessage`
-contract documented (this file + a section in `AGENTS.md`) so it stays
+  | `source` | `kind` | Purpose |
+  |---|---|---|
+  | `reachy-mini-shell` | `hf-token` | HF access token handover (skip the embed's own OAuth) |
+  | `reachy-mini-shell` | `theme` | Live light/dark theme switch |
+  | `reachy-mini-shell` | `embed-config` | "You're inside the mobile shell" hint so the embed suppresses its own chrome |
+  | `reachy-mini` | `host:init` | `@reachy-mini/host/lib/protocol#HostInitMsg` payload for SDK-aware Spaces |
+
+  The contract is implemented in
+  [`AppIframeOverlay.tsx`](../src/ui/panels/apps-list/AppIframeOverlay.tsx).
+  Any new message kind must be added here with a security-review note
+  so the surface stays finite and auditable.
+- The iframe `allow` list is reasonable and matches the feature set.
+  Today: `microphone 'src'; camera 'src'; geolocation 'src';
+  autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'`. Each
+  maps to a real feature (voice apps, camera-based apps, location-aware
+  apps, autoplay for music apps, clipboard for code-snippet apps), and
+  each is scoped to the iframe's own origin via `'src'` rather than
+  delegated globally.
+
+**Verdict on 2.5.2**: we comply. The `postMessage` contract is
+documented here and in `AGENTS.md`; keep both in sync so it stays
 finite as new features land.
 
 ### 2.5 Guideline 3.2.2 - "Unacceptable" - the framing risk
@@ -348,6 +373,17 @@ want to win on.
 
 ## 6. Pre-submission action plan
 
+> **Implementation status (2026-05-29).** This section is the
+> *original* plan. For where each item actually stands today, see
+> [`APP_STORE_AUDIT_2026-05.md`](./APP_STORE_AUDIT_2026-05.md). In
+> short: the four UGC pillars (§ 6.1) shipped, the OpenAI key
+> migration shipped, and the remaining hard blockers are the
+> server-side catalog kill switch (§ 6.2.2) and pre-publication
+> moderation (§ 6.2.1). Note that the report mechanism shipped
+> against **HF Trust & Safety** (a `<spaceUrl>?report=true` deeplink),
+> not a Pollen-operated `/api/apps/report` endpoint as § 6.1.1
+> originally proposed.
+
 Four chantiers, in priority order. None of them is a research
 problem; all of them are concrete code work.
 
@@ -415,7 +451,7 @@ When a Space tagged `reachy_mini_js_app` is detected:
 
 **6.2.2 - Kill switch**
 
-- The catalog endpoint (`/api/apps`) must filter on
+- The catalog endpoint (`/api/js-apps`) must filter on
   `mobile_visible: true` for the **mobile** caller (detect via
   `User-Agent` or a query param `?surface=mobile`).
 - Hiding an app is a single Hub mutation, no app update needed. This

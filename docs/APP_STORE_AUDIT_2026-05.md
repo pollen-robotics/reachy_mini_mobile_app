@@ -1,7 +1,7 @@
 # App Store iOS - submission readiness audit
 
 > Status: audit / pre-submission gap analysis
-> Last reviewed: 2026-05-26
+> Last reviewed: 2026-05-29
 > Owner: mobile team
 > Companion to: [`APP_STORE_COMPLIANCE.md`](./APP_STORE_COMPLIANCE.md)
 > (which lays out the policy framework and the pre-submission action
@@ -13,11 +13,16 @@ This document answers a different question from the compliance plan:
 > what would actually block a TestFlight + App Store submission if
 > we built the bundle this afternoon?**
 
-Short answer: the **shell is ~70% submission-ready**. The hard
-client-side UGC work is done. The blockers that remain are:
+Short answer: the **shell is ~85% submission-ready**. The hard
+client-side UGC work is done, and the OpenAI key blocker has since
+been resolved (the bundle no longer ships a long-lived key). The
+blockers that remain are:
 
-1. **The OpenAI API key is baked into the bundle** (1 hard blocker,
-   non-Apple but ToS-breaking).
+1. ~~**The OpenAI API key is baked into the bundle**~~ **RESOLVED
+   (2026-05)**: the bundle no longer carries a long-lived OpenAI key.
+   Voice conversation now mints a per-user, short-lived ephemeral key
+   via the website Space's `/api/openai/ephemeral` endpoint, gated by
+   the user's Hugging Face token. See § 2.1.
 2. **No server-side kill switch on the catalog** (1 hard Apple UGC
    blocker).
 3. **No pre-publication moderation pipeline** (1 hard Apple UGC
@@ -41,7 +46,7 @@ in `main` and would be cocheable for an App Review pass.
 - Bridge between shell and iframe is `postMessage` only, host -> iframe,
   with a finite (but slightly larger than § 2.4 of the compliance doc
   describes) set of message kinds. See section 4 below for the gap.
-- Iframe `allow` list ([`AppIframeOverlay.tsx:714`](../src/ui/panels/apps-list/AppIframeOverlay.tsx))
+- Iframe `allow` list ([`AppIframeOverlay.tsx:864`](../src/ui/panels/apps-list/AppIframeOverlay.tsx))
   uses scoped tokens, **better** than what the compliance doc
   originally outlined:
 
@@ -111,7 +116,7 @@ someone refactors it, the rationale is right there.
 ```json
 "productName": "Reachy Mini",
 "identifier":  "com.pollen-robotics.reachy-mini",
-"version":     "0.6.4",
+"version":     "0.6.5",
 "iOS.developmentTeam": "4KLHP7L6KP"
 ```
 
@@ -133,59 +138,60 @@ all reviewer-invisible. The current vocabulary in the UI ("Apps",
 
 ## 2. What's missing - the actual blockers
 
-### 2.1 OpenAI API key baked into the bundle (CRITICAL, non-Apple)
+### 2.1 OpenAI API key baked into the bundle - RESOLVED (2026-05)
 
-Source: [`src/features/conversation/engine/settings.ts:113`](../src/features/conversation/engine/settings.ts)
+> **Status: fixed.** This was the #1 hard blocker in the original
+> 2026-05-26 audit. It has since been resolved by option 1 below
+> (server-issued ephemeral keys). The section is kept for historical
+> context and so the App Review data-flow story stays documented.
 
-```ts
-const BUILD_TIME_OPENAI_KEY: string =
-  (import.meta.env?.VITE_OPENAI_API_KEY as string | undefined) ?? '';
-```
+**What used to be the problem.** The shell baked a long-lived OpenAI
+API key into the bundle (`VITE_OPENAI_API_KEY` ->
+`BUILD_TIME_OPENAI_KEY` in `settings.ts`, injected by
+`build-mobile.yml` from a repo secret). The key was extractable from
+the shipped `.ipa`, which violates OpenAI's ToS for distributed
+clients and exposed Pollen's quota to anyone who pulled it apart.
 
-The `.env.example` and the file header self-label this as
-"TEMPORARY". GitHub Actions
-([`build-mobile.yml`](../.github/workflows/build-mobile.yml))
-injects the same key from a repo secret at CI build time. The key
-ends up readable inside the shipped `.ipa`.
+**How it was fixed.** The build-time injection is gone from
+`settings.ts`, `.env.example`, and `build-mobile.yml` (the workflow no
+longer needs an `OPENAI_API_KEY` repo secret). Voice conversation now
+follows the server-issued ephemeral-key path:
 
-**Why this blocks a public release, even outside Apple:**
+1. The phone holds an HF token (acquired via the in-app
+   `ASWebAuthenticationSession` OAuth flow).
+2. [`ephemeral-key.ts`](../src/features/conversation/engine/ephemeral-key.ts)
+   POSTs that token as `Authorization: Bearer <hf_token>` to the
+   website Space's `/api/openai/ephemeral` endpoint.
+3. The server validates the HF token (`whoami-v2`), rate-limits per
+   HF user, then mints a short-lived (~10 min) OpenAI Realtime client
+   secret using the master `OPENAI_API_KEY` that stays in the Space's
+   secrets.
+4. The `ek_…` value is used as the bearer for the
+   `POST /v1/realtime/calls` GA handshake. The long-lived key never
+   reaches the client.
 
-1. **OpenAI Terms of Service** explicitly forbid embedding an API
-   key in a distributed client. Account suspension is on the table
-   the first time a reviewer / researcher extracts it.
-2. **Cost exposure**: anyone with the `.ipa` can pull the key and
-   run unlimited Realtime API calls on Pollen's quota. There is no
-   client-side rate limit that survives a determined attacker.
-3. **Apple 5.1.2**: end-user audio is shipped to a third party
-   (OpenAI) over a connection the app itself authenticates. The
-   privacy nutrition label needs to disclose this, and the App
-   Review notes need to explain the data flow. Doable, but the
-   reviewer's first question will be "how do you prevent abuse if
-   your key leaks?".
+**Residual App Review work (still required).** Even though the key is
+gone, the data flow still needs disclosure:
 
-**Fix** (in order of preference):
+- **Apple 5.1.2**: end-user audio is shipped to a third party (OpenAI)
+  over the WebRTC tunnel. The privacy nutrition label must disclose
+  it, and the App Review notes should explain the ephemeral-key
+  brokering so the reviewer doesn't ask "how do you prevent abuse if
+  your key leaks?" (answer: there is no long-lived key in the bundle;
+  access is HF-token-gated and rate-limited server-side).
 
-1. **Server-issued ephemeral keys**: stand up a small endpoint on
-   `pollen-robotics-reachy-mini.hf.space` (or any other Pollen-controlled
-   surface) that calls `POST /v1/realtime/sessions` with the
-   master key and returns the resulting ephemeral key to the mobile
-   client. The mobile client never sees the long-lived key, and the
-   server can rate-limit per HF user.
-2. **User OAuth on OpenAI**: heavier UX, but every user pays from
-   their own quota. Removes Pollen from the loop entirely.
-
-Either fix removes the build-time injection from `.env.local`,
-`build-mobile.yml`, and `settings.ts`. The localStorage debug
-escape hatch can stay for dev.
-
-Effort: 1-2 days backend + 0.5 day mobile rewire.
+Effort remaining: 0 (engineering); the disclosure is folded into the
+§ 2.4 paperwork.
 
 ### 2.2 No server-side catalog kill switch
 
-`GET https://pollen-robotics-reachy-mini.hf.space/api/apps` returns
-every Space tagged `reachy_mini_js_app`. The tag is self-attributed
-by the Space author. There's no `mobile_visible: true` filter and
-no `?surface=mobile` query param the catalog endpoint honours.
+`GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps` returns
+the catalog. The endpoint already pre-filters to JS apps server-side
+(the client no longer filters on the `reachy_mini_js_app` tag itself),
+but that filter is a *type* gate, not a *content* gate: it's still
+ultimately driven by author-applied tags, and there's no
+`mobile_visible: true` flag nor a `?surface=mobile` query param that
+would let Pollen hide a specific Space.
 
 Concrete consequences:
 
@@ -205,9 +211,10 @@ whoever maintains `pollen-robotics-reachy-mini`).
 ### 2.3 No pre-publication moderation
 
 Today, the only gate between "Space exists" and "Space appears in
-mobile" is the author-applied tag. With the "vibe coding" hypothesis
-(LLM-generated apps published quickly to HF Spaces), the catalog
-will grow faster than a human can pre-review.
+mobile" is the author-applied tag (now resolved server-side by
+`/api/js-apps`, but still author-driven). With the "vibe coding"
+hypothesis (LLM-generated apps published quickly to HF Spaces), the
+catalog will grow faster than a human can pre-review.
 
 Minimum viable v1 (compliance doc § 6.2.1):
 
@@ -259,14 +266,7 @@ charter.
 
 ## 3. Secondary points - worth fixing before submission
 
-### 3.1 The postMessage contract doc has drifted
-
-`APP_STORE_COMPLIANCE.md` § 2.4 says the bridge is a single message
-type:
-
-```js
-{ source: 'reachy-mini-shell', kind: 'hf-token', token }
-```
+### 3.1 The postMessage contract - RECONCILED (2026-05-29)
 
 The shipped code in [`AppIframeOverlay.tsx`](../src/ui/panels/apps-list/AppIframeOverlay.tsx)
 sends FOUR message kinds today:
@@ -279,12 +279,10 @@ sends FOUR message kinds today:
 | `reachy-mini` | `host:init` | `@reachy-mini/host/lib/protocol#HostInitMsg` payload for SDK-aware Spaces |
 
 All four are host -> iframe (no iframe -> host messages are consumed
-yet). Still, the compliance doc needs to be updated to list all
-four, with rationale per message and a "no incoming messages
+yet). `APP_STORE_COMPLIANCE.md` § 2.4 has been updated to list all
+four with per-message rationale plus the "no incoming messages
 consumed" note, so it stays the source of truth a reviewer can be
 pointed at.
-
-Effort: 0.5 day.
 
 ### 3.2 OpenAI Realtime data flow not disclosed in EULA
 
@@ -347,12 +345,13 @@ needed today.
 
 ### 4.1 Hard blockers (cannot submit without these)
 
-- [ ] **(2.1)** Move the OpenAI API key off the bundle: ephemeral
-      keys from a Pollen-controlled endpoint, OR user OAuth on
-      OpenAI. Remove the build-time injection from `.env.local`,
+- [x] **(2.1)** ~~Move the OpenAI API key off the bundle~~ **DONE**:
+      ephemeral keys from the website Space's `/api/openai/ephemeral`
+      endpoint. Build-time injection removed from `.env.example`,
       GitHub Actions, and `settings.ts`.
 - [ ] **(2.2)** Server-side kill switch on the catalog
-      (`mobile_visible: true` + `?surface=mobile` filter).
+      (`mobile_visible: true` + `?surface=mobile` filter on
+      `/api/js-apps`).
 - [ ] **(2.3)** Pre-publication automated moderation on
       title/description/README.
 - [ ] **(2.4)** Privacy Nutrition Label populated in App Store Connect.
@@ -402,26 +401,28 @@ Assuming sequential work, single owner per chantier:
 
 | Workstream | Effort | Dependency |
 |---|---|---|
-| OpenAI ephemeral keys backend | 1-2 days | Need a Pollen-controlled HF Space or server |
-| OpenAI ephemeral keys mobile rewire | 0.5 day | After backend |
+| ~~OpenAI ephemeral keys backend~~ | done | shipped 2026-05 |
+| ~~OpenAI ephemeral keys mobile rewire~~ | done | shipped 2026-05 |
 | Catalog kill switch | 1 day | Coordination with `pollen-robotics-reachy-mini` owner |
 | Catalog moderation v1 | 3 days | Off-the-shelf classifier choice |
 | Privacy Policy review + update | 0.5-1 day | Legal review |
 | App Store Connect paperwork | 0.5 day | Privacy Policy URL ready |
 | Bridge doc update + capability audit | 1 day | None |
 
-**Realistic critical path**: ~2 weeks calendar from "start" to
-"submission-ready bundle", with the catalog backend work being the
-long pole.
+**Realistic critical path**: ~1 week calendar from "start" to
+"submission-ready bundle" now that the OpenAI key migration is done,
+with the catalog kill switch / moderation backend being the long
+pole.
 
 ---
 
 ## 6. Open questions for product
 
-1. Do we want **ephemeral keys** (Pollen pays, we monitor abuse)
-   or **user OAuth** (each user pays, Pollen is out of the loop)?
-   The first is faster to ship, the second is cleaner for the
-   business model long term.
+1. ~~Do we want **ephemeral keys** or **user OAuth**?~~ **Decided:
+   ephemeral keys.** Pollen's master key mints short-lived,
+   HF-token-gated, per-user rate-limited keys via
+   `/api/openai/ephemeral`. Revisit user-OAuth-on-OpenAI only if the
+   business model needs each user to pay from their own quota.
 2. The kill switch is server-side; **who operates it**? Pollen
    only, or any HF moderator? The Apple-safe answer is "Pollen
    only", with author input as a hint.
