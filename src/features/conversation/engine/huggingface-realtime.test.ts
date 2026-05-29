@@ -56,7 +56,6 @@ describe('buildHfSessionConfig', () => {
       audio: {
         input: {
           format: { type: 'audio/pcm', rate: null },
-          transcription: { model: 'gpt-4o-transcribe', language: 'en' },
           turn_detection: {
             type: 'server_vad',
             interrupt_response: true,
@@ -76,6 +75,8 @@ describe('buildHfSessionConfig', () => {
         },
       ],
     });
+    const audioInput = (config.audio as { input: Record<string, unknown> }).input;
+    expect(audioInput).not.toHaveProperty('transcription');
   });
 
   it('falls back to the default HF voice for unsupported saved voices', () => {
