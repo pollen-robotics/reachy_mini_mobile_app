@@ -149,8 +149,13 @@ export class HuggingFaceRealtimeClient {
       const ws = new WebSocket(websocketUrl);
       this.ws = ws;
       let opened = false;
+      let startupSettled = false;
+      let startupRejected = false;
 
       const rejectStartup = (err: Error): void => {
+        if (startupSettled) return;
+        startupSettled = true;
+        startupRejected = true;
         cleanupStartupListeners();
         try {
           ws.close();
@@ -162,6 +167,13 @@ export class HuggingFaceRealtimeClient {
         this.outputPlayer = null;
         this.setStatus("error");
         reject(err);
+      };
+
+      const buildCloseError = (event: CloseEvent): Error => {
+        const reason = event.reason ? `: ${event.reason}` : "";
+        return new Error(
+          `Hugging Face realtime websocket closed (${event.code})${reason}`,
+        );
       };
 
       const cleanupStartupListeners = (): void => {
@@ -201,6 +213,7 @@ export class HuggingFaceRealtimeClient {
           streamer.start();
           this.inputStreamer = streamer;
           this.setStatus("connected");
+          startupSettled = true;
           resolve();
         } catch (err) {
           rejectStartup(err instanceof Error ? err : new Error(String(err)));
@@ -220,10 +233,12 @@ export class HuggingFaceRealtimeClient {
       });
       ws.addEventListener("close", (event) => {
         if (this.intentionalClose) return;
-        const reason = event.reason ? `: ${event.reason}` : "";
-        const err = new Error(
-          `Hugging Face realtime websocket closed (${event.code})${reason}`,
-        );
+        const err = buildCloseError(event);
+        if (!startupSettled) {
+          rejectStartup(err);
+          return;
+        }
+        if (startupRejected) return;
         this.emit("error", { error: err });
         this.setStatus("error");
       });
