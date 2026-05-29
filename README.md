@@ -70,6 +70,8 @@ For the deep specs:
   server wrapping the daemon
 - [`docs/APP_STORE_COMPLIANCE.md`](./docs/APP_STORE_COMPLIANCE.md) -
   Apple / Google review checklist
+- [`docs/APP_STORE_AUDIT_2026-05.md`](./docs/APP_STORE_AUDIT_2026-05.md) -
+  submission-readiness gap analysis (what blocks a build today)
 - [`docs/ANDROID_PERMISSIONS.md`](./docs/ANDROID_PERMISSIONS.md) -
   runbook for iframe-delegated mic/camera/geolocation permissions on Android
 

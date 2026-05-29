@@ -225,11 +225,11 @@ useful commands.
 
 | File | What |
 |------|------|
-| `docs/CONNECTION_FLOW.md` | End-to-end specification of auth + discovery + session lifecycle |
-| `docs/ROADMAP.md` | What's next on the product side |
-| `docs/VISION.md` | Design for the (future) standalone scene-awareness module |
+| `docs/APP_STORE_COMPLIANCE.md` | Apple / Google review policy framework + pre-submission action plan |
+| `docs/APP_STORE_AUDIT_2026-05.md` | Submission-readiness gap analysis (what actually blocks a build today) |
+| `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
+| `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
-| `docs/WEBRTC_LOGS.md` | PR plan for streaming daemon journalctl over WebRTC |
 
 ## Notes for HF Space authors
 
