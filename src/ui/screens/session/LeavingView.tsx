@@ -4,7 +4,7 @@
  *
  * The actual sequence runs inside the engine's `unmount()`:
  *
- *   1. stop OpenAI Realtime + audio analysers + motion oscillators
+ *   1. stop HF realtime + audio analysers + motion oscillators
  *   2. play the goto-sleep trajectory (DataChannel command, ~2 s)
  *   3. release motor torque (`setMotorMode('disabled')`)
  *   4. `stopSession()` (central is told the session ended)

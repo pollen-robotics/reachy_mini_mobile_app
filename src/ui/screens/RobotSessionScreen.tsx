@@ -271,7 +271,7 @@ function ConnectedSession({
 
   // Tab-switch lifecycle for the conversation parts.
   //
-  // Leaving the conversation tab stops the OpenAI Realtime pipeline,
+  // Leaving the conversation tab stops the HF realtime pipeline,
   // motion controllers and audio analysers. The robot stays awake
   // (gravity-comp on the head/antennas, motors enabled, WebRTC up,
   // SSE alive) so re-entering the tab is instant - the user just

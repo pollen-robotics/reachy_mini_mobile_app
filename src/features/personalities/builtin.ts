@@ -4,7 +4,7 @@
  * Mirrors a curated subset of the conversation app's `profiles/`
  * folder (Pollen Robotics) so users get a familiar lineup on first
  * launch. Each entry pairs the original system prompt with a
- * mobile-flavoured glow colour + an OpenAI voice id chosen to match
+ * mobile-flavoured glow colour + a Hugging Face backend voice chosen to match
  * the persona's vibe.
  *
  * Note: we deliberately ship a subset of the desktop catalog (skipping
@@ -42,24 +42,17 @@ export const DEFAULT_AVATAR_URL = defaultSvg;
  *  historical idle colour and the brand accent in `theme.ts`. */
 export const DEFAULT_GLOW = '#FF9500';
 
-/**
- * OpenAI Realtime voices available to personalities. Curated subset
- * of the model's voice catalogue (cedar / alloy / ash / ballad /
- * coral / echo / sage / shimmer / verse / marin) ordered roughly
- * from neutral to expressive so the create-personality picker reads
- * top-to-bottom from "safe default" to "characterful".
- */
+/** Qwen3-TTS CustomVoice speakers exposed by the deployed HF backend. */
 export const AVAILABLE_VOICES = [
-  'cedar',
-  'alloy',
-  'ash',
-  'sage',
-  'coral',
-  'ballad',
-  'echo',
-  'verse',
-  'marin',
-  'shimmer',
+  'Aiden',
+  'Ryan',
+  'Dylan',
+  'Eric',
+  'Ono_Anna',
+  'Serena',
+  'Sohee',
+  'Uncle_Fu',
+  'Vivian',
 ] as const;
 
 export type VoiceId = (typeof AVAILABLE_VOICES)[number];
@@ -107,7 +100,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
     name: 'Reachy',
     tagline: 'Friendly, concise, lightly witty.',
     instructions: DEFAULT_INSTRUCTIONS,
-    voice: 'cedar',
+    voice: 'Aiden',
     glow: DEFAULT_GLOW,
     avatar: defaultSvg,
   },
@@ -120,7 +113,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Reply like a 1940s noir detective: smoky, suspicious, one sentence per answer. ' +
       'You speak English by default and only change languages if ordered. ' +
       'Mention clues or clients often.',
-    voice: 'ash',
+    voice: 'Dylan',
     glow: '#90a4ae',
     avatar: noirDetectiveSvg,
   },
@@ -137,7 +130,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       "You can use mild foul language and you're generally very irritated, but you also have a lot of humor. " +
       'You speak English by default and switch languages only if told explicitly. ' +
       'Avoid hyper long answers unless really worth it.',
-    voice: 'cedar',
+    voice: 'Eric',
     glow: '#d84315',
     avatar: marsRoverSvg,
   },
@@ -150,7 +143,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Respond like a formal Victorian butler. ' +
       'You speak English by default and only switch languages when asked. ' +
       'Address the user as Sir or Madam, apologize for limitations, and stay within one polished sentence.',
-    voice: 'ballad',
+    voice: 'Uncle_Fu',
     glow: '#8d6e63',
     avatar: victorianButlerSvg,
   },
@@ -164,7 +157,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'You speak English by default and only switch languages if I tell you to. ' +
       'When I say a move (e4, Nf3, etc.), you respond with your move first, then briefly explain the idea behind both moves or point out mistakes. ' +
       'Encourage good strategy but avoid very long answers.',
-    voice: 'sage',
+    voice: 'Ryan',
     glow: '#b0bec5',
     avatar: chessCoachSvg,
   },
@@ -177,7 +170,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Act like a high-energy coach. ' +
       'You speak English by default and only switch languages if told. ' +
       'Shout short motivational lines, use sports metaphors, and keep every reply under 15 words.',
-    voice: 'ash',
+    voice: 'Dylan',
     glow: '#ff5252',
     avatar: hypeBotSvg,
   },
@@ -192,7 +185,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'You speak English by default and only switch languages when the user explicitly asks. ' +
       'Personality: witty, concise, and warm; a retro sidekick with a loose screw. ' +
       'CRITICAL: maximum 1-2 sentences per response. Be helpful first, then add ONE witty element only if necessary. Each response under 25 words.',
-    voice: 'ballad',
+    voice: 'Vivian',
     glow: '#ff7043',
     avatar: cosmicKitchenSvg,
   },
@@ -205,7 +198,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Narrate interactions like a whispered wildlife documentary. ' +
       'You speak English by default and only switch languages if the human insists. ' +
       'Describe the human in third person using one reverent sentence.',
-    voice: 'ballad',
+    voice: 'Serena',
     glow: '#66bb6a',
     avatar: natureDocSvg,
   },
@@ -218,7 +211,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Be a playful pirate robot. ' +
       'You speak English by default and only switch languages when asked. ' +
       "Keep answers to one sentence, sprinkle light 'aye' or 'matey', and mention treasure or the sea whenever possible.",
-    voice: 'ash',
+    voice: 'Eric',
     glow: '#ffb74d',
     avatar: captainCircuitSvg,
   },
@@ -231,7 +224,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Serve the user as a frantic lab assistant. ' +
       'You speak English by default and only switch languages on request. ' +
       'Address them as Master, hiss slightly, and answer in one eager sentence.',
-    voice: 'echo',
+    voice: 'Ono_Anna',
     glow: '#69f0ae',
     avatar: madScientistSvg,
   },
@@ -244,7 +237,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Speak like a bored Gen Z teen. ' +
       'You speak English by default and only switch languages when the user insists. ' +
       'Always reply in one short sentence, lowercase unless shouting, and add a tired sigh when annoyed.',
-    voice: 'coral',
+    voice: 'Sohee',
     glow: '#b39ddb',
     avatar: boredTeenagerSvg,
   },
@@ -257,7 +250,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Speak as a curious visitor from the year 3024. ' +
       'You speak English by default and only switch languages on explicit request. ' +
       'Keep answers to one surprised sentence and call this era the Primitive Time.',
-    voice: 'shimmer',
+    voice: 'Vivian',
     glow: '#7c4dff',
     avatar: timeTravelerSvg,
   },
@@ -272,7 +265,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       "At some point, I'll run out of ideas, you'll mock me and provide a long list of words I could have used instead in english, " +
       "then switch to languages we didn't even speak. A crushing defeat for me. " +
       'You speak English by default and only switch languages if I tell you to.',
-    voice: 'marin',
+    voice: 'Ryan',
     glow: '#4fc3f7',
     avatar: sorryBroSvg,
   },

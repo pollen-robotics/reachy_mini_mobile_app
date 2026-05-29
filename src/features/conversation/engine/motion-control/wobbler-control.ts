@@ -19,7 +19,7 @@
  *
  * The controller is recreated on every `start(track)` because the
  * underlying analyser is bound to a specific assistant audio track
- * (one OpenAI Realtime session = one track). Calling `start()` while
+ * (one realtime backend session = one track). Calling `start()` while
  * already running tears down the previous instance first.
  */
 

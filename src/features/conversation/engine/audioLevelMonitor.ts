@@ -7,12 +7,12 @@
  *                          custom properties. Drives the breathing
  *                          ring + 5-band bars on the orb during the
  *                          `listening` / `user-speaking` states.
- *   - `AiLevelMonitor`   : samples the OpenAI output (Reachy's voice)
+ *   - `AiLevelMonitor`   : samples the assistant output (Reachy's voice)
  *                          and writes `--ai-audio-level`. Drives
  *                          the `ai-speaking` halo + a `waitForSilence`
  *                          helper so the engine can defer state
  *                          transitions until the voice has actually
- *                          stopped, not just until OpenAI says
+ *                          stopped, not just until the backend says
  *                          `response.done`.
  *
  * Both classes are pure: they take a `target` HTMLElement (the orb
@@ -212,14 +212,14 @@ export class MicLevelMonitor {
 /* ───────────────────────── AI-level monitor ───────────────────── */
 
 /**
- * Sample the OpenAI output (Reachy's voice) to a single CSS custom
+ * Sample the assistant output (Reachy's voice) to a single CSS custom
  * property `--ai-audio-level` in [0, 1]. Drives the ai-speaking halo
  * (core scale + outer-ring ripple) in real time, so the orb pulses on
  * every syllable instead of running a fixed-timer animation.
  *
  * Also tracks when the audio goes silent for long enough that we can
  * confidently exit the ai-speaking state. The conversation-engine
- * leaves `ai-speaking` once the OpenAI server emits
+ * leaves `ai-speaking` once the realtime backend emits
  * `output_audio_buffer.stopped` (GA, WebRTC/SIP-only) - signalling
  * that the server has fully drained its outbound audio buffer for the
  * current response. By that point the only audio left in flight is

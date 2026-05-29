@@ -22,7 +22,7 @@
  * TOS says, not what an older revision said. Storing a boolean
  * locks us into "accepted forever, even if we change the deal";
  * storing the version cleanly handles material updates (new data
- * categories, OpenAI Realtime swap, etc.).
+ * categories, realtime backend swap, etc.).
  *
  * Bump policy
  * ───────────

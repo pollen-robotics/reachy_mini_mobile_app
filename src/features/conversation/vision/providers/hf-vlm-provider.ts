@@ -8,19 +8,15 @@
  * routing policy and forwards the request, returning an
  * OpenAI-Chat-Completions-shaped payload.
  *
- * Why this provider instead of `OpenaiVlmProvider`
+ * Why this provider
  * ------------------------------------------------
- * 1. **No master key on the wire.** OpenAI's `chat/completions`
- *    endpoint can't accept ephemeral keys, so the previous
- *    `OpenaiVlmProvider` either needed a server-side proxy or had
- *    to embed `VITE_OPENAI_API_KEY` in the bundle (banned for App
- *    Store releases). The HF router accepts the user's own HF
- *    token, which is already in `sessionStorage` for the Realtime
- *    ephemeral mint flow.
+ * 1. **No master key on the wire.** The HF router accepts the user's
+ *    own HF token, which is already in `sessionStorage` for the
+ *    realtime session allocator.
  *
  * 2. **Per-user billing.** Calls land on the user's HF account
  *    (their $0.10/mo free tier, their $2/mo PRO credits, their
- *    pay-as-you-go cap), not on Pollen's OpenAI bill. A runaway
+ *    pay-as-you-go cap), not on Pollen's shared provider bill. A runaway
  *    user can't drain a shared budget.
  *
  * 3. **Backend swap = config change.** Switching from
@@ -31,9 +27,9 @@
  * Decoupling from gpt-realtime
  * ----------------------------
  * Vision runs through a SEPARATE HTTP round-trip to HF's router,
- * fully independent of the OpenAI Realtime WebRTC bridge. Replacing
- * `gpt-realtime-2` with another conversation backend later requires
- * zero changes here. Likewise, swapping `Qwen2.5-VL` for a future
+ * fully independent of the HF realtime voice bridge. Replacing
+ * the conversation backend later requires zero changes here.
+ * Likewise, swapping `Qwen2.5-VL` for a future
  * HF model (or pinning a specific provider via `:fastest` /
  * `:cheapest` suffix on the model id) requires zero changes in the
  * conversation engine.

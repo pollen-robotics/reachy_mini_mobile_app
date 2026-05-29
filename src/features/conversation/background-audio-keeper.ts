@@ -27,7 +27,7 @@
  *      background despite being "allowed" to keep running.
  *
  * The keeper does ONLY the runtime half. It's intentionally
- * decoupled from the OpenAI bridge / level monitors / wobbler so
+ * decoupled from the realtime bridge / level monitors / wobbler so
  * those modules don't have to grow background-keepalive
  * responsibilities; they each own their own AudioContext for
  * analysis, while this one is the only one connected to
@@ -49,7 +49,7 @@
  * Lifecycle
  * ─────────
  *   - `start()` is called by the conversation engine right after
- *     the OpenAI bridge connects (we have an active conv → we
+ *     the realtime bridge connects (we have an active conv → we
  *     want background protection).
  *   - `stop()` is called from the same engine paths that tear
  *     down the bridge (stopConversation, full teardown, fatal

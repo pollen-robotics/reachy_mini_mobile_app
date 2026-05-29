@@ -13,7 +13,7 @@ import type { VlmProvider } from "./types";
 
 export interface CreateProviderOptions {
   /** Late-bound HF token accessor. Same source-of-truth as
-   *  `engine/ephemeral-key.ts` (the user's HF OAuth token, stored
+   *  `engine/hf-token.ts` (the user's HF OAuth token, stored
    *  at `sessionStorage.hf_token`). Called on every VLM call so a
    *  token rotation mid-session is picked up automatically. */
   getHfToken: () => string | null;

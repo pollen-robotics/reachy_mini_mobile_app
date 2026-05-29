@@ -5,7 +5,7 @@
  *
  *   - `reachyMini.personalities.activeId` (string)
  *       Currently active personality id. Read on every conversation
- *       (re)connect to compose the OpenAI session.
+ *       (re)connect to compose the realtime session.
  *
  *   - `reachyMini.personalities.custom` (JSON array)
  *       User-authored personalities. Each entry is a `Personality`

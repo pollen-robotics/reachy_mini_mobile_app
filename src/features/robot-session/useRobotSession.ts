@@ -16,7 +16,7 @@
  *                            down: gotoSleep + motors disabled +
  *                            stopSession + disconnect).
  *
- * The conversation pipeline (layer D - OpenAI Realtime, antennas,
+ * The conversation pipeline (layer D - HF realtime, antennas,
  * head wobbler) is also owned by the engine but treated as a
  * SEPARATE lifecycle: the panel toggles it via
  * `startConversation()` / `stopConversation()`.
@@ -100,7 +100,7 @@ export interface RobotSessionHandle {
    */
   webrtcTransport: ConversationTransportInfo | null;
 
-  /** Conversation parts (D layer): start / stop the OpenAI Realtime
+  /** Conversation parts (D layer): start / stop the HF realtime
    *  pipeline, antennas, head wobbler. No-op if the engine isn't
    *  ready yet (the call is queued and runs on the next viable
    *  transition). */
@@ -108,7 +108,7 @@ export interface RobotSessionHandle {
   stopConversation: () => Promise<void>;
   /**
    * Restart the conversation parts in place. Used after a
-   * personality switch so the running OpenAI client picks up the
+   * personality switch so the running realtime client picks up the
    * new instructions + voice without the user having to stop and
    * start again manually. No-op when no conversation is active.
    */

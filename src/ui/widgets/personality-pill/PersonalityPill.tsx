@@ -29,7 +29,7 @@
  * grid. The grid mutates the personality store on tap; the
  * conversation panel above watches the active id and triggers
  * `restartConversation()` if a session is live, so the running
- * OpenAI client picks up the new instructions + voice on the next
+ * realtime client picks up the new instructions + voice on the next
  * reconnect.
  */
 import {
@@ -54,7 +54,7 @@ interface PersonalityPillProps {
   /**
    * Disable the picker entirely. Used by the host while a live
    * conversation is running so the user can't switch personas
-   * mid-call (which would force a stop+start of the OpenAI client
+   * mid-call (which would force a stop+start of the realtime client
    * and audibly cut Reachy off mid-sentence). The band stays
    * mounted and keeps showing the active persona, but loses its
    * hover / press affordances + the chevron.

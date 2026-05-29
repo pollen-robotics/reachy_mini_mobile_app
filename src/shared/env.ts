@@ -32,24 +32,52 @@ export const CENTRAL_SIGNALING_URL: string =
   'https://pollen-robotics-reachy-mini-central.hf.space';
 
 /**
- * Reachy Mini website API host.
+ * Hugging Face realtime backend selector.
  *
- * Hosts the server-side endpoints the mobile shell consumes without
- * a robot in the loop. Today:
- *
- *   - `POST /api/openai/ephemeral` - mints per-user OpenAI Realtime
- *     ephemeral session keys (replaces the deprecated build-time
- *     `VITE_OPENAI_API_KEY` injection). See
- *     `features/conversation/engine/ephemeral-key.ts`.
- *
- * Override at build time via `VITE_REACHY_WEBSITE_URL` (e.g. when
- * developing against a staging Space). Defaults to the production
- * pollen-robotics Space; the mint endpoint requires the master
- * `OPENAI_API_KEY` in that Space's secrets to actually return a key.
+ * `deployed` uses the app-managed session allocator Space and is the
+ * production default. `local` bypasses the allocator and connects to
+ * `VITE_HF_REALTIME_WS_URL`, useful when running a local
+ * speech-to-speech backend on a laptop or LAN host.
  *
  * Consumers:
- *   - `features/conversation/engine/ephemeral-key.ts`
+ *   - `features/conversation/engine/huggingface-realtime.ts`
  */
-export const WEBSITE_API_URL: string =
-  (import.meta.env.VITE_REACHY_WEBSITE_URL as string | undefined) ??
-  'https://pollen-robotics-reachy-mini.hf.space';
+export const HF_REALTIME_CONNECTION_MODE: 'deployed' | 'local' = (() => {
+  const raw = (
+    import.meta.env.VITE_HF_REALTIME_CONNECTION_MODE as string | undefined
+  )
+    ?.trim()
+    .toLowerCase();
+  if (raw === 'local' || raw === 'deployed') return raw;
+  if (raw) {
+    console.warn(
+      `[env] invalid VITE_HF_REALTIME_CONNECTION_MODE=${JSON.stringify(
+        raw,
+      )}; using "deployed"`,
+    );
+  }
+  return 'deployed';
+})();
+
+/**
+ * App-managed HF session allocator.
+ *
+ * The allocator returns a short-lived `connect_url` for the current
+ * deployed realtime backend. Keeping this behind a stable Space proxy
+ * lets backend routing change without shipping a new mobile build.
+ */
+export const HF_REALTIME_SESSION_PROXY_URL: string =
+  (import.meta.env.VITE_HF_REALTIME_SESSION_PROXY_URL as string | undefined) ??
+  'https://pollen-robotics-reachy-mini-realtime-url.hf.space/session';
+
+/**
+ * Direct HF realtime websocket endpoint for local / LAN development.
+ *
+ * Accepts either a base URL such as `ws://127.0.0.1:8765/v1` or the
+ * full websocket URL `ws://127.0.0.1:8765/v1/realtime`.
+ */
+export const HF_REALTIME_WS_URL: string | null = (() => {
+  const raw = import.meta.env.VITE_HF_REALTIME_WS_URL as string | undefined;
+  const trimmed = raw?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed : null;
+})();

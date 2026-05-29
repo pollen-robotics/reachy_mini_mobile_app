@@ -21,7 +21,7 @@
  * (useful for any future side-channel) or be reverted for cleanliness.
  */
 
-import type { RealtimePort } from "../engine/bridge/openai-bridge";
+import type { RealtimePort } from "../engine/bridge/huggingface-bridge";
 import { createProvider } from "./providers/factory";
 import { createSceneInjector } from "./scene-injector";
 import { createScenePoller } from "./scene-poller";
@@ -38,8 +38,8 @@ export interface VisionHandle {
 }
 
 export interface AttachVisionDeps {
-  /** Side-channel port onto the live OpenAI Realtime data channel.
-   *  Obtained from `openaiBridge.getRealtimePort()`. */
+  /** Side-channel port onto the live realtime websocket.
+   *  Obtained from `realtimeBridge.getRealtimePort()`. */
   realtime: RealtimePort;
   /** Live accessor onto the robot's WebRTC video stream. Returning
    *  `null` simply causes the current tick to be skipped (logged at

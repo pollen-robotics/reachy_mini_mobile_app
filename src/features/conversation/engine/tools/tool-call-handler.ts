@@ -1,15 +1,15 @@
 /**
  * Tool-call handler.
  *
- * Owns the side of the engine that reacts to OpenAI Realtime tool
+ * Owns the side of the engine that reacts to realtime tool
  * calls (`move_head`, `play_move`, `remember`, `forget`, …):
  *
  *   - Surfaces a friendly toast label via the host's
  *     `onToolToast` callback.
  *   - Forwards the action to the right downstream module (head
  *     pose, MovePlayer, memory store).
- *   - Reports the outcome back to OpenAI through
- *     `openai.sendToolResponse()` so the model can chain.
+ *   - Reports the outcome back through `sendToolResponse()` so the
+ *     model can chain.
  *
  * The handler also owns:
  *   - the lazily-created `MovePlayer` (one per session),
@@ -41,11 +41,11 @@ export interface ToolCallHandlerDeps {
   getRobot: () => ReachyMiniInstance | null;
   /**
    * Send the tool result back through whatever bridge is currently
-   * holding the OpenAI session. Returns `false` when there's no
+   * holding the realtime session. Returns `false` when there's no
    * live client (e.g. the engine raced a teardown), in which case
    * the handler swallows the result silently.
    *
-   * Decoupled from `OpenaiRealtimeClient` directly so the handler
+   * Decoupled from the realtime client directly so the handler
    * doesn't have to know about the bridge's internals.
    */
   sendToolResponse: (

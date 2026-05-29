@@ -31,7 +31,7 @@
  *   - the engine's FSM (no `setState` here)
  *   - the engine's lifecycle queue (we run inline; the host
  *     serialises via `chainLifecycle`)
- *   - the conversation pipeline (no OpenAI / motion concerns)
+ *   - the conversation pipeline (no backend / motion concerns)
  */
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import type { ConversationConnectionAttempt } from '@/features/conversation/engine/types';

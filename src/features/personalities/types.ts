@@ -2,8 +2,8 @@
  * Personality domain types.
  *
  * A personality is the "skin" applied to the conversation:
- *   - `instructions`: system prompt fed to the OpenAI Realtime model
- *   - `voice`        : OpenAI voice id used to synthesise responses
+ *   - `instructions`: system prompt fed to the realtime backend
+ *   - `voice`        : backend voice id used to synthesize responses
  *   - `glow`         : accent colour driving the orb's warm-up states
  *                      (idle / connecting / ready). Mid-conversation
  *                      states (listening / processing / ai-speaking)
@@ -34,11 +34,10 @@ export interface Personality {
   /** One-liner shown as a teaser under the avatar in the strip and
    *  in the create modal preview. */
   tagline: string;
-  /** Full system prompt sent to the OpenAI Realtime model. */
+  /** Full system prompt sent to the realtime backend. */
   instructions: string;
-  /** OpenAI Realtime voice id (cedar / alloy / ash / ballad / coral /
-   *  echo / sage / shimmer / verse / marin). Empty string falls back
-   *  to the engine's `DEFAULT_VOICE`. */
+  /** Hugging Face realtime voice id. Empty string falls back to the
+   *  engine's `DEFAULT_VOICE`. */
   voice: string;
   /** Hex colour used for the orb glow during warm-up states. */
   glow: string;
