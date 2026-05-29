@@ -66,6 +66,7 @@ export function createHuggingFaceBridge(
   let audioSink: HTMLAudioElement | null = null;
   let reconnecting = false;
   let reconnectAttempts = 0;
+  let connecting = false;
   let lastMicTrack: MediaStreamTrack | null = null;
 
   const userTranscriptSubs = new Set<(text: string) => void>();
@@ -95,6 +96,7 @@ export function createHuggingFaceBridge(
       if (status === "connected") reconnectAttempts = 0;
 
       if (status === "error") {
+        if (connecting) return;
         if (reconnecting) return;
         if (lastMicTrack) {
           void tryReconnect(
@@ -147,7 +149,12 @@ export function createHuggingFaceBridge(
     lastMicTrack = robotMicTrack;
     const next = buildClient(robotMicTrack);
     client = next;
-    await next.connect();
+    connecting = true;
+    try {
+      await next.connect();
+    } finally {
+      connecting = false;
+    }
   };
 
   const tryReconnect = async (

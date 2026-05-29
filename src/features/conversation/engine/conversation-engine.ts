@@ -471,6 +471,15 @@ if (onErrorMessageChange) {
   });
 }
 
+function emitErrorMessage(message: string | null): void {
+  if (!onErrorMessageChange) return;
+  try {
+    onErrorMessageChange(message);
+  } catch (err) {
+    console.warn("[conversation-engine] onErrorMessageChange threw:", err);
+  }
+}
+
 // 3. Daemon-side motor mode dedup, see `syncMotorModeForState` below.
 //    Registered last so the user-visible transition has already been
 //    fanned out by the time we hit the DataChannel.
@@ -844,6 +853,7 @@ async function doStart(): Promise<void> {
 async function runConversationParts(): Promise<void> {
   if (!robot || conversationStarted.get()) return;
 
+  emitErrorMessage(null);
   conversationStarted.on();
 
   // If we're being called from the deferred-start path (host flipped
@@ -881,8 +891,7 @@ async function runConversationParts(): Promise<void> {
   try {
     await realtimeBridge?.connect(robotMicTrack);
   } catch (err) {
-    conversationStarted.off();
-    onFatalError(err);
+    await recoverConversationStartFailure(err);
     return;
   }
 
@@ -925,6 +934,23 @@ async function runConversationParts(): Promise<void> {
   // the SDK regenerates `_micStream` on every `startSession`, so
   // this stop runs exactly once per session.
   releaseSdkPhoneMic(robot);
+}
+
+async function recoverConversationStartFailure(err: unknown): Promise<void> {
+  console.warn("[conversation-engine] HF realtime startup failed:", err);
+  emitErrorMessage(formatRecoverableConversationStartError(err));
+  await tearDownConversationPipeline({ glide: true });
+  if (!unmounted.get() && session.isEstablished()) {
+    setState("ready");
+  }
+}
+
+function formatRecoverableConversationStartError(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  if (/\b(401|403)\b|auth|authorization|unauthorized|forbidden/i.test(detail)) {
+    return "Hugging Face authorization failed. Sign in again and retry.";
+  }
+  return "Could not start the Hugging Face conversation. Retry in a moment.";
 }
 
 /**
@@ -1382,16 +1408,7 @@ async function onFatalError(err: unknown): Promise<void> {
   // message goes through a dedicated callback so the host can show it
   // as a tooltip / detail line under the orb without us reaching into
   // the DOM.
-  if (onErrorMessageChange) {
-    try {
-      onErrorMessageChange(message);
-    } catch (callbackErr) {
-      console.warn(
-        "[conversation-engine] onErrorMessageChange threw:",
-        callbackErr,
-      );
-    }
-  }
+  emitErrorMessage(message);
   await teardown();
 }
 
