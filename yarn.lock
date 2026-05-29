@@ -533,6 +533,13 @@
     "@jridgewell/resolve-uri" "^3.1.0"
     "@jridgewell/sourcemap-codec" "^1.4.14"
 
+"@mnlphlp/plugin-blec@^0.4.0":
+  version "0.4.1"
+  resolved "https://registry.yarnpkg.com/@mnlphlp/plugin-blec/-/plugin-blec-0.4.1.tgz#e18c3360c8731e27340d4a33b8085177fecd2b56"
+  integrity sha512-oxxgZVjh3anarvkp+nyHuM9/5KMQr6EdU6SWEult7Y4ZJFf314nDYZR8ExRoKQP9YOBQZ3tmpJlhchqRKjLXdA==
+  dependencies:
+    "@tauri-apps/api" ">=2.0.0-beta.6"
+
 "@mui/core-downloads-tracker@^7.3.10":
   version "7.3.10"
   resolved "https://registry.npmjs.org/@mui/core-downloads-tracker/-/core-downloads-tracker-7.3.10.tgz"
@@ -700,6 +707,23 @@
     clsx "^2.1.1"
     prop-types "^15.8.1"
     react-is "^19.2.4"
+
+"@noble/ciphers@^1.0.0":
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/@noble/ciphers/-/ciphers-1.3.0.tgz#f64b8ff886c240e644e5573c097f86e5b43676dc"
+  integrity sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==
+
+"@noble/curves@^1.6.0":
+  version "1.9.7"
+  resolved "https://registry.yarnpkg.com/@noble/curves/-/curves-1.9.7.tgz#79d04b4758a43e4bca2cbdc62e7771352fa6b951"
+  integrity sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==
+  dependencies:
+    "@noble/hashes" "1.8.0"
+
+"@noble/hashes@1.8.0", "@noble/hashes@^1.5.0":
+  version "1.8.0"
+  resolved "https://registry.yarnpkg.com/@noble/hashes/-/hashes-1.8.0.tgz#cee43d801fcef9644b11b8194857695acd5f815a"
+  integrity sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==
 
 "@pollen-robotics/reachy-mini-sdk@1.7.3-main.b44388c":
   version "1.7.3-main.b44388c"

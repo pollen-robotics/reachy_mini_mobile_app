@@ -28,6 +28,13 @@ tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-os = "2"
 tauri-plugin-http = "2"
 
+# BLE central for WiFi provisioning over Bluetooth (scan/connect/notify
+# against the robot's GATT command service). Wraps btleplug and handles the
+# Android BLE init + runtime permissions. JS side: `@mnlphlp/plugin-blec`.
+# NOTE: confirm the latest 0.x at https://crates.io/crates/tauri-plugin-blec
+# and keep it in lock-step with the npm `@mnlphlp/plugin-blec` version.
+tauri-plugin-blec = "0.4"
+
 # Opens a URL in the user's default browser. Used for non-auth flows
 # (e.g. opening the conversation Space `*.hf.space` directly in Safari
 # when the user explicitly asks to leave the app, or surfacing support

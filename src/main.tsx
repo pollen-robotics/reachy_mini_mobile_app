@@ -4,6 +4,7 @@ import { CssBaseline, ThemeProvider } from '@mui/material';
 import { QueryClientProvider } from '@tanstack/react-query';
 
 import App from './App';
+import { BleDevEntry } from '@/ui/screens/BleWifiDebugScreen';
 import { ErrorBoundary } from '@/ui/design/ErrorBoundary';
 import { useResolvedThemeMode } from '@/features/theme-preference';
 import { installDesktopMicShim } from '@/shared/desktop-mic-shim';
@@ -32,6 +33,10 @@ function Root() {
       <ThemeProvider theme={theme}>
         <CssBaseline enableColorScheme />
         <App />
+        {/* Dev-only BLE WiFi-provisioning test harness (floating button).
+            Reachable regardless of auth/scan state; touches no app flow.
+            Drop the `import.meta.env.DEV` guard to ship it. */}
+        {import.meta.env.DEV && <BleDevEntry />}
       </ThemeProvider>
     </QueryClientProvider>
   );
