@@ -96,7 +96,10 @@ function AppCompactTileImpl({
   // layout concerns.
   const like = useSpaceLike(app);
   const showLikeBadge = like.canToggle || like.displayedCount > 0;
-  const hasMeta = !!author || app.isOfficial || showLikeBadge;
+  // The like badge has been promoted to the title row (right side
+  // of the name) so the meta line only needs to consider author /
+  // verified now.
+  const hasMeta = !!author || app.isOfficial;
 
   // Click counter for the star pulse: each toggle bumps it,
   // which forces the inner star icon to remount via `key` and
@@ -126,14 +129,17 @@ function AppCompactTileImpl({
         // Width branch: in `fullWidth` mode the tile is rendered
         // one-per-row inside a padded column (search results,
         // category focus). Otherwise it sits in a horizontal
-        // rail and uses the "1 + 30 % peek" viewport-relative
+        // rail and uses the "1 + 25 % peek" viewport-relative
         // formula:
         //
-        //   1.3 × W + 24 = 100vw − 48  ⇒  W = (100vw − 72) / 1.3
+        //   1.25 × W + 24 = 100vw − 48  ⇒  W = (100vw − 72) / 1.25
         //
         // (24 px column padding + 24 px rail gap; see
-        // `docs/APPS_TAB_REDESIGN.md` Section 4.3.)
-        width: fullWidth ? '100%' : 'clamp(208px, calc((100vw - 72px) / 1.3), 320px)',
+        // `docs/APPS_TAB_REDESIGN.md` Section 4.3.) The peek used
+        // to be 30 %, but the cards felt cramped once we promoted
+        // the like badge into the title row, so we trade a bit of
+        // "next card" preview for a roomier card.
+        width: fullWidth ? '100%' : 'clamp(220px, calc((100vw - 72px) / 1.25), 340px)',
         // Height is content-driven in both modes so a tile with
         // a 1-line description doesn't pad itself out to match a
         // 2-line tile - the cards then read with the same
@@ -216,26 +222,53 @@ function AppCompactTileImpl({
             gap: 0.25,
           }}
         >
-          <Typography
+          {/* Title row: name on the left (single-line ellipsis),
+              like badge flush right. Vertically centred so the
+              heart's optical mass sits on the title's mid-line. */}
+          <Box
             sx={{
-              fontSize: TYPO.lg,
-              fontWeight: FONT_WEIGHT.bold,
-              color: 'text.primary',
-              letterSpacing: '-0.3px',
-              lineHeight: 1.2,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              minWidth: 0,
             }}
           >
-            {app.name}
-          </Typography>
+            <Typography
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: TYPO.lg,
+                fontWeight: FONT_WEIGHT.bold,
+                color: 'text.primary',
+                letterSpacing: '-0.3px',
+                lineHeight: 1.2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {app.name}
+            </Typography>
+            {showLikeBadge && (
+              <LikeButton
+                isLiked={like.isLiked}
+                canToggle={like.canToggle}
+                count={like.displayedCount}
+                onToggle={like.toggle}
+                ariaLabel={
+                  like.canToggle
+                    ? like.isLiked
+                      ? `Unlike ${app.name}`
+                      : `Like ${app.name}`
+                    : `${like.displayedCount} likes`
+                }
+              />
+            )}
+          </Box>
 
-          {/* Meta line: `by <author> ✓ · ♥ <likes>`. Author and
-              likes share a single row to keep the card vertical
-              real estate tight. The whole line is rendered as a
-              flex row so the verified badge and the heart icon
-              sit on the typographic baseline. */}
+          {/* Meta line: `by <author> ✓`. Author + verified badge
+              live on their own row now that the like badge has
+              moved up next to the title. */}
           {hasMeta && (
             <Box
               sx={{
@@ -278,34 +311,6 @@ function AppCompactTileImpl({
                     flexShrink: 0,
                   }}
                   aria-label="Official"
-                />
-              )}
-              {author && showLikeBadge && (
-                <Typography
-                  component="span"
-                  aria-hidden
-                  sx={{
-                    fontSize: TYPO.xs,
-                    color: 'text.disabled',
-                    flexShrink: 0,
-                  }}
-                >
-                  ·
-                </Typography>
-              )}
-              {showLikeBadge && (
-                <LikeButton
-                  isLiked={like.isLiked}
-                  canToggle={like.canToggle}
-                  count={like.displayedCount}
-                  onToggle={like.toggle}
-                  ariaLabel={
-                    like.canToggle
-                      ? like.isLiked
-                        ? `Unlike ${app.name}`
-                        : `Like ${app.name}`
-                      : `${like.displayedCount} likes`
-                  }
                 />
               )}
             </Box>
