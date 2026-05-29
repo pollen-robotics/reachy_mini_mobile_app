@@ -55,5 +55,9 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Apps launched inside Reachy Mini may request your location to provide location-aware features (for example, a guided tour).</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
 </dict>
 </plist>
