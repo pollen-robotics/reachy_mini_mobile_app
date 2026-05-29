@@ -151,6 +151,11 @@ export class OpenaiRealtimeClient {
   // tab is hidden: we re-arm the grace timer only once the tab is active
   // so throttled timers can't cause spurious errors.
   private pendingVisibilityHandler: (() => void) | null = null;
+  // Safety fallback that fires after `response.done` if the server
+  // never emits `output_audio_buffer.stopped` (rare, but observed in
+  // the wild when transport hiccups eat the trailing event). See the
+  // `response.done` case in `handleEvent` for the rationale.
+  private audioStopFallbackTimer: number | null = null;
 
   readonly options: RealtimeOptions;
 
@@ -431,6 +436,26 @@ export class OpenaiRealtimeClient {
     return session;
   }
 
+  /**
+   * Flip out of `ai-speaking` / `processing` once the server has
+   * confirmed (via `output_audio_buffer.stopped` or `.cleared`) that
+   * the assistant audio buffer is fully drained. Cancels any pending
+   * `audioStopFallbackTimer` that `response.done` may have armed.
+   */
+  private markConnectedAfterSpeech(): void {
+    this.clearAudioStopFallback();
+    if (this.status === "ai-speaking" || this.status === "processing") {
+      this.setStatus("connected");
+    }
+  }
+
+  private clearAudioStopFallback(): void {
+    if (this.audioStopFallbackTimer !== null) {
+      clearTimeout(this.audioStopFallbackTimer);
+      this.audioStopFallbackTimer = null;
+    }
+  }
+
   private clearIceGrace(): void {
     if (this.iceGraceTimer !== null) {
       clearTimeout(this.iceGraceTimer);
@@ -534,6 +559,9 @@ export class OpenaiRealtimeClient {
       //     and `content_part.added` with an output_audio part DO
       //     fire reliably over the data channel, so we listen to all
       //     of them and whichever lands first flips us to ai-speaking.
+      //   - WebRTC also gets a dedicated `output_audio_buffer.started`
+      //     event from the server (handled below) which is the most
+      //     authoritative "audio is on the wire NOW" signal.
       //
       // Transcript deltas are handled in their own case below (they
       // also need to emit a `transcript` event), so we duplicate the
@@ -562,9 +590,77 @@ export class OpenaiRealtimeClient {
 
       case "response.done":
       case "response.cancelled":
-        if (this.status === "ai-speaking" || this.status === "processing") {
+        // `response.done` only signals that the model finished GENERATING
+        // the response. On WebRTC the audio for that response is still
+        // travelling on the media track and being played out by the
+        // client (and, in our setup, relayed onward to the robot's
+        // speakers). The authoritative "audio is actually finished
+        // playing" signal is `output_audio_buffer.stopped`, emitted by
+        // the server strictly AFTER `response.done` once the server-
+        // side buffer is fully drained.
+        // See: https://platform.openai.com/docs/guides/realtime-conversations#client-and-server-events-for-audio-in-webrtc
+        //
+        // So when we're mid-speech we deliberately do NOT flip out of
+        // `ai-speaking` here. We wait for the `output_audio_buffer.*`
+        // event below to do it. The `audioStopFallbackTimer` is a
+        // safety: if the trailing event somehow never reaches us, we
+        // unstick the UI after 5 s rather than freeze on the speaker
+        // icon forever.
+        //
+        // When we're still in `processing` (no audio was ever
+        // produced — text-only reply, tool call without speech, or
+        // an early cancel), we flip immediately: no buffer to wait
+        // for.
+        if (this.status === "ai-speaking") {
+          this.clearAudioStopFallback();
+          this.audioStopFallbackTimer = window.setTimeout(() => {
+            this.audioStopFallbackTimer = null;
+            if (this.status !== "ai-speaking") return;
+            console.warn(
+              "[openai-realtime] output_audio_buffer.stopped never arrived after response.done; using 5s fallback to leave ai-speaking",
+            );
+            this.setStatus("connected");
+          }, 5_000);
+        } else if (this.status === "processing") {
           this.setStatus("connected");
         }
+        break;
+
+      // ─── Server-side audio buffer lifecycle (WebRTC / SIP only) ───
+      //
+      // These are the most accurate signals available for "Reachy is
+      // currently making sound" / "Reachy just stopped making sound".
+      //
+      //   - `.started`  : the server has begun streaming an audio
+      //                   response to us on the media track. Strictly
+      //                   after `response.content_part.added` for an
+      //                   audio part. We use it as a belt-and-braces
+      //                   `markAudible()` (in case the transcript /
+      //                   content-part triggers above didn't fire
+      //                   first).
+      //   - `.stopped`  : the server has drained the audio buffer for
+      //                   the current response (no more audio
+      //                   forthcoming). Strictly after `response.done`.
+      //                   This is THE event we use to leave
+      //                   `ai-speaking`.
+      //   - `.cleared`  : the audio buffer was cancelled mid-response
+      //                   (server-side VAD detected user barge-in, or
+      //                   the client sent `output_audio_buffer.clear`).
+      //                   Treat it identically to `.stopped`: the
+      //                   assistant is no longer making sound.
+      //
+      // Reference (the events are GA but were briefly dropped from the
+      // public docs in 2025 / early 2026; the canonical names live in
+      // the openai-node SDK, OutputAudioBufferStarted / Stopped /
+      // Cleared interfaces, and were re-confirmed by OpenAI staff in
+      // community.openai.com discussions).
+      case "output_audio_buffer.started":
+        this.markAudible();
+        break;
+
+      case "output_audio_buffer.stopped":
+      case "output_audio_buffer.cleared":
+        this.markConnectedAfterSpeech();
         break;
 
       case "conversation.item.input_audio_transcription.delta": {
@@ -665,6 +761,7 @@ export class OpenaiRealtimeClient {
 
   async close(): Promise<void> {
     this.clearIceGrace();
+    this.clearAudioStopFallback();
 
     try {
       this.dc?.close();

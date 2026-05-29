@@ -7,10 +7,11 @@
  * removing the `attachVision(...)` call in the engine (and ideally
  * the whole `vision/` folder - see `docs/VISION.md` § 12).
  *
- * Single provider for now (OpenAI gpt-4o-mini). The HF SmolVLM
- * scaffold mentioned in the design doc is deliberately not present;
- * the `VlmProvider` interface stays so adding a second provider is a
- * one-file change.
+ * Single provider today: Hugging Face Inference Providers router
+ * (`router.huggingface.co/v1/chat/completions`) authenticated with
+ * the user's own HF token. See `providers/hf-vlm-provider.ts` for
+ * the full rationale; the `VlmProvider` interface stays so adding
+ * a second provider is a one-file change.
  */
 
 export const VISION_CONFIG = {
@@ -40,16 +41,29 @@ export const VISION_CONFIG = {
   ],
   triggerDebounceMs: 5_000,
 
-  // OpenAI Vision provider.
-  // The model is overridable via env for cheap A/B tests against
-  // newer snapshots without rebuilding the bundle's logic.
-  openaiVlmModel:
-    (import.meta.env?.VITE_VISION_OPENAI_MODEL as string | undefined) ??
-    "gpt-4o-mini",
-  // `low` detail keeps the per-call cost negligible. Bump to
-  // `high` only if a downstream user complaints about coarse scene
-  // descriptions; the latency cost is real.
-  openaiVlmDetail: "low" as const,
+  // Hugging Face Inference Providers VLM.
+  // `zai-org/GLM-4.5V` is the model HF officially recommends in its
+  // Chat-Completion VLM docs and, as of May 2026, it's the only VLM
+  // in the catalogue served by two live providers (`novita` and
+  // `zai-org` self-hosted), giving the router meaningful failover.
+  // Smaller Qwen-VL snapshots (7B / 32B) currently route to a
+  // single backend that's frequently `status: "error"` - calling
+  // those silently returns empty `content`, which is what surfaced
+  // here as "HF VLM returned empty description".
+  //
+  // Override via env for A/B tests against alternatives served at
+  // the time of writing: `google/gemma-3-12b-it` (featherless-ai),
+  // `google/gemma-3-27b-it` (featherless-ai + scaleway),
+  // `mistralai/Pixtral-12B-2409` (hyperbolic),
+  // `Qwen/Qwen2.5-VL-72B-Instruct` (ovhcloud).
+  //
+  // Append `:fastest` / `:cheapest` / `:<provider>` to pin a
+  // specific routing policy (e.g. `zai-org/GLM-4.5V:novita`). The
+  // default omits the suffix, which is equivalent to `:fastest`.
+  // Source: `GET huggingface.co/api/models/<id>?expand=inferenceProviderMapping`.
+  hfVlmModel:
+    (import.meta.env?.VITE_VISION_HF_MODEL as string | undefined) ??
+    "zai-org/GLM-4.5V",
 
   // Hygiene. Cap the VLM call wall-time and the resulting text to
   // protect the Realtime context from a runaway provider.

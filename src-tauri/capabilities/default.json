@@ -18,6 +18,12 @@
         { "url": "https://*.hf.space/*" },
         { "url": "https://*.huggingface.co/*" }
       ]
+    },
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://router.huggingface.co/*" }
+      ]
     }
   ]
 }

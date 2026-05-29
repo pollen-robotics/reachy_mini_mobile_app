@@ -218,11 +218,16 @@ export class MicLevelMonitor {
  * every syllable instead of running a fixed-timer animation.
  *
  * Also tracks when the audio goes silent for long enough that we can
- * confidently exit the ai-speaking state. The OpenAI `response.done`
- * event fires the moment the model finishes *generating*, but the
- * already-buffered audio may still be playing out of the speakers for
- * another few hundred milliseconds. `waitForSilence()` lets callers
- * defer the state transition until the voice has actually stopped.
+ * confidently exit the ai-speaking state. The conversation-engine
+ * leaves `ai-speaking` once the OpenAI server emits
+ * `output_audio_buffer.stopped` (GA, WebRTC/SIP-only) - signalling
+ * that the server has fully drained its outbound audio buffer for the
+ * current response. By that point the only audio left in flight is
+ * what's already inside the client's jitter/playout buffer (plus, in
+ * our setup, Reachy's own downstream pipeline). `waitForSilence()`
+ * gives the orb a final, audio-accurate tail check so the speaker
+ * icon doesn't snap back to bars while the last syllable is still
+ * coming out of the speakers.
  */
 export class AiLevelMonitor {
   private ctx: AudioContext | null = null;

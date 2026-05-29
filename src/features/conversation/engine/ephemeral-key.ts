@@ -100,8 +100,14 @@ let cached: CachedEphemeral | null = null;
  *      keeps in sync on every state change, so it reflects "current
  *      user" without us having to subscribe to a React hook from a
  *      non-React module.
+ *
+ * Exported so the vision module (`features/conversation/vision/`)
+ * can reuse the exact same source-of-truth without duplicating the
+ * key name + try-block. Both consumers go through this single
+ * accessor so a future migration (cookie, OS-keychain, secure
+ * enclave) only touches one place.
  */
-function readHfTokenFromStorage(): string | null {
+export function readHfTokenFromStorage(): string | null {
   if (typeof sessionStorage === "undefined") return null;
   try {
     const raw = sessionStorage.getItem("hf_token");
