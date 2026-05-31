@@ -55,13 +55,14 @@
  *   `lastError` so the UI can suggest re-signing-in (typical dev
  *   case: someone pasted a PAT into localStorage).
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
 
+import { queryClient } from '@/queryClient';
 import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
 
 import {
@@ -88,8 +89,68 @@ const EMPTY_CACHE: LikedSpacesCache = Object.freeze({
   optimistic: new Set<string>(),
 }) as LikedSpacesCache;
 
+/**
+ * Freshness window for the liked-set query. The user's likes change
+ * rarely within a session and we update the cache locally on every
+ * mutation, so we don't need to refetch on every focus / mount.
+ *
+ * Shared between `useSpaceLikes()` and `prefetchSpaceLikes()`: the
+ * prefetch MUST agree with the live query, otherwise warming the
+ * cache at app boot would mark the entry fresh on a different window
+ * and suppress the hook's own revalidations.
+ */
+const LIKES_STALE_TIME_MS = 10 * 60 * 1000;
+
 function likesQueryKey(username: string | null): readonly unknown[] {
   return ['hf-liked-spaces', username] as const;
+}
+
+/**
+ * Fetch the user's liked set and seed the optimistic view with the
+ * server snapshot so the first paint has the right hearts filled.
+ * Shared by the live query and the boot-time prefetch.
+ */
+async function loadLikedSpacesCache(
+  token: string,
+  username: string,
+): Promise<LikedSpacesCache> {
+  const liked = await fetchUserLikedSpaces(token, username);
+  return {
+    server: liked,
+    optimistic: new Set(liked),
+  };
+}
+
+/**
+ * Warm the liked-Spaces cache. Idempotent (TanStack dedupes against
+ * the same key), so calling it at app boot AND mounting
+ * `useSpaceLikes()` later shares a single network call. Mirrors
+ * `prefetchMyApps()` / `prefetchApps()` so every per-user list is
+ * warm by the time the Apps tab opens.
+ */
+export function prefetchSpaceLikes(
+  token: string,
+  username: string,
+): Promise<void> {
+  return queryClient.prefetchQuery({
+    queryKey: likesQueryKey(username),
+    queryFn: () => loadLikedSpacesCache(token, username),
+    staleTime: LIKES_STALE_TIME_MS,
+  });
+}
+
+/**
+ * Hook variant of `prefetchSpaceLikes()` for the App root. No-ops
+ * while signed out (no token / username); re-fires when the username
+ * changes (account switch) so the cache slot for the new user warms
+ * up immediately.
+ */
+export function usePrefetchSpaceLikes(): void {
+  const { token, username } = useRemoteHfToken();
+  useEffect(() => {
+    if (!token || !username) return;
+    void prefetchSpaceLikes(token, username);
+  }, [token, username]);
 }
 
 /**
@@ -106,23 +167,12 @@ export function useSpaceLikes() {
 
   const query = useQuery<LikedSpacesCache>({
     queryKey,
-    queryFn: async () => {
-      // `enabled: false` paths still get the query function typed,
-      // but TanStack guarantees it won't run unless we have both a
-      // token AND a username, so we can assert non-null here.
-      const liked = await fetchUserLikedSpaces(token as string, username as string);
-      return {
-        server: liked,
-        // Seed the optimistic view with the server snapshot so the
-        // first paint has the right hearts filled.
-        optimistic: new Set(liked),
-      };
-    },
+    // `enabled: false` paths still get the query function typed,
+    // but TanStack guarantees it won't run unless we have both a
+    // token AND a username, so we can assert non-null here.
+    queryFn: () => loadLikedSpacesCache(token as string, username as string),
     enabled,
-    // The user's likes change rarely within a session and we update
-    // the cache locally on every mutation, so we don't need to
-    // refetch on every focus / mount.
-    staleTime: 10 * 60 * 1000,
+    staleTime: LIKES_STALE_TIME_MS,
   });
 
   // When the query isn't enabled (signed-out) we still want a stable

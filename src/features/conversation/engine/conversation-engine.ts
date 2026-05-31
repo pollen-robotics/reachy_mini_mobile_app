@@ -862,6 +862,16 @@ async function runConversationParts(): Promise<void> {
   // in `sessionStorage`), but we still defensively probe so a stale
   // state or a token-expiry race surfaces as a clear UI message
   // instead of a vague handshake failure two seconds later.
+  // Arm the "starting" UI *before* the ephemeral-key mint so the orb
+  // flips to its connecting spinner the instant the user taps. The mint
+  // is a network round-trip to the website's `/api/openai/ephemeral`
+  // endpoint (hundreds of ms on a cold first start) and used to run
+  // while the state was still `ready`, leaving the orb visually idle
+  // during that latency. From the deferred (tap-to-start) path the FSM
+  // is in `ready` here; from the auto-start path it's already
+  // `starting`, so this is a no-op there.
+  if (fsm.current() === "ready") setState("starting");
+
   try {
     await mintEphemeralKey();
   } catch (err) {
@@ -891,13 +901,8 @@ async function runConversationParts(): Promise<void> {
 
   conversationStarted.on();
 
-  // If we're being called from the deferred-start path (host flipped
-  // the `convoActive` gate after we parked in `ready`), the state
-  // machine is currently in `ready`. Re-arm the "starting" UI so the
-  // orb shows the spinner during the OpenAI handshake. If we got here
-  // from the auto-start path, we're already in `starting` and the
-  // call is a no-op.
-  if (fsm.current() === "ready") setState("starting");
+  // ("starting" was already armed before the mint above, so the orb's
+  // connecting spinner has been showing since the user's tap.)
 
   // Grab the robot's incoming audio track (the robot's microphone).
   const robotMicTrack = openaiBridge?.getRobotMicTrack(robot) ?? null;

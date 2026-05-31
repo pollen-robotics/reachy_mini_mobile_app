@@ -45,11 +45,15 @@ import { ConversationToolToast } from './orb/ConversationToolToast';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
 import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { useActivePersonality } from '@/features/personalities';
+import { type Personality, useActivePersonality } from '@/features/personalities';
 import { useActiveLanguageId } from '@/features/conversation-language';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { LanguageFlagPicker } from '@/ui/widgets/language-picker';
-import { PersonalityGrid, PersonalityPill } from '@/ui/widgets/personality-pill';
+import {
+  PersonalityStore,
+  PersonalityPill,
+  CreatePersonalityModal,
+} from '@/ui/widgets/personality-pill';
 import { LAYOUT } from '@/ui/design/tokens';
 
 export interface ConversationPanelProps {
@@ -68,6 +72,12 @@ export interface ConversationPanelProps {
    */
   orbRef: RefObject<HTMLButtonElement | null>;
 }
+
+/** Which persona-authoring form (if any) is open in the body slot. */
+type PersonaFormMode =
+  | { kind: 'create' }
+  | { kind: 'edit'; persona: Personality }
+  | null;
 
 export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   const orbState = mapAppStateToOrb(session.engineState);
@@ -105,7 +115,10 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   // browsing the picker would feel like the app skipped a beat.
   // Same idea on engine errors - the user needs to see the orb's
   // error state, not a stale picker.
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // NOTE (experiment): defaulted to `true` so the personality store
+  // shows on entry while we iterate on its design. Revert to `false`
+  // before shipping so the orb is the landing surface again.
+  const [pickerOpen, setPickerOpen] = useState(true);
   useEffect(() => {
     if (!pickerOpen) return;
     if (live || session.engineState === 'error') setPickerOpen(false);
@@ -117,6 +130,27 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   const closePicker = useCallback(() => {
     setPickerOpen(false);
   }, []);
+
+  // Persona authoring form: create a new persona OR edit an existing
+  // custom one. Both render EMBEDDED in the body slot (below the
+  // always-visible band) rather than as a full-screen overlay, so the
+  // band stays put and its "+" morphs into the "✕" that closes the
+  // form. Create is triggered from the band's trailing "+", edit from a
+  // custom card's pencil in the store.
+  //   - create success -> close form + picker (land on the orb with the
+  //     new persona selected).
+  //   - edit success/delete -> close form only, stay in the picker so
+  //     the user sees the updated (or removed) card.
+  const [formMode, setFormMode] = useState<PersonaFormMode>(null);
+  const formOpen = formMode !== null;
+  // Band trailing affordance: closes any open form, else opens create.
+  const toggleForm = useCallback(() => {
+    setFormMode(prev => (prev ? null : { kind: 'create' }));
+  }, []);
+  const openEdit = useCallback((persona: Personality) => {
+    setFormMode({ kind: 'edit', persona });
+  }, []);
+  const closeForm = useCallback(() => setFormMode(null), []);
 
   // Mid-conversation personality switch: when the user picks a new
   // personality while the OpenAI client is live, restart the
@@ -213,12 +247,9 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
       }}
     >
       {/* SUB-HEADER: full-bleed band that hosts the personality
-          hero. The band itself is pure structure - full-bleed
-          escape (RobotTabView pattern) + border-bottom divider +
-          canvas background. The actual identity (avatar, name,
-          tagline, tap target) is owned by the PersonalityPill
-          component, which spans the band edge-to-edge so the
-          entire row is one big tappable affordance. */}
+          hero. Always visible - including while the picker/store is
+          open - so the band stays the persistent "select" affordance
+          and its chevron is the toggle back to the orb. */}
       <Box
         sx={{
           width: '100vw',
@@ -238,7 +269,14 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
               why it's locked. The user can stop the conversation
               from the orb's stop button (or finish naturally) to
               re-enable the picker. */}
-          <PersonalityPill open={pickerOpen} onToggle={togglePicker} disabled={live} />
+          <PersonalityPill
+            open={pickerOpen}
+            onToggle={togglePicker}
+            onCreate={toggleForm}
+            creating={formMode?.kind === 'create'}
+            editingPersona={formMode?.kind === 'edit' ? formMode.persona : null}
+            disabled={live}
+          />
         </Box>
       </Box>
       {/* BODY SLOT: either the orb area or the persona picker grid.
@@ -280,7 +318,7 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
             width: '100%',
             pt: 1.5,
             pb: 3,
-            display: pickerOpen ? 'none' : 'grid',
+            display: pickerOpen || formOpen ? 'none' : 'grid',
             gridTemplateRows: '1fr auto 1fr',
             justifyItems: 'center',
           }}
@@ -341,7 +379,7 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
             is browsing personas, sliders below the grid would
             split attention. Re-rendering on toggle is cheap (no
             heavy state - the sliders just read `daemon`). */}
-        {!pickerOpen && (
+        {!pickerOpen && !formOpen && (
           <Box
             sx={{
               flexShrink: 0,
@@ -461,7 +499,35 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
           </Box>
         )}
 
-        {pickerOpen && <PersonalityGrid onClose={closePicker} />}
+        {pickerOpen && !formOpen && (
+          <PersonalityStore
+            onClose={closePicker}
+            onEdit={openEdit}
+            onCreate={() => setFormMode({ kind: 'create' })}
+          />
+        )}
+
+        {/* Persona authoring form, EMBEDDED in the body slot (below the
+            always-visible personality band, not as a full-screen
+            overlay) so the band stays put and its "✕" remains the way
+            out. Keyed by target so switching create<->edit (or between
+            two personas) remounts the form with fresh field state.
+              - create success -> close form + picker (land on the orb).
+              - edit success/delete -> close form only, back to picker. */}
+        {formMode && (
+          <CreatePersonalityModal
+            key={formMode.kind === 'edit' ? formMode.persona.id : 'create'}
+            embedded
+            editing={formMode.kind === 'edit' ? formMode.persona : null}
+            onCancel={closeForm}
+            onCreated={() => {
+              const wasCreate = formMode.kind === 'create';
+              closeForm();
+              if (wasCreate) closePicker();
+            }}
+            onDeleted={closeForm}
+          />
+        )}
       </Box>
       {/* The engine-host inert div used to live here for legacy
           API compat with `mountConversation(root, opts)`. The hook
