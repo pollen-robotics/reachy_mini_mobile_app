@@ -217,7 +217,26 @@ export function CreatePersonalityModal({
   // field, flush right, instead of as a helperText line under it (which
   // added a row of vertical chrome per field). `pr: 1` trims the input's
   // own right padding so the counter hugs the edge.
+  // When the floating label shrinks up onto the outline it must sit
+  // over a solid fill, otherwise the outline border draws straight
+  // through the text ("struck out"). The form sits on
+  // `background.default` (so does the outlined field's transparent
+  // interior), so a matching backing is seamless when the notch is
+  // open and a safety net if it ever fails to open (notably on the
+  // multiline field).
+  const shrinkLabelSlotProps = {
+    inputLabel: {
+      sx: {
+        '&.MuiInputLabel-shrink': {
+          bgcolor: 'background.default',
+          px: 0.5,
+        },
+      },
+    },
+  };
+
   const counterSlotProps = (len: number, max: number) => ({
+    ...shrinkLabelSlotProps,
     input: {
       sx: { borderRadius: `${RADIUS.md}px`, pr: 1 },
       endAdornment: (
@@ -353,7 +372,10 @@ export function CreatePersonalityModal({
             multiline
             minRows={4}
             maxRows={12}
-            slotProps={{ input: { sx: { borderRadius: `${RADIUS.md}px` } } }}
+            slotProps={{
+              ...shrinkLabelSlotProps,
+              input: { sx: { borderRadius: `${RADIUS.md}px` } },
+            }}
           />
 
           {/* Voice picker: the curated OpenAI Realtime voices as
@@ -405,7 +427,7 @@ export function CreatePersonalityModal({
                         ? alpha(theme.palette.primary.main, 0.1)
                         : 'background.paper',
                       border: selected
-                        ? `1.5px solid ${theme.palette.primary.main}`
+                        ? `1px solid ${theme.palette.primary.main}`
                         : `1px solid ${theme.palette.divider}`,
                       transition: 'background-color 0.15s ease, border-color 0.15s ease',
                       '&:active': { transform: 'scale(0.97)' },

@@ -23,8 +23,8 @@
  * action on the user's own work, so it's tucked inside the editor (see
  * `CreatePersonalityModal`) where it takes an explicit confirmation.
  */
-import { type ReactNode } from 'react';
-import { Box, Stack, Typography, alpha, useTheme } from '@mui/material';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 
@@ -44,6 +44,10 @@ interface PersonalityStoreProps {
    *  card at the top of the store (the band no longer carries a "+"). */
   onCreate: () => void;
 }
+
+/** Delay between picking a personality and returning to the orb, so the
+ *  tile's selection feedback (active ring + press scale) is visible. */
+const SELECT_CLOSE_DELAY_MS = 500;
 
 /** Family taxonomy (presentation-only, local to this experiment).
  *  Three buckets: the two clean ones (helpful assistants, role-play
@@ -82,9 +86,24 @@ export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStore
   const byFamily = (familyId: string) =>
     catalog.filter(p => p.kind === 'builtin' && FAMILY_BY_ID[p.id] === familyId);
 
+  // Defer the close after a pick so the tile's selection feedback (the
+  // active primary ring snapping on + the press scale) has time to play
+  // before the orb view returns - closing instantly swallowed it.
+  const closeTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    },
+    [],
+  );
+
   const pick = (id: string) => {
     if (id !== active.id) setActivePersonality(id);
-    onClose();
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      onClose();
+    }, SELECT_CLOSE_DELAY_MS);
   };
 
   return (
@@ -102,9 +121,13 @@ export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStore
     >
       {/* SCROLL BODY. No internal header/close: the persistent
           personality band above (PersonalityPill) owns the identity
-          + the toggle back to the orb. */}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 2, pb: 4 }}>
-        <Stack spacing={4}>
+          + the toggle back to the orb.
+          `pt: 4` (32px) matches the Stack `spacing={4}` below the
+          CreateCard, so the card sits with symmetric breathing room
+          between the band above and the first rail title below (the
+          band->card gap used to be half the card->rail gap). */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 4, pb: 4 }}>
+        <Stack spacing={3}>
           {/* CREATE: dedicated CTA card, pinned above the rails. The
               persistent band no longer carries a "+", so authoring a
               new persona starts here. */}
@@ -287,24 +310,24 @@ interface PersonaTileProps {
 function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
   const theme = useTheme();
   return (
-    <Box
-      component="button"
-      type="button"
+    <ButtonBase
       onClick={onClick}
       aria-pressed={active}
       aria-label={`Use personality ${persona.name}`}
+      focusRipple
       sx={{
         flexShrink: 0,
         width: 146,
-        appearance: 'none',
-        cursor: 'pointer',
-        font: 'inherit',
         color: 'text.primary',
         textAlign: 'center',
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
+        // Top-anchored: the avatar's illustration spills slightly toward
+        // the top edge, and a fixed gap keeps the name/tagline block
+        // stable across tiles.
+        justifyContent: 'flex-start',
         gap: 1.25,
         px: 2,
         pt: 3,
@@ -312,14 +335,20 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
         borderRadius: `${RADIUS.lg}px`,
         // App-Store-style tile: white (paper) surface, light hairline
         // border, subtle drop shadow. Active state keeps the white bg
-        // and adds a primary inset ring (no reflow, no tint wash).
+        // and adds a primary inset ring. The base border stays a
+        // constant 1px in BOTH states (only its colour changes,
+        // transparent <-> divider) and the active ring is an inset
+        // box-shadow, so selecting a tile never changes its box size -
+        // no content reflow / flicker. ButtonBase clips its ripple to
+        // this rounded rect via its own `overflow: hidden`.
         bgcolor: 'background.paper',
         border: `1px solid ${active ? 'transparent' : theme.palette.divider}`,
         boxShadow: active
           ? `inset 0 0 0 2px ${theme.palette.primary.main}, 0 1px 4px ${alpha('#000', 0.06)}`
           : `0 1px 4px ${alpha('#000', 0.05)}`,
-        transition: 'transform 0.1s ease, box-shadow 0.18s ease',
-        '&:active': { transform: 'scale(0.97)' },
+        // No press-scale: the ripple is the only tap feedback so the
+        // tile never resizes on click (no jump / reflow of neighbours).
+        transition: 'box-shadow 0.18s ease',
         WebkitTapHighlightColor: 'transparent',
       }}
     >
@@ -394,6 +423,8 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
           role="button"
           tabIndex={0}
           aria-label={`Edit ${persona.name}`}
+          onMouseDown={e => e.stopPropagation()}
+          onTouchStart={e => e.stopPropagation()}
           onClick={e => {
             e.stopPropagation();
             onEdit();
@@ -428,6 +459,6 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
           <EditRoundedIcon sx={{ fontSize: 16 }} />
         </Box>
       )}
-    </Box>
+    </ButtonBase>
   );
 }
