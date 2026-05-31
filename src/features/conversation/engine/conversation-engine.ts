@@ -133,6 +133,8 @@ import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
+import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
+import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
 import { createConversationHandle } from "./host-handle";
@@ -941,7 +943,13 @@ async function runConversationParts(): Promise<void> {
   // module: it'll grab a first frame in ~1.5 s, then every 30 s,
   // plus immediately on any STT keyword trigger. Idempotent; survives
   // transparent reconnects through the bridge's `RealtimePort`.
-  vision?.start();
+  //
+  // Gated on the user's conversation setting (read lazily here, at
+  // start time): when scene-awareness is off we simply never start the
+  // poller, so no frames are ever captured. The setting can only be
+  // toggled while stopped, so this start-time read is authoritative
+  // for the whole conversation.
+  if (isVisionEnabled()) vision?.start();
 
   // Make sure the robot actually sends what OpenAI produces by unmuting the
   // mic path. Our sender now carries the OpenAI audio track, not the local
@@ -1149,8 +1157,13 @@ openaiBridge = createOpenaiBridge({
       personality.instructions && personality.instructions.length > 0
         ? personality.instructions
         : settings.instructions;
-    const memoryFragment = memoryStore.formatForPrompt();
-    const visionAppendix = getVisionPromptAppendix();
+    // Memory + vision prompt fragments are each gated on the user's
+    // conversation setting (read lazily here, per reconnect). When a
+    // feature is off we drop its fragment entirely so the model isn't
+    // primed to use a capability it doesn't have this session (memory
+    // tools are also filtered out below at the bridge level).
+    const memoryFragment = isMemoryEnabled() ? memoryStore.formatForPrompt() : "";
+    const visionAppendix = isVisionEnabled() ? getVisionPromptAppendix() : "";
     // Language nudge. Read lazily from the conversation-language
     // store on every reconnect so a mid-session switch (user taps
     // the flag picker -> ConversationPanel restarts the conv)
@@ -1165,7 +1178,26 @@ openaiBridge = createOpenaiBridge({
     parts.push(languageAppendix);
     return parts.join("\n\n");
   },
+  // Tool set resolved lazily per connect so the memory toggle takes
+  // effect on the next conversation start without rebuilding the
+  // bridge. When long-term memory is off we drop the `remember` /
+  // `forget` tools so the model can't write to (or read intent about)
+  // a store the user has disabled; the matching prompt digest is also
+  // omitted in `composeInstructions` above.
+  tools: () =>
+    isMemoryEnabled()
+      ? ROBOT_TOOLS
+      : ROBOT_TOOLS.filter((t) => t.name !== "remember" && t.name !== "forget"),
   onStatus: (status) => {
+    // Once the user has tapped stop we park the orb in `stopping`
+    // (spinner) and run a gentle ~700 ms teardown. The OpenAI bridge
+    // can still emit a trailing status as it closes (a final
+    // `connected` from the in-flight response completing, or a late
+    // activity flip) which would otherwise call `setState("listening")`
+    // below and yank the orb straight back into a live look,
+    // swallowing the "ending" spinner. Ignore status events while we
+    // are deliberately winding down.
+    if (fsm.current() === "stopping") return;
     switch (status) {
       case "connected":
         // `connected` arrives from the SDK both (a) when the WebRTC

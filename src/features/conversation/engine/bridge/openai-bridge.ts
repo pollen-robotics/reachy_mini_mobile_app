@@ -113,8 +113,14 @@ export interface OpenaiBridgeDeps {
   composeInstructions: () => string;
   /** Tool descriptors handed to the model. The default is the
    *  engine's curated `ROBOT_TOOLS` set, but kept overridable so a
-   *  test or a future variant can pass a narrower list. */
-  tools?: typeof ROBOT_TOOLS;
+   *  test or a future variant can pass a narrower list.
+   *
+   *  Accepts either a static array OR a getter, mirroring `voice`:
+   *  the getter form is re-evaluated on every `buildClient()` so the
+   *  host can narrow the set between reconnects (e.g. drop the memory
+   *  tools when the user disables long-term memory) without rebuilding
+   *  the whole bridge. */
+  tools?: typeof ROBOT_TOOLS | (() => typeof ROBOT_TOOLS);
 
   // ─── Outwards events (forwarded to the engine) ──────────────────────
   /** Forwarded `OpenaiRealtimeClient.on("status")`. */
@@ -193,11 +199,16 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
   // observers (vision, future memory, etc.).
   const userTranscriptSubs = new Set<(text: string) => void>();
 
-  const tools = deps.tools ?? ROBOT_TOOLS;
-
   const buildClient = (
     robotMicTrack: MediaStreamTrack,
   ): OpenaiRealtimeClient => {
+    // Resolve tools lazily here (not once at bridge construction) so a
+    // getter form is re-evaluated on every connect/reconnect - lets the
+    // host narrow the set between sessions (e.g. drop memory tools).
+    const tools =
+      typeof deps.tools === 'function'
+        ? deps.tools()
+        : deps.tools ?? ROBOT_TOOLS;
     const next = new OpenaiRealtimeClient({
       getApiKey: deps.getApiKey,
       model: deps.model,
