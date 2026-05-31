@@ -35,7 +35,7 @@
  * `categoryTaxonomy.ts`); the slug list is never mirrored by hand.
  * See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -62,39 +62,40 @@ import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
+import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import AppCompactTile from './AppCompactTile';
 import AppCreateYourOwnTile from './AppCreateYourOwnTile';
 import AppPinnedTile from './AppPinnedTile';
 import AppRail from './AppRail';
 import AppsCreateFooter from './AppsCreateFooter';
+import LazyMount from './LazyMount';
+import VirtualAppList from './VirtualAppList';
+import { COLUMN_SX } from './layout';
 
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
 }
 
 /**
- * Vertical gap between consecutive cards in the search-results
- * and category-focus lists. The tile is content-driven (no fixed
- * height) so the gap is the only thing controlling the rhythm
- * between rows.
+ * Number of tiles a browse rail renders as a *preview*. A horizontal
+ * rail only ever shows ~2-3 tiles at once, so mounting a category's
+ * full bucket (which can be dozens of apps once the catalog grows to
+ * 200-300) just to leave them parked off-screen is pure waste - each
+ * tile spins up its own TanStack like-observer + icon load. We render
+ * the top-N (already sorted by likes) and route the rest through the
+ * rail's existing "See all" drill-down, exactly the App Store
+ * pattern. The focus list keeps the FULL bucket, so nothing is lost.
  */
-const LIST_ROW_GAP_PX = 12;
+const RAIL_PREVIEW_CAP = 12;
 
 /**
- * Shared `sx` that re-constrains a row to the centred content
- * column. Used by every panel inside a full-bleed wrapper so
- * panel content (titles, search input, list rows) lines up on
- * one vertical axis even though the dividers themselves span
- * the whole viewport.
+ * Reserved height for a not-yet-mounted rail (`LazyMount` placeholder).
+ * Approximates header + one tile row + the panel's top padding so the
+ * scroll length is right before the rail hydrates; mounting happens
+ * ahead of the fold so any small mismatch settles off-screen.
  */
-const COLUMN_SX = {
-  width: '100%',
-  maxWidth: LAYOUT.contentMaxWidth,
-  mx: 'auto',
-  px: 3,
-} as const;
+const RAIL_PLACEHOLDER_HEIGHT = 260;
 
 /**
  * Shared min-height for the pinned panel header row (label on the
@@ -136,6 +137,11 @@ const RAIL_PANEL_SX = {
 export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const { state, refresh } = useApps();
   const hiddenAuthors = useHiddenAuthors();
+
+  // The scrollable body. Threaded into `VirtualAppList` so the
+  // windowed search / focus lists virtualise against the same
+  // scroll element the rest of the tab scrolls in.
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Strip apps whose author the user has hidden BEFORE any
   // downstream pass (search, categorisation, pinned reconciliation,
@@ -307,6 +313,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
       }}
     >
       <Box
+        ref={scrollRef}
         sx={{
           flex: 1,
           minHeight: 0,
@@ -437,19 +444,28 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     chrome. No dedup with the catalog rails by
                     design. */}
                 {!filtered.isSearching && myApps.apps.length > 0 && (
-                  <Box sx={RAIL_PANEL_SX}>
-                    <AppRail label="Your apps" count={myApps.apps.length}>
-                      {myApps.apps.map(app => (
-                        <AppCompactTile
-                          key={app.id}
-                          app={app}
-                          isPinned={pinnedApps.set.has(app.id)}
-                          onOpen={onOpen}
-                          onTogglePin={handleTogglePin}
-                        />
-                      ))}
-                    </AppRail>
-                  </Box>
+                  <LazyMount minHeight={RAIL_PLACEHOLDER_HEIGHT}>
+                    <Box sx={RAIL_PANEL_SX}>
+                      <AppRail
+                        label="Your apps"
+                        subLabel={
+                          myApps.apps[0]?.author
+                            ? `@${myApps.apps[0].author} - ${myApps.apps.length} app${myApps.apps.length === 1 ? '' : 's'}`
+                            : `${myApps.apps.length} app${myApps.apps.length === 1 ? '' : 's'}`
+                        }
+                      >
+                        {myApps.apps.map(app => (
+                          <AppCompactTile
+                            key={app.id}
+                            app={app}
+                            isPinned={pinnedApps.set.has(app.id)}
+                            onOpen={onOpen}
+                            onTogglePin={handleTogglePin}
+                          />
+                        ))}
+                      </AppRail>
+                    </Box>
+                  </LazyMount>
                 )}
 
                 {/* Browse rails. Hidden during search mode (the
@@ -460,30 +476,32 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     already filtered out by `useFilteredApps`. */}
                 {!filtered.isSearching &&
                   filtered.rails.map(bucket => (
-                    <Box key={bucket.descriptor.id} sx={RAIL_PANEL_SX}>
-                      <AppRail
-                        label={bucket.descriptor.label}
-                        count={bucket.apps.length}
-                        onSeeAll={() => setFocusedCategoryId(bucket.descriptor.id)}
-                      >
-                        {bucket.apps.map(app => (
-                          <AppCompactTile
-                            key={app.id}
-                            app={app}
-                            isPinned={pinnedApps.set.has(app.id)}
-                            onOpen={onOpen}
-                            onTogglePin={handleTogglePin}
-                          />
-                        ))}
-                        {/* CTA tile pinned to the right of every
-                            rail: same width branch as the app
-                            tiles so the "1 + 30 % peek" framing
-                            stays consistent, dashed primary
-                            border to signal it's an affordance
-                            rather than another app. */}
-                        <AppCreateYourOwnTile />
-                      </AppRail>
-                    </Box>
+                    <LazyMount key={bucket.descriptor.id} minHeight={RAIL_PLACEHOLDER_HEIGHT}>
+                      <Box sx={RAIL_PANEL_SX}>
+                        <AppRail
+                          label={bucket.descriptor.label}
+                          count={bucket.apps.length}
+                          onSeeAll={() => setFocusedCategoryId(bucket.descriptor.id)}
+                        >
+                          {bucket.apps.slice(0, RAIL_PREVIEW_CAP).map(app => (
+                            <AppCompactTile
+                              key={app.id}
+                              app={app}
+                              isPinned={pinnedApps.set.has(app.id)}
+                              onOpen={onOpen}
+                              onTogglePin={handleTogglePin}
+                            />
+                          ))}
+                          {/* CTA tile pinned to the right of every
+                              rail: same width branch as the app
+                              tiles so the "1 + 30 % peek" framing
+                              stays consistent, dashed primary
+                              border to signal it's an affordance
+                              rather than another app. */}
+                          <AppCreateYourOwnTile />
+                        </AppRail>
+                      </Box>
+                    </LazyMount>
                   ))}
 
                 {/* End-of-list "Want to create your own?" footer.
@@ -530,31 +548,19 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             {/* Flat list of `AppCompactTile`s in `fullWidth` mode.
                 Mounted only in search and category-focus modes
                 (browse mode has no trailing list - sparse-bucket
-                apps surface via search). The tile is
-                content-driven, so the gap between rows is the
-                only thing controlling the rhythm. We don't
-                virtualise: the catalog is small enough that
-                rendering all matches outright is cheaper than
-                the bookkeeping a virtualizer would require for
-                content-variable rows. */}
+                apps surface via search). These lists can run to the
+                full catalog (200-300 rows), so they are windowed via
+                `VirtualAppList`: only the visible rows (+ overscan)
+                are ever mounted, virtualised against the tab's shared
+                scroll body. */}
             {showFlatList && (
-              <Stack
-                spacing={`${LIST_ROW_GAP_PX}px`}
-                sx={{
-                  ...COLUMN_SX,
-                }}
-              >
-                {flatList.map(app => (
-                  <AppCompactTile
-                    key={app.id}
-                    app={app}
-                    isPinned={pinnedApps.set.has(app.id)}
-                    onOpen={onOpen}
-                    onTogglePin={handleTogglePin}
-                    fullWidth
-                  />
-                ))}
-              </Stack>
+              <VirtualAppList
+                apps={flatList}
+                scrollRef={scrollRef}
+                pinnedSet={pinnedApps.set}
+                onOpen={onOpen}
+                onTogglePin={handleTogglePin}
+              />
             )}
           </>
         )}
