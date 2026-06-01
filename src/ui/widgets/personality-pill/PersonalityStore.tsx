@@ -1,21 +1,20 @@
 /**
- * PersonalityStore - experimental "App-Store-style" picker.
+ * PersonalityStore - "App-Store-style" personality picker.
  *
- * Alternative browse surface to `PersonalityCoverflow`: instead of a
- * single swipeable deck, the catalog is laid out as a vertical scroll
- * of horizontal rails, one per personality "family" (Assistants,
- * Characters, Oddballs), plus a "Yours" rail for custom personas.
+ * The catalog is laid out as a vertical scroll of horizontal rails,
+ * one per personality "family" (Assistants, Characters, Oddballs),
+ * plus a "Yours" rail for custom personas.
  *
  * This mirrors the apps tab's rail rhythm (`AppRail` /
  * `AppCompactTile`) so the two browse surfaces of the app feel like
  * siblings.
  *
- * Self-contained + isolated: it reads the same personalities store
- * and exposes the same `onClose` contract as the coverflow, so it can
- * be swapped in/out from `ConversationPanel` in one line. The family
- * taxonomy lives here (not in the shared model) on purpose - it's a
- * presentation concern of this experiment, and keeping it local means
- * the coverflow + data layer stay untouched.
+ * Self-contained + isolated: it reads the personalities store and
+ * exposes an `onClose` contract, so the host (`ConversationPanel`)
+ * can swap it in/out in one line. The family taxonomy lives here (not
+ * in the shared model) on purpose - it's a presentation concern of
+ * this surface, and keeping it local means the data layer stays
+ * untouched.
  *
  * Custom personas carry an always-visible "edit" pencil: editing your
  * own creation is a first-class, frequent action, so it lives right on
@@ -23,10 +22,11 @@
  * action on the user's own work, so it's tucked inside the editor (see
  * `CreatePersonalityModal`) where it takes an explicit confirmation.
  */
-import { type ReactNode, useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 
 import {
   type Personality,
@@ -34,6 +34,7 @@ import {
   useActivePersonality,
   usePersonalitiesCatalog,
 } from '@/features/personalities';
+import PersonaAvatar from '@/ui/design/PersonaAvatar';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface PersonalityStoreProps {
@@ -309,9 +310,21 @@ interface PersonaTileProps {
 
 function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
   const theme = useTheme();
+  // Click counter for the avatar "pop": each tap bumps it, which
+  // remounts the avatar wrapper via `key` and replays the spring
+  // keyframe (assigning the same animation name doesn't re-fire on its
+  // own). Same retrigger technique as the star pulse / like pop, and the
+  // same signature spring curve, so selecting a persona feels of-a-piece
+  // with the rest of the app. `> 0` skips the very first render so tiles
+  // don't pop on initial mount.
+  const [popKey, setPopKey] = useState(0);
+  const handleClick = () => {
+    setPopKey(k => k + 1);
+    onClick();
+  };
   return (
     <ButtonBase
-      onClick={onClick}
+      onClick={handleClick}
       aria-pressed={active}
       aria-label={`Use personality ${persona.name}`}
       focusRipple
@@ -346,41 +359,71 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
         boxShadow: active
           ? `inset 0 0 0 2px ${theme.palette.primary.main}, 0 1px 4px ${alpha('#000', 0.06)}`
           : `0 1px 4px ${alpha('#000', 0.05)}`,
-        // No press-scale: the ripple is the only tap feedback so the
-        // tile never resizes on click (no jump / reflow of neighbours).
+        // The tile itself never press-scales (that would reflow
+        // neighbours); the tap feedback is the ripple + the avatar pop
+        // below, both of which stay within the avatar's own box.
         transition: 'box-shadow 0.18s ease',
         WebkitTapHighlightColor: 'transparent',
       }}
     >
-      <Box
-        sx={{
-          width: 116,
-          height: 116,
-          borderRadius: '50%',
-          position: 'relative',
-          overflow: 'visible',
-          bgcolor: theme.palette.mode === 'dark'
-            ? 'rgba(255,255,255,0.04)'
-            : 'rgba(0,0,0,0.025)',
-        }}
-      >
+      {/* Avatar + selection check, on a relative box so the check badge
+          can pin to the disc's lower-right corner. The inner wrapper is
+          remounted by `key={popKey}` on every tap to replay the pop. */}
+      <Box sx={{ position: 'relative', lineHeight: 0 }}>
         <Box
-          component="img"
-          src={persona.avatar}
-          alt=""
-          aria-hidden
-          draggable={false}
+          key={popKey}
           sx={{
-            position: 'absolute',
-            width: '152%',
-            height: 'auto',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -57%)',
-            pointerEvents: 'none',
-            userSelect: 'none',
+            // Quick spring pop on tap: the face bounces to 112 % and
+            // settles. `overflow: visible` on the avatar means this
+            // scales the spilling illustration too, so the whole
+            // persona "kicks" rather than just the disc.
+            animation:
+              popKey > 0 ? 'persona-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+            '@keyframes persona-pop': {
+              '0%': { transform: 'scale(1)' },
+              '35%': { transform: 'scale(1.12)' },
+              '100%': { transform: 'scale(1)' },
+            },
           }}
-        />
+        >
+          <PersonaAvatar src={persona.avatar} size={116} imageScale={1.52} />
+        </Box>
+        {/* Selection check. It's shown on every active tile, but the
+            pop-in spring only plays on an actual user pick (`popKey >
+            0`): when the panel opens with a persona already selected the
+            badge appears statically, no animation. A paper ring lifts it
+            off the orange disc edge. */}
+        {active && (
+          <Box
+            aria-hidden
+            sx={{
+              position: 'absolute',
+              bottom: 2,
+              right: 2,
+              width: 30,
+              height: 30,
+              borderRadius: '50%',
+              // Outlined treatment matching the edit pencil: paper fill so
+              // it reads on the orange disc, primary hairline ring + primary
+              // glyph (rather than a solid primary fill).
+              bgcolor: 'background.paper',
+              color: 'primary.main',
+              display: 'grid',
+              placeItems: 'center',
+              border: `1.5px solid ${theme.palette.primary.main}`,
+              boxShadow: `0 1px 4px ${alpha('#000', 0.15)}`,
+              animation:
+                popKey > 0 ? 'persona-check-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+              '@keyframes persona-check-pop': {
+                '0%': { transform: 'scale(0)', opacity: 0 },
+                '60%': { transform: 'scale(1.15)', opacity: 1 },
+                '100%': { transform: 'scale(1)', opacity: 1 },
+              },
+            }}
+          >
+            <CheckRoundedIcon sx={{ fontSize: 18 }} />
+          </Box>
+        )}
       </Box>
       <Typography
         sx={{

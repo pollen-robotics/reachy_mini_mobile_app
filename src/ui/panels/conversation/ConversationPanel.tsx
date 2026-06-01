@@ -120,8 +120,8 @@ export function ConversationPanel({
   const activePersonalityId = useActivePersonality().id;
 
   // Personality picker open / closed. When open, the body slot
-  // below the sub-header swaps from the orb area to a grid of
-  // persona cards (see PersonalityGrid). The hero band's chevron
+  // below the sub-header swaps from the orb area to the persona
+  // picker (see PersonalityStore). The hero band's chevron
   // mirrors this state via its `open` prop.
   //
   // We deliberately auto-close the picker when a conversation
@@ -129,10 +129,10 @@ export function ConversationPanel({
   // browsing the picker would feel like the app skipped a beat.
   // Same idea on engine errors - the user needs to see the orb's
   // error state, not a stale picker.
-  // NOTE (experiment): defaulted to `true` so the personality store
-  // shows on entry while we iterate on its design. Revert to `false`
-  // before shipping so the orb is the landing surface again.
-  const [pickerOpen, setPickerOpen] = useState(true);
+  // Defaults to closed so the orb is the landing surface when the
+  // panel opens (e.g. right after connecting to a robot); the user
+  // opens the picker explicitly via the hero band's chevron.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Conversation settings ("cog") surface. Opened from the bottom
   // strip, it swaps the orb area for the settings panel via the same
@@ -704,12 +704,12 @@ function StripDivider() {
  */
 export function mapAppStateToOrb(state: AppState): OrbState {
   switch (state) {
+    // `stopping` reuses the connecting spinner so the orb shows immediate
+    // feedback during the gentle teardown after the stop tap. The caption
+    // disambiguates ("Ending conversation", see below).
     case 'connecting':
     case 'starting':
     case 'auto-selecting':
-    // Wind-down after the stop tap reuses the connecting spinner so
-    // the orb shows immediate feedback during the gentle teardown.
-    // The caption disambiguates ("Ending conversation", see below).
     case 'stopping':
       return 'connecting';
     case 'ready':
