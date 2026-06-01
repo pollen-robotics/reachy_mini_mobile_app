@@ -836,32 +836,31 @@ export default function AppIframeOverlay({
             // Token rationale:
             //   - microphone  : voice / chat Spaces (`getUserMedia({audio})`)
             //   - camera      : vision / AR Spaces (`getUserMedia({video})`)
-            //   - geolocation : tour-guide / location-aware Spaces
             //   - autoplay    : media playback without prior user gesture
             //   - clipboard-* : text / image copy-paste from inside the Space
             //
             // Each token needs a matching OS-side authorisation:
-            //   - iOS  : `NSMicrophoneUsageDescription`,
-            //            `NSCameraUsageDescription`,
-            //            `NSLocationWhenInUseUsageDescription`
-            //            in `src-tauri/Info.plist`. Missing the
-            //            Camera key while granting the iframe token
+            //   - iOS  : `NSMicrophoneUsageDescription` and
+            //            `NSCameraUsageDescription` in
+            //            `src-tauri/Info.plist`. Missing the Camera
+            //            key while granting the iframe token
             //            HARD-crashes the WKWebView process on
             //            recent iOS - non-optional.
-            //   - Android : `RECORD_AUDIO`, `CAMERA`,
-            //               `ACCESS_FINE_LOCATION` in the generated
+            //   - Android : `RECORD_AUDIO`, `CAMERA` in the generated
             //               `AndroidManifest.xml`, plus a custom
             //               `WebChromeClient` in `MainActivity.kt`
-            //               that maps `onPermissionRequest` and
-            //               `onGeolocationPermissionsShowPrompt` to
-            //               the OS grants. Tauri's default WebView
-            //               denies iframe permission requests
-            //               otherwise. Full runbook in
-            //               `docs/ANDROID_PERMISSIONS.md`. The
-            //               Android target itself isn't initialised
-            //               in this repo today; the iframe tokens
-            //               are harmless until then.
-            allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
+            //               that maps `onPermissionRequest` to the
+            //               OS grants. Tauri's default WebView denies
+            //               iframe permission requests otherwise.
+            //               Full runbook in `docs/ANDROID_PERMISSIONS.md`.
+            //
+            // Geolocation is intentionally NOT delegated: no Space
+            // surfaces a location feature today and the extra prompt
+            // string (`NSLocationWhenInUseUsageDescription`,
+            // `ACCESS_FINE_LOCATION`) is an App Review red flag for a
+            // capability we don't actually use. Re-add when a Space
+            // genuinely needs `navigator.geolocation`.
+            allow="microphone 'src'; camera 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
               // Iframe done parsing the bundle - move to
               // `connecting`. The overlay stays up; we'll only
