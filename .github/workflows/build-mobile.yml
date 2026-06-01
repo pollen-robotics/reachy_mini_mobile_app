@@ -462,6 +462,57 @@ jobs:
             done
           fi
 
+      - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
+        # Two patches, applied together:
+        #
+        # 1. Add RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, CAMERA so the
+        #    WebView can grant those to iframe-hosted HF Spaces.
+        # 2. Strip ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION via
+        #    `tools:node="remove"`. tauri-plugin-blec transitively
+        #    declares both for pre-Android-12 BLE scanning, but no
+        #    shipping Space surfaces geolocation and an unused
+        #    "Location" permission on the Play listing is an App
+        #    Review / Play Console red flag. Trade-off: BLE WiFi
+        #    provisioning won't work on Android 8-11. Android 12+ is
+        #    unaffected because blec also declares BLUETOOTH_SCAN
+        #    with `neverForLocation`.
+        #
+        # Idempotent — re-running is a no-op once RECORD_AUDIO is in
+        # the manifest.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+          if "RECORD_AUDIO" not in s:
+              perms = (
+                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+                  '    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n'
+                  '    <uses-permission android:name="android.permission.CAMERA" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />\n\n'
+                  '    <!-- AndroidTV support -->'
+              )
+              s2 = s.replace('    <!-- AndroidTV support -->', perms, 1)
+              if s2 == s:
+                  print("::error::<!-- AndroidTV support --> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Injected app permissions + location-strip overrides.")
+          else:
+              print("Permissions already present, skipping.")
+          p.write_text(s)
+          PY
+
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
         # `tauri-plugin-auth-session` declares `AuthSessionActivity`
         # in its own manifest but, by design, leaves the OAuth-callback
@@ -1312,6 +1363,44 @@ jobs:
           p.write_text(s)
           print("--- patched build.gradle.kts ---")
           print(s)
+          PY
+
+      - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
+        # Mirror of the debug job's "Patch AndroidManifest
+        # (app permissions + strip GPS injected by blec)" step. See
+        # that step for the full rationale. Idempotent.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+          if "RECORD_AUDIO" not in s:
+              perms = (
+                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+                  '    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n'
+                  '    <uses-permission android:name="android.permission.CAMERA" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />\n\n'
+                  '    <!-- AndroidTV support -->'
+              )
+              s2 = s.replace('    <!-- AndroidTV support -->', perms, 1)
+              if s2 == s:
+                  print("::error::<!-- AndroidTV support --> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Injected app permissions + location-strip overrides.")
+          else:
+              print("Permissions already present, skipping.")
+          p.write_text(s)
           PY
 
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
