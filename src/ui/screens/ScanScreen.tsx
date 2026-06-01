@@ -79,6 +79,7 @@ import {
   alpha,
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import AddIcon from '@mui/icons-material/Add';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
@@ -105,6 +106,8 @@ import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
+  /** Open the first-time setup wizard (BLE Wi-Fi provisioning). */
+  onStartSetup: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -118,6 +121,7 @@ interface ScanScreenProps {
 
 export default function ScanScreen({
   onRemotePicked,
+  onStartSetup,
   onSignOutRemote,
   token,
   username,
@@ -265,7 +269,11 @@ export default function ScanScreen({
           height of the centred content above never changes - the
           button just spins + disables in place during any fetch
           (initial load, refresh, poll). */}
-      <StickyRefreshBar onRefresh={() => void remote.refresh()} isRefreshing={isRefreshing} />
+      <StickyRefreshBar
+        onRefresh={() => void remote.refresh()}
+        isRefreshing={isRefreshing}
+        onStartSetup={onStartSetup}
+      />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
           Google-mandated contact channels for UGC-bearing apps.
@@ -629,9 +637,12 @@ const refreshTapKeyframes = keyframes`
 function StickyRefreshBar({
   onRefresh,
   isRefreshing,
+  onStartSetup,
 }: {
   onRefresh: () => void;
   isRefreshing: boolean;
+  /** Opens the first-time setup wizard. */
+  onStartSetup: () => void;
 }) {
   // Bumped on every tap so the wind-up animation re-plays cleanly
   // even when the user spam-taps. React keys the icon on this
@@ -716,6 +727,27 @@ function StickyRefreshBar({
         }}
       >
         Refresh
+      </Button>
+      {/* First-time setup entry. Lives in the persistent bottom action
+          zone (out of the scrollable list) so it's always reachable -
+          a brand-new wireless Reachy can't appear in the list above
+          (it's not on Wi-Fi / central yet), so this CTA is the only
+          way in. Outlined + lower visual weight than the robot cards
+          so it reads as a secondary action, not a primary destination. */}
+      <Button
+        onClick={onStartSetup}
+        startIcon={<AddIcon sx={{ fontSize: 20 }} />}
+        sx={{
+          mt: 0.5,
+          textTransform: 'none',
+          fontSize: TYPO.sm,
+          fontWeight: FONT_WEIGHT.semibold,
+          color: 'text.secondary',
+          borderRadius: 999,
+          px: 2,
+        }}
+      >
+        Set up a new Reachy
       </Button>
     </Stack>
   );

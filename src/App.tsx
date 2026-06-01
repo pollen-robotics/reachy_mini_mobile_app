@@ -9,12 +9,13 @@ import RemoteSignInScreen from '@/ui/screens/RemoteSignInScreen';
 import RobotSessionScreen, {
   type ConnectionTarget,
 } from '@/ui/screens/RobotSessionScreen';
+import SetupWizardScreen from '@/ui/screens/SetupWizardScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
 import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
 import { useTosConsent } from '@/features/consent/useTosConsent';
 
-type Screen = 'scan' | 'session';
+type Screen = 'scan' | 'session' | 'setup';
 
 /**
  * Root component.
@@ -32,10 +33,16 @@ type Screen = 'scan' | 'session';
  * `ScanScreen` lists the user's robots as advertised by the HF central
  * signaling Space. Tapping a row hands off to `RobotSessionScreen`,
  * which negotiates the SDK's WebRTC + DataChannel session through the
- * same central. First-time Wi-Fi provisioning and local USB bring-up
- * are not part of the mobile shell - the assumption is the robot is
- * already on Wi-Fi and registered with central before the user opens
- * the app.
+ * same central.
+ *
+ * First-time setup
+ * ────────────────
+ * A brand-new Reachy Mini Wireless is not on Wi-Fi yet (and therefore
+ * not on central), so it can't appear in the list. The "Set up a new
+ * Reachy" CTA on `ScanScreen` opens `SetupWizardScreen`, which provisions
+ * the robot's Wi-Fi over Bluetooth (see `docs/FIRST_TIME_SETUP_PLAN.md`).
+ * On success the robot registers with central and we either open a
+ * session directly or drop the user back on the (now-populated) list.
  */
 export default function App() {
   // Brand splash shown for ~1.2 s on every cold start, fading out
@@ -142,6 +149,26 @@ export default function App() {
         />
       );
     }
+    if (screen === 'setup') {
+      return (
+        <SetupWizardScreen
+          token={token}
+          onCancel={backToScan}
+          onComplete={(result) => {
+            // If the freshly-provisioned robot already appeared on
+            // central, jump straight into a session with it. Otherwise
+            // (Wi-Fi joined but not yet registered) fall back to the
+            // list, which keeps polling and will surface it shortly.
+            if (result.robot) {
+              setTarget({ kind: 'remote', robot: result.robot });
+              setScreen('session');
+            } else {
+              backToScan();
+            }
+          }}
+        />
+      );
+    }
     // `scan` is the default landing screen - we fall through here
     // even when `screen === 'session'` but `target` is null
     // (defensive: should never happen, but renders a sane view).
@@ -153,6 +180,7 @@ export default function App() {
           setTarget({ kind: 'remote', robot });
           setScreen('session');
         }}
+        onStartSetup={() => setScreen('setup')}
         onSignOutRemote={handleSignOut}
       />
     );
