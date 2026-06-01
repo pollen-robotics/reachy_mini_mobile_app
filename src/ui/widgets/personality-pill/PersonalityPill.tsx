@@ -37,7 +37,6 @@ import {
   ButtonBase,
   Stack,
   Typography,
-  alpha,
   useTheme,
 } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -343,7 +342,7 @@ export function PersonalityPill({
           sx={{
             display: 'flex',
             alignItems: 'center',
-            pr: 2,
+            pr: 3,
             pl: 0.5,
             flexShrink: 0,
           }}
@@ -357,11 +356,7 @@ export function PersonalityPill({
               height: 38,
               borderRadius: '50%',
               color: 'primary.main',
-              bgcolor: alpha(theme.palette.primary.main, 0.1),
-              transition: 'background-color 0.15s ease, transform 0.12s ease',
-              '&:hover': {
-                bgcolor: alpha(theme.palette.primary.main, 0.18),
-              },
+              transition: 'transform 0.12s ease',
               '&:active': { transform: 'scale(0.92)' },
             }}
           >
