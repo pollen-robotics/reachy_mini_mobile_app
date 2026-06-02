@@ -9,7 +9,7 @@
  * allocator or a direct local websocket configured in `shared/env.ts`.
  */
 
-import { HF_DEFAULT_VOICE } from "./huggingface-realtime";
+import { HF_DEFAULT_VOICE } from "./hf-voices";
 
 export const DEFAULT_VOICE = HF_DEFAULT_VOICE;
 

@@ -67,6 +67,7 @@ export function createHuggingFaceBridge(
   let audioSink: HTMLAudioElement | null = null;
   let reconnecting = false;
   let reconnectAttempts = 0;
+  let reconnectGeneration = 0;
   let connecting = false;
   let lastMicTrack: MediaStreamTrack | null = null;
   let micMuted = false;
@@ -180,6 +181,7 @@ export function createHuggingFaceBridge(
 
     reconnecting = true;
     reconnectAttempts += 1;
+    const generation = reconnectGeneration;
     console.warn(
       "[hf-bridge] connection lost, attempting silent reconnect...",
       cause,
@@ -190,18 +192,21 @@ export function createHuggingFaceBridge(
       console.warn("[hf-bridge] onReconnecting threw:", err);
     }
 
+    const clientToClose = client;
     try {
-      await client?.close();
+      await clientToClose?.close();
     } catch (err) {
       console.warn("[hf-bridge] close during reconnect failed:", err);
     }
-    client = null;
+    if (client === clientToClose) client = null;
 
     await new Promise((resolve) => setTimeout(resolve, RECONNECT_BACKOFF_MS));
+    if (generation !== reconnectGeneration || !reconnecting) return;
 
     try {
       await connect(robotMicTrack);
     } catch (err) {
+      if (generation !== reconnectGeneration || !reconnecting) return;
       reconnecting = false;
       deps.onFatalError(err instanceof Error ? err : new Error(String(err)));
       return;
@@ -211,12 +216,15 @@ export function createHuggingFaceBridge(
   };
 
   const close = async (): Promise<void> => {
+    reconnectGeneration += 1;
+    reconnecting = false;
+    const clientToClose = client;
     try {
-      await client?.close();
+      await clientToClose?.close();
     } catch (err) {
       console.warn("[hf-bridge] close failed:", err);
     }
-    client = null;
+    if (client === clientToClose) client = null;
     teardownSink();
   };
 

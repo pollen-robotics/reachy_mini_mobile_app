@@ -22,7 +22,7 @@
  * holding the primary "Create" CTA. The CTA stays disabled until the
  * two required fields (name + instructions) carry content.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Button,
@@ -35,7 +35,6 @@ import {
   useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 
 import {
@@ -43,7 +42,6 @@ import {
   DEFAULT_GLOW,
   type Personality,
   addCustomPersonality,
-  getVoiceSampleUrl,
   removeCustomPersonality,
   setActivePersonality,
   updateCustomPersonality,
@@ -129,52 +127,6 @@ export function CreatePersonalityModal({
   // it, the second commits. Deleting a custom persona destroys the
   // user's own work, so we make it deliberate rather than one-tap.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  // Voice audition: tapping a voice chip both selects it AND plays a
-  // short bundled sample so the user hears the voice before committing.
-  // A single shared <Audio> element is reused; selecting another voice
-  // (or re-tapping the same one) stops the previous clip first.
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
-
-  const stopSample = useCallback(() => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-    }
-    setPlayingVoice(null);
-  }, []);
-
-  const selectVoice = useCallback(
-    (v: string) => {
-      setVoice(v);
-      stopSample();
-      const url = getVoiceSampleUrl(v);
-      if (!url) return;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.addEventListener('ended', () =>
-        setPlayingVoice(prev => (prev === v ? null : prev)),
-      );
-      setPlayingVoice(v);
-      void audio.play().catch(() =>
-        setPlayingVoice(prev => (prev === v ? null : prev)),
-      );
-    },
-    [stopSample],
-  );
-
-  // Stop + release any in-flight clip when the form unmounts (e.g. the
-  // user closes it via the band's "✕" while a sample is still playing).
-  useEffect(
-    () => () => {
-      const audio = audioRef.current;
-      if (audio) audio.pause();
-      audioRef.current = null;
-    },
-    [],
-  );
 
   const canSubmit = name.trim().length > 0 && instructions.trim().length > 0;
 
@@ -378,11 +330,10 @@ export function CreatePersonalityModal({
             }}
           />
 
-          {/* Voice picker: the curated OpenAI Realtime voices as
+          {/* Voice picker: the curated HF realtime voices as
               selectable chips. Single-select - the active chip carries
               a primary ring + tint, matching the persona-card active
-              treatment. Tapping a chip also auditions it: a short
-              sample plays and the speaker icon pulses while it does. */}
+              treatment. */}
           <Stack spacing={1}>
             <Typography
               sx={{
@@ -392,22 +343,18 @@ export function CreatePersonalityModal({
               }}
             >
               Voice
-              <Box component="span" sx={{ fontWeight: FONT_WEIGHT.medium, opacity: 0.7 }}>
-                {'  -  tap to hear it'}
-              </Box>
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
               {AVAILABLE_VOICES.map(v => {
                 const selected = v === voice;
-                const playing = v === playingVoice;
                 return (
                   <Box
                     key={v}
                     component="button"
                     type="button"
-                    onClick={() => selectVoice(v)}
+                    onClick={() => setVoice(v)}
                     aria-pressed={selected}
-                    aria-label={`Voice ${v}, tap to hear a sample`}
+                    aria-label={`Voice ${v}`}
                     sx={{
                       appearance: 'none',
                       cursor: 'pointer',
@@ -431,20 +378,8 @@ export function CreatePersonalityModal({
                         : `1px solid ${theme.palette.divider}`,
                       transition: 'background-color 0.15s ease, border-color 0.15s ease',
                       '&:active': { transform: 'scale(0.97)' },
-                      '@keyframes voicePulse': {
-                        '0%, 100%': { opacity: 0.45, transform: 'scale(0.9)' },
-                        '50%': { opacity: 1, transform: 'scale(1.1)' },
-                      },
                     }}
                   >
-                    {selected && (
-                      <VolumeUpRoundedIcon
-                        sx={{
-                          fontSize: 16,
-                          animation: playing ? 'voicePulse 0.7s ease-in-out infinite' : 'none',
-                        }}
-                      />
-                    )}
                     {v}
                   </Box>
                 );

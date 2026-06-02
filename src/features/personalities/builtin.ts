@@ -13,6 +13,10 @@
  * strip on first launch.
  */
 import type { Personality } from './types';
+import {
+  HF_AVAILABLE_VOICES,
+  type HfVoiceId,
+} from '@/features/conversation/engine/hf-voices';
 
 import boredTeenagerSvg from '@/assets/personalities/bored-teenager.svg';
 import captainCircuitSvg from '@/assets/personalities/captain-circuit.svg';
@@ -42,38 +46,9 @@ export const DEFAULT_AVATAR_URL = defaultSvg;
  *  historical idle colour and the brand accent in `theme.ts`. */
 export const DEFAULT_GLOW = '#FF9500';
 
-/** Qwen3-TTS CustomVoice speakers exposed by the deployed HF backend. */
-export const AVAILABLE_VOICES = [
-  'Aiden',
-  'Ryan',
-  'Dylan',
-  'Eric',
-  'Ono_Anna',
-  'Serena',
-  'Sohee',
-  'Uncle_Fu',
-  'Vivian',
-] as const;
+export const AVAILABLE_VOICES = HF_AVAILABLE_VOICES;
 
-export type VoiceId = (typeof AVAILABLE_VOICES)[number];
-
-/**
- * Curated palette for the create-personality glow picker. Same hues
- * we use for built-in personalities so a custom slot blends with the
- * rest of the strip.
- */
-export const GLOW_PALETTE = [
-  '#FF9500',
-  '#FF5252',
-  '#FF7043',
-  '#FFB74D',
-  '#69F0AE',
-  '#66BB6A',
-  '#4FC3F7',
-  '#7C4DFF',
-  '#B39DDB',
-  '#90A4AE',
-] as const;
+export type VoiceId = HfVoiceId;
 
 const DEFAULT_INSTRUCTIONS = [
   '## IDENTITY',

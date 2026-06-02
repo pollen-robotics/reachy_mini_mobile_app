@@ -43,7 +43,7 @@ export type AppState =
   /**
    * Transient wind-down state entered the instant the user taps the
    * stop button, BEFORE the (deliberately gentle) pipeline teardown
-   * runs - the 700 ms glide-to-neutral plus the OpenAI bridge close.
+   * runs - the 700 ms glide-to-neutral plus the realtime bridge close.
    * Without it the orb would keep showing the live conversation
    * state for the whole shutdown and the tap would feel laggy; here
    * the orb flips to its spinner immediately. `stopConversation()`

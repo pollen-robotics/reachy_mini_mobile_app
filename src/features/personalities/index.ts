@@ -13,11 +13,9 @@ export {
   DEFAULT_AVATAR_URL,
   DEFAULT_GLOW,
   DEFAULT_PERSONALITY_ID,
-  GLOW_PALETTE,
   getDefaultPersonality,
 } from './builtin';
 export type { VoiceId } from './builtin';
-export { VOICE_SAMPLES, getVoiceSampleUrl } from './voice-samples';
 export {
   addCustomPersonality,
   getActivePersonality,

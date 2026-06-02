@@ -226,7 +226,7 @@ export function createConversationHandle(
       if (isUnmounted()) return;
       // Flip the orb to its "ending" spinner IMMEDIATELY, before the
       // teardown below. That teardown is deliberately gentle (a 700 ms
-      // glide-to-neutral run in parallel with the OpenAI bridge close),
+      // glide-to-neutral run in parallel with the realtime bridge close),
       // so without this the orb would keep showing the live
       // conversation state for the whole wind-down and the stop tap
       // would feel unresponsive. `stopping` maps to the spinner in the
@@ -244,10 +244,7 @@ export function createConversationHandle(
       // engine's UI lying about its current capabilities. `ready`
       // (not `connected`) is the right target: the SDK + DataChannel
       // are still up and motors are still enabled - the user only
-      // dismissed the AI side. The accompanying `setMotorMode(
-      // 'gravity_compensation')` (driven by `syncMotorModeForState`)
-      // silences the Dynamixel idle buzz now that we've landed on
-      // a known neutral pose just above.
+      // dismissed the AI side.
       if (session.isEstablished()) {
         setState("ready");
       } else {

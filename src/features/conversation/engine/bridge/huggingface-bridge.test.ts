@@ -88,4 +88,43 @@ describe('createHuggingFaceBridge', () => {
     expect(onReconnecting).not.toHaveBeenCalled();
     expect(onFatalError).not.toHaveBeenCalled();
   });
+
+  it('does not reconnect after close cancels a pending reconnect', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      realtimeMock.connectImpl.mockResolvedValue(undefined);
+
+      const onFatalError = vi.fn();
+      const onReconnecting = vi.fn();
+      const bridge = createHuggingFaceBridge({
+        getRobot: () => null,
+        getHfToken: () => 'hf-token',
+        voice: 'Aiden',
+        composeInstructions: () => 'Be concise.',
+        onStatus: vi.fn(),
+        onOutputTrack: vi.fn(),
+        onToolCall: vi.fn(),
+        onReconnecting,
+        onFatalError,
+      });
+
+      await bridge.connect({ enabled: true } as MediaStreamTrack);
+      expect(realtimeMock.clients).toHaveLength(1);
+
+      realtimeMock.clients[0].emit('status', { status: 'error' });
+      expect(onReconnecting).toHaveBeenCalledTimes(1);
+
+      await bridge.close();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(realtimeMock.connectImpl).toHaveBeenCalledTimes(1);
+      expect(realtimeMock.clients).toHaveLength(1);
+      expect(onFatalError).not.toHaveBeenCalled();
+      expect(bridge.isReconnecting()).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });

@@ -95,10 +95,6 @@ describe('parseHfRealtimeUrl', () => {
     expect(parsed.websocketUrl).toBe(
       'ws://127.0.0.1:8765/v1/realtime?session_token=abc',
     );
-    expect(parsed.websocketBaseUrl).toBe('ws://127.0.0.1:8765/v1');
-    expect(parsed.connectQuery).toEqual({ session_token: 'abc' });
-    expect(parsed.host).toBe('127.0.0.1');
-    expect(parsed.port).toBe(8765);
     expect(parsed.hasRealtimePath).toBe(true);
   });
 

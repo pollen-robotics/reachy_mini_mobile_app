@@ -20,7 +20,15 @@ import {
   HF_REALTIME_WS_URL,
 } from "@/shared/env";
 
+import { normalizeHfVoice } from "./hf-voices";
 import { readHfTokenFromStorage } from "./hf-token";
+
+export {
+  HF_AVAILABLE_VOICES,
+  HF_DEFAULT_VOICE,
+  normalizeHfVoice,
+  type HfVoiceId,
+} from "./hf-voices";
 
 const HF_SAMPLE_RATE = 16_000;
 const INPUT_BUFFER_SIZE = 4096;
@@ -71,10 +79,6 @@ type Listener<K extends keyof EventMap> = (detail: EventMap[K]) => void;
 
 export interface HfRealtimeUrlParts {
   websocketUrl: string;
-  websocketBaseUrl: string;
-  connectQuery: Record<string, string>;
-  host: string | null;
-  port: number | null;
   hasRealtimePath: boolean;
 }
 
@@ -503,30 +507,6 @@ export function buildHfSessionConfig(options: {
   };
 }
 
-export const HF_AVAILABLE_VOICES = [
-  "Aiden",
-  "Ryan",
-  "Dylan",
-  "Eric",
-  "Ono_Anna",
-  "Serena",
-  "Sohee",
-  "Uncle_Fu",
-  "Vivian",
-] as const;
-
-export type HfVoiceId = (typeof HF_AVAILABLE_VOICES)[number];
-
-export const HF_DEFAULT_VOICE: HfVoiceId = "Aiden";
-
-export function normalizeHfVoice(value: string | null | undefined): HfVoiceId {
-  const candidate = (value ?? "").trim().toLowerCase();
-  const match = HF_AVAILABLE_VOICES.find(
-    (voice) => voice.toLowerCase() === candidate,
-  );
-  return match ?? HF_DEFAULT_VOICE;
-}
-
 export async function resolveHfRealtimeWebSocketUrl(
   hfToken: string | null,
 ): Promise<string> {
@@ -598,7 +578,6 @@ export function parseHfRealtimeUrl(realtimeUrl: string): HfRealtimeUrlParts {
 
   const path = parsed.pathname.replace(/\/+$/, "");
   const hasRealtimePath = path.endsWith("/realtime");
-  const basePath = hasRealtimePath ? path.slice(0, -"/realtime".length) : path;
   const realtimePath = hasRealtimePath ? path : `${path || ""}/realtime`;
 
   const connectQuery: Record<string, string> = {};
@@ -616,21 +595,8 @@ export function parseHfRealtimeUrl(realtimeUrl: string): HfRealtimeUrlParts {
     websocketUrl.searchParams.set(key, value);
   }
 
-  const websocketBaseUrl = new URL(parsed.toString());
-  websocketBaseUrl.protocol = wsProtocol;
-  websocketBaseUrl.pathname = basePath || "/";
-  websocketBaseUrl.search = "";
-  websocketBaseUrl.hash = "";
-
-  const defaultPort = 8765;
-  const port = parsed.port ? Number(parsed.port) : defaultPort;
-
   return {
     websocketUrl: websocketUrl.toString(),
-    websocketBaseUrl: websocketBaseUrl.toString().replace(/\/$/, ""),
-    connectQuery,
-    host: parsed.hostname || null,
-    port,
     hasRealtimePath,
   };
 }
