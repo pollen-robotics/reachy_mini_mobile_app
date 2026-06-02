@@ -27,7 +27,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.0.0",
     "@mui/material": "^9.0.0",
-    "@pollen-robotics/reachy-mini-sdk": "1.7.3-main.b44388c",
+    "@pollen-robotics/reachy-mini-sdk": "1.8.0-main.3d52f7d",
     "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.11.0",

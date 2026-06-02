@@ -47,7 +47,16 @@ export interface DcHealthMonitor {
   reset: () => void;
 }
 
-const FAILURE_FATAL_THRESHOLD = 40;
+// Raised from 40 → 120 (2026-06) alongside the pose-dispatcher
+// threshold bump, for the same reason: the current daemon can fall
+// behind on `set_full_target` drain for a few seconds under load,
+// and at the 30 Hz pose-dispatcher tick rate, 40 consecutive
+// failures = only ~1.3 s of patience before tearing the session
+// down. 120 ≈ ~4 s, long enough for the daemon to recover from a
+// transient CPU spike but still short enough that a genuinely dead
+// link surfaces to the user reasonably quickly. Lower this back
+// once the daemon-side receive loop is fixed.
+const FAILURE_FATAL_THRESHOLD = 120;
 const FAILURE_LOG_INTERVAL = 20;
 
 export function createDcHealthMonitor(deps: DcHealthDeps): DcHealthMonitor {

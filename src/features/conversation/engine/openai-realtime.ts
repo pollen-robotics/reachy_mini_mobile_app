@@ -38,10 +38,21 @@ const REALTIME_BASE_URL =
 // clean voice; capping avoids saturating a weak WiFi AP which causes
 // bursty packet loss.
 const MAX_AUDIO_BITRATE_BPS = 32_000;
-// Hint to the browser's jitter buffer: we'd rather play audio ~150 ms
+// Hint to the browser's jitter buffer: we'd rather play audio ~300 ms
 // late than chop it up on jitter spikes. Voice assistants are forgiving
 // of a bit of latency.
-const PLAYOUT_DELAY_HINT_S = 0.15;
+//
+// Raised from 150 ms → 300 ms (2026-06) after observing audio
+// stuttering on the Android client over the standard office WiFi.
+// 150 ms is on the aggressive low-latency end: WebRTC's NetEq jitter
+// buffer would underrun on the first inter-packet timing spike and
+// the user would hear it as a stutter. 300 ms is a more forgiving
+// budget — voice assistants are perceived as "responsive enough" up
+// to ~500 ms of one-way latency on the audio path, and trading
+// 150 ms of perceived delay for stutter-free playback is the right
+// call on a robot conversation use case (users already expect some
+// latency from the robot's wake-up motion).
+const PLAYOUT_DELAY_HINT_S = 0.3;
 // Opus fmtp knobs forced via SDP munging. FEC inline gives us ~5-15%
 // loss resilience "for free", DTX off keeps the comfort-noise packets
 // arriving continuously so our own VAD/wobbler never thinks the line
