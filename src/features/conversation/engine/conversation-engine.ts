@@ -622,12 +622,16 @@ async function handleOrbClick(): Promise<void> {
 }
 
 function applyMicMuted(next: boolean): void {
-  // The SDK's "mic muted" actually gates the OUTBOUND track sent to
-  // the robot's speakers. Since we route OpenAI's audio there,
-  // muting = the robot stops speaking. That's the right mapping for
-  // a "pause the assistant" button.
+  // Mute = gate the robot's mic track we forward to OpenAI, so the
+  // assistant stops HEARING the user (matches the MicOff button).
+  //
+  // This goes through the bridge, NOT `robot.setMicMuted()`: since
+  // SDK 1.8.0 the SDK no longer owns a getUserMedia stream, so its
+  // `setMicMuted` is a silent no-op (it gates a null `_micStream`).
+  // The bridge owns the robot-mic→OpenAI routing, so the gate lives
+  // there and survives transparent reconnects.
   try {
-    robot?.setMicMuted(next);
+    openaiBridge?.setMicMuted(next);
   } catch (err) {
     console.warn("[conversation-engine] setMicMuted failed:", err);
   }
@@ -951,10 +955,12 @@ async function runConversationParts(): Promise<void> {
   // for the whole conversation.
   if (isVisionEnabled()) vision?.start();
 
-  // Make sure the robot actually sends what OpenAI produces by unmuting the
-  // mic path. Our sender now carries the OpenAI audio track, not the local
-  // microphone — the `mic` vocabulary in the SDK is legacy.
-  robot.setMicMuted(false);
+  // Every fresh conversation starts unmuted. Routed through the bridge
+  // (not the inert SDK `setMicMuted`) so it also clears any mute state
+  // a previous session left on the bridge — a new session must never
+  // inherit a stale mute. Transparent reconnects, by contrast, go
+  // through `bridge.connect()` which re-applies the live mute state.
+  openaiBridge?.setMicMuted(false);
 
   // Release the iOS phone-microphone claim now that the bridge has
   // replaced the SDK's outgoing audio sender with OpenAI's output

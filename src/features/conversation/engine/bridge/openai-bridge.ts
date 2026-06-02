@@ -171,6 +171,12 @@ export interface OpenaiBridge {
    *  Pure helper kept here because mic ↔ AI plumbing is part of the
    *  bridge's responsibility. */
   getRobotMicTrack: (robotInstance: ReachyMiniInstance) => MediaStreamTrack | null;
+  /** Mute/unmute the user's voice into OpenAI by gating the robot-mic
+   *  track the bridge routes to the Realtime client. Replaces the
+   *  SDK's `setMicMuted`, which is a no-op since the SDK dropped its
+   *  getUserMedia stream (1.8.0+). State persists across transparent
+   *  reconnects. */
+  setMicMuted: (muted: boolean) => void;
   /** Generic side-channel port for modules that need to interact
    *  with the Realtime data channel without owning the client
    *  lifecycle (vision, future memory/telemetry). The port survives
@@ -191,6 +197,15 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
   // path can rebuild a session against the same input without the
   // engine having to re-fetch it from the SDK.
   let lastMicTrack: MediaStreamTrack | null = null;
+  // Mic-mute state. The robot's mic track is what we send to OpenAI,
+  // so muting = disabling that track (OpenAI receives silence, the
+  // assistant stops hearing the user). The SDK's `setMicMuted` can't
+  // do this anymore — since SDK 1.8.0 the SDK no longer owns a
+  // getUserMedia stream, so its `setMicMuted` is a no-op. The bridge
+  // owns the robot-mic track (it routes it to the OpenAI client), so
+  // the gate lives here. Kept as state (not just a one-shot toggle)
+  // so a transparent reconnect re-applies it to the fresh track.
+  let micMuted = false;
 
   // ─── RealtimePort (side-channel) bookkeeping ──────────────────────
   // Subscribers register once at boot. Each fresh client built below
@@ -301,9 +316,18 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
 
   const connect = async (robotMicTrack: MediaStreamTrack): Promise<void> => {
     lastMicTrack = robotMicTrack;
+    // Re-apply the current mute state to the freshly-bound track so a
+    // transparent reconnect (or a mid-session mute set before the
+    // first connect) survives the new MediaStreamTrack instance.
+    robotMicTrack.enabled = !micMuted;
     const next = buildClient(robotMicTrack);
     client = next;
     await next.connect();
+  };
+
+  const setMicMuted = (muted: boolean): void => {
+    micMuted = muted;
+    if (lastMicTrack) lastMicTrack.enabled = !muted;
   };
 
   const tryReconnect = async (
@@ -515,6 +539,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
     isReconnecting,
     resetReconnectCounter,
     getRobotMicTrack,
+    setMicMuted,
     getRealtimePort,
   };
 }
