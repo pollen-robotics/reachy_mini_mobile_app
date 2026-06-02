@@ -41,6 +41,16 @@ export type AppState =
   | "processing"
   | "ai-speaking"
   /**
+   * Transient wind-down state entered the instant the user taps the
+   * stop button, BEFORE the (deliberately gentle) pipeline teardown
+   * runs - the 700 ms glide-to-neutral plus the OpenAI bridge close.
+   * Without it the orb would keep showing the live conversation
+   * state for the whole shutdown and the tap would feel laggy; here
+   * the orb flips to its spinner immediately. `stopConversation()`
+   * leaves this state for `ready` once the teardown settles.
+   */
+  | "stopping"
+  /**
    * Session was deliberately released for a handoff (e.g. an embedded
    * iframe app needs the robot's WebRTC peer slot). HF auth + SSE are
    * still up, the robot is still PHYSICALLY awake (motors enabled,

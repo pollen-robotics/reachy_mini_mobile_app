@@ -35,7 +35,7 @@ export interface HuggingFaceBridgeDeps {
   getHfToken: () => string | null;
   voice: string | (() => string);
   composeInstructions: () => string;
-  tools?: typeof ROBOT_TOOLS;
+  tools?: typeof ROBOT_TOOLS | (() => typeof ROBOT_TOOLS);
   onStatus: (status: RealtimeStatusKind) => void;
   onOutputTrack: (track: MediaStreamTrack) => void;
   onToolCall: (call: RealtimeToolCallEvent) => void;
@@ -53,6 +53,7 @@ export interface HuggingFaceBridge {
   isReconnecting: () => boolean;
   resetReconnectCounter: () => void;
   getRobotMicTrack: (robotInstance: ReachyMiniInstance) => MediaStreamTrack | null;
+  setMicMuted: (muted: boolean) => void;
   getRealtimePort: () => RealtimePort;
 }
 
@@ -68,13 +69,17 @@ export function createHuggingFaceBridge(
   let reconnectAttempts = 0;
   let connecting = false;
   let lastMicTrack: MediaStreamTrack | null = null;
+  let micMuted = false;
 
   const userTranscriptSubs = new Set<(text: string) => void>();
-  const tools = deps.tools ?? ROBOT_TOOLS;
 
   const buildClient = (
     robotMicTrack: MediaStreamTrack,
   ): HuggingFaceRealtimeClient => {
+    const tools =
+      typeof deps.tools === "function"
+        ? deps.tools()
+        : (deps.tools ?? ROBOT_TOOLS);
     const next = new HuggingFaceRealtimeClient({
       getHfToken: deps.getHfToken,
       voice: typeof deps.voice === "function" ? deps.voice() : deps.voice,
@@ -147,6 +152,7 @@ export function createHuggingFaceBridge(
 
   const connect = async (robotMicTrack: MediaStreamTrack): Promise<void> => {
     lastMicTrack = robotMicTrack;
+    robotMicTrack.enabled = !micMuted;
     const next = buildClient(robotMicTrack);
     client = next;
     connecting = true;
@@ -155,6 +161,11 @@ export function createHuggingFaceBridge(
     } finally {
       connecting = false;
     }
+  };
+
+  const setMicMuted = (muted: boolean): void => {
+    micMuted = muted;
+    if (lastMicTrack) lastMicTrack.enabled = !muted;
   };
 
   const tryReconnect = async (
@@ -313,6 +324,7 @@ export function createHuggingFaceBridge(
       reconnectAttempts = 0;
     },
     getRobotMicTrack,
+    setMicMuted,
     getRealtimePort: () => realtimePort,
   };
 }

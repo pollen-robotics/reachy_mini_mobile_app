@@ -81,3 +81,29 @@ export const HF_REALTIME_WS_URL: string | null = (() => {
   const trimmed = raw?.trim() ?? '';
   return trimmed.length > 0 ? trimmed : null;
 })();
+
+/**
+ * Reachy Mini backend API host.
+ *
+ * Hosts every server-side endpoint the mobile shell consumes:
+ *
+ *   - `GET  /api/js-apps`          - curated app catalog (see
+ *     `features/apps/useApps.ts`).
+ *   - app/user metadata endpoints consumed by `features/apps/*`.
+ *
+ * This used to be the combined website Space
+ * (`pollen-robotics-reachy-mini.hf.space`). The API has since been
+ * split into its own dedicated Space; the showcase website is now a
+ * separate static deploy. The env var keeps its historical name
+ * (`VITE_REACHY_WEBSITE_URL`) for backward compatibility.
+ *
+ * Override at build time via `VITE_REACHY_WEBSITE_URL` (e.g. when
+ * developing against a staging Space). Defaults to the production
+ * pollen-robotics API Space.
+ *
+ * Consumers:
+ *   - `features/apps/useApps.ts`
+ */
+export const WEBSITE_API_URL: string =
+  (import.meta.env.VITE_REACHY_WEBSITE_URL as string | undefined) ??
+  'https://pollen-robotics-reachy-mini-api.hf.space';

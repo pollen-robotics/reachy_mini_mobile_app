@@ -51,13 +51,15 @@ in `main` and would be cocheable for an App Review pass.
   originally outlined:
 
   ```
-  allow="microphone 'src'; camera 'src'; geolocation 'src';
+  allow="microphone 'src'; camera 'src';
          autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
   ```
 
   Each capability is restricted to the iframe's own origin (`'src'`),
-  not delegated globally. Geolocation is new vs. the original list
-  and is justified by location-aware Spaces.
+  not delegated globally. Geolocation was previously delegated but
+  removed (2026-06) — no shipping Space surfaces a location feature,
+  and an unused permission prompt is an App Review red flag for a
+  capability we don't actually use.
 - CSP in [`tauri.conf.json:25`](../src-tauri/tauri.conf.json) is tight:
   `frame-src https://*.hf.space` (no wildcard origins), `script-src
   'self' 'unsafe-inline' https://cdn.jsdelivr.net` (D3-ish CDN only
@@ -102,8 +104,14 @@ All required usage strings present and honest:
 NSMicrophoneUsageDescription      - voice conversation + third-party Spaces
 NSCameraUsageDescription          - third-party Spaces (vision / AR / barcode)
 NSLocalNetworkUsageDescription    - daemon HTTP on robot:8000
-NSLocationWhenInUseUsageDescription - third-party Spaces (geolocation)
 ```
+
+> `NSLocationWhenInUseUsageDescription` was previously declared but
+> removed (2026-06) ahead of the next store validation pass. No
+> shipping Space surfaces a location feature, and an unused
+> permission prompt is an App Review red flag. Restore the key (and
+> the iframe `geolocation 'src'` token) if a Space ever needs
+> `navigator.geolocation`.
 
 Plus the right orientation locks (portrait), `UIRequiresFullScreen
 = true` (no iPad Split View resizing the WKWebView mid-WebRTC), and

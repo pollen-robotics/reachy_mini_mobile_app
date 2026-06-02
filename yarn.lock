@@ -701,10 +701,10 @@
     prop-types "^15.8.1"
     react-is "^19.2.4"
 
-"@pollen-robotics/reachy-mini-sdk@1.7.3-main.b44388c":
-  version "1.7.3-main.b44388c"
-  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.7.3-main.b44388c.tgz#37528ebcc95c84ba19efebfcb29d60538c6dd5e3"
-  integrity sha512-UePqImsOcg6pXUL1qqRoGn2cPUe0QrBcR5QfbatJB4UsN5dj/FejLSWqvqkFBGTmWlKOLL6ZW9jGRPT4WCs7WA==
+"@pollen-robotics/reachy-mini-sdk@1.8.0-main.3d52f7d":
+  version "1.8.0-main.3d52f7d"
+  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.8.0-main.3d52f7d.tgz#e698ea5252134caa04d92231b5cb8a4f232acde4"
+  integrity sha512-UGbg7voVJrX9tn7yFhilzD+lXY/QKsNf9Ks98kKQxMDks/io3xQ6fJN4EhbVtOJ+fycqc9XILgsl8PSDwBpgtQ==
   dependencies:
     "@emotion/react" "^11.14.0"
     "@emotion/styled" "^11.14.1"

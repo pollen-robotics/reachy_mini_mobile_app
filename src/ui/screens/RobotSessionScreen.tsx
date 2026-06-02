@@ -182,6 +182,17 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // The conv tab is kept mounted (just `display: none`d) so its orb
+  // audio refs survive a tab switch, which makes switching TO it
+  // instant. The Apps tab used to be torn down and remounted on every
+  // visit - its heavy first render (catalog fetch + carousels + rails)
+  // blocked the click, so switching to Apps felt laggy while conv did
+  // not. Mount it lazily on first visit, then KEEP it alive (CSS
+  // toggle like conv) so every later switch is instant too.
+  const [appsMounted, setAppsMounted] = useState(false);
+  useEffect(() => {
+    if (tab === 'apps') setAppsMounted(true);
+  }, [tab]);
   /**
    * App selected from the catalog; non-null while the iframe overlay
    * is being prepared (`releasing`), shown (`ready`), or closing
@@ -560,17 +571,21 @@ function ConnectedSession({
               }}
             >
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <ConversationPanel session={session} orbRef={orbRef} />
+                <ConversationPanel
+                  session={session}
+                  orbRef={orbRef}
+                  active={tab === 'conv'}
+                />
               </Box>
             </Box>
           )}
 
-          {tab === 'apps' && !leaving && (
+          {appsMounted && !leaving && (
             <Box
               sx={{
                 flex: 1,
                 minHeight: 0,
-                display: 'flex',
+                display: tab === 'apps' ? 'flex' : 'none',
                 flexDirection: 'column',
               }}
             >

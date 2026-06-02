@@ -26,15 +26,21 @@
  * Pure presentational component: receives no engine state, just
  * the personality store + an onClose callback.
  */
-import { Box, Stack, Typography, useTheme } from '@mui/material';
+import { useState } from 'react';
+import { Box, Stack, Typography, alpha, useTheme } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
+import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 
 import {
   type Personality,
+  removeCustomPersonality,
   setActivePersonality,
   useActivePersonality,
   usePersonalitiesCatalog,
 } from '@/features/personalities';
+
+import { CreatePersonalityModal } from './CreatePersonalityModal';
 
 interface PersonalityGridProps {
   /** Fired right after the user picks a card. The host clears its
@@ -46,9 +52,23 @@ export function PersonalityGrid({ onClose }: PersonalityGridProps) {
   const catalog = usePersonalitiesCatalog();
   const active = useActivePersonality();
 
+  // Whether the "author your own persona" overlay is mounted. Kept
+  // local to the grid (rather than lifted to the host) because the
+  // overlay is `position: fixed` and self-contained: it doesn't need
+  // the host to swap any body slot, it just floats above everything.
+  const [creating, setCreating] = useState(false);
+
   const handlePick = (id: string) => {
     if (id !== active.id) setActivePersonality(id);
     onClose();
+  };
+
+  // Remove a custom persona. We don't auto-close the picker here: the
+  // user is curating their list and likely wants to keep browsing /
+  // deleting. `removeCustomPersonality` already falls the active id
+  // back to the default when the deleted persona was active.
+  const handleDelete = (id: string) => {
+    removeCustomPersonality(id);
   };
 
   return (
@@ -89,9 +109,29 @@ export function PersonalityGrid({ onClose }: PersonalityGridProps) {
             persona={persona}
             isActive={persona.id === active.id}
             onClick={() => handlePick(persona.id)}
+            onDelete={
+              persona.kind === 'custom' ? () => handleDelete(persona.id) : undefined
+            }
           />
         ))}
+        {/* Trailing CTA card: opens the author-your-own overlay. Sits
+            last so the built-in lineup reads first; styled as a
+            dashed-plate affordance so it never gets mistaken for a
+            real persona. */}
+        <CreatePersonaCard onClick={() => setCreating(true)} />
       </Box>
+
+      {creating && (
+        <CreatePersonalityModal
+          onCancel={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            // The new persona is now active (set inside the modal);
+            // close the picker so the user lands back on the orb.
+            onClose();
+          }}
+        />
+      )}
     </Box>
   );
 }
@@ -104,9 +144,12 @@ interface PersonaCardProps {
   persona: Personality;
   isActive: boolean;
   onClick: () => void;
+  /** Present only for custom personas: renders a small delete affordance
+   *  in the card's top-left corner. Built-ins pass `undefined`. */
+  onDelete?: () => void;
 }
 
-function PersonaCard({ persona, isActive, onClick }: PersonaCardProps) {
+function PersonaCard({ persona, isActive, onClick, onDelete }: PersonaCardProps) {
   const theme = useTheme();
   return (
     <Box
@@ -307,6 +350,145 @@ function PersonaCard({ persona, isActive, onClick }: PersonaCardProps) {
           <CheckIcon sx={{ fontSize: 14 }} />
         </Box>
       )}
+
+      {/* Delete affordance for custom personas only. Rendered as a
+          `span` (not a real `<button>`) because the card root is
+          already a `<button>` and nesting interactive buttons is
+          invalid HTML; we restore button semantics with role +
+          tabIndex + key handlers and stop propagation so a tap on
+          the trash icon never also triggers the card's "pick"
+          handler. */}
+      {onDelete && (
+        <Box
+          component="span"
+          role="button"
+          tabIndex={0}
+          aria-label={`Delete personality ${persona.name}`}
+          onClick={e => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }
+          }}
+          sx={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            display: 'grid',
+            placeItems: 'center',
+            cursor: 'pointer',
+            color: 'text.secondary',
+            bgcolor: theme.palette.mode === 'dark'
+              ? 'rgba(255, 255, 255, 0.06)'
+              : 'rgba(0, 0, 0, 0.04)',
+            transition: 'color 0.15s ease, background-color 0.15s ease',
+            '&:hover': {
+              color: theme.palette.error.main,
+              bgcolor: alpha(theme.palette.error.main, 0.12),
+            },
+            '&:focus-visible': {
+              outline: `2px solid ${theme.palette.primary.main}`,
+              outlineOffset: 2,
+            },
+          }}
+        >
+          <DeleteOutlineRoundedIcon sx={{ fontSize: 16 }} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Trailing "Create your own" card. Same footprint as a PersonaCard
+ * but with a dashed primary plate + `+` glyph so it reads as an
+ * affordance, not a persona. Mirrors the apps tab's
+ * `AppCreateYourOwnTile` CTA treatment.
+ * ────────────────────────────────────────────────────────────────── */
+
+interface CreatePersonaCardProps {
+  onClick: () => void;
+}
+
+function CreatePersonaCard({ onClick }: CreatePersonaCardProps) {
+  const theme = useTheme();
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={onClick}
+      aria-label="Create a custom personality"
+      sx={{
+        appearance: 'none',
+        border: 0,
+        cursor: 'pointer',
+        font: 'inherit',
+        color: 'text.primary',
+        bgcolor: 'background.paper',
+        borderRadius: 1.5,
+        boxShadow: `inset 0 0 0 1px ${theme.palette.divider}`,
+        minHeight: 196,
+        px: 2,
+        pt: 2.5,
+        pb: 2,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 1.5,
+        transition: 'transform 0.1s ease, background-color 0.18s ease',
+        '&:hover': {
+          bgcolor: theme.palette.mode === 'dark'
+            ? 'rgba(255, 255, 255, 0.04)'
+            : 'rgba(0, 0, 0, 0.025)',
+        },
+        '&:active': { transform: 'scale(0.97)' },
+        '&:focus': { outline: 'none' },
+        '&:focus-visible': {
+          boxShadow: `inset 0 0 0 2px ${theme.palette.primary.main}, 0 0 0 3px color-mix(in srgb, ${theme.palette.primary.main} 30%, transparent)`,
+        },
+        '-webkit-tap-highlight-color': 'transparent',
+      }}
+    >
+      <Box
+        sx={{
+          width: 72,
+          height: 72,
+          borderRadius: '50%',
+          display: 'grid',
+          placeItems: 'center',
+          color: 'primary.main',
+          bgcolor: alpha(theme.palette.primary.main, 0.1),
+          border: `1px dashed ${alpha(theme.palette.primary.main, 0.4)}`,
+        }}
+      >
+        <AddRoundedIcon sx={{ fontSize: 34 }} />
+      </Box>
+      <Stack spacing={0.5} sx={{ alignItems: 'center' }}>
+        <Typography
+          sx={{ fontWeight: 600, fontSize: 15, color: 'primary.main', textAlign: 'center' }}
+        >
+          Create your own
+        </Typography>
+        <Typography
+          sx={{
+            fontSize: 12,
+            fontStyle: 'italic',
+            color: 'text.secondary',
+            textAlign: 'center',
+          }}
+        >
+          Write your own prompt
+        </Typography>
+      </Stack>
     </Box>
   );
 }

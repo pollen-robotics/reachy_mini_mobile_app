@@ -68,9 +68,15 @@ The iframe `allow` list is already in place and is identical on both
 platforms ([`AppIframeOverlay.tsx`](../src/ui/panels/apps-list/AppIframeOverlay.tsx)):
 
 ```
-allow="microphone 'src'; camera 'src'; geolocation 'src';
+allow="microphone 'src'; camera 'src';
        autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
 ```
+
+> Geolocation was previously delegated but removed (2026-06): no
+> shipping Space surfaces a location feature, and an unused
+> permission prompt is an App Review / Play Console red flag. The
+> Android `onGeolocationPermissionsShowPrompt` handler below remains
+> documented as the recipe to follow if a Space ever needs it.
 
 `allow` is a *web-platform* feature-policy gate. It says "the iframe is
 permitted to ask". It does **not** grant the OS-level permission. On
@@ -92,7 +98,7 @@ why, and what triggers it.
 | Network | `android.permission.INTERNET` | Every HTTP/WebRTC/WebSocket call | **Yes** (auto-added by Tauri) | n/a (implicit) |
 | Microphone | `android.permission.RECORD_AUDIO`, `android.permission.MODIFY_AUDIO_SETTINGS` | Conversation WebRTC unlock + voice Spaces (`getUserMedia({audio})`) | **Yes** | `NSMicrophoneUsageDescription` |
 | Camera | `android.permission.CAMERA` | Vision / AR / barcode Spaces (`getUserMedia({video})`) | Yes (only if a Space uses it) | `NSCameraUsageDescription` |
-| Location | `android.permission.ACCESS_FINE_LOCATION`, `android.permission.ACCESS_COARSE_LOCATION` | Tour-guide / location-aware Spaces (`getCurrentPosition`) | Yes (only if a Space uses it) | `NSLocationWhenInUseUsageDescription` |
+| ~~Location~~ | ~~`ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`~~ | (removed 2026-06 — no Space surfaces geolocation today; the permission was an App Review red flag for a capability we don't use. Re-add if a Space genuinely needs `getCurrentPosition`.) | No | ~~`NSLocationWhenInUseUsageDescription`~~ |
 | Local network | (no explicit permission on Android) | Daemon HTTP on `robot:8000` | n/a | `NSLocalNetworkUsageDescription` + `NSAllowsLocalNetworking` |
 | Keep screen on | (no permission; `FLAG_KEEP_SCREEN_ON` window flag) | `tauri-plugin-keep-screen-on` during a live session | **Yes** (handled by plugin) | `UIApplication.isIdleTimerDisabled` |
 | Background audio | (foreground service or none; see § 6) | Keep WebRTC alive when screen locks | Decision needed | `UIBackgroundModes = audio` |
@@ -102,11 +108,14 @@ Notes:
 
 - `INTERNET` is added automatically by the Tauri/wry Android template;
   you don't declare it yourself, but confirm it survived `init`.
-- Camera and location are only strictly needed because **third-party
-  Spaces** may use them. If product decides to ship the first Android
-  build *without* camera/location-using Spaces visible, you can defer
-  those two and the matching Data Safety entries. Microphone is
-  non-negotiable (the core conversation feature needs it).
+- Camera is only strictly needed because **third-party Spaces** may
+  use it. If product decides to ship the first Android build *without*
+  camera-using Spaces visible, you can defer it and the matching Data
+  Safety entry. Microphone is non-negotiable (the core conversation
+  feature needs it).
+- Location was previously declared but removed (2026-06) because no
+  shipping Space surfaces a geolocation feature; an unused
+  runtime-permission prompt is an App Review / Play Console red flag.
 
 ---
 
@@ -157,14 +166,14 @@ permission-relevant lines shown):
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION removed 2026-06.
+         No shipping Space surfaces a geolocation feature; re-add if
+         a Space genuinely needs `navigator.geolocation`. -->
 
     <!-- Declare hardware as NOT required so the app stays installable
-         on devices without a camera / GPS (the features degrade
-         gracefully; only the Spaces that need them are affected). -->
+         on devices without a camera (the features degrade gracefully;
+         only the Spaces that need them are affected). -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.location" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application ...>
@@ -376,7 +385,7 @@ form, or submission is blocked. Mapping:
 | Data type | Collected? | Shared? | Purpose | Note |
 |---|---|---|---|---|
 | Audio (microphone) | Yes | Yes (OpenAI Realtime) | App functionality (voice conversation) | Not stored on Pollen servers; processed by OpenAI |
-| Location (precise) | Only if a Space uses it | Possibly (the Space) | App functionality | Disclose as "handled by third-party apps" |
+| ~~Location (precise)~~ | ~~Only if a Space uses it~~ | n/a | n/a | Removed 2026-06 — no shipping Space surfaces geolocation; the permission was an App Review / Play Console red flag. Restore the row if a Space starts using `navigator.geolocation`. |
 | Photos/video (camera) | Only if a Space uses it | Possibly (the Space) | App functionality | Same third-party caveat |
 | App activity / identifiers | Yes | Yes (Hugging Face) | Account / auth | HF token + username |
 
@@ -403,7 +412,7 @@ For each device, run the full path:
 - [ ] Deny the mic prompt -> app degrades gracefully (no crash, clear message).
 - [ ] Open a mic-using Space in the iframe -> capture works (prompt may not re-appear if host already holds the grant - that's expected, see `AGENTS.md`).
 - [ ] Open a camera-using Space -> prompt appears once, then video works.
-- [ ] Open a location-using Space -> `onGeolocationPermissionsShowPrompt` fires, prompt appears, position returns.
+- ~~[ ] Open a location-using Space~~ — geolocation no longer declared (2026-06). Re-enable this step if/when the manifest re-adds `ACCESS_*_LOCATION`.
 - [ ] Revoke a permission in Android Settings, relaunch -> app re-prompts on next use.
 - [ ] HF sign-in via Chrome Custom Tabs returns through `reachymini://` (regression check on the intent-filter patch).
 

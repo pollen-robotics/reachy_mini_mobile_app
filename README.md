@@ -91,22 +91,24 @@ for your platform.
 ### Environment variables
 
 The mobile bundle no longer ships with a long-lived OpenAI API
-key. Voice conversation works out of the box against the
-production website Space (`pollen-robotics-reachy-mini.hf.space`),
-which mints per-user OpenAI Realtime ephemeral keys via
-`/api/openai/ephemeral` once the user is signed in to Hugging Face.
+key. The app catalog (`/api/js-apps`) and voice conversation work
+out of the box against the production API Space
+(`pollen-robotics-reachy-mini-api.hf.space`), which also mints
+per-user OpenAI Realtime ephemeral keys via `/api/openai/ephemeral`
+once the user is signed in to Hugging Face.
 
 Copy `.env.example` to `.env.local` only if you need to override
-defaults (staging signaling or staging website host):
+defaults (staging signaling or staging API host):
 
 ```env
 # Optional: override the HF central signaling Space for staging.
 # Defaults to the production pollen-robotics instance.
 # VITE_REACHY_CENTRAL_URL=https://my-staging-central.hf.space
 
-# Optional: override the Reachy Mini website host (mint endpoint).
-# Defaults to the production pollen-robotics website Space.
-# VITE_REACHY_WEBSITE_URL=https://my-staging-website.hf.space
+# Optional: override the Reachy Mini API host (catalog + mint).
+# Defaults to the production pollen-robotics API Space. The env var
+# keeps its historical `WEBSITE` name for backward compatibility.
+# VITE_REACHY_WEBSITE_URL=https://my-staging-api.hf.space
 ```
 
 ### Install

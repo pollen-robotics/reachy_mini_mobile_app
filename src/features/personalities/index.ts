@@ -17,6 +17,7 @@ export {
   getDefaultPersonality,
 } from './builtin';
 export type { VoiceId } from './builtin';
+export { VOICE_SAMPLES, getVoiceSampleUrl } from './voice-samples';
 export {
   addCustomPersonality,
   getActivePersonality,
@@ -24,6 +25,7 @@ export {
   resolvePersonalityById,
   setActivePersonality,
   subscribe as subscribePersonalities,
+  updateCustomPersonality,
   useActivePersonality,
   usePersonalitiesCatalog,
 } from './store';

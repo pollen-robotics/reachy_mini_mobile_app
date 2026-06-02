@@ -169,6 +169,34 @@ export function addCustomPersonality(input: CustomPersonalityInput): Personality
   return next;
 }
 
+/** Update an existing custom personality in place. The id is kept
+ *  stable on purpose (even when the name changes) so the active
+ *  selection and any engine reference stay valid; only the editable
+ *  fields and the avatar-preserving record are rewritten. Returns the
+ *  updated personality, or null when the id isn't a known custom. */
+export function updateCustomPersonality(
+  id: string,
+  input: CustomPersonalityInput,
+): Personality | null {
+  if (!id.startsWith('custom:')) return null;
+  const idx = state.customs.findIndex((p) => p.id === id);
+  if (idx === -1) return null;
+  const prev = state.customs[idx];
+  const next: Personality = {
+    ...prev,
+    name: input.name.trim(),
+    tagline: (input.tagline ?? '').trim(),
+    instructions: input.instructions.trim(),
+    voice: (input.voice ?? '').trim(),
+    glow: input.glow ?? prev.glow ?? DEFAULT_GLOW,
+  };
+  const customs = [...state.customs];
+  customs[idx] = next;
+  writeCustomPersonalities(customs);
+  update({ customs, catalog: mergeCatalog(customs) });
+  return next;
+}
+
 /** Remove a custom personality. If it was the active one, fall back
  *  to the default so the engine doesn't end up with a dangling id. */
 export function removeCustomPersonality(id: string): void {

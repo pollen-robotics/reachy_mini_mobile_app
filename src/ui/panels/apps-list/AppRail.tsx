@@ -41,6 +41,13 @@ interface AppRailProps {
    * "Pinned" rail, where the user already manages the list).
    */
   count?: number;
+  /**
+   * Optional sub-line rendered under the heading, REPLACING the
+   * default `{count} apps` line (e.g. `@username - 3 apps` for the
+   * "Your apps" rail). Same quiet secondary-color treatment as the
+   * count line. When provided, `count` is ignored.
+   */
+  subLabel?: ReactNode;
   /** Optional handler for the trailing "See ›" tap. */
   onSeeAll?: () => void;
   /**
@@ -62,6 +69,7 @@ interface AppRailProps {
 export default function AppRail({
   label,
   count,
+  subLabel,
   onSeeAll,
   children,
   paddingX = 3,
@@ -100,17 +108,33 @@ export default function AppRail({
           >
             {label}
           </Typography>
-          {typeof count === 'number' && (
+          {subLabel != null ? (
             <Typography
               sx={{
                 fontSize: TYPO.xs,
                 color: 'text.secondary',
                 lineHeight: 1.2,
                 mt: 0.25,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              {count} app{count === 1 ? '' : 's'}
+              {subLabel}
             </Typography>
+          ) : (
+            typeof count === 'number' && (
+              <Typography
+                sx={{
+                  fontSize: TYPO.xs,
+                  color: 'text.secondary',
+                  lineHeight: 1.2,
+                  mt: 0.25,
+                }}
+              >
+                {count} app{count === 1 ? '' : 's'}
+              </Typography>
+            )
           )}
         </Stack>
         {onSeeAll && (

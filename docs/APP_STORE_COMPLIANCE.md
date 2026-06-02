@@ -57,7 +57,7 @@ let us first write down precisely what the Apps tab does today.
    with the capabilities scoped to the iframe's own origin (`'src'`):
 
    ```
-   allow="microphone 'src'; camera 'src'; geolocation 'src';
+   allow="microphone 'src'; camera 'src';
           autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
    ```
 
@@ -181,12 +181,15 @@ review will check that:
   Any new message kind must be added here with a security-review note
   so the surface stays finite and auditable.
 - The iframe `allow` list is reasonable and matches the feature set.
-  Today: `microphone 'src'; camera 'src'; geolocation 'src';
-  autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'`. Each
-  maps to a real feature (voice apps, camera-based apps, location-aware
-  apps, autoplay for music apps, clipboard for code-snippet apps), and
-  each is scoped to the iframe's own origin via `'src'` rather than
-  delegated globally.
+  Today: `microphone 'src'; camera 'src'; autoplay 'src';
+  clipboard-read 'src'; clipboard-write 'src'`. Each maps to a real
+  feature (voice apps, camera-based apps, autoplay for music apps,
+  clipboard for code-snippet apps), and each is scoped to the
+  iframe's own origin via `'src'` rather than delegated globally.
+  Geolocation was previously delegated but removed (2026-06): no
+  shipping Space surfaces a location feature, and an unused
+  `NSLocationWhenInUseUsageDescription` / `ACCESS_*_LOCATION` is an
+  App Review / Play Console red flag.
 
 **Verdict on 2.5.2**: we comply. The `postMessage` contract is
 documented here and in `AGENTS.md`; keep both in sync so it stays

@@ -12,6 +12,8 @@ import RobotSessionScreen, {
 import ScreenTransition from '@/ui/design/ScreenTransition';
 import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
+import { usePrefetchMyApps } from '@/features/apps/useMyApps';
+import { usePrefetchSpaceLikes } from '@/features/apps/useSpaceLikes';
 import { useTosConsent } from '@/features/consent/useTosConsent';
 
 type Screen = 'scan' | 'session';
@@ -63,6 +65,18 @@ export default function App() {
   // fetch even before the auth gate. The cache lives for the whole
   // JS session and is naturally refreshed on cold start.
   usePrefetchApps();
+
+  // Same warm-up for the "Your apps" rail (the user's own Reachy
+  // Spaces on HF, private included). Unifies the boot-time network
+  // calls with the catalog above: both lists are fetched once at
+  // start and shared via TanStack Query. No-ops while signed out.
+  usePrefetchMyApps();
+
+  // And the user's liked-Spaces set, so the hearts on the Apps tab
+  // are already filled in on first paint instead of hydrating only
+  // when the apps panel mounts. Same boot-time pattern as the two
+  // prefetches above; no-ops while signed out.
+  usePrefetchSpaceLikes();
 
   const backToScan = (): void => {
     setTarget(null);

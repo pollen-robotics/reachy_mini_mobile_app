@@ -92,7 +92,16 @@ export interface PoseDispatcher {
 }
 
 const DEFAULT_TICK_HZ = 30;
-const DEFAULT_BUFFERED_THRESHOLD_BYTES = 4096;
+// Raised from 4 KB → 16 KB (2026-06) after observing the current
+// daemon fall behind on `set_full_target` drain under sustained
+// 30 Hz load: the SCTP send buffer would cross 4 KB within ~1 s of
+// the user starting to speak, dc-health would log 40 consecutive
+// `pose-dispatcher-backpressure` failures, and the engine would
+// tear the session down before the daemon had a chance to catch
+// up. 16 KB ≈ ~100 in-flight `set_full_target` frames, giving the
+// daemon ~3 s of buffer at 30 Hz to recover from a transient CPU
+// spike. Lower this back once the daemon-side receive loop is fixed.
+const DEFAULT_BUFFERED_THRESHOLD_BYTES = 16384;
 
 export function createPoseDispatcher(
   deps: PoseDispatcherDeps,

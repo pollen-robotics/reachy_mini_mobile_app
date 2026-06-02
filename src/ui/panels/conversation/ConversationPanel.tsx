@@ -35,22 +35,26 @@
  * THIS panel via a ref forwarded back to the session through
  * `audioLevelsTargetRef` on the host side.
  */
-import { Box, Divider, Stack } from '@mui/material';
+import { Box, ButtonBase, Divider, Stack, alpha } from '@mui/material';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
 import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
+import { ConversationSettingsPanel } from './ConversationSettingsPanel';
 import type { AppState } from '@/features/conversation/engine/conversation-engine';
 import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { useActivePersonality } from '@/features/personalities';
+import { type Personality, useActivePersonality } from '@/features/personalities';
 import { useActiveLanguageId } from '@/features/conversation-language';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
-import { LanguageFlagPicker } from '@/ui/widgets/language-picker';
-import { PersonalityGrid, PersonalityPill } from '@/ui/widgets/personality-pill';
-import { LAYOUT } from '@/ui/design/tokens';
+import {
+  PersonalityStore,
+  PersonalityPill,
+  CreatePersonalityModal,
+} from '@/ui/widgets/personality-pill';
 
 export interface ConversationPanelProps {
   /**
@@ -67,9 +71,29 @@ export interface ConversationPanelProps {
    * sides without a circular dependency.
    */
   orbRef: RefObject<HTMLButtonElement | null>;
+  /**
+   * Whether the conversation tab is the one currently shown. The panel
+   * is kept mounted (just `display: none`d) when the user switches to
+   * another tab so the WebRTC session / orb audio refs survive, so it
+   * needs this signal to collapse its transient overlays (settings,
+   * personality picker, authoring form) when the user leaves - they
+   * shouldn't still be open when the user comes back to a clean orb.
+   * Defaults to `true` for standalone callers.
+   */
+  active?: boolean;
 }
 
-export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
+/** Which persona-authoring form (if any) is open in the body slot. */
+type PersonaFormMode =
+  | { kind: 'create' }
+  | { kind: 'edit'; persona: Personality }
+  | null;
+
+export function ConversationPanel({
+  session,
+  orbRef,
+  active = true,
+}: ConversationPanelProps) {
   const orbState = mapAppStateToOrb(session.engineState);
   const live =
     session.engineState === 'listening' ||
@@ -96,8 +120,8 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   const activePersonalityId = useActivePersonality().id;
 
   // Personality picker open / closed. When open, the body slot
-  // below the sub-header swaps from the orb area to a grid of
-  // persona cards (see PersonalityGrid). The hero band's chevron
+  // below the sub-header swaps from the orb area to the persona
+  // picker (see PersonalityStore). The hero band's chevron
   // mirrors this state via its `open` prop.
   //
   // We deliberately auto-close the picker when a conversation
@@ -105,18 +129,74 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
   // browsing the picker would feel like the app skipped a beat.
   // Same idea on engine errors - the user needs to see the orb's
   // error state, not a stale picker.
+  // Defaults to closed so the orb is the landing surface when the
+  // panel opens (e.g. right after connecting to a robot); the user
+  // opens the picker explicitly via the hero band's chevron.
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Conversation settings ("cog") surface. Opened from the bottom
+  // strip, it swaps the orb area for the settings panel via the same
+  // body-slot mechanism as the picker. It's mutually exclusive with the
+  // picker / authoring form (opening one closes the others). The cog is
+  // only reachable while stopped (see the strip cell's `disabled`), so
+  // a conversation going live also force-closes it defensively.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   useEffect(() => {
-    if (!pickerOpen) return;
-    if (live || session.engineState === 'error') setPickerOpen(false);
-  }, [pickerOpen, live, session.engineState]);
+    if (live || session.engineState === 'error') {
+      setPickerOpen(false);
+      setSettingsOpen(false);
+    }
+  }, [live, session.engineState]);
 
   const togglePicker = useCallback(() => {
+    setSettingsOpen(false);
     setPickerOpen(prev => !prev);
   }, []);
   const closePicker = useCallback(() => {
     setPickerOpen(false);
   }, []);
+  const toggleSettings = useCallback(() => {
+    setSettingsOpen(prev => {
+      const next = !prev;
+      if (next) setPickerOpen(false);
+      return next;
+    });
+  }, []);
+
+  // Persona authoring form: create a new persona OR edit an existing
+  // custom one. Both render EMBEDDED in the body slot (below the
+  // always-visible band) rather than as a full-screen overlay, so the
+  // band stays put and its "+" morphs into the "✕" that closes the
+  // form. Create is triggered from the band's trailing "+", edit from a
+  // custom card's pencil in the store.
+  //   - create success -> close form + picker (land on the orb with the
+  //     new persona selected).
+  //   - edit success/delete -> close form only, stay in the picker so
+  //     the user sees the updated (or removed) card.
+  const [formMode, setFormMode] = useState<PersonaFormMode>(null);
+  const formOpen = formMode !== null;
+  // Band trailing affordance: closes any open form, else opens create.
+  const toggleForm = useCallback(() => {
+    setSettingsOpen(false);
+    setFormMode(prev => (prev ? null : { kind: 'create' }));
+  }, []);
+  const openEdit = useCallback((persona: Personality) => {
+    setSettingsOpen(false);
+    setFormMode({ kind: 'edit', persona });
+  }, []);
+  const closeForm = useCallback(() => setFormMode(null), []);
+
+  // Leaving the conversation tab (the panel is kept mounted, just
+  // `display: none`d) should collapse every transient overlay so the
+  // user returns to a clean orb rather than a stale settings sheet /
+  // personality picker / authoring form left open from last time.
+  useEffect(() => {
+    if (active) return;
+    setSettingsOpen(false);
+    setPickerOpen(false);
+    setFormMode(null);
+  }, [active]);
 
   // Mid-conversation personality switch: when the user picks a new
   // personality while the realtime client is live, restart the
@@ -213,12 +293,13 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
       }}
     >
       {/* SUB-HEADER: full-bleed band that hosts the personality
-          hero. The band itself is pure structure - full-bleed
-          escape (RobotTabView pattern) + border-bottom divider +
-          canvas background. The actual identity (avatar, name,
-          tagline, tap target) is owned by the PersonalityPill
-          component, which spans the band edge-to-edge so the
-          entire row is one big tappable affordance. */}
+          hero. Visible while the picker/store is open (it stays the
+          persistent "select" affordance whose chevron toggles back to
+          the orb), but HIDDEN while the conversation settings panel is
+          open: the settings overlay sits "above" the band, and the
+          body slot below expands upward to fill the freed space, so the
+          panel reads as a sheet covering everything except the bottom
+          strip (cog + sliders stay put down there). */}
       <Box
         sx={{
           width: '100vw',
@@ -226,6 +307,7 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
           flexShrink: 0,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
+          display: settingsOpen ? 'none' : 'block',
         }}
       >
         <Box sx={{ maxWidth: 720, mx: 'auto' }}>
@@ -238,7 +320,14 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
               why it's locked. The user can stop the conversation
               from the orb's stop button (or finish naturally) to
               re-enable the picker. */}
-          <PersonalityPill open={pickerOpen} onToggle={togglePicker} disabled={live} />
+          <PersonalityPill
+            open={pickerOpen}
+            onToggle={togglePicker}
+            onCreate={toggleForm}
+            creating={formMode?.kind === 'create'}
+            editingPersona={formMode?.kind === 'edit' ? formMode.persona : null}
+            disabled={live}
+          />
         </Box>
       </Box>
       {/* BODY SLOT: either the orb area or the persona picker grid.
@@ -280,7 +369,7 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
             width: '100%',
             pt: 1.5,
             pb: 3,
-            display: pickerOpen ? 'none' : 'grid',
+            display: pickerOpen || formOpen || settingsOpen ? 'none' : 'grid',
             gridTemplateRows: '1fr auto 1fr',
             justifyItems: 'center',
           }}
@@ -323,10 +412,26 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
               mt: 2,
             }}
           >
-            <ConversationCaption state={orbState} message={session.errorMessage} />
+            <ConversationCaption
+              state={orbState}
+              message={
+                session.engineState === 'stopping'
+                  ? 'Ending conversation'
+                  : session.errorMessage
+              }
+            />
             <ConversationToolToast label={session.toolToastLabel} />
           </Stack>
         </Box>
+
+        {/* Conversation settings panel. Rendered HERE (above the bottom
+            strip, in place of the orb grid which is display:none while
+            open). With the personality band hidden above (see SUB-HEADER
+            note), the body slot expands upward and this panel fills the
+            whole area down to the strip - reading as a sheet "above" the
+            band. The strip stays below with its cog tinted active, so the
+            cog remains the toggle back to the orb. */}
+        {settingsOpen && <ConversationSettingsPanel />}
 
         {/* Bottom audio strip: speaker + microphone sliders. Lives
             inside the body box as a sibling of the orb's centered
@@ -341,7 +446,7 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
             is browsing personas, sliders below the grid would
             split attention. Re-rendering on toggle is cheap (no
             heavy state - the sliders just read `daemon`). */}
-        {!pickerOpen && (
+        {!pickerOpen && !formOpen && (
           <Box
             sx={{
               flexShrink: 0,
@@ -392,12 +497,12 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
                 (thanks to `alignItems="stretch"`) and the strip
                 content reaches the full strip width.
 
-                Inner `maxWidth: LAYOUT.contentMaxWidth` keeps the
-                cells from sprawling on large viewports, mirroring
-                how the persona sub-header caps its inner box too
-                - the hairline spans the screen, the controls stay
-                in the central column. */}
-            <Box sx={{ maxWidth: LAYOUT.contentMaxWidth, mx: 'auto' }}>
+                The strip content spans the FULL width (no inner
+                max-width cap) so the cells line up flush with the
+                full-bleed hairline above - the leftmost cog reaches
+                the screen's left edge and the audio cards reach the
+                right edge, reading as one edge-to-edge toolbar. */}
+            <Box sx={{ width: '100%' }}>
               <Stack
                 direction="row"
                 spacing={0}
@@ -406,18 +511,56 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
                   width: '100%',
                 }}
               >
-                <Box
+                {/* Conversation settings ("cog"). The WHOLE strip cell is
+                    the button: no inner circular pill, so the ripple and
+                    the active bg tint fill the entire block. When its
+                    panel is open the cell carries a soft primary bg tint
+                    + a primary glyph (and the gear gives a small turn),
+                    so it reads as active without a heavy outlined pill.
+                    Disabled while a conversation is live (the options
+                    inside are stopped-only, read by the engine at the
+                    next start). */}
+                <ButtonBase
+                  aria-label="Conversation settings"
+                  aria-pressed={settingsOpen}
+                  disabled={live || session.engineState === 'error'}
+                  onClick={toggleSettings}
                   sx={{
                     flexShrink: 0,
+                    // Fill the WHOLE strip cell: stretch to the row
+                    // height and take a comfortable fixed width with
+                    // symmetric padding. No border-radius so the ripple
+                    // + active bg tint cover the entire rectangular
+                    // block (flush to the dividers) instead of being
+                    // confined to a small rounded/circular pill.
+                    alignSelf: 'stretch',
+                    px: 2,
+                    borderRadius: 0,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    px: STRIP_CELL_PX,
-                    py: STRIP_CELL_PY,
+                    color: settingsOpen ? 'primary.main' : 'text.secondary',
+                    bgcolor: t =>
+                      settingsOpen ? alpha(t.palette.primary.main, 0.1) : 'transparent',
+                    transition: 'background-color 0.15s ease, color 0.15s ease',
+                    '&:hover': {
+                      bgcolor: t =>
+                        settingsOpen
+                          ? alpha(t.palette.primary.main, 0.16)
+                          : 'action.hover',
+                    },
+                    '&.Mui-disabled': { opacity: 0.45 },
+                    WebkitTapHighlightColor: 'transparent',
                   }}
                 >
-                  <LanguageFlagPicker disabled={session.engineState === 'error'} />
-                </Box>
+                  <SettingsOutlinedIcon
+                    sx={{
+                      fontSize: 20,
+                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      transform: settingsOpen ? 'rotate(45deg)' : 'rotate(0deg)',
+                    }}
+                  />
+                </ButtonBase>
                 <StripDivider />
                 <Box
                   sx={{
@@ -461,7 +604,35 @@ export function ConversationPanel({ session, orbRef }: ConversationPanelProps) {
           </Box>
         )}
 
-        {pickerOpen && <PersonalityGrid onClose={closePicker} />}
+        {pickerOpen && !formOpen && (
+          <PersonalityStore
+            onClose={closePicker}
+            onEdit={openEdit}
+            onCreate={() => setFormMode({ kind: 'create' })}
+          />
+        )}
+
+        {/* Persona authoring form, EMBEDDED in the body slot (below the
+            always-visible personality band, not as a full-screen
+            overlay) so the band stays put and its "✕" remains the way
+            out. Keyed by target so switching create<->edit (or between
+            two personas) remounts the form with fresh field state.
+              - create success -> close form + picker (land on the orb).
+              - edit success/delete -> close form only, back to picker. */}
+        {formMode && (
+          <CreatePersonalityModal
+            key={formMode.kind === 'edit' ? formMode.persona.id : 'create'}
+            embedded
+            editing={formMode.kind === 'edit' ? formMode.persona : null}
+            onCancel={closeForm}
+            onCreated={() => {
+              const wasCreate = formMode.kind === 'create';
+              closeForm();
+              if (wasCreate) closePicker();
+            }}
+            onDeleted={closeForm}
+          />
+        )}
       </Box>
       {/* The engine-host inert div used to live here for legacy
           API compat with `mountConversation(root, opts)`. The hook
@@ -533,9 +704,13 @@ function StripDivider() {
  */
 export function mapAppStateToOrb(state: AppState): OrbState {
   switch (state) {
+    // `stopping` reuses the connecting spinner so the orb shows immediate
+    // feedback during the gentle teardown after the stop tap. The caption
+    // disambiguates ("Ending conversation", see below).
     case 'connecting':
     case 'starting':
     case 'auto-selecting':
+    case 'stopping':
       return 'connecting';
     case 'ready':
       return 'ready';

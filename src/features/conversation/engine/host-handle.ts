@@ -224,6 +224,14 @@ export function createConversationHandle(
 
     stopConversation: async () => {
       if (isUnmounted()) return;
+      // Flip the orb to its "ending" spinner IMMEDIATELY, before the
+      // teardown below. That teardown is deliberately gentle (a 700 ms
+      // glide-to-neutral run in parallel with the OpenAI bridge close),
+      // so without this the orb would keep showing the live
+      // conversation state for the whole wind-down and the stop tap
+      // would feel unresponsive. `stopping` maps to the spinner in the
+      // orb; we leave it for `ready` once teardown settles.
+      setState("stopping");
       // "Lite" teardown: stop the conversation pipeline (D layer) but
       // leave the SDK / DataChannel alive so the daemon proxy keeps
       // working. The helper takes care of the convo gate, motion
@@ -240,7 +248,14 @@ export function createConversationHandle(
       // 'gravity_compensation')` (driven by `syncMotorModeForState`)
       // silences the Dynamixel idle buzz now that we've landed on
       // a known neutral pose just above.
-      if (session.isEstablished()) setState("ready");
+      if (session.isEstablished()) {
+        setState("ready");
+      } else {
+        // Session vanished mid-teardown (not reachable from the mobile
+        // stop button, which only shows with an established session) -
+        // don't strand the orb on its "ending" spinner.
+        setState("connected");
+      }
     },
 
     restartConversation: async () => {

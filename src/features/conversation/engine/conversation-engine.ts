@@ -130,6 +130,8 @@ import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
+import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
+import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
 import { createConversationHandle } from "./host-handle";
@@ -626,12 +628,16 @@ async function handleOrbClick(): Promise<void> {
 }
 
 function applyMicMuted(next: boolean): void {
-  // The SDK's "mic muted" actually gates the OUTBOUND track sent to
-  // the robot's speakers. Since we route assistant audio there,
-  // muting = the robot stops speaking. That's the right mapping for
-  // a "pause the assistant" button.
+  // Mute = gate the robot's mic track we forward to the HF backend, so the
+  // assistant stops HEARING the user (matches the MicOff button).
+  //
+  // This goes through the bridge, NOT `robot.setMicMuted()`: since
+  // SDK 1.8.0 the SDK no longer owns a getUserMedia stream, so its
+  // `setMicMuted` is a silent no-op (it gates a null `_micStream`).
+  // The bridge owns the robot-mic→backend routing, so the gate lives
+  // there and survives transparent reconnects.
   try {
-    robot?.setMicMuted(next);
+    realtimeBridge?.setMicMuted(next);
   } catch (err) {
     console.warn("[conversation-engine] setMicMuted failed:", err);
   }
@@ -856,12 +862,10 @@ async function runConversationParts(): Promise<void> {
   emitErrorMessage(null);
   conversationStarted.on();
 
-  // If we're being called from the deferred-start path (host flipped
-  // the `convoActive` gate after we parked in `ready`), the state
-  // machine is currently in `ready`. Re-arm the "starting" UI so the
-  // orb shows the spinner during the HF backend handshake. If we got here
-  // from the auto-start path, we're already in `starting` and the
-  // call is a no-op.
+  // Arm the "starting" UI before the HF backend handshake so the orb
+  // flips to its connecting spinner the instant the user taps. From the
+  // deferred (tap-to-start) path the FSM is in `ready` here; from the
+  // auto-start path it's already `starting`, so this is a no-op there.
   if (fsm.current() === "ready") setState("starting");
 
   // Grab the robot's incoming audio track (the robot's microphone).
@@ -900,12 +904,20 @@ async function runConversationParts(): Promise<void> {
   // module: it'll grab a first frame in ~1.5 s, then every 30 s,
   // plus immediately on any STT keyword trigger. Idempotent; survives
   // transparent reconnects through the bridge's `RealtimePort`.
-  vision?.start();
+  //
+  // Gated on the user's conversation setting (read lazily here, at
+  // start time): when scene-awareness is off we simply never start the
+  // poller, so no frames are ever captured. The setting can only be
+  // toggled while stopped, so this start-time read is authoritative
+  // for the whole conversation.
+  if (isVisionEnabled()) vision?.start();
 
-  // Make sure the robot actually sends what the backend produces by unmuting the
-  // mic path. Our sender now carries the assistant audio track, not the local
-  // microphone — the `mic` vocabulary in the SDK is legacy.
-  robot.setMicMuted(false);
+  // Every fresh conversation starts unmuted. Routed through the bridge
+  // (not the inert SDK `setMicMuted`) so it also clears any mute state
+  // a previous session left on the bridge — a new session must never
+  // inherit a stale mute. Transparent reconnects, by contrast, go
+  // through `bridge.connect()` which re-applies the live mute state.
+  realtimeBridge?.setMicMuted(false);
 
   // Release the iOS phone-microphone claim now that the bridge has
   // replaced the SDK's outgoing audio sender with the assistant output
@@ -1120,8 +1132,13 @@ realtimeBridge = createHuggingFaceBridge({
       personality.instructions && personality.instructions.length > 0
         ? personality.instructions
         : settings.instructions;
-    const memoryFragment = memoryStore.formatForPrompt();
-    const visionAppendix = getVisionPromptAppendix();
+    // Memory + vision prompt fragments are each gated on the user's
+    // conversation setting (read lazily here, per reconnect). When a
+    // feature is off we drop its fragment entirely so the model isn't
+    // primed to use a capability it doesn't have this session (memory
+    // tools are also filtered out below at the bridge level).
+    const memoryFragment = isMemoryEnabled() ? memoryStore.formatForPrompt() : "";
+    const visionAppendix = isVisionEnabled() ? getVisionPromptAppendix() : "";
     // Language nudge. Read lazily from the conversation-language
     // store on every reconnect so a mid-session switch (user taps
     // the flag picker -> ConversationPanel restarts the conv)
@@ -1136,7 +1153,26 @@ realtimeBridge = createHuggingFaceBridge({
     parts.push(languageAppendix);
     return parts.join("\n\n");
   },
+  // Tool set resolved lazily per connect so the memory toggle takes
+  // effect on the next conversation start without rebuilding the
+  // bridge. When long-term memory is off we drop the `remember` /
+  // `forget` tools so the model can't write to (or read intent about)
+  // a store the user has disabled; the matching prompt digest is also
+  // omitted in `composeInstructions` above.
+  tools: () =>
+    isMemoryEnabled()
+      ? ROBOT_TOOLS
+      : ROBOT_TOOLS.filter((t) => t.name !== "remember" && t.name !== "forget"),
   onStatus: (status) => {
+    // Once the user has tapped stop we park the orb in `stopping`
+    // (spinner) and run a gentle ~700 ms teardown. The HF bridge
+    // can still emit a trailing status as it closes (a final
+    // `connected` from the in-flight response completing, or a late
+    // activity flip) which would otherwise call `setState("listening")`
+    // below and yank the orb straight back into a live look,
+    // swallowing the "ending" spinner. Ignore status events while we
+    // are deliberately winding down.
+    if (fsm.current() === "stopping") return;
     switch (status) {
       case "connected":
         // The websocket backend marks `connected` after its queued
