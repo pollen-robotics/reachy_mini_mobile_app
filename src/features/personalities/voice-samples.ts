@@ -7,8 +7,8 @@
  *
  * Why bundled clips (not live TTS)
  * ────────────────────────────────
- * The mobile shell only ever mints short-lived *realtime* ephemeral
- * keys (see `engine/ephemeral-key.ts`); it has no standalone TTS
+ * The mobile shell only holds the user's HF token for the *realtime*
+ * session (see `engine/hf-token.ts`); it has no standalone TTS
  * credential, and we don't want a network round-trip (or per-tap cost)
  * just to audition a voice. So the clips are generated once, offline,
  * with OpenAI's `gpt-4o-mini-tts` (all 10 voices say the same line:

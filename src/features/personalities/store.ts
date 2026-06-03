@@ -322,17 +322,6 @@ export function useIsAvatarPending(id: string): boolean {
   return useSyncExternalStore(subscribe, () => state.pendingAvatars.has(id));
 }
 
-/** React hook reading WHEN a persona's avatar generation started (epoch
- *  ms), or `null` if it isn't cooking. Lets the cooking donut anchor its
- *  fill to the real start time instead of the ring component's mount, so
- *  progress survives remounts. */
-export function useAvatarPendingSince(id: string): number | null {
-  return useSyncExternalStore(
-    subscribe,
-    () => state.pendingAvatars.get(id) ?? null,
-  );
-}
-
 /** React hook reading the currently active personality. Re-renders
  *  whenever the active id (or the resolved catalog) changes. */
 export function useActivePersonality(): Personality {

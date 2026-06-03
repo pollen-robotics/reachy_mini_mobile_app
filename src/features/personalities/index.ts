@@ -42,7 +42,6 @@ export {
   subscribe as subscribePersonalities,
   updateCustomPersonality,
   useActivePersonality,
-  useAvatarPendingSince,
   useIsAvatarPending,
   usePersonalitiesCatalog,
 } from './store';
