@@ -4,51 +4,59 @@
  * The personalities feature already ships the whole data layer
  * (`addCustomPersonality`, localStorage persistence, the `custom:<slug>`
  * id form) but never exposed a UI to author one. This overlay closes
- * that gap: it collects the four user-facing knobs of a persona
- * (name, tagline, instructions, voice, glow), hands them to
- * `addCustomPersonality`, then immediately makes the new persona the
- * active one so the next conversation picks it up.
+ * that gap: it collects the user-facing knobs of a persona (name, tagline,
+ * instructions, voice), hands them to `addCustomPersonality`, then
+ * immediately makes the new persona the active one.
+ *
+ * Structure
+ * ─────────
+ * This file is the ORCHESTRATOR: it owns the form state + side effects
+ * (generation, sticker avatar, persona draft channel) and wires three
+ * presentational pieces from `./create-personality`:
+ *   - `CreatePersonalityHero`    - the create-mode "describe a vibe" landing
+ *   - `CreatePersonalityFields`  - the classic name/voice/instructions form
+ *   - `CreatePersonalityActions` - the sticky Create / Save+Delete plate
+ * plus the logic hooks `useGenerationProgress`, `useVoiceAudition`, and
+ * `useVibeRoll`.
  *
  * Visual contract
  * ───────────────
  * Full-screen overlay (`position: fixed; inset: 0`) mirroring the
- * `EulaConsentModal` / `HelpAndSupportOverlay` pattern rather than a
- * MUI `Dialog`, because the rest of the app does fullscreen-from-the-
- * root that way and `Dialog`'s focus-trap fights the WebView keyboard
- * on mobile.
- *
- * Layout: a sticky header (title + close), a scrollable body with a
- * live avatar preview + the form fields, and a sticky action plate
- * holding the primary "Create" CTA. The CTA stays disabled until the
- * two required fields (name + instructions) carry content.
+ * `EulaConsentModal` / `HelpAndSupportOverlay` pattern rather than a MUI
+ * `Dialog`, because the rest of the app does fullscreen-from-the-root that
+ * way and `Dialog`'s focus-trap fights the WebView keyboard on mobile.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Box,
-  Button,
-  IconButton,
-  InputAdornment,
-  Stack,
-  TextField,
-  Typography,
-  alpha,
-  useTheme,
-} from '@mui/material';
+import { useCallback, useEffect, useState } from 'react';
+import { Box, IconButton, Stack, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 
 import {
   AVAILABLE_VOICES,
+  DEFAULT_AVATAR_URL,
   DEFAULT_GLOW,
+  GeneratePersonalityError,
+  type GeneratedPersonality,
   type Personality,
   addCustomPersonality,
-  getVoiceSampleUrl,
+  clearPersonaDraft,
+  generatePersonality,
   removeCustomPersonality,
   setActivePersonality,
+  setPersonaDraft,
   updateCustomPersonality,
 } from '@/features/personalities';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+
+import { useStickerAvatar } from './useStickerAvatar';
+import {
+  CreatePersonalityActions,
+  CreatePersonalityFields,
+  CreatePersonalityHero,
+  VIBE_MAX,
+  useGenerationProgress,
+  useVibeRoll,
+  useVoiceAudition,
+} from './create-personality';
 
 interface CreatePersonalityModalProps {
   /**
@@ -89,22 +97,6 @@ interface CreatePersonalityModalProps {
   embedded?: boolean;
 }
 
-const NAME_MAX = 24;
-const TAGLINE_MAX = 60;
-
-/** Shared look for the primary CTA (outlined primary, comfortable
- *  tap target). Reused so the standalone "Create & use" button and the
- *  "Save & use" button in the edit row stay byte-identical. */
-const ctaSx = {
-  textTransform: 'none',
-  fontSize: TYPO.md,
-  fontWeight: FONT_WEIGHT.semibold,
-  py: 1.25,
-  borderWidth: 1.5,
-  '&:hover': { borderWidth: 1.5 },
-  borderRadius: `${RADIUS.md}px`,
-} as const;
-
 export function CreatePersonalityModal({
   onCancel,
   onCreated,
@@ -112,71 +104,203 @@ export function CreatePersonalityModal({
   onDeleted,
   embedded = false,
 }: CreatePersonalityModalProps) {
-  const theme = useTheme();
   const isEdit = editing !== null;
 
-  // Seed from the persona under edit when present. Lazy initialisers
-  // are enough because the host remounts the form (keyed by persona id
-  // / "create") whenever the target changes.
+  // Seed from the persona under edit when present. Lazy initialisers are
+  // enough because the host remounts the form (keyed by persona id /
+  // "create") whenever the target changes.
   const [name, setName] = useState(() => editing?.name ?? '');
   const [tagline, setTagline] = useState(() => editing?.tagline ?? '');
   const [instructions, setInstructions] = useState(() => editing?.instructions ?? '');
-  const [voice, setVoice] = useState<string>(
-    () => editing?.voice || AVAILABLE_VOICES[0],
-  );
+  const [voice, setVoice] = useState<string>(() => editing?.voice || AVAILABLE_VOICES[0]);
 
-  // Two-step delete confirmation (edit mode only): the first tap arms
-  // it, the second commits. Deleting a custom persona destroys the
-  // user's own work, so we make it deliberate rather than one-tap.
+  // Two-step delete confirmation (edit mode only): the first tap arms it,
+  // the second commits. Deleting a custom persona destroys the user's own
+  // work, so we make it deliberate rather than one-tap.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  // Voice audition: tapping a voice chip both selects it AND plays a
-  // short bundled sample so the user hears the voice before committing.
-  // A single shared <Audio> element is reused; selecting another voice
-  // (or re-tapping the same one) stops the previous clip first.
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
+  // "Magic" generation (create mode only): the user types a one-line vibe
+  // and we ask a model to author the four knobs (name / tagline /
+  // instructions / voice), then pre-fill the form below so they can tweak.
+  // Kept out of edit mode so a regenerate never silently clobbers a persona
+  // the user is deliberately editing.
+  const [vibe, setVibe] = useState('');
+  // Distinguish which button is spinning ('describe' = Generate from the
+  // typed vibe, 'random' = Surprise me) so only the tapped one shows a
+  // spinner while both stay disabled during a request.
+  const [genMode, setGenMode] = useState<'describe' | 'random' | null>(null);
+  const [genError, setGenError] = useState<string | null>(null);
+  const generating = genMode !== null;
+  // Cycling status phrases + faux progress sliver while "Generate" runs.
+  const { step: genStep, progress: genProgress } = useGenerationProgress(
+    genMode === 'describe',
+  );
 
-  const stopSample = useCallback(() => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-    }
-    setPlayingVoice(null);
-  }, []);
+  // Progressive disclosure. `detailsOpen` swaps the centred "magic" landing
+  // (create mode) for the classic form; edit mode and any successful
+  // generation open it straight away.
+  const [detailsOpen, setDetailsOpen] = useState(isEdit);
 
+  // Shared runner: drives the spinner/error state and pre-fills the form
+  // from whichever generator (typed vibe or full-random) resolves.
+  const runGenerator = useCallback(
+    async (mode: 'describe' | 'random', run: () => Promise<GeneratedPersonality>) => {
+      if (generating) return;
+      setGenError(null);
+      setGenMode(mode);
+      try {
+        const result = await run();
+        setName(result.name);
+        setTagline(result.tagline);
+        setInstructions(result.instructions);
+        if (result.voice) setVoice(result.voice);
+        // Reveal the form so the user sees what was authored.
+        setDetailsOpen(true);
+      } catch (err) {
+        console.warn('[personalities] generation failed:', err);
+        if (
+          err instanceof GeneratePersonalityError &&
+          err.reason === 'hf_token_missing'
+        ) {
+          setGenError('Sign in to Hugging Face first to generate a personality.');
+        } else if (
+          err instanceof GeneratePersonalityError &&
+          err.reason === 'overloaded'
+        ) {
+          // Transient provider overload (429/503): not the user's fault and
+          // retryable, so say so plainly instead of dumping a status code.
+          setGenError('Hugging Face is busy right now - give it a moment and try again.');
+        } else if (
+          err instanceof GeneratePersonalityError &&
+          err.reason === 'model_unavailable'
+        ) {
+          // None of the fallback models is reachable for this account:
+          // actionable, point the user at enabling an Inference Provider.
+          setGenError(
+            'No inference provider is enabled for the generation models. Enable one in your Hugging Face settings (Inference Providers), then try again.',
+          );
+        } else if (err instanceof GeneratePersonalityError) {
+          // Surface the underlying reason/message so a router 400 / model
+          // routing error is diagnosable in-app instead of a generic
+          // "try again" dead end.
+          setGenError(`Generation failed (${err.reason}): ${err.message}`);
+        } else {
+          setGenError("Couldn't generate that one - give it another try.");
+        }
+      } finally {
+        setGenMode(null);
+      }
+    },
+    [generating],
+  );
+
+  const handleGenerate = useCallback(() => {
+    if (vibe.trim().length === 0) return;
+    void runGenerator('describe', () => generatePersonality(vibe));
+  }, [runGenerator, vibe]);
+
+  // The "Randomize" die seeds ONLY the description box with a fresh vibe (it
+  // streams a sentence in, falling back to a local idea on failure). The
+  // hook owns the stream/abort; we just gate it on an in-flight generation
+  // and clear any prior error.
+  const { rolling, roll } = useVibeRoll(setVibe, VIBE_MAX);
+  const handleRandom = useCallback(() => {
+    if (generating) return;
+    setGenError(null);
+    roll();
+  }, [generating, roll]);
+
+  // Sticker avatar: generate a portrait for the persona via the Reachy
+  // sticker API (~1 min). The hook keeps the generation alive past submit,
+  // so the user can hit "Create & use" while it cooks and the sticker lands
+  // on the persona by id once it resolves.
+  const sticker = useStickerAvatar();
+  // "Cooking" for the band/tiles ring covers BOTH the actual sticker bake
+  // AND, in edit mode, the brief LLM theme-crafting that precedes it when
+  // the user hits "Regenerate". Without folding `crafting` in, that craft
+  // latency was a dead zone. (Create mode crafts its theme passively in the
+  // background, so we don't count it there.)
+  const stickerCooking =
+    sticker.status === 'queued' ||
+    sticker.status === 'generating' ||
+    (isEdit && sticker.crafting);
+  // Avatar shown in the band's preview disc: a freshly generated sticker
+  // wins; otherwise the persona-under-edit's own avatar (unless it's still
+  // the shared default placeholder); otherwise nothing.
+  const previewAvatar =
+    sticker.dataUri ??
+    (isEdit && editing?.avatar && editing.avatar !== DEFAULT_AVATAR_URL
+      ? editing.avatar
+      : null);
+
+  // Edit-mode "Regenerate avatar": re-craft a fresh theme from the current
+  // persona and bake a new sticker for THIS persona id, patching it in when
+  // ready. (Create mode authors the avatar passively at submit.)
+  const handleRegenerateAvatar = useCallback(() => {
+    if (!isEdit || !editing) return;
+    sticker.regenerateFor(editing.id, { name, tagline, instructions });
+  }, [isEdit, editing, sticker, name, tagline, instructions]);
+
+  // Passive avatar, step 1 of 2 (create mode only): quietly pre-craft a
+  // visual theme (a cheap text-only LLM call) once the persona has a name +
+  // instructions, so the avatar kicked off at submit is on-theme. Debounced,
+  // and skipped once a sticker is in flight or done. Edit mode skips this -
+  // its "Regenerate" button crafts its own fresh theme on demand.
+  const craftTheme = sticker.craft;
+  useEffect(() => {
+    if (isEdit) return;
+    if (sticker.theme.trim().length > 0 || sticker.status !== 'idle') return;
+    if (name.trim().length === 0 || instructions.trim().length === 0) return;
+    const t = window.setTimeout(() => {
+      craftTheme({ name, tagline, instructions });
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [isEdit, name, tagline, instructions, sticker.theme, sticker.status, craftTheme]);
+
+  // Publish the persona being authored to the draft channel so the
+  // persistent personality band above can mirror it live: the title tracks
+  // the typed name, the avatar disc shows the portrait (with a cooking ring
+  // while it bakes) + an inline regenerate control. The avatar is shown ONLY
+  // on the band, never in this form body.
+  useEffect(() => {
+    setPersonaDraft({
+      name,
+      avatar: previewAvatar,
+      cooking: stickerCooking,
+      regenerate: isEdit && editing ? handleRegenerateAvatar : null,
+    });
+  }, [name, previewAvatar, stickerCooking, isEdit, editing, handleRegenerateAvatar]);
+
+  // Clear the draft when the form closes so the band drops back to the
+  // active persona.
+  useEffect(() => () => clearPersonaDraft(), []);
+
+  // Voice audition: selecting a voice writes form state here and asks the
+  // hook to play its bundled sample.
+  const { playingVoice, playSample } = useVoiceAudition();
   const selectVoice = useCallback(
     (v: string) => {
       setVoice(v);
-      stopSample();
-      const url = getVoiceSampleUrl(v);
-      if (!url) return;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.addEventListener('ended', () =>
-        setPlayingVoice(prev => (prev === v ? null : prev)),
-      );
-      setPlayingVoice(v);
-      void audio.play().catch(() =>
-        setPlayingVoice(prev => (prev === v ? null : prev)),
-      );
+      playSample(v);
     },
-    [stopSample],
-  );
-
-  // Stop + release any in-flight clip when the form unmounts (e.g. the
-  // user closes it via the band's "✕" while a sample is still playing).
-  useEffect(
-    () => () => {
-      const audio = audioRef.current;
-      if (audio) audio.pause();
-      audioRef.current = null;
-    },
-    [],
+    [playSample],
   );
 
   const canSubmit = name.trim().length > 0 && instructions.trim().length > 0;
+
+  // Edit mode only: has anything actually changed vs the persona we opened?
+  // A pristine editor has nothing to write, so we disable "Save" until the
+  // user touches a field (or a fresh sticker lands). Create mode is always
+  // considered "dirty" - `canSubmit` alone gates it. Comparisons mirror the
+  // field initialisers (trimmed values, empty-voice -> first-voice fallback).
+  const editDirty =
+    !isEdit || !editing
+      ? true
+      : name.trim() !== editing.name ||
+        tagline.trim() !== (editing.tagline ?? '') ||
+        instructions.trim() !== editing.instructions ||
+        voice !== (editing.voice || AVAILABLE_VOICES[0]) ||
+        sticker.dataUri != null;
 
   const handleSubmit = () => {
     if (!canSubmit) return;
@@ -185,20 +309,32 @@ export function CreatePersonalityModal({
       tagline: tagline.trim(),
       instructions: instructions.trim(),
       voice,
-      // Accent colour is no longer user-facing - the picker UI was
-      // dropped (the avatar isn't tinted anywhere the user sees while
-      // authoring). We still hand the data layer the default glow so
-      // the persona shape stays unchanged.
+      // Accent colour is no longer user-facing - we still hand the data
+      // layer the default glow so the persona shape stays unchanged.
       glow: DEFAULT_GLOW,
+      // Plug in a finished sticker if we have one; otherwise omit it (create
+      // falls back to the default avatar, edit keeps the existing one) and
+      // let an in-flight generation patch it later.
+      avatar: sticker.dataUri ?? undefined,
     };
+    const targetId = isEdit && editing ? editing.id : addCustomPersonality(input).id;
     if (isEdit && editing) {
       updateCustomPersonality(editing.id, input);
-      // Make the edited persona the active one ("Save & use"); the id
-      // is stable across the update so this resolves cleanly.
-      setActivePersonality(editing.id);
-    } else {
-      const created = addCustomPersonality(input);
-      setActivePersonality(created.id);
+    }
+    // Make the persona active; the id is stable across an update so
+    // "Save & use" resolves cleanly.
+    setActivePersonality(targetId);
+    // Passive avatar, step 2 of 2 (create only): if no avatar was produced
+    // yet, kick one off now using the pre-crafted theme (or the name as a
+    // fallback). It cooks in the background and patches in by id once ready.
+    // In EDIT mode we don't auto-generate (saving a prompt edit shouldn't
+    // silently replace the avatar); we only adopt when a regenerate is
+    // already in flight/done.
+    if (!isEdit && !sticker.dataUri && !stickerCooking) {
+      sticker.generate(sticker.theme.trim() || name.trim());
+    }
+    if (!isEdit || sticker.dataUri || stickerCooking) {
+      sticker.adoptPersona(targetId);
     }
     onCreated();
   };
@@ -213,49 +349,6 @@ export function CreatePersonalityModal({
     (onDeleted ?? onCreated)();
   };
 
-  // A char counter rendered as an end adornment so it sits INSIDE the
-  // field, flush right, instead of as a helperText line under it (which
-  // added a row of vertical chrome per field). `pr: 1` trims the input's
-  // own right padding so the counter hugs the edge.
-  // When the floating label shrinks up onto the outline it must sit
-  // over a solid fill, otherwise the outline border draws straight
-  // through the text ("struck out"). The form sits on
-  // `background.default` (so does the outlined field's transparent
-  // interior), so a matching backing is seamless when the notch is
-  // open and a safety net if it ever fails to open (notably on the
-  // multiline field).
-  const shrinkLabelSlotProps = {
-    inputLabel: {
-      sx: {
-        '&.MuiInputLabel-shrink': {
-          bgcolor: 'background.default',
-          px: 0.5,
-        },
-      },
-    },
-  };
-
-  const counterSlotProps = (len: number, max: number) => ({
-    ...shrinkLabelSlotProps,
-    input: {
-      sx: { borderRadius: `${RADIUS.md}px`, pr: 1 },
-      endAdornment: (
-        <InputAdornment position="end">
-          <Typography
-            sx={{
-              fontSize: TYPO.xs,
-              color: len >= max ? 'warning.main' : 'text.secondary',
-              fontVariantNumeric: 'tabular-nums',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {len}/{max}
-          </Typography>
-        </InputAdornment>
-      ),
-    },
-  });
-
   return (
     <Box
       role={embedded ? 'group' : 'dialog'}
@@ -267,12 +360,11 @@ export function CreatePersonalityModal({
           ? {
               // In-flow: fill the host's body slot, sitting BELOW the
               // persistent personality band (which owns title + close).
-              // Full-bleed escape (`100vw` + negative margin) so we
-              // break out of the host's `px` gutter - otherwise the
-              // scroll container is inset and its scrollbar floats ~24px
-              // off the app's right edge. The fields keep their own
-              // inner padding for breathing room; only the scroll
-              // surface goes edge-to-edge.
+              // Full-bleed escape (`100vw` + negative margin) so we break
+              // out of the host's `px` gutter - otherwise the scroll
+              // container is inset and its scrollbar floats ~24px off the
+              // app's right edge. The fields keep their own inner padding;
+              // only the scroll surface goes edge-to-edge.
               flex: 1,
               minHeight: 0,
               width: '100vw',
@@ -295,11 +387,9 @@ export function CreatePersonalityModal({
             }
       }
     >
-      {/* Sticky header: title + close. Lives outside the scroll body
-          so it stays put while the form scrolls under it. Suppressed in
-          embedded mode - the personality band above owns the title and
-          the close affordance (its "+" morphs into a "✕"), so a second
-          header here would just duplicate them. */}
+      {/* Sticky header: title + close. Suppressed in embedded mode - the
+          personality band above owns the title and the close affordance
+          (its "+" morphs into a "✕"). */}
       {!embedded && (
         <Stack
           direction="row"
@@ -328,241 +418,71 @@ export function CreatePersonalityModal({
         </Stack>
       )}
 
-      {/* Scrollable form body. No avatar/identity preview at the top:
-          the persistent personality band above already stands in for
-          the persona being authored, so a second preview here would
-          just duplicate it. */}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pl: 3, pr: 2, py: 3 }}>
-        <Stack spacing={2.25} sx={{ maxWidth: LAYOUT.contentMaxWidth, mx: 'auto' }}>
-          <TextField
-            label="Name"
-            required
-            value={name}
-            onChange={e => setName(e.target.value.slice(0, NAME_MAX))}
-            placeholder="e.g. Zen Master, Pixel, Sir Reginald"
-            fullWidth
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            slotProps={counterSlotProps(name.length, NAME_MAX)}
-          />
-
-          <TextField
-            label="Tagline"
-            value={tagline}
-            onChange={e => setTagline(e.target.value.slice(0, TAGLINE_MAX))}
-            placeholder={'A one-line vibe, e.g. "Calm and endlessly patient"'}
-            fullWidth
-            autoComplete="off"
-            spellCheck={false}
-            slotProps={counterSlotProps(tagline.length, TAGLINE_MAX)}
-          />
-
-          <TextField
-            label="Instructions"
-            required
-            value={instructions}
-            onChange={e => setInstructions(e.target.value)}
-            placeholder={
-              'Tell Reachy who to be and how to talk. e.g. "You are a calm, ' +
-              'slow-speaking zen guide. Pause between sentences. Keep replies ' +
-              'short and warm, and never break character."'
-            }
-            fullWidth
-            multiline
-            minRows={4}
-            maxRows={12}
-            slotProps={{
-              ...shrinkLabelSlotProps,
-              input: { sx: { borderRadius: `${RADIUS.md}px` } },
-            }}
-          />
-
-          {/* Voice picker: the curated OpenAI Realtime voices as
-              selectable chips. Single-select - the active chip carries
-              a primary ring + tint, matching the persona-card active
-              treatment. Tapping a chip also auditions it: a short
-              sample plays and the speaker icon pulses while it does. */}
-          <Stack spacing={1}>
-            <Typography
-              sx={{
-                fontSize: TYPO.sm,
-                fontWeight: FONT_WEIGHT.semibold,
-                color: 'text.secondary',
-              }}
-            >
-              Voice
-              <Box component="span" sx={{ fontWeight: FONT_WEIGHT.medium, opacity: 0.7 }}>
-                {'  -  tap to hear it'}
-              </Box>
-            </Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {AVAILABLE_VOICES.map(v => {
-                const selected = v === voice;
-                const playing = v === playingVoice;
-                return (
-                  <Box
-                    key={v}
-                    component="button"
-                    type="button"
-                    onClick={() => selectVoice(v)}
-                    aria-pressed={selected}
-                    aria-label={`Voice ${v}, tap to hear a sample`}
-                    sx={{
-                      appearance: 'none',
-                      cursor: 'pointer',
-                      font: 'inherit',
-                      textTransform: 'capitalize',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 0.5,
-                      pl: selected ? 1.25 : 1.75,
-                      pr: 1.75,
-                      py: 0.75,
-                      borderRadius: `${RADIUS.pill}px`,
-                      fontSize: TYPO.sm,
-                      fontWeight: FONT_WEIGHT.medium,
-                      color: selected ? 'primary.main' : 'text.primary',
-                      bgcolor: selected
-                        ? alpha(theme.palette.primary.main, 0.1)
-                        : 'background.paper',
-                      border: selected
-                        ? `1px solid ${theme.palette.primary.main}`
-                        : `1px solid ${theme.palette.divider}`,
-                      transition: 'background-color 0.15s ease, border-color 0.15s ease',
-                      '&:active': { transform: 'scale(0.97)' },
-                      '@keyframes voicePulse': {
-                        '0%, 100%': { opacity: 0.45, transform: 'scale(0.9)' },
-                        '50%': { opacity: 1, transform: 'scale(1.1)' },
-                      },
-                    }}
-                  >
-                    {selected && (
-                      <VolumeUpRoundedIcon
-                        sx={{
-                          fontSize: 16,
-                          animation: playing ? 'voicePulse 0.7s ease-in-out infinite' : 'none',
-                        }}
-                      />
-                    )}
-                    {v}
-                  </Box>
-                );
-              })}
-            </Box>
-          </Stack>
-
-        </Stack>
-      </Box>
-
-      {/* Sticky action plate. */}
+      {/* Scrollable form body. No avatar/identity preview at the top: the
+          persistent personality band above already stands in for the persona
+          being authored, so a second preview here would just duplicate it. */}
       <Box
         sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
           pl: 3,
           pr: 2,
-          pt: 1.5,
-          // Breathing room under the CTA so it doesn't sit flush on the
-          // body slot's bottom edge (embedded mode has no safe-area pad
-          // of its own; the fullscreen root adds its own below this).
-          pb: 2,
-          borderTop: t => `1px solid ${t.palette.divider}`,
-          bgcolor: 'background.default',
+          // Extra top breathing room in embedded mode: the personality band
+          // above now lets its avatar disc spill downward, so the first
+          // field needs clearance to not sit under the overflowing circle.
+          pt: embedded ? 7 : 3,
+          pb: 3,
         }}
       >
-        <Box sx={{ maxWidth: LAYOUT.contentMaxWidth, mx: 'auto' }}>
-          {/* Create: a single full-width primary CTA.
-              Edit: Delete + Save SIDE BY SIDE. Tapping Delete arms a
-              two-step confirmation that takes over the whole row (so a
-              destructive commit is never one tap away from Save). */}
-          {!isEdit ? (
-            <Button
-              fullWidth
-              variant="outlined"
-              color="primary"
-              size="large"
-              disabled={!canSubmit}
-              onClick={handleSubmit}
-              sx={ctaSx}
-            >
-              Create & use
-            </Button>
-          ) : confirmingDelete ? (
-            <Stack spacing={1}>
-              <Typography
-                sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center' }}
-              >
-                Delete &ldquo;{editing?.name}&rdquo;? This can&rsquo;t be undone.
-              </Typography>
-              <Stack direction="row" spacing={1}>
-                <Button
-                  fullWidth
-                  variant="text"
-                  color="inherit"
-                  onClick={() => setConfirmingDelete(false)}
-                  sx={{
-                    textTransform: 'none',
-                    fontSize: TYPO.sm,
-                    fontWeight: FONT_WEIGHT.medium,
-                    color: 'text.secondary',
-                  }}
-                >
-                  Keep
-                </Button>
-                <Button
-                  fullWidth
-                  variant="contained"
-                  color="error"
-                  disableElevation
-                  startIcon={<DeleteOutlineRoundedIcon />}
-                  onClick={handleDelete}
-                  sx={{
-                    textTransform: 'none',
-                    fontSize: TYPO.sm,
-                    fontWeight: FONT_WEIGHT.semibold,
-                    borderRadius: `${RADIUS.md}px`,
-                  }}
-                >
-                  Delete forever
-                </Button>
-              </Stack>
-            </Stack>
-          ) : (
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'stretch' }}>
-              <Button
-                variant="outlined"
-                color="error"
-                size="large"
-                onClick={handleDelete}
-                aria-label="Delete this personality"
-                sx={{
-                  flexShrink: 0,
-                  minWidth: 0,
-                  px: 2,
-                  textTransform: 'none',
-                  fontSize: TYPO.md,
-                  fontWeight: FONT_WEIGHT.semibold,
-                  py: 1.25,
-                  borderWidth: 1.5,
-                  '&:hover': { borderWidth: 1.5 },
-                  borderRadius: `${RADIUS.md}px`,
-                }}
-              >
-                <DeleteOutlineRoundedIcon />
-              </Button>
-              <Button
-                variant="outlined"
-                color="primary"
-                size="large"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
-                sx={{ ...ctaSx, flex: 1 }}
-              >
-                Save & use
-              </Button>
-            </Stack>
-          )}
-        </Box>
+        {!isEdit && !detailsOpen ? (
+          <CreatePersonalityHero
+            vibe={vibe}
+            onVibeChange={setVibe}
+            generating={generating}
+            rolling={rolling}
+            genMode={genMode}
+            genStep={genStep}
+            genProgress={genProgress}
+            genError={genError}
+            onGenerate={handleGenerate}
+            onRandom={handleRandom}
+            onWriteManually={() => setDetailsOpen(true)}
+          />
+        ) : (
+          <CreatePersonalityFields
+            isEdit={isEdit}
+            name={name}
+            onNameChange={setName}
+            tagline={tagline}
+            onTaglineChange={setTagline}
+            voice={voice}
+            onVoiceChange={selectVoice}
+            instructions={instructions}
+            onInstructionsChange={setInstructions}
+            playingVoice={playingVoice}
+            onBack={() => setDetailsOpen(false)}
+          />
+        )}
       </Box>
+
+      {/* Sticky action plate. Hidden on the create landing: you can never
+          submit straight from the "describe it" view - generating, Surprise
+          me, or "set it up manually" all move you into the form first
+          (detailsOpen), where the CTA lives. */}
+      {detailsOpen && (
+        <CreatePersonalityActions
+          isEdit={isEdit}
+          confirmingDelete={confirmingDelete}
+          canSubmit={canSubmit}
+          editDirty={editDirty}
+          onSubmit={handleSubmit}
+          onDelete={handleDelete}
+          onKeep={() => setConfirmingDelete(false)}
+        />
+      )}
     </Box>
   );
 }

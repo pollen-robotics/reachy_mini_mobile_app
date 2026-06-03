@@ -31,7 +31,7 @@
  * that path upsamples the box's bitmap and reads as blur the
  * moment `zoom > 1` - swap back at your peril.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, useTheme } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -75,7 +75,7 @@ export interface ReachiesCarouselProps {
 }
 
 export default function ReachiesCarousel({
-  interval = 1000,
+  interval = 750,
   fadeInDuration = 350,
   fadeOutDuration = 120,
   zoom = 1.8,
@@ -103,15 +103,31 @@ export default function ReachiesCarousel({
       .sort();
   }, []);
 
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [previousIndex, setPreviousIndex] = useState<number | null>(null);
-  const [isTransitioning, setIsTransitioning] = useState(false);
-  const [fadeOutComplete, setFadeOutComplete] = useState(false);
-  const currentIndexRef = useRef(currentIndex);
+  // Deterministic visiting order shared by ALL instances. The frames
+  // are sorted (stable) above, and we walk them with a fixed stride
+  // that's coprime with the count, so the cycle visits every frame once
+  // before repeating (no adjacent dupes) while still reading as a varied
+  // shuffle. Because it's a pure function of `imagePaths.length` it's
+  // IDENTICAL across instances - the key to keeping carousels in sync.
+  const order = useMemo<number[]>(() => {
+    const n = imagePaths.length;
+    if (n <= 1) return [0];
+    const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+    const stride = [7, 5, 11, 13, 3, 1].find(s => s < n && gcd(s, n) === 1) ?? 1;
+    return Array.from({ length: n }, (_, k) => (k * stride) % n);
+  }, [imagePaths.length]);
 
-  useEffect(() => {
-    currentIndexRef.current = currentIndex;
-  }, [currentIndex]);
+  // The frame index is derived from WALL-CLOCK time, not from per-instance
+  // state advanced on a mount-time timer. `step = floor(now / interval)`
+  // is the same number in every instance at the same instant, so two
+  // carousels sharing an `interval` always show the same frame together,
+  // regardless of when each one mounted. `tick` only exists to force a
+  // re-render on each interval boundary; the actual index is computed
+  // from the clock below.
+  const stepOf = (t: number) => Math.floor(t / interval);
+  const [step, setStep] = useState(() => stepOf(Date.now()));
+  const [prevStep, setPrevStep] = useState<number | null>(null);
+  const [fadeOutComplete, setFadeOutComplete] = useState(false);
 
   // Preload all images so the first cycle doesn't flicker on a
   // slow connection (Tauri ships them as part of the bundle, so
@@ -127,33 +143,55 @@ export default function ReachiesCarousel({
   useEffect(() => {
     if (imagePaths.length <= 1) return;
 
-    const timer = window.setInterval(() => {
-      const prevIdx = currentIndexRef.current;
-      setPreviousIndex(prevIdx);
-      setIsTransitioning(true);
-      setFadeOutComplete(false);
+    const overlapDelay = Math.min(fadeInDuration * 0.4, fadeOutDuration * 2);
+    let settleTimer = 0;
+    let overlapTimer = 0;
 
-      let nextIdx: number;
-      do {
-        nextIdx = Math.floor(Math.random() * imagePaths.length);
-      } while (nextIdx === prevIdx);
-      setCurrentIndex(nextIdx);
-
-      // Trigger the outgoing image's fade-out after a short
-      // delay so both layers briefly overlap. Matches the
-      // desktop carousel's "premium" overlap timing.
-      const overlapDelay = Math.min(fadeInDuration * 0.4, fadeOutDuration * 2);
-      window.setTimeout(() => setFadeOutComplete(true), overlapDelay);
-
-      window.setTimeout(() => {
-        setIsTransitioning(false);
-        setPreviousIndex(null);
+    const advance = () => {
+      const next = stepOf(Date.now());
+      setStep(prev => {
+        if (next === prev) return prev;
+        // Begin a cross-fade: remember the outgoing step, then clear it
+        // after the fade window so both layers briefly overlap.
+        setPrevStep(prev);
         setFadeOutComplete(false);
-      }, Math.max(fadeInDuration, fadeOutDuration));
-    }, interval);
+        window.clearTimeout(overlapTimer);
+        window.clearTimeout(settleTimer);
+        overlapTimer = window.setTimeout(() => setFadeOutComplete(true), overlapDelay);
+        settleTimer = window.setTimeout(() => {
+          setPrevStep(null);
+          setFadeOutComplete(false);
+        }, Math.max(fadeInDuration, fadeOutDuration));
+        return next;
+      });
+    };
 
-    return () => window.clearInterval(timer);
+    // Align the first tick to the next interval boundary (shared across
+    // instances) so same-interval carousels flip together, then keep a
+    // steady cadence. `advance` re-reads the clock each time, so any
+    // drift self-corrects.
+    advance();
+    const align = interval - (Date.now() % interval);
+    let intervalId = 0;
+    const boundaryTimer = window.setTimeout(() => {
+      advance();
+      intervalId = window.setInterval(advance, interval);
+    }, align);
+
+    return () => {
+      window.clearTimeout(boundaryTimer);
+      window.clearInterval(intervalId);
+      window.clearTimeout(overlapTimer);
+      window.clearTimeout(settleTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imagePaths.length, interval, fadeInDuration, fadeOutDuration]);
+
+  const len = order.length;
+  const currentIndex = order[((step % len) + len) % len];
+  const previousIndex =
+    prevStep === null ? null : order[((prevStep % len) + len) % len];
+  const isTransitioning = prevStep !== null;
 
   // Resolve the vertical anchor to CSS values.
   let topValue: number | string;

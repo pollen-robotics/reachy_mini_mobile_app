@@ -18,6 +18,7 @@
  */
 import { Box } from '@mui/material';
 import type { ReactNode } from 'react';
+import CookingMonogram from './CookingMonogram';
 
 interface PersonaAvatarProps {
   /** Persona artwork URL. When omitted, `children` is rendered instead. */
@@ -32,6 +33,14 @@ interface PersonaAvatarProps {
   imageScale?: number;
   /** Optional inset ring (used by the compact pill band). */
   boxShadow?: string;
+  /**
+   * While a new sticker bakes, show a deterministic monogram placeholder
+   * (the persona's initial) under a soft shimmer instead of the portrait.
+   * The persona is already usable; the real image fades in once it lands.
+   */
+  cooking?: boolean;
+  /** Persona name - used for the cooking monogram's initial. */
+  name?: string;
   /** Placeholder rendered when `src` is absent. */
   children?: ReactNode;
 }
@@ -41,6 +50,8 @@ export default function PersonaAvatar({
   size,
   imageScale = 1.4,
   boxShadow,
+  cooking = false,
+  name = '',
   children,
 }: PersonaAvatarProps) {
   return (
@@ -59,7 +70,13 @@ export default function PersonaAvatar({
         placeItems: 'center',
       })}
     >
-      {src ? (
+      {cooking ? (
+        // While a fresh sticker bakes, show a deterministic monogram (the
+        // persona's initial) under a soft shimmer - the persona is already
+        // usable, so this reads as "present, portrait on its way" rather
+        // than "loading, wait". The real image fades in once it lands.
+        <CookingMonogram name={name} size={size} />
+      ) : src ? (
         <Box
           component="img"
           src={src}
@@ -68,11 +85,13 @@ export default function PersonaAvatar({
           draggable={false}
           sx={{
             position: 'absolute',
-            width: `${imageScale * 100}%`,
             height: 'auto',
             left: '50%',
             top: '50%',
+            width: `${imageScale * 100}%`,
             transform: 'translate(-50%, -57%)',
+            opacity: 1,
+            transition: 'opacity 0.2s ease',
             pointerEvents: 'none',
             userSelect: 'none',
           }}
