@@ -150,13 +150,6 @@ export default function IdentityChipBar({
           button. */}
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
         <VariantTag transport={transport} />
-        {typeTag && typeTag.pulse && typeTag.tone && (
-          // In-flight (Connecting / Reconnecting): just a mini spinner,
-          // no label - the toned spinner already reads as "working on it".
-          <MetaPill tone={typeTag.tone}>
-            <TagSpinner color={typeTag.tone} />
-          </MetaPill>
-        )}
         <MetaPill>
           <LinkQualityBars
             level={linkQualityLevel(linkRttMs, linkKind ?? 'checking')}
@@ -164,6 +157,14 @@ export default function IdentityChipBar({
           />
           <TagLabel>{latencyText}</TagLabel>
         </MetaPill>
+        {typeTag && typeTag.pulse && typeTag.tone && (
+          // In-flight (Connecting / Reconnecting): just a mini spinner, no
+          // label - the toned spinner already reads as "working on it".
+          // Always rendered LAST, after the transport + latency tags.
+          <MetaPill tone={typeTag.tone}>
+            <TagSpinner color={typeTag.tone} />
+          </MetaPill>
+        )}
       </Stack>
     </Stack>
   );

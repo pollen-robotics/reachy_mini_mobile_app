@@ -554,7 +554,13 @@ export function ConversationPanel({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: 'primary.main',
+                    // Greyed (not primary) while a live call locks it - same
+                    // treatment as the personality band's chevron/pencil - so
+                    // it reads as inert without dimming the whole strip cell.
+                    color:
+                      conversationEngaged || session.engineState === 'error'
+                        ? 'action.disabled'
+                        : 'primary.main',
                     // Active (panel open): a clean white card surface that
                     // pops off the strip's `background.default` canvas, rather
                     // than the old primary tint that read grey-ish.
@@ -563,7 +569,7 @@ export function ConversationPanel({
                     '&:hover': {
                       bgcolor: settingsOpen ? 'background.paper' : 'action.hover',
                     },
-                    '&.Mui-disabled': { opacity: 0.45 },
+                    '&.Mui-disabled': { color: 'action.disabled' },
                     WebkitTapHighlightColor: 'transparent',
                   }}
                 >

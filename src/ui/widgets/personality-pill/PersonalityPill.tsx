@@ -169,10 +169,10 @@ export function PersonalityPill({
         py: 0.75,
         color: 'text.primary',
         textAlign: 'left',
-        // Dim the whole band while a live call locks the picker, echoing the
-        // (now hidden) chevron's disabled state.
-        transition: 'opacity 0.18s ease',
-        opacity: disabled ? 0.55 : 1,
+        // The band keeps full opacity while a live call locks the picker -
+        // only the controls (chevron + edit pencil) grey out, so the active
+        // persona stays perfectly legible mid-conversation.
+        opacity: 1,
       }}
     >
       {/* Avatar disc + oversize SVG (RobotAvatar pattern). The
@@ -500,25 +500,29 @@ export function PersonalityPill({
           >
             <CloseRoundedIcon sx={{ fontSize: 24 }} />
           </ButtonBase>
-        ) : onEditActive && !disabled && active.kind === 'custom' ? (
+        ) : onEditActive && active.kind === 'custom' ? (
           <ButtonBase
             onMouseDown={e => e.stopPropagation()}
             onClick={e => {
               e.stopPropagation();
               onEditActive(active);
             }}
+            disabled={disabled}
             focusRipple
             aria-label={`Edit ${active.name}`}
             sx={{
               width: '100%',
               height: '100%',
               borderRadius: '50%',
-              color: 'primary.main',
-              transition: 'transform 0.12s ease, background-color 0.15s ease',
+              // Greyed + inert while a live call locks the picker, like the
+              // chevron; primary + tappable otherwise.
+              color: disabled ? 'action.disabled' : 'primary.main',
+              transition: 'transform 0.12s ease, background-color 0.15s ease, color 0.18s ease',
               '&:hover': {
                 bgcolor: theme => alpha(theme.palette.primary.main, 0.1),
               },
               '&:active': { transform: 'scale(0.9)' },
+              '&.Mui-disabled': { color: 'action.disabled' },
             }}
           >
             <EditOutlinedIcon sx={{ fontSize: 24 }} />
@@ -559,18 +563,17 @@ export function PersonalityPill({
           // sits closer to the band edge. Negative margin (not padding) so
           // the circular hover/ripple stays centred on the glyph.
           mr: -1,
-          // Greyed (not primary) while a form is open: the toggle is
-          // intentionally inert during authoring (the ✕ is the exit), so a
-          // primary-tinted chevron would falsely read as tappable.
-          color: authoring ? 'action.disabled' : 'primary.main',
+          // Greyed (not primary) while a form is open OR a live call locks
+          // the picker: the toggle is intentionally inert in both cases, so a
+          // primary-tinted chevron would falsely read as tappable. It stays
+          // VISIBLE (greyed) rather than hidden so it remains a stable anchor.
+          color: disabled || authoring ? 'action.disabled' : 'primary.main',
           transition:
-            'background-color 0.15s ease, opacity 0.18s ease, color 0.18s ease, transform 0.12s ease',
-          // Only hidden while disabled (live call). During authoring it
-          // stays put (greyed) as the layout anchor.
-          opacity: disabled ? 0 : 1,
+            'background-color 0.15s ease, color 0.18s ease, transform 0.12s ease',
+          opacity: 1,
           '&:hover': { bgcolor: theme => alpha(theme.palette.primary.main, 0.1) },
           '&:active': { transform: 'scale(0.9)' },
-          '&.Mui-disabled': { color: authoring ? 'action.disabled' : 'primary.main' },
+          '&.Mui-disabled': { color: 'action.disabled' },
           '& .MuiTouchRipple-root': { color: 'primary.main' },
         }}
       >
