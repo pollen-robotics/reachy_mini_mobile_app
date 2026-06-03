@@ -31,6 +31,7 @@ import {
   DEFAULT_GLOW,
   DEFAULT_PERSONALITY_ID,
   getDefaultPersonality,
+  snapVoiceForBackend,
 } from './builtin';
 import {
   readActivePersonalityId,
@@ -38,7 +39,18 @@ import {
   writeActivePersonalityId,
   writeCustomPersonalities,
 } from './storage';
-import type { CustomPersonalityInput, Personality } from './types';
+import type { CustomPersonalityInput, PersonaVoices, Personality } from './types';
+
+/** Build a complete per-backend voice pair from a partial input,
+ *  snapping each id to its backend catalog (default when absent). */
+function resolveInputVoices(
+  voices: Partial<PersonaVoices> | undefined,
+): PersonaVoices {
+  return {
+    huggingface: snapVoiceForBackend('huggingface', voices?.huggingface),
+    openai: snapVoiceForBackend('openai', voices?.openai),
+  };
+}
 
 type Listener = () => void;
 
@@ -178,7 +190,7 @@ export function addCustomPersonality(input: CustomPersonalityInput): Personality
     name: input.name.trim(),
     tagline: (input.tagline ?? '').trim(),
     instructions: input.instructions.trim(),
-    voice: (input.voice ?? '').trim(),
+    voices: resolveInputVoices(input.voices),
     glow: input.glow ?? DEFAULT_GLOW,
     avatar: input.avatar?.trim() || DEFAULT_AVATAR_URL,
   };
@@ -206,7 +218,9 @@ export function updateCustomPersonality(
     name: input.name.trim(),
     tagline: (input.tagline ?? '').trim(),
     instructions: input.instructions.trim(),
-    voice: (input.voice ?? '').trim(),
+    // The editor no longer collects voices; keep the persona's existing
+    // pair unless the caller explicitly supplies a new one.
+    voices: input.voices ? resolveInputVoices(input.voices) : prev.voices,
     glow: input.glow ?? prev.glow ?? DEFAULT_GLOW,
     // Only overwrite the avatar when a new one is supplied; an
     // omitted avatar keeps whatever the persona already had (e.g. a
