@@ -21,7 +21,7 @@
     <string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
 
     <!--
-        Required for the native conversation (OpenAI Realtime over WebRTC)
+        Required for the native conversation (HF realtime backend + robot WebRTC)
         and for embedded Spaces like `cduss/webrtc_example` that capture
         audio from the phone. Without it the webview returns
         NotAllowedError when calling getUserMedia.
@@ -94,12 +94,12 @@
     <string>UIStatusBarStyleDefault</string>
 
     <!--
-        Background-audio capability for the OpenAI Realtime
+        Background-audio capability for the HF realtime
         conversation pipeline. Without `audio` in
         `UIBackgroundModes`, iOS suspends the WKWebView process a
         few seconds after the user locks the screen or switches
-        apps, killing the WebRTC peer connection AND the JS
-        runtime. With it (combined with the runtime keepalive in
+        apps, killing the robot WebRTC peer connection, HF websocket,
+        AND the JS runtime. With it (combined with the runtime keepalive in
         `src/features/conversation/background-audio-keeper.ts` that
         keeps a non-zero AudioContext output alive while a conv is
         running), iOS keeps us scheduled and the user can put the

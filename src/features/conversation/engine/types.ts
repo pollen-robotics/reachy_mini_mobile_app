@@ -116,6 +116,15 @@ export interface ConversationTransportInfo {
   kind: ConversationTransportKind;
   bps: number | null;
   remoteIp: string | null;
+  /**
+   * Rolling-min round-trip time on the selected candidate pair, in
+   * milliseconds, or `null` when the platform doesn't expose it (iOS
+   * WKWebView). Mirrors `TransportInfo.rttMs` from the
+   * `TransportMonitor`. This is the link-QUALITY signal the topbar's
+   * signal bars are driven by (latency, not bitrate); `kind` is shown
+   * separately as a topology tag.
+   */
+  rttMs: number | null;
 }
 
 /**

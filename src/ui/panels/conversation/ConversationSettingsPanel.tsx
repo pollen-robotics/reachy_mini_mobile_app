@@ -140,7 +140,7 @@ export function ConversationSettingsPanel() {
                         pl: 1.25,
                         pr: 1.5,
                         py: 0.75,
-                        borderRadius: `${RADIUS.pill}px`,
+                        borderRadius: `${RADIUS.sm}px`,
                         fontSize: TYPO.sm,
                         // Constant weight in both states: switching to
                         // semibold on active made the (bolder) text wider
@@ -209,51 +209,55 @@ export function ConversationSettingsPanel() {
                   slotProps={{ input: { 'aria-label': 'Long-term memory' } }}
                 />
               </Row>
-            </Card>
 
-            {/* Clear memory: destructive, two-step. Disabled when there's
-                nothing to clear so it never teases a no-op. */}
-            <Box sx={{ px: 3, mt: 1.5 }}>
-              {!confirmingClear ? (
-                <Row
-                  as="button"
-                  onClick={() => facts.length > 0 && setConfirmingClear(true)}
-                  aria-label="Clear memory"
-                  card
-                  disabled={facts.length === 0}
-                >
-                  <DeleteOutlineRoundedIcon
-                    sx={{ fontSize: TYPO.lg, color: 'error.main', flexShrink: 0 }}
-                  />
-                  <Typography
-                    sx={{ flex: 1, minWidth: 0, fontSize: TYPO.body, color: 'error.main' }}
+              {/* Clear memory: real danger button INSIDE this card,
+                  directly below the toggle (same concern), no divider
+                  between them - just a padded footer. Disabled when
+                  there's nothing to clear so it never teases a no-op. */}
+              <Box sx={{ px: 2, pb: 2 }}>
+                {!confirmingClear ? (
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => facts.length > 0 && setConfirmingClear(true)}
+                    aria-label="Clear memory"
+                    disabled={facts.length === 0}
+                    sx={{
+                      ...ghostBtnSx(theme.palette.error.main),
+                      flex: 'none',
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      px: 2,
+                      py: 1.5,
+                      border: `1.5px solid ${alpha(theme.palette.error.main, 0.45)}`,
+                      fontSize: TYPO.body,
+                      fontWeight: FONT_WEIGHT.semibold,
+                      bgcolor: alpha(theme.palette.error.main, 0.05),
+                      opacity: facts.length === 0 ? 0.5 : 1,
+                      cursor: facts.length === 0 ? 'default' : 'pointer',
+                      '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.08) },
+                    }}
                   >
-                    Clear memory
-                  </Typography>
-                  <Typography
-                    sx={{ fontSize: TYPO.xs, color: 'text.secondary', flexShrink: 0 }}
-                  >
-                    {facts.length} {facts.length === 1 ? 'fact' : 'facts'}
-                  </Typography>
-                </Row>
-              ) : (
-                <Box
-                  sx={{
-                    p: 2,
-                    borderRadius: `${RADIUS.lg}px`,
-                    bgcolor: 'background.paper',
-                    border: `1px solid ${alpha(theme.palette.error.main, 0.4)}`,
-                  }}
-                >
-                  <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', mb: 1 }}>
-                    Forget all {facts.length} {facts.length === 1 ? 'fact' : 'facts'}? This can&rsquo;t be undone.
-                  </Typography>
+                    <DeleteOutlineRoundedIcon sx={{ fontSize: TYPO.lg, flexShrink: 0 }} />
+                    <Box component="span" sx={{ flexShrink: 0 }}>
+                      Clear memory
+                    </Box>
+                    <Box
+                      component="span"
+                      sx={{ ml: 'auto', color: 'text.disabled', fontSize: TYPO.xs }}
+                    >
+                      {facts.length} {facts.length === 1 ? 'fact' : 'facts'}
+                    </Box>
+                  </Box>
+                ) : (
                   <Stack direction="row" spacing={1}>
                     <Box
                       component="button"
                       type="button"
                       onClick={() => setConfirmingClear(false)}
-                      sx={ghostBtnSx(theme.palette.text.secondary)}
+                      sx={ghostBtnSx(theme.palette.primary.main)}
                     >
                       Keep
                     </Box>
@@ -264,20 +268,14 @@ export function ConversationSettingsPanel() {
                         clear();
                         setConfirmingClear(false);
                       }}
-                      sx={{
-                        ...ghostBtnSx('#fff'),
-                        bgcolor: 'error.main',
-                        border: 'none',
-                        fontWeight: FONT_WEIGHT.semibold,
-                        '&:hover': { bgcolor: 'error.dark' },
-                      }}
+                      sx={ghostBtnSx(theme.palette.error.main)}
                     >
                       Delete forever
                     </Box>
                   </Stack>
-                </Box>
-              )}
-            </Box>
+                )}
+              </Box>
+            </Card>
           </Section>
         </Stack>
       </Box>

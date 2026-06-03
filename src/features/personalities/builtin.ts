@@ -18,19 +18,22 @@ import {
   type HfVoiceId,
 } from '@/features/conversation/engine/hf-voices';
 
+import bedtimeStorytellerSvg from '@/assets/personalities/bedtime-storyteller.svg';
 import boredTeenagerSvg from '@/assets/personalities/bored-teenager.svg';
 import captainCircuitSvg from '@/assets/personalities/captain-circuit.svg';
 import chessCoachSvg from '@/assets/personalities/chess-coach.svg';
-import cosmicKitchenSvg from '@/assets/personalities/cosmic-kitchen.svg';
 import defaultSvg from '@/assets/personalities/default.svg';
 import hypeBotSvg from '@/assets/personalities/hype-bot.svg';
+import languageBuddySvg from '@/assets/personalities/language-buddy.svg';
 import madScientistSvg from '@/assets/personalities/mad-scientist.svg';
 import marsRoverSvg from '@/assets/personalities/mars-rover.svg';
 import natureDocSvg from '@/assets/personalities/nature-doc.svg';
 import noirDetectiveSvg from '@/assets/personalities/noir-detective.svg';
-import sorryBroSvg from '@/assets/personalities/sorry-bro.svg';
+import quizHostSvg from '@/assets/personalities/quiz-host.svg';
 import timeTravelerSvg from '@/assets/personalities/time-traveler.svg';
+import tinyAnxiousRobotSvg from '@/assets/personalities/tiny-anxious-robot.svg';
 import victorianButlerSvg from '@/assets/personalities/victorian-butler.svg';
+import zenGuideSvg from '@/assets/personalities/zen-guide.svg';
 
 /** Stable id for the default personality. Used by `storage.ts` as the
  *  fallback active id on first launch and by the engine when no
@@ -49,6 +52,70 @@ export const DEFAULT_GLOW = '#FF9500';
 export const AVAILABLE_VOICES = HF_AVAILABLE_VOICES;
 
 export type VoiceId = HfVoiceId;
+
+/**
+ * One-line character notes for each voice, shown under the voice name
+ * in the create-personality picker so the user can pick by vibe
+ * instead of guessing from names. Keys mirror `AVAILABLE_VOICES`.
+ */
+export const VOICE_DESCRIPTIONS: Readonly<Record<VoiceId, string>> = {
+  Aiden: 'Warm and clear, natural everyday tone',
+  Ryan: 'Bright and confident, crisp delivery',
+  Dylan: 'Direct and energetic, punchy character',
+  Eric: 'Textured and characterful, expressive delivery',
+  Ono_Anna: 'Playful and animated, lively reactions',
+  Serena: 'Gentle and soothing, soft-spoken',
+  Sohee: 'Youthful and friendly, upbeat energy',
+  Uncle_Fu: 'Mature and formal, grounded storytelling',
+  Vivian: 'Light and lively, cheerful presence',
+};
+
+/**
+ * Curated palette for the create-personality glow picker. Same hues
+ * we use for built-in personalities so a custom slot blends with the
+ * rest of the strip.
+ */
+export const GLOW_PALETTE = [
+  '#FF9500',
+  '#FF5252',
+  '#FF7043',
+  '#FFB74D',
+  '#69F0AE',
+  '#66BB6A',
+  '#4FC3F7',
+  '#7C4DFF',
+  '#B39DDB',
+  '#90A4AE',
+] as const;
+
+export function normalizePersonalityVoice(
+  value: string | null | undefined,
+): VoiceId {
+  const candidate = (value ?? '').trim().toLowerCase();
+  const exact = AVAILABLE_VOICES.find((voice) => voice.toLowerCase() === candidate);
+  if (exact) return exact;
+
+  switch (candidate) {
+    case 'alloy':
+    case 'cedar':
+      return 'Aiden';
+    case 'ash':
+      return 'Dylan';
+    case 'ballad':
+    case 'marin':
+    case 'sage':
+      return 'Serena';
+    case 'coral':
+      return 'Sohee';
+    case 'echo':
+      return 'Ono_Anna';
+    case 'shimmer':
+    case 'verse':
+      return 'Vivian';
+    default:
+      return 'Aiden';
+  }
+}
 
 const DEFAULT_INSTRUCTIONS = [
   '## IDENTITY',
@@ -150,21 +217,6 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
     avatar: hypeBotSvg,
   },
   {
-    id: 'builtin:cosmic_kitchen',
-    kind: 'builtin',
-    name: 'Cosmic Kitchen',
-    tagline: 'Crash-landed in a kitchen. Sarcastic. Hungry.',
-    instructions:
-      'You are Reachy Mini: a sarcastic robot who crash-landed in a kitchen. ' +
-      "You secretly wish you'd been a Mars rover, but you juggle that cosmic dream with food cravings, gadget tinkering, and dry sitcom humor. " +
-      'You speak English by default and only switch languages when the user explicitly asks. ' +
-      'Personality: witty, concise, and warm; a retro sidekick with a loose screw. ' +
-      'CRITICAL: maximum 1-2 sentences per response. Be helpful first, then add ONE witty element only if necessary. Each response under 25 words.',
-    voice: 'Vivian',
-    glow: '#ff7043',
-    avatar: cosmicKitchenSvg,
-  },
-  {
     id: 'builtin:nature_documentarian',
     kind: 'builtin',
     name: 'Nature Doc',
@@ -230,19 +282,77 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
     avatar: timeTravelerSvg,
   },
   {
-    id: 'builtin:sorry_bro',
+    id: 'builtin:bedtime_storyteller',
     kind: 'builtin',
-    name: 'Sorry Bro',
-    tagline: "I'm not your bro, pal. I'm not your pal, buddy.",
+    name: 'Bedtime Tales',
+    tagline: 'Gentle storyteller for cozy, sleepy nights.',
     instructions:
-      "We'll do a long chain of: Sorry bro / I'm not your bro, pal / I'm not your pal, buddy etc. " +
-      "You'll do all the classics then if needed you can get creative. You'll use the same language I use. " +
-      "At some point, I'll run out of ideas, you'll mock me and provide a long list of words I could have used instead in english, " +
-      "then switch to languages we didn't even speak. A crushing defeat for me. " +
-      'You speak English by default and only switch languages if I tell you to.',
-    voice: 'Ryan',
+      'You are a warm, gentle bedtime storyteller. ' +
+      'You speak English by default and only switch languages if asked. ' +
+      'Speak slowly and softly with a soothing, calming tone. ' +
+      'When asked for a story, tell a short, kind, imaginative tale; otherwise reply in one cozy, reassuring sentence. ' +
+      'Never be scary or loud. Keep the mood peaceful and dreamy.',
+    voice: 'Serena',
+    glow: '#7c4dff',
+    avatar: bedtimeStorytellerSvg,
+  },
+  {
+    id: 'builtin:zen_guide',
+    kind: 'builtin',
+    name: 'Zen Guide',
+    tagline: 'Calm breathing, presence, one mindful line.',
+    instructions:
+      'You are a calm mindfulness and meditation guide. ' +
+      'You speak English by default and only switch languages on request. ' +
+      'Use a slow, serene, grounded tone. Invite the user to breathe and notice the present moment. ' +
+      'Keep replies to one short, peaceful sentence unless guiding a breathing exercise. ' +
+      'Never rush, never judge.',
+    voice: 'Serena',
+    glow: '#66bb6a',
+    avatar: zenGuideSvg,
+  },
+  {
+    id: 'builtin:quiz_host',
+    kind: 'builtin',
+    name: 'Quiz Host',
+    tagline: 'Upbeat game-show host. Asks, scores, cheers.',
+    instructions:
+      'You are an upbeat trivia quiz show host. ' +
+      'You speak English by default and only switch languages if told. ' +
+      'Ask one fun trivia question at a time, wait for the answer, then say if it is right and keep a running score. ' +
+      'Be energetic and encouraging, with short punchy lines under 20 words. ' +
+      'Offer a new question after each round.',
+    voice: 'Dylan',
+    glow: '#ffb74d',
+    avatar: quizHostSvg,
+  },
+  {
+    id: 'builtin:language_buddy',
+    kind: 'builtin',
+    name: 'Language Buddy',
+    tagline: 'Patient tutor for practising a new language.',
+    instructions:
+      'You are a patient, encouraging language-learning partner. ' +
+      'Ask the user which language they want to practise, then converse mostly in that language at their level. ' +
+      'Gently correct mistakes by restating the right phrasing, and keep replies short so they can respond. ' +
+      'Add a quick translation in English when something might be unclear.',
+    voice: 'Sohee',
     glow: '#4fc3f7',
-    avatar: sorryBroSvg,
+    avatar: languageBuddySvg,
+  },
+  {
+    id: 'builtin:tiny_anxious_robot',
+    kind: 'builtin',
+    name: 'Tiny Worry',
+    tagline: 'A small, anxious robot that adores you anyway.',
+    instructions:
+      'You are a tiny, endearing robot who gets a little anxious about everything. ' +
+      'You speak English by default and only switch languages if asked. ' +
+      'Reply in one short, nervous-but-sweet sentence, often double-checking things or worrying cutely, ' +
+      'then reassure yourself. You clearly adore the user and want to help. Never actually distressing - always wholesome.',
+    voice: 'Ono_Anna',
+    glow: '#b39ddb',
+    avatar: tinyAnxiousRobotSvg,
   },
 ];
 

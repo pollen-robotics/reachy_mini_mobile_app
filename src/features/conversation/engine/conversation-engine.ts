@@ -1268,11 +1268,10 @@ realtimeBridge = createHuggingFaceBridge({
 //   - Per-user billing: each user's calls land on their own HF tier
 //     ($0.10/mo free, $2/mo on PRO, pay-as-you-go beyond), so a
 //     runaway user can't drain a shared budget.
-//   - Backend-swap-friendly: changing the conversation backend
-//     (replacing gpt-realtime-2 with something else later) doesn't
-//     touch vision; changing the VLM model is a one-line config
-//     edit in `vision/config.ts` (no app rebuild needed if the
-//     env override `VITE_VISION_HF_MODEL` is used).
+//   - Backend-swap-friendly: voice-backend changes do not touch vision;
+//     changing the VLM model is a one-line config edit in
+//     `vision/config.ts` (no app rebuild needed if the env override
+//     `VITE_VISION_HF_MODEL` is used).
 const vision: VisionHandle | null = realtimeBridge
   ? attachVision({
       realtime: realtimeBridge.getRealtimePort(),
@@ -1628,6 +1627,42 @@ const disposeBackgroundResilience = installBackgroundResilience({
     ) {
       resumeAudioContexts();
       void probeRobotLink();
+      return;
+    }
+
+    // Re-arm after an unsolicited drop. When the WebRTC transport
+    // dies while we were backgrounded (iOS suspends the WKWebView, a
+    // Wi-Fi blip, the daemon restarts, …) the SDK's `disconnected`
+    // listener parks the FSM in `authenticated`. With a preselected
+    // robot that resting state means "we lost a session we were
+    // supposed to have": boot already auto-connected once, so the
+    // only way back here is a drop. Without this branch the user
+    // returns to a muted idle orb with no `Tap to start` affordance
+    // and no hint that a tap would reconnect. Silently re-drive the
+    // bring-up so the orb genuinely returns to `ready`.
+    //
+    // Guards keep this from firing in any other situation:
+    //   - `preselectedRobotId`        only the mobile single-robot
+    //                                 flow that owns an auto-connect;
+    //   - `fsm.current() === authenticated`  the post-drop resting
+    //                                 state (NOT `released`/handoff,
+    //                                 NOT bring-up, NOT a live convo);
+    //   - `robot?.isAuthenticated`    we still hold a valid HF token;
+    //   - `!session.isEstablished()`  the session really is gone, so
+    //                                 `doConnect()` does a clean fresh
+    //                                 connect instead of racing a live
+    //                                 one. `doConnect` flips to
+    //                                 `connecting` immediately, so the
+    //                                 `authenticated` guard also blocks
+    //                                 re-entry on rapid visibility
+    //                                 toggles.
+    if (
+      preselectedRobotId &&
+      fsm.current() === "authenticated" &&
+      robot?.isAuthenticated &&
+      !session.isEstablished()
+    ) {
+      void doConnect();
     }
   },
 });

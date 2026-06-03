@@ -88,6 +88,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 
 import reachyBusteSvg from '@/assets/reachy-buste.svg';
 import RobotAvatar from '@/ui/design/RobotAvatar';
+import PersonaAvatar from '@/ui/design/PersonaAvatar';
+import { getRememberedPersonaId, resolvePersonalityById } from '@/features/personalities';
 import {
   extractRobotActiveApp,
   extractRobotBusy,
@@ -99,7 +101,7 @@ import {
 } from '@/features/auth/fetchRobotsFromCentral';
 import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
-import { TransportChip } from '@/ui/design/TransportChip';
+import { VariantTag } from '@/ui/design/MetaPill';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 
@@ -859,7 +861,7 @@ function RemoteRobotCard({
           width: '100%',
         }}
       >
-        <CardAvatar />
+        <CardAvatar robotKey={hardwareId ?? id} />
         {/* Two-row identity grid, both rows left-aligned hugging
             the avatar. Mirrors the post-connect `<IdentityChipBar>`
             so a user who picked a robot keeps recognising the same
@@ -894,7 +896,7 @@ function RemoteRobotCard({
               {extractRobotName(robot)}
             </Typography>
             <Box sx={{ flexShrink: 0 }}>
-              <TransportChip transport={transport} height={20} />
+              <VariantTag transport={transport} />
             </Box>
           </Stack>
           <Typography
@@ -946,11 +948,22 @@ function RemoteRobotCard({
 }
 
 /**
- * Card-sized variant of the shared `RobotAvatar`. Kept as a thin
- * wrapper to preserve the original call sites (`<CardAvatar />`)
- * and pin the discovery-card sizing in one place.
+ * Card-sized avatar for a discovery row.
+ *
+ * When we remember a personality for this robot (keyed by its stable
+ * `hardware_id`, recorded the last time the user was in a session with
+ * it - see `rememberRobotPersona`), we show that persona's face so the
+ * robot reads as "the one you dressed up as Mars Rover". Otherwise -
+ * never paired, daemon too old to expose a hardware id, or the
+ * remembered persona was since deleted - we fall back to the generic
+ * Reachy silhouette. Pins the discovery-card sizing in one place.
  */
-function CardAvatar() {
+function CardAvatar({ robotKey }: { robotKey: string | null }) {
+  const rememberedId = getRememberedPersonaId(robotKey);
+  const persona = rememberedId ? resolvePersonalityById(rememberedId) : null;
+  if (persona) {
+    return <PersonaAvatar src={persona.avatar} size={72} name={persona.name} />;
+  }
   return <RobotAvatar size={72} />;
 }
 

@@ -35,7 +35,7 @@
  * THIS panel via a ref forwarded back to the session through
  * `audioLevelsTargetRef` on the host side.
  */
-import { Box, ButtonBase, Divider, Stack, alpha } from '@mui/material';
+import { Box, ButtonBase, Divider, Stack } from '@mui/material';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
@@ -101,6 +101,19 @@ export function ConversationPanel({
     session.engineState === 'processing' ||
     session.engineState === 'ai-speaking';
 
+  // "Engaged" = the user has opted into the AI conversation by tapping
+  // the orb, regardless of whether the realtime backend has answered yet.
+  // Tapping the orb in `ready` flips the engine to `starting` (HF
+  // realtime session allocation + websocket handshake) BEFORE it reaches
+  // `listening`, so `live` alone
+  // would leave the personality picker reachable during that gap. We
+  // treat that post-tap `starting` as engaged too. The `starting` of
+  // the initial robot bring-up is excluded via `hasReachedReady` (which
+  // only latches once we've first hit `ready`), so the picker stays
+  // available while the orb says "Tap to start conversation".
+  const conversationEngaged =
+    live || (session.engineState === 'starting' && session.hasReachedReady);
+
   // Daemon-side audio state (volumes + mute toggles). Read here so
   // the bottom audio strip stays in lockstep with the daemon
   // without round-tripping props down through the orb subtree.
@@ -143,18 +156,15 @@ export function ConversationPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
-    if (live || session.engineState === 'error') {
+    if (conversationEngaged || session.engineState === 'error') {
       setPickerOpen(false);
       setSettingsOpen(false);
     }
-  }, [live, session.engineState]);
+  }, [conversationEngaged, session.engineState]);
 
   const togglePicker = useCallback(() => {
     setSettingsOpen(false);
     setPickerOpen(prev => !prev);
-  }, []);
-  const closePicker = useCallback(() => {
-    setPickerOpen(false);
   }, []);
   const toggleSettings = useCallback(() => {
     setSettingsOpen(prev => {
@@ -170,8 +180,9 @@ export function ConversationPanel({
   // band stays put and its "+" morphs into the "✕" that closes the
   // form. Create is triggered from the band's trailing "+", edit from a
   // custom card's pencil in the store.
-  //   - create success -> close form + picker (land on the orb with the
-  //     new persona selected).
+  //   - create success -> close form only, stay in the picker so the user
+  //     sees their new persona (cooking its avatar) instead of the tab
+  //     snapping shut.
   //   - edit success/delete -> close form only, stay in the picker so
   //     the user sees the updated (or removed) card.
   const [formMode, setFormMode] = useState<PersonaFormMode>(null);
@@ -308,6 +319,10 @@ export function ConversationPanel({
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
           display: settingsOpen ? 'none' : 'block',
+          // Let the persona avatar disc spill slightly past the band's
+          // bottom divider and paint OVER the body slot below it.
+          position: 'relative',
+          zIndex: 1,
         }}
       >
         <Box sx={{ maxWidth: 720, mx: 'auto' }}>
@@ -324,9 +339,10 @@ export function ConversationPanel({
             open={pickerOpen}
             onToggle={togglePicker}
             onCreate={toggleForm}
+            onEditActive={openEdit}
             creating={formMode?.kind === 'create'}
             editingPersona={formMode?.kind === 'edit' ? formMode.persona : null}
-            disabled={live}
+            disabled={conversationEngaged}
           />
         </Box>
       </Box>
@@ -523,7 +539,7 @@ export function ConversationPanel({
                 <ButtonBase
                   aria-label="Conversation settings"
                   aria-pressed={settingsOpen}
-                  disabled={live || session.engineState === 'error'}
+                  disabled={conversationEngaged || session.engineState === 'error'}
                   onClick={toggleSettings}
                   sx={{
                     flexShrink: 0,
@@ -539,15 +555,14 @@ export function ConversationPanel({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: settingsOpen ? 'primary.main' : 'text.secondary',
-                    bgcolor: t =>
-                      settingsOpen ? alpha(t.palette.primary.main, 0.1) : 'transparent',
+                    color: 'primary.main',
+                    // Active (panel open): a clean white card surface that
+                    // pops off the strip's `background.default` canvas, rather
+                    // than the old primary tint that read grey-ish.
+                    bgcolor: settingsOpen ? 'background.paper' : 'transparent',
                     transition: 'background-color 0.15s ease, color 0.15s ease',
                     '&:hover': {
-                      bgcolor: t =>
-                        settingsOpen
-                          ? alpha(t.palette.primary.main, 0.16)
-                          : 'action.hover',
+                      bgcolor: settingsOpen ? 'background.paper' : 'action.hover',
                     },
                     '&.Mui-disabled': { opacity: 0.45 },
                     WebkitTapHighlightColor: 'transparent',
@@ -605,19 +620,15 @@ export function ConversationPanel({
         )}
 
         {pickerOpen && !formOpen && (
-          <PersonalityStore
-            onClose={closePicker}
-            onEdit={openEdit}
-            onCreate={() => setFormMode({ kind: 'create' })}
-          />
+          <PersonalityStore onCreate={() => setFormMode({ kind: 'create' })} />
         )}
 
         {/* Persona authoring form, EMBEDDED in the body slot (below the
             always-visible personality band, not as a full-screen
             overlay) so the band stays put and its "✕" remains the way
-            out. Keyed by target so switching create<->edit (or between
+            out.             Keyed by target so switching create<->edit (or between
             two personas) remounts the form with fresh field state.
-              - create success -> close form + picker (land on the orb).
+              - create success -> close form only, back to picker.
               - edit success/delete -> close form only, back to picker. */}
         {formMode && (
           <CreatePersonalityModal
@@ -626,9 +637,13 @@ export function ConversationPanel({
             editing={formMode.kind === 'edit' ? formMode.persona : null}
             onCancel={closeForm}
             onCreated={() => {
-              const wasCreate = formMode.kind === 'create';
+              // Both create AND edit return to the picker (not the orb):
+              // after "Save & use" the user lands back in the personality
+              // store with their new/updated persona visible (and cooking
+              // its avatar) rather than the tab snapping shut. Closing the
+              // store is an explicit action (its own ✕ / tapping away).
+              setPickerOpen(true);
               closeForm();
-              if (wasCreate) closePicker();
             }}
             onDeleted={closeForm}
           />

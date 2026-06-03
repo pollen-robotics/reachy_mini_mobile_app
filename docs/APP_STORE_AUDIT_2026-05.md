@@ -14,15 +14,16 @@ This document answers a different question from the compliance plan:
 > we built the bundle this afternoon?**
 
 Short answer: the **shell is ~85% submission-ready**. The hard
-client-side UGC work is done, and the OpenAI key blocker has since
-been resolved (the bundle no longer ships a long-lived key). The
+client-side UGC work is done, and the voice-backend credential blocker
+has since been resolved (the bundle no longer ships a long-lived model
+provider key). The
 blockers that remain are:
 
-1. ~~**The OpenAI API key is baked into the bundle**~~ **RESOLVED
-   (2026-05)**: the bundle no longer carries a long-lived OpenAI key.
-   Voice conversation now mints a per-user, short-lived ephemeral key
-   via the website Space's `/api/openai/ephemeral` endpoint, gated by
-   the user's Hugging Face token. See § 2.1.
+1. ~~**A long-lived model-provider key is baked into the bundle**~~
+   **RESOLVED (2026-06)**: the bundle carries no long-lived
+   model-provider key. Voice conversation now allocates an
+   HF-token-gated realtime session via the HF realtime session proxy.
+   See § 2.1.
 2. **No server-side kill switch on the catalog** (1 hard Apple UGC
    blocker).
 3. **No pre-publication moderation pipeline** (1 hard Apple UGC
@@ -115,7 +116,7 @@ NSLocalNetworkUsageDescription    - daemon HTTP on robot:8000
 
 Plus the right orientation locks (portrait), `UIRequiresFullScreen
 = true` (no iPad Split View resizing the WKWebView mid-WebRTC), and
-`UIBackgroundModes = audio` for the OpenAI Realtime pipeline. Each
+`UIBackgroundModes = audio` for the HF realtime voice pipeline. Each
 key is well-commented in `src-tauri/Info.plist` so the next time
 someone refactors it, the rationale is right there.
 
@@ -146,12 +147,12 @@ all reviewer-invisible. The current vocabulary in the UI ("Apps",
 
 ## 2. What's missing - the actual blockers
 
-### 2.1 OpenAI API key baked into the bundle - RESOLVED (2026-05)
+### 2.1 Long-lived model-provider key in the bundle - RESOLVED (2026-06)
 
 > **Status: fixed.** This was the #1 hard blocker in the original
-> 2026-05-26 audit. It has since been resolved by option 1 below
-> (server-issued ephemeral keys). The section is kept for historical
-> context and so the App Review data-flow story stays documented.
+> 2026-05-26 audit. It was first resolved by server-issued ephemeral
+> keys and then superseded by the HF realtime backend migration. The
+> section is kept so the App Review data-flow story stays documented.
 
 **What used to be the problem.** The shell baked a long-lived OpenAI
 API key into the bundle (`VITE_OPENAI_API_KEY` ->
@@ -160,33 +161,31 @@ API key into the bundle (`VITE_OPENAI_API_KEY` ->
 the shipped `.ipa`, which violates OpenAI's ToS for distributed
 clients and exposed Pollen's quota to anyone who pulled it apart.
 
-**How it was fixed.** The build-time injection is gone from
+**How it is fixed now.** The build-time injection is gone from
 `settings.ts`, `.env.example`, and `build-mobile.yml` (the workflow no
-longer needs an `OPENAI_API_KEY` repo secret). Voice conversation now
-follows the server-issued ephemeral-key path:
+longer needs a model-provider API key repo secret). Voice conversation
+now follows the HF realtime session path:
 
 1. The phone holds an HF token (acquired via the in-app
    `ASWebAuthenticationSession` OAuth flow).
-2. [`ephemeral-key.ts`](../src/features/conversation/engine/ephemeral-key.ts)
-   POSTs that token as `Authorization: Bearer <hf_token>` to the
-   website Space's `/api/openai/ephemeral` endpoint.
-3. The server validates the HF token (`whoami-v2`), rate-limits per
-   HF user, then mints a short-lived (~10 min) OpenAI Realtime client
-   secret using the master `OPENAI_API_KEY` that stays in the Space's
-   secrets.
-4. The `ek_…` value is used as the bearer for the
-   `POST /v1/realtime/calls` GA handshake. The long-lived key never
-   reaches the client.
+2. [`hf-token.ts`](../src/features/conversation/engine/hf-token.ts)
+   reads that token from session storage and passes it to the HF
+   realtime session proxy.
+3. The session proxy validates/rate-limits the user and returns a
+   short-lived realtime websocket URL for the backend.
+4. The phone connects through
+   [`huggingface-realtime.ts`](../src/features/conversation/engine/huggingface-realtime.ts).
+   No long-lived model-provider key reaches the client bundle.
 
 **Residual App Review work (still required).** Even though the key is
 gone, the data flow still needs disclosure:
 
-- **Apple 5.1.2**: end-user audio is shipped to a third party (OpenAI)
-  over the WebRTC tunnel. The privacy nutrition label must disclose
-  it, and the App Review notes should explain the ephemeral-key
-  brokering so the reviewer doesn't ask "how do you prevent abuse if
-  your key leaks?" (answer: there is no long-lived key in the bundle;
-  access is HF-token-gated and rate-limited server-side).
+- **Apple 5.1.2**: end-user audio is sent to the HF realtime backend.
+  The privacy nutrition label must disclose it, and the App Review notes
+  should explain the HF-token-gated session allocation so the reviewer
+  doesn't ask "how do you prevent abuse if your key leaks?" (answer:
+  there is no long-lived key in the bundle; access is HF-token-gated and
+  rate-limited server-side).
 
 Effort remaining: 0 (engineering); the disclosure is folded into the
 § 2.4 paperwork.
@@ -245,7 +244,7 @@ Not code work, but you can't submit without these:
 
 - **Privacy Nutrition Label** populated, including:
   - Account info (HF username + token storage)
-  - Audio (mic capture, sent to OpenAI Realtime, not stored on
+  - Audio (mic capture, sent to the HF realtime backend, not stored on
     Pollen servers)
   - Identifiers (HF user id, robot peer id)
   - User content (text from conversation transcripts if we surface
@@ -261,7 +260,7 @@ Not code work, but you can't submit without these:
   `https://www.pollen-robotics.com/personal-data-protection-charter/`.
   **Verify** that this document covers:
   - HF account info (token, username) used for Hub auth.
-  - Audio sent to OpenAI Realtime (purpose, retention, no
+  - Audio sent to the HF realtime backend (purpose, retention, no
     server-side storage on Pollen side).
   - Third-party Spaces operating independently with their own
     policies.
@@ -292,21 +291,20 @@ four with per-message rationale plus the "no incoming messages
 consumed" note, so it stays the source of truth a reviewer can be
 pointed at.
 
-### 3.2 OpenAI Realtime data flow not disclosed in EULA
+### 3.2 HF realtime data flow not disclosed in EULA
 
 The first-launch `EulaConsentModal` says:
 
-> Your microphone audio is sent to OpenAI Realtime to power Reachy
+> Your microphone audio is sent to the HF realtime backend to power Reachy
 > Mini's replies. Audio is not stored on our servers.
 
 Good. But it doesn't mention:
 
-- OpenAI **may** retain audio per their data usage policy (we sign
-  the consumer ToS).
+- The realtime backend provider's retention and processing terms.
 - Tool calls return to the model with the robot's state.
 
 Acceptable as-is for Apple, but worth aligning with whatever the
-final Privacy Policy says about OpenAI's data handling, so the
+final Privacy Policy says about realtime audio handling, so the
 in-app text and the public policy don't contradict each other.
 
 ### 3.3 `developmentTeam` ID needs verification
@@ -335,7 +333,7 @@ for future devs but invisible to App Review. The App Review notes
 should pre-empt the question:
 
 > The app uses the `audio` background mode to keep the WebRTC peer
-> connection to OpenAI Realtime alive while the device is locked,
+> connection to the robot and HF realtime backend alive while the device is locked,
 > so a voice conversation in progress isn't dropped when the user
 > pockets the phone. Mirrors Discord / Slack / Google Assistant
 > background-audio entitlements.
@@ -353,10 +351,10 @@ needed today.
 
 ### 4.1 Hard blockers (cannot submit without these)
 
-- [x] **(2.1)** ~~Move the OpenAI API key off the bundle~~ **DONE**:
-      ephemeral keys from the website Space's `/api/openai/ephemeral`
-      endpoint. Build-time injection removed from `.env.example`,
-      GitHub Actions, and `settings.ts`.
+- [x] **(2.1)** ~~Move the long-lived model-provider key off the bundle~~
+      **DONE**: HF-token-gated realtime session allocation. Build-time
+      key injection removed from `.env.example`, GitHub Actions, and
+      `settings.ts`.
 - [ ] **(2.2)** Server-side kill switch on the catalog
       (`mobile_visible: true` + `?surface=mobile` filter on
       `/api/js-apps`).
@@ -367,14 +365,15 @@ needed today.
 - [ ] **(2.4)** App Review notes drafted (4.7 citation + precedents
       + moderation backend = HF Trust & Safety).
 - [ ] **(2.4)** Privacy Policy URL publicly reachable and covering
-      all data flows (HF token, audio to OpenAI, third-party Spaces).
+      all data flows (HF token, audio to the HF realtime backend,
+      third-party Spaces).
 
 ### 4.2 Soft blockers (cheap fixes, do before submission)
 
 - [ ] **(3.1)** `APP_STORE_COMPLIANCE.md` § 2.4 updated to list all
       four `postMessage` kinds with rationale per kind.
 - [ ] **(3.2)** EULA copy reconciled with the Privacy Policy
-      regarding OpenAI's data handling.
+      regarding realtime audio handling.
 - [ ] **(3.3)** `developmentTeam: 4KLHP7L6KP` confirmed to be the
       Pollen Robotics organisation.
 - [ ] **(3.4)** `src-tauri/capabilities/default.json` audited and
@@ -409,8 +408,7 @@ Assuming sequential work, single owner per chantier:
 
 | Workstream | Effort | Dependency |
 |---|---|---|
-| ~~OpenAI ephemeral keys backend~~ | done | shipped 2026-05 |
-| ~~OpenAI ephemeral keys mobile rewire~~ | done | shipped 2026-05 |
+| ~~Voice backend credential migration~~ | done | HF realtime session allocator shipped 2026-06 |
 | Catalog kill switch | 1 day | Coordination with `pollen-robotics-reachy-mini` owner |
 | Catalog moderation v1 | 3 days | Off-the-shelf classifier choice |
 | Privacy Policy review + update | 0.5-1 day | Legal review |
@@ -418,7 +416,7 @@ Assuming sequential work, single owner per chantier:
 | Bridge doc update + capability audit | 1 day | None |
 
 **Realistic critical path**: ~1 week calendar from "start" to
-"submission-ready bundle" now that the OpenAI key migration is done,
+"submission-ready bundle" now that the voice credential migration is done,
 with the catalog kill switch / moderation backend being the long
 pole.
 
@@ -426,11 +424,9 @@ pole.
 
 ## 6. Open questions for product
 
-1. ~~Do we want **ephemeral keys** or **user OAuth**?~~ **Decided:
-   ephemeral keys.** Pollen's master key mints short-lived,
-   HF-token-gated, per-user rate-limited keys via
-   `/api/openai/ephemeral`. Revisit user-OAuth-on-OpenAI only if the
-   business model needs each user to pay from their own quota.
+1. ~~Do we want **ephemeral keys** or **user OAuth** for the old OpenAI
+   path?~~ **Superseded by HF realtime.** The app now uses the signed-in
+   user's HF token to allocate short-lived realtime backend sessions.
 2. The kill switch is server-side; **who operates it**? Pollen
    only, or any HF moderator? The Apple-safe answer is "Pollen
    only", with author input as a hint.
@@ -439,8 +435,8 @@ pole.
    moderation pipeline to mature beyond v1?
 4. **TestFlight first**? A TestFlight internal-test build can
    already ship today (TestFlight doesn't enforce the catalog
-   moderation question), which would let us iterate on the OpenAI
-   key migration in real builds without the App Store review loop.
+   moderation question), which would let us iterate on the HF realtime
+   backend in real builds without the App Store review loop.
    Strongly recommended.
 
 ---
@@ -452,5 +448,3 @@ pole.
 - [`README.md`](../README.md) - stack overview
 - [Apple App Store Review Guidelines, section 4.7](https://developer.apple.com/app-store/review/guidelines/#mini-apps-mini-games-streaming-games-chatbots-plug-ins-and-game-emulators)
 - [Apple App Store Review Guidelines, section 1.2 (UGC)](https://developer.apple.com/app-store/review/guidelines/#user-generated-content)
-- [OpenAI API key safety best practices](https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety)
-- [OpenAI Realtime API ephemeral tokens](https://platform.openai.com/docs/guides/realtime-webrtc)

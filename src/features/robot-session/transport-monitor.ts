@@ -43,6 +43,59 @@ export interface TransportInfo {
   kind: TransportKind;
   bps: number | null;
   remoteIp: string | null;
+  /**
+   * Rolling-min round-trip time on the selected candidate pair, in
+   * milliseconds, or `null` when the platform doesn't expose it (iOS
+   * WKWebView). This - NOT `bps` - is the meaningful link-QUALITY
+   * signal: latency drives perceived voice quality, whereas `bps` is
+   * capped at 32 kbps and tracks speech activity. The UI maps it to
+   * signal bars via {@link linkQualityLevel}; `kind` becomes a
+   * separate "topology" tag rather than the bars' driver.
+   */
+  rttMs: number | null;
+}
+
+/**
+ * Coarse link-quality level used by the topbar's signal bars.
+ * `0` = unknown / still measuring (rendered as muted/empty bars).
+ */
+export type LinkQuality = 0 | 1 | 2 | 3;
+
+/** RTT (ms) cut-offs for the 3 → 2 and 2 → 1 bar transitions. */
+const RTT_GOOD_MS = 40; // < 40 ms  : excellent, imperceptible → 3 bars
+const RTT_OK_MS = 150; // < 150 ms : usable                  → 2 bars
+//                        ≥ 150 ms : laggy                    → 1 bar
+
+/**
+ * Map the live transport to a 0-3 quality level for the signal bars.
+ *
+ * Prefers RTT (the real quality axis); falls back to the topology
+ * `kind` only when RTT is unavailable (iOS WKWebView doesn't expose
+ * `currentRoundTripTime`), so the bars still say something sensible
+ * there. A fast `direct` link therefore shows 3 full bars on
+ * RTT-capable platforms instead of being capped at 2 by topology -
+ * which was the whole point of moving off a kind-driven mapping.
+ *
+ * Shared by the monitor (to dedupe emissions on level changes) and by
+ * the `<LinkQualityBars>` renderer, so thresholds live in exactly one
+ * place.
+ */
+export function linkQualityLevel(rttMs: number | null, kind: TransportKind): LinkQuality {
+  if (rttMs !== null) {
+    if (rttMs < RTT_GOOD_MS) return 3;
+    if (rttMs < RTT_OK_MS) return 2;
+    return 1;
+  }
+  switch (kind) {
+    case 'lan':
+      return 3;
+    case 'direct':
+      return 2;
+    case 'relay':
+      return 1;
+    default:
+      return 0; // checking
+  }
 }
 
 interface RTCIceCandidateStat {
@@ -70,12 +123,32 @@ interface RTCStatsWithCandidates {
   remoteCandidateId?: string;
 }
 
+/**
+ * RTT floor (ms) below which a host↔host pair is treated as physically
+ * local even when addressing is ambiguous. A genuine LAN pair floors
+ * sub-few-ms; an internet hop never dips below ~5 ms, so the value is
+ * a conservative "same L2" cut-off. Only ever UPGRADES to `lan` - it's
+ * one of three OR-ed signals, never the sole authority.
+ */
+const LAN_RTT_MAX_MS = 5;
+/**
+ * Number of RTT samples kept for the rolling-min. ~6 ticks ≈ 9 s of
+ * history: long enough that a single Wi-Fi jitter spike can't bounce
+ * us out of `lan` (we classify off the min, i.e. the path floor).
+ */
+const RTT_WINDOW_SIZE = 6;
+
 export class TransportMonitor {
   private pc: RTCPeerConnection | null = null;
   private timer: number | null = null;
   private lastKind: TransportKind | null = null;
   private lastBps: number | null = null;
   private lastRemoteIp: string | null = null;
+  private lastLevel: LinkQuality | null = null;
+  // Rolling window of recent RTT samples (ms) on the selected pair.
+  // Classification reads the MIN over the window so transient jitter
+  // can't drop us out of `lan`; the floor reflects the physical path.
+  private rttWindowMs: number[] = [];
   // External listener wired via `start(pc, listener)`. Captured per
   // session and cleared on `stop()` so it can't leak to the next
   // engine mount when the singleton is reused.
@@ -93,7 +166,7 @@ export class TransportMonitor {
     this.stop();
     this.pc = pc;
     this.listener = listener;
-    this.show('checking', null, null);
+    this.show('checking', null, null, null);
     // 1.5 s strikes a decent balance: responsive enough that the bitrate
     // feels live, but infrequent enough that `getStats()` doesn't show up
     // on the main-thread profile.
@@ -111,6 +184,8 @@ export class TransportMonitor {
     this.lastKind = null;
     this.lastBps = null;
     this.lastRemoteIp = null;
+    this.lastLevel = null;
+    this.rttWindowMs = [];
     this.prevBytesSent = -1;
     this.prevBytesRecv = -1;
     this.prevSampleTs = 0;
@@ -122,7 +197,8 @@ export class TransportMonitor {
     try {
       const stats = await pc.getStats();
       const bps = this.sampleBitrate(stats);
-      const { kind, remoteIp: remoteIpFromStats } = analyzeSelectedPair(stats);
+      const rttMs = this.sampleRttMinMs(stats);
+      const { kind, remoteIp: remoteIpFromStats } = analyzeSelectedPair(stats, { rttMs });
       // SDP fallback: iOS WKWebView (and some older Chromium builds)
       // don't expose the `address` / `ip` field on `RTCIceCandidate`
       // stats - the spec made it optional and Safari leaves it out.
@@ -135,7 +211,7 @@ export class TransportMonitor {
       if (!remoteIp && kind !== 'checking' && kind !== 'relay') {
         remoteIp = extractRobotHostIp(pc.remoteDescription?.sdp ?? null);
       }
-      this.show(kind, bps, remoteIp);
+      this.show(kind, bps, remoteIp, rttMs);
     } catch (err) {
       console.warn('[transport] getStats failed:', err);
     }
@@ -145,26 +221,33 @@ export class TransportMonitor {
     kind: TransportKind,
     bps: number | null,
     remoteIp: string | null,
+    rttMs: number | null,
   ): void {
     // Dedup on the rounded bitrate so micro-fluctuations don't fire the
     // listener every tick. ~0.1 kbps granularity is more than enough for
     // the UI - the badge formats to one decimal. `remoteIp` is included
     // in the dedup so a late-arriving address (Chromium resolves mDNS a
-    // few ticks after nomination) actually triggers a re-render.
+    // few ticks after nomination) actually triggers a re-render. The
+    // quality LEVEL (not raw `rttMs`) is in the dedup too, so the signal
+    // bars re-render when latency crosses a bar boundary but not on
+    // every sub-threshold RTT jitter tick.
     const roundedBps = bps === null ? null : Math.round(bps / 100) * 100;
+    const level = linkQualityLevel(rttMs, kind);
     if (
       kind === this.lastKind &&
       roundedBps === this.lastBps &&
-      remoteIp === this.lastRemoteIp
+      remoteIp === this.lastRemoteIp &&
+      level === this.lastLevel
     ) {
       return;
     }
     this.lastKind = kind;
     this.lastBps = roundedBps;
     this.lastRemoteIp = remoteIp;
+    this.lastLevel = level;
     if (this.listener) {
       try {
-        this.listener({ kind, bps, remoteIp });
+        this.listener({ kind, bps, remoteIp, rttMs });
       } catch (err) {
         // Listener errors must never tear down the engine.
         console.warn('[transport] onTransportChange listener threw:', err);
@@ -249,6 +332,36 @@ export class TransportMonitor {
     this.prevSampleTs = nowTs;
     return bps;
   }
+
+  /**
+   * Read the selected candidate-pair's `currentRoundTripTime` and
+   * return the rolling MIN over the recent window, in milliseconds.
+   * Returns `null` when the platform doesn't expose RTT (iOS WKWebView
+   * often omits it) - the classifier then simply ignores the RTT
+   * signal and leans on addressing. The min is the robust read: see
+   * {@link RTT_WINDOW_SIZE}.
+   */
+  private sampleRttMinMs(stats: RTCStatsReport): number | null {
+    let rttMsSample: number | null = null;
+    stats.forEach((report) => {
+      if (report.type !== 'candidate-pair') return;
+      const pair = report as RTCStatsWithCandidates & {
+        selected?: boolean;
+        currentRoundTripTime?: number;
+      };
+      const isSelected =
+        pair.selected === true ||
+        (pair.nominated === true && pair.state === 'succeeded');
+      if (!isSelected) return;
+      if (typeof pair.currentRoundTripTime === 'number') {
+        rttMsSample = pair.currentRoundTripTime * 1000;
+      }
+    });
+    if (rttMsSample === null) return null;
+    this.rttWindowMs.push(rttMsSample);
+    if (this.rttWindowMs.length > RTT_WINDOW_SIZE) this.rttWindowMs.shift();
+    return Math.min(...this.rttWindowMs);
+  }
 }
 
 /**
@@ -262,15 +375,23 @@ export class TransportMonitor {
  *   relay   - either side uses a TURN-relayed candidate. The audio
  *             flows through a third-party relay (worst latency).
  *
- *   lan     - both sides use `host` candidates AND both addresses are
- *             provably private (RFC1918, IPv6 ULA / link-local,
- *             loopback, or an mDNS `.local` hostname). The `host`
- *             type alone is NOT enough: ICE marks any candidate bound
- *             to a local interface as `host`, including ones that
- *             carry a publicly-routable IPv6 (common with native v6
- *             at French ISPs - Free, Orange) or even a public IPv4.
- *             A "host + host" pair on those addresses is genuine
- *             peer-to-peer over the internet, not LAN.
+ *   lan     - both sides use `host` candidates AND at least one of
+ *             three signals confirms a same-link pair (see the inline
+ *             block at the decision site):
+ *               1. both addresses provably private (RFC1918, IPv6
+ *                  ULA / link-local, loopback, `.local`);
+ *               2. both addresses share a routing prefix (IPv6 /64 or
+ *                  IPv4 /24) - rescues native-v6 homes (Free, Orange)
+ *                  where two public GUAs sit on the same delegated
+ *                  /64, which signal (1) alone would reject;
+ *               3. a sub-few-ms RTT floor (`opts.rttMs`) - a
+ *                  hardware-level same-L2 proof for when the address
+ *                  is unreadable (Safari).
+ *             The `host` type alone is NOT enough: ICE marks any
+ *             candidate bound to a local interface as `host`, incl.
+ *             ones carrying a publicly-routable IP, so a bare
+ *             "host + host" with none of (1)-(3) is genuine
+ *             peer-to-peer over the internet → `direct`.
  *
  *   direct  - peer-to-peer without a relay, but at least one address
  *             is publicly routable (or we can't read it, so we
@@ -286,6 +407,16 @@ export class TransportMonitor {
  */
 export function analyzeSelectedPair(
   stats: RTCStatsReport,
+  opts: {
+    /**
+     * Rolling-min RTT (ms) on the selected pair, when the platform
+     * exposes it. A sub-{@link LAN_RTT_MAX_MS} floor upgrades a
+     * host↔host pair to `lan` even when the addresses don't prove it
+     * (Safari strips them, or they're public IPv6). Omitted / `null`
+     * → the RTT signal is simply not consulted.
+     */
+    rttMs?: number | null;
+  } = {},
 ): { kind: TransportKind; remoteIp: string | null } {
   // Stats shape: `candidate-pair`s reference `local-candidate` and
   // `remote-candidate` entries by id. The "selected" pair is the one
@@ -340,10 +471,31 @@ export function analyzeSelectedPair(
 
   // Both sides are `host`, but that's only "candidate bound to a
   // local interface" - the underlying IP can still be publicly
-  // routable (IPv6 globals, public v4). Verify the actual addresses
-  // before claiming LAN.
+  // routable (IPv6 globals, public v4). We confirm a genuine LAN via
+  // three independent signals, ANY of which is sufficient:
+  //
+  //   1. addressing  - both addresses provably private (RFC1918 /
+  //                    IPv6 ULA / link-local / `.local`). The
+  //                    strictest, privacy-grade proof: the data path
+  //                    never leaves the local network.
+  //   2. same prefix - both addresses share a routing prefix
+  //                    (IPv6 /64 or IPv4 /24). Catches native-v6
+  //                    homes (Free / Orange) where two PUBLIC GUAs
+  //                    sit on the single ISP-delegated /64, which (1)
+  //                    rejects despite being genuinely same-link.
+  //   3. RTT floor   - a sub-few-ms rolling-min RTT, a hardware-level
+  //                    "same L2" proof independent of addressing, for
+  //                    the cases (1)/(2) can't read (Safari strips
+  //                    the address entirely).
+  //
+  // (1) is authoritative for privacy; (2)/(3) only ever rescue false
+  // negatives, never overstate (relay was already excluded above).
   const localAddr = local?.address ?? local?.ip;
-  if (isPrivateAddress(localAddr) && isPrivateAddress(remoteAddr ?? undefined)) {
+  const lanByAddress =
+    isPrivateAddress(localAddr) && isPrivateAddress(remoteAddr ?? undefined);
+  const lanByPrefix = sameRoutingPrefix(localAddr, remoteAddr ?? undefined);
+  const lanByRtt = typeof opts.rttMs === 'number' && opts.rttMs <= LAN_RTT_MAX_MS;
+  if (lanByAddress || lanByPrefix || lanByRtt) {
     return { kind: 'lan', remoteIp: remoteAddr };
   }
   return { kind: 'direct', remoteIp: remoteAddr };
@@ -431,6 +583,86 @@ function isPrivateIpv4(addr: string): boolean {
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
   if (a === 192 && b === 168) return true; // 192.168.0.0/16
   return false;
+}
+
+/**
+ * Whether two candidate addresses sit on the same link, by comparing
+ * their routing prefix: IPv4 /24 (first three octets) or IPv6 /64
+ * (first four hextets).
+ *
+ * This is what upgrades a host↔host pair over two PUBLIC IPv6 GUAs to
+ * `lan`: on a native-v6 home both devices get addresses inside the
+ * single /64 the ISP delegates, so an equal /64 is a strong "same
+ * broadcast domain" signal that `isPrivateAddress` (rightly) rejects.
+ *
+ * Returns `false` whenever either address is missing or not a literal
+ * IP (e.g. a `.local` mDNS hostname) - those are handled by
+ * `isPrivateAddress` instead, so we never overstate LAN here.
+ */
+function sameRoutingPrefix(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+
+  const a4 = asIpv4(a);
+  const b4 = asIpv4(b);
+  if (a4 && b4) {
+    return a4.split('.').slice(0, 3).join('.') === b4.split('.').slice(0, 3).join('.');
+  }
+
+  const a6 = ipv6Prefix64(a);
+  const b6 = ipv6Prefix64(b);
+  return a6 !== null && a6 === b6;
+}
+
+/**
+ * Extract a dotted-quad IPv4 string from an address that may be a
+ * plain v4 or an IPv4-mapped IPv6 (`::ffff:a.b.c.d`). Returns `null`
+ * for anything that isn't v4-shaped (incl. `.local` hostnames).
+ */
+function asIpv4(addr: string): string | null {
+  const a = addr.toLowerCase();
+  const v4 = a.startsWith('::ffff:') ? a.slice('::ffff:'.length) : a;
+  const parts = v4.split('.');
+  if (parts.length !== 4) return null;
+  const valid = parts.every((p) => {
+    const n = Number(p);
+    return Number.isInteger(n) && n >= 0 && n <= 255;
+  });
+  return valid ? v4 : null;
+}
+
+/**
+ * Normalise an IPv6 literal and return its /64 prefix (first four
+ * 16-bit groups, leading zeros stripped, `:`-joined), or `null` if the
+ * input isn't parseable IPv6. Handles `::` zero-run expansion and an
+ * optional `%zone` suffix; bails (returns `null`) on embedded-IPv4 or
+ * malformed forms rather than guessing.
+ */
+function ipv6Prefix64(addr: string): string | null {
+  let s = addr.toLowerCase();
+  const zone = s.indexOf('%');
+  if (zone >= 0) s = s.slice(0, zone);
+  if (!s.includes(':')) return null;
+
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+
+  let groups: string[];
+  if (halves.length === 2) {
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0) return null;
+    groups = [...head, ...Array(missing).fill('0'), ...tail];
+  } else {
+    groups = head;
+  }
+  if (groups.length !== 8) return null;
+
+  const prefix = groups.slice(0, 4).map((g) => {
+    const n = parseInt(g || '0', 16);
+    return Number.isNaN(n) ? null : n.toString(16);
+  });
+  return prefix.some((g) => g === null) ? null : prefix.join(':');
 }
 
 /**
