@@ -227,7 +227,7 @@ useful commands.
 |------|------|
 | `docs/APP_STORE_COMPLIANCE.md` | Apple / Google review policy framework + pre-submission action plan |
 | `docs/APP_STORE_AUDIT_2026-05.md` | Submission-readiness gap analysis (what actually blocks a build today) |
-| `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera permissions on Android |
+| `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
 | `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
 
@@ -235,14 +235,8 @@ useful commands.
 
 Your HF Space loads as an iframe inside Reachy Mini Mobile. The host
 delegates these capabilities to your iframe today: `microphone`, `camera`,
-`autoplay`, `clipboard-read`, `clipboard-write`. Use the corresponding
-`navigator.*` API - nothing extra to request on your end.
-
-Geolocation was previously delegated but is not part of the active host
-surface: no shipping Space uses it today, and unused location permission
-strings are an App Review / Play Console liability. Re-add the iframe
-token and native OS permissions only when a real Space needs
-`navigator.geolocation`.
+`geolocation`, `autoplay`, `clipboard-read`, `clipboard-write`. Use the
+corresponding `navigator.*` API — nothing extra to request on your end.
 
 > **Platform status today**: iOS is fully wired (Info.plist usage strings
 > + iframe `allow` tokens). Android is not yet initialised as a Tauri
@@ -250,13 +244,14 @@ token and native OS permissions only when a real Space needs
 > work that remains is OS-side. The full runbook lives in
 > [`docs/ANDROID_PERMISSIONS.md`](./docs/ANDROID_PERMISSIONS.md):
 > `tauri android init`, manifest patch, and a custom `WebChromeClient`
-> in `MainActivity.kt` (Android WebView denies iframe `getUserMedia`
-> until the host implements `onPermissionRequest`).
+> in `MainActivity.kt` (Android WebView denies iframe `getUserMedia` /
+> `getCurrentPosition` until the host implements
+> `onPermissionRequest` + `onGeolocationPermissionsShowPrompt`).
 
 ### Don't gate on the permission prompt — ask, and if it works, go
 
-In a regular browser, the first `getUserMedia` call shows a permission
-dialog and only proceeds once the user clicks Allow.
+In a regular browser, the first `getUserMedia` / `getCurrentPosition` call
+shows a permission dialog and only proceeds once the user clicks Allow.
 **Inside Reachy Mini, the dialog may never appear** — the mobile app
 typically already holds the OS-level grant (e.g. from the built-in
 conversation feature), so the iframe's call resolves silently. As a side
@@ -266,10 +261,10 @@ effect, `navigator.permissions.query({name:'microphone'})` returns
 Spaces that gate their UI on a visible dialog (or on the Permissions API
 returning `'granted'`) will look broken inside the app even though the
 capability is fully available. The fix is purely Space-side: **call the
-API and use whatever stream you get back. Don't condition UI on
+API and use whatever stream/position you get back. Don't condition UI on
 `permissions.query` state, and don't expect a dialog every time.**
 
-Diagnostic if your Space's mic / camera feature works in a regular browser
+Diagnostic if your Space's mic / GPS feature works in a regular browser
 but seems broken inside Reachy Mini: open Chrome `chrome://inspect/#devices`
 on the dev machine, switch the DevTools console context to your
 `*.hf.space` frame, and run:

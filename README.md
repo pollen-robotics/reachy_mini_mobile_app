@@ -73,7 +73,7 @@ For the deep specs:
 - [`docs/APP_STORE_AUDIT_2026-05.md`](./docs/APP_STORE_AUDIT_2026-05.md) -
   submission-readiness gap analysis (what blocks a build today)
 - [`docs/ANDROID_PERMISSIONS.md`](./docs/ANDROID_PERMISSIONS.md) -
-  runbook for iframe-delegated mic/camera permissions on Android
+  runbook for iframe-delegated mic/camera/geolocation permissions on Android
 
 ## Setup
 
