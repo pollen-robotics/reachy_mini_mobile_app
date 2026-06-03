@@ -60,42 +60,24 @@
  * See: https://huggingface.co/docs/inference-providers/en/index
  */
 
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { routerChatCompletion } from "@/features/hf";
 
 import { VISION_CONFIG } from "../config";
 import type { CapturedFrame, DescribeOptions } from "../types";
 import type { VlmProvider } from "./types";
 
 /**
- * We use the OpenAI-compatible Chat Completions endpoint rather
- * than the newer Responses API. Both work through the HF router,
- * but Chat Completions is the GA "drop-in OpenAI replacement"
- * (per HF's own docs) and Vision via `image_url` content parts has
- * been the canonical OpenAI shape for over a year - every VLM in
- * the catalogue is wired against it. The Responses API is still
- * tagged `(beta)` in HF's documentation and providers fill its
- * envelope inconsistently, which surfaces here as `output_text`
- * being unset on some backends.
- */
-const HF_ROUTER_CHAT_URL =
-  "https://router.huggingface.co/v1/chat/completions";
-
-/**
- * `router.huggingface.co` does NOT serve `Access-Control-Allow-Origin: *`,
- * so the browser-side `fetch` from a Tauri WebView origin
- * (`tauri://localhost`, `http://localhost:1422`, ...) is rejected at
- * the CORS preflight stage. We route the call through the
- * `@tauri-apps/plugin-http` JS wrapper instead, which proxies the
- * request through the Rust runtime (`reqwest` under the hood) and
- * therefore is not subject to browser CORS enforcement.
+ * We use the OpenAI-compatible Chat Completions endpoint rather than the
+ * newer Responses API. Both work through the HF router, but Chat Completions
+ * is the GA "drop-in OpenAI replacement" (per HF's docs) and Vision via
+ * `image_url` content parts is the canonical OpenAI shape every VLM in the
+ * catalogue is wired against. The Responses API is still `(beta)` and
+ * providers fill its envelope inconsistently (`output_text` unset on some).
  *
- * The function exposes the same Fetch API shape as `globalThis.fetch`,
- * including support for `AbortSignal`, so the rest of this provider
- * looks identical to a plain `fetch` call. The capability scope is
- * pinned to `https://router.huggingface.co/*` in
- * `src-tauri/capabilities/default.json`.
+ * The transport itself - Tauri HTTP (CORS bypass), provider-selection policy,
+ * and classified errors - is shared via `@/features/hf`'s
+ * `routerChatCompletion`.
  */
-const httpFetch = tauriFetch;
 
 export interface HfVlmProviderOptions {
   /** Late-bound HF token accessor. Called on every `describeScene`
@@ -150,37 +132,31 @@ export class HfVlmProvider implements VlmProvider {
     );
 
     try {
-      const response = await httpFetch(HF_ROUTER_CHAT_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${hfToken}`,
-        },
+      // Single-model call: vision is multimodal, so we must NOT fall back
+      // across the router's default TEXT instruct chain (those can't read an
+      // image). `discover: false` skips the catalog GET on the vision hot
+      // path (the poller runs this ~60x/hour). The router still applies the
+      // provider-selection policy and raises a classified `HfRouterError` on
+      // failure (caller's poller skips the tick on any throw).
+      const response = await routerChatCompletion({
+        baseModel: this.model,
+        models: [this.model],
+        discover: false,
+        hfToken,
         signal: controller.signal,
-        body: JSON.stringify({
-          model: this.model,
+        body: {
           max_tokens: 200,
           messages: [
             {
               role: "user",
               content: [
                 { type: "text", text: prompt },
-                {
-                  type: "image_url",
-                  image_url: { url: frame.dataUrl },
-                },
+                { type: "image_url", image_url: { url: frame.dataUrl } },
               ],
             },
           ],
-        }),
+        },
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `HF router call failed (${response.status}): ${text.slice(0, 200)}`,
-        );
-      }
 
       const payload = (await response.json()) as VlmResponsePayload;
       const raw = extractText(payload);
