@@ -15,6 +15,7 @@
 import type { Personality } from './types';
 import {
   HF_AVAILABLE_VOICES,
+  normalizeHfVoice,
   type HfVoiceId,
 } from '@/features/conversation/engine/hf-voices';
 
@@ -88,33 +89,24 @@ export const GLOW_PALETTE = [
   '#90A4AE',
 ] as const;
 
+const LEGACY_OPENAI_VOICE_ALIASES: Partial<Record<string, VoiceId>> = {
+  alloy: 'Aiden',
+  cedar: 'Aiden',
+  ash: 'Dylan',
+  ballad: 'Serena',
+  marin: 'Serena',
+  sage: 'Serena',
+  coral: 'Sohee',
+  echo: 'Ono_Anna',
+  shimmer: 'Vivian',
+  verse: 'Vivian',
+};
+
 export function normalizePersonalityVoice(
   value: string | null | undefined,
 ): VoiceId {
   const candidate = (value ?? '').trim().toLowerCase();
-  const exact = AVAILABLE_VOICES.find((voice) => voice.toLowerCase() === candidate);
-  if (exact) return exact;
-
-  switch (candidate) {
-    case 'alloy':
-    case 'cedar':
-      return 'Aiden';
-    case 'ash':
-      return 'Dylan';
-    case 'ballad':
-    case 'marin':
-    case 'sage':
-      return 'Serena';
-    case 'coral':
-      return 'Sohee';
-    case 'echo':
-      return 'Ono_Anna';
-    case 'shimmer':
-    case 'verse':
-      return 'Vivian';
-    default:
-      return 'Aiden';
-  }
+  return LEGACY_OPENAI_VOICE_ALIASES[candidate] ?? normalizeHfVoice(value);
 }
 
 const DEFAULT_INSTRUCTIONS = [

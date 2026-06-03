@@ -1,12 +1,12 @@
 # Android permissions runbook
 
 > Status: implementation runbook / pre-Android-target
-> Last reviewed: 2026-05-29
+> Last reviewed: 2026-06-03
 > Owner: mobile team
 > Scope: every runtime permission the app needs on Android, where each
 > one is declared, who triggers it, and the exact steps to wire the
-> WebView so iframe-delegated `getUserMedia` / `getCurrentPosition`
-> calls actually prompt the user.
+> WebView so iframe-delegated `getUserMedia` calls actually prompt the
+> user.
 > Companion to:
 > [`APP_STORE_COMPLIANCE.md`](./APP_STORE_COMPLIANCE.md) (policy framework)
 > and [`APP_STORE_AUDIT_2026-05.md`](./APP_STORE_AUDIT_2026-05.md)
@@ -21,8 +21,8 @@ It exists because the permission model on Android WebView is *not*
 automatic the way iOS WKWebView is. On iOS, declaring the
 `NSXxxUsageDescription` strings + the iframe `allow` tokens is enough;
 WKWebView prompts the user on the first `getUserMedia`. On Android, the
-host **must** implement two `WebChromeClient` callbacks or the iframe's
-media / geolocation calls are silently denied with no prompt.
+host **must** implement a `WebChromeClient` permission bridge or the
+iframe's media calls are silently denied with no prompt.
 
 ---
 
@@ -37,15 +37,14 @@ If you only read one section, read this.
    re-applied after every `init`** - exactly like the existing
    `reachymini://` intent-filter patch in CI. Do **not** hand-edit
    `gen/android/` and expect it to survive.
-2. Three permission families are in play: **microphone**, **camera**,
-   **location**. Plus `INTERNET` (auto). See the matrix in section 2.
+2. Two permission families are in play: **microphone** and **camera**.
+   Plus `INTERNET` (auto). See the matrix in section 2.
 3. The manifest needs the `<uses-permission>` entries (section 4).
 4. The `MainActivity` WebView needs a `WebChromeClient` that implements
-   `onPermissionRequest` (mic/camera) and
-   `onGeolocationPermissionsShowPrompt` (location), each bridged to the
-   Android 6+ **runtime** permission request (section 5). This is the
-   step that has no iOS equivalent and is the usual reason "the mic
-   works on iOS but not Android".
+   `onPermissionRequest` for mic/camera and bridges it to the Android
+   6+ **runtime** permission request (section 5). This is the step that
+   has no iOS equivalent and is the usual reason "the mic works on iOS
+   but not Android".
 5. Every permission must be mapped in the Play Console **Data Safety**
    form (section 7) or the listing is blocked at submission.
 
@@ -62,7 +61,7 @@ The app has two distinct consumers of OS permissions:
 | Consumer | What it does | iOS path | Android path |
 |---|---|---|---|
 | **Host shell** (the conversation feature) | `getUserMedia({audio})` to unlock WebRTC LAN candidates (see [`iosMicUnlock.ts`](../src/features/conversation/permissions/iosMicUnlock.ts)) | WKWebView prompts on first call | WebView calls `onPermissionRequest`; host must launch the runtime request |
-| **Iframe** (third-party Spaces) | `getUserMedia`, `getCurrentPosition` from inside a cross-origin `*.hf.space` frame | iframe `allow` tokens + WKWebView prompt | WebView calls `onPermissionRequest` / `onGeolocationPermissionsShowPrompt`; host must forward the grant to the iframe origin |
+| **Iframe** (third-party Spaces) | `getUserMedia` from inside a cross-origin `*.hf.space` frame | iframe `allow` tokens + WKWebView prompt | WebView calls `onPermissionRequest`; host must forward the grant to the iframe origin |
 
 The iframe `allow` list is already in place and is identical on both
 platforms ([`AppIframeOverlay.tsx`](../src/ui/panels/apps-list/AppIframeOverlay.tsx)):
@@ -73,10 +72,11 @@ allow="microphone 'src'; camera 'src';
 ```
 
 > Geolocation was previously delegated but removed (2026-06): no
-> shipping Space surfaces a location feature, and an unused
-> permission prompt is an App Review / Play Console red flag. The
-> Android `onGeolocationPermissionsShowPrompt` handler below remains
-> documented as the recipe to follow if a Space ever needs it.
+> shipping Space surfaces a location feature, and an unused permission
+> prompt is an App Review / Play Console red flag. If a Space later
+> needs `navigator.geolocation`, re-add the iframe `allow` token, native
+> permissions, Data Safety entry, and WebChromeClient geolocation
+> callback as one coordinated change.
 
 `allow` is a *web-platform* feature-policy gate. It says "the iframe is
 permitted to ask". It does **not** grant the OS-level permission. On
@@ -138,8 +138,8 @@ Permissions therefore arrive in the manifest one of two ways:
    in their own `AndroidManifest.xml` get merged by the Gradle manifest
    merger. This is how the `auth-session` activity and the keep-screen-on
    flag arrive.
-2. **App-injected**: anything the *app itself* needs (mic, camera,
-   location for the WebView) must be added to the generated
+2. **App-injected**: anything the *app itself* needs (mic and camera
+   for the WebView) must be added to the generated
    `gen/android/app/src/main/AndroidManifest.xml`.
 
 Because `gen/android/` is regenerated on every `tauri android init`, the
@@ -194,19 +194,18 @@ would needlessly shrink reach since these capabilities are only used by
 
 ## 5. The WebChromeClient bridge (the part with no iOS equivalent)
 
-This is the crux. Android WebView routes a frame's `getUserMedia` and
-`getCurrentPosition` requests to the host's `WebChromeClient`. If the
-host doesn't override the relevant callbacks, WebView's default is to
-**deny silently**. The result: `NotAllowedError` inside the iframe and
-no system prompt - the exact symptom in `AGENTS.md`.
+This is the crux. Android WebView routes a frame's `getUserMedia`
+requests to the host's `WebChromeClient`. If the host doesn't override
+the relevant callback, WebView's default is to **deny silently**. The
+result: `NotAllowedError` inside the iframe and no system prompt - the
+exact symptom in `AGENTS.md`.
 
 Tauri's Android backend (wry) installs its own `RustWebChromeClient`.
 Depending on the wry version pinned via the Tauri dependency, mic/camera
-`onPermissionRequest` handling may already be present, but
-**geolocation is not**, and the behaviour has shifted across wry
-releases. Do not assume; verify on a device (section 8). When the
-default is insufficient, the fix is to subclass / extend the activity's
-WebChromeClient in `MainActivity.kt`.
+`onPermissionRequest` handling may already be present, and the behaviour
+has shifted across wry releases. Do not assume; verify on a device
+(section 8). When the default is insufficient, the fix is to subclass /
+extend the activity's WebChromeClient in `MainActivity.kt`.
 
 ### 5.1 Runtime permission gating
 
@@ -214,8 +213,7 @@ Android 6+ (API 23+) requires the app to hold the *runtime* permission
 before WebView can grant the web-layer request. So the bridge is a
 two-step dance:
 
-1. WebView callback fires (`onPermissionRequest` for mic/camera,
-   `onGeolocationPermissionsShowPrompt` for location).
+1. WebView callback fires (`onPermissionRequest` for mic/camera).
 2. If the app already holds the OS runtime permission, grant the web
    request immediately. Otherwise, launch the runtime permission
    request, and grant/deny the web request based on the result.
@@ -230,7 +228,6 @@ a *runbook reference* - adapt names to the wry version actually pinned:
 package com.pollenrobotics.reachymini   // matches the CI-renamed applicationId
 
 import android.Manifest
-import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import androidx.core.app.ActivityCompat
@@ -242,8 +239,6 @@ class MainActivity : TauriActivity() {
     // Cache the pending web-layer requests while we wait for the
     // Android runtime permission dialog to resolve.
     private var pendingPermissionRequest: PermissionRequest? = null
-    private var pendingGeoOrigin: String? = null
-    private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
     override fun onWebViewCreate(webView: android.webkit.WebView) {
         super.onWebViewCreate(webView)
@@ -275,27 +270,6 @@ class MainActivity : TauriActivity() {
                     )
                 }
             }
-
-            // Location coming from getCurrentPosition / watchPosition.
-            override fun onGeolocationPermissionsShowPrompt(
-                origin: String,
-                callback: GeolocationPermissions.Callback
-            ) {
-                val granted = ContextCompat.checkSelfPermission(
-                    this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-                if (granted) {
-                    callback.invoke(origin, true, false)
-                } else {
-                    pendingGeoOrigin = origin
-                    pendingGeoCallback = callback
-                    ActivityCompat.requestPermissions(
-                        this@MainActivity,
-                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
-                        REQ_LOCATION
-                    )
-                }
-            }
         }
     }
 
@@ -314,17 +288,11 @@ class MainActivity : TauriActivity() {
                 }
                 pendingPermissionRequest = null
             }
-            REQ_LOCATION -> {
-                pendingGeoCallback?.invoke(pendingGeoOrigin ?: "", allGranted, false)
-                pendingGeoOrigin = null
-                pendingGeoCallback = null
-            }
         }
     }
 
     companion object {
         private const val REQ_MEDIA = 4001
-        private const val REQ_LOCATION = 4002
     }
 }
 ```
@@ -336,8 +304,9 @@ Caveats the implementer must check against the pinned wry version:
   already sets a `webChromeClient`, you may need to *wrap* it rather
   than replace it, or wry's mic handling will be lost.
 - `request.grant()` must be called on the UI thread.
-- For cross-origin iframes, WebView reports the *frame's* origin in the
-  geolocation prompt; that's fine - we grant per-origin.
+- If geolocation is reintroduced later, add the Android location
+  permissions, iframe `allow` token, Data Safety entry, and
+  `onGeolocationPermissionsShowPrompt` handling in the same change.
 
 ### 5.3 Why not just patch CI like the intent-filter?
 
@@ -427,9 +396,9 @@ bridge works and the bug is Space-side; `NotAllowedError` means the
 
 ## 9. Open questions
 
-1. **Camera / location in v1?** If the first Android build hides Spaces
-   that use camera or location, those permissions + Data Safety entries
-   can be deferred. Product decision.
+1. **Camera in v1?** If the first Android build hides Spaces that use
+   camera, that permission + Data Safety entry can be deferred. Product
+   decision. Location is already deferred until a real Space needs it.
 2. **Background audio (§ 6)?** Foreground service now, or accept
    conversation-pauses-on-background for v1?
 3. **`WebChromeClient` injection strategy (§ 5.3)?** CI source patch vs.
@@ -446,7 +415,6 @@ bridge works and the bug is Space-side; `NotAllowedError` means the
 - Internal: [`build-mobile.yml`](../.github/workflows/build-mobile.yml) - existing idempotent manifest patch pattern
 - Internal: [`iosMicUnlock.ts`](../src/features/conversation/permissions/iosMicUnlock.ts) - cross-platform mic-unlock rationale
 - [Android WebView `onPermissionRequest`](https://developer.android.com/reference/android/webkit/WebChromeClient#onPermissionRequest(android.webkit.PermissionRequest))
-- [Android `onGeolocationPermissionsShowPrompt`](https://developer.android.com/reference/android/webkit/WebChromeClient#onGeolocationPermissionsShowPrompt(java.lang.String,%20android.webkit.GeolocationPermissions.Callback))
 - [Android runtime permissions](https://developer.android.com/training/permissions/requesting)
 - [Play Data Safety form](https://support.google.com/googleplay/android-developer/answer/10787469)
 - [Tauri 2 Android distribution](https://v2.tauri.app/distribute/google-play/)
