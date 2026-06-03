@@ -1628,6 +1628,42 @@ const disposeBackgroundResilience = installBackgroundResilience({
     ) {
       resumeAudioContexts();
       void probeRobotLink();
+      return;
+    }
+
+    // Re-arm after an unsolicited drop. When the WebRTC transport
+    // dies while we were backgrounded (iOS suspends the WKWebView, a
+    // Wi-Fi blip, the daemon restarts, …) the SDK's `disconnected`
+    // listener parks the FSM in `authenticated`. With a preselected
+    // robot that resting state means "we lost a session we were
+    // supposed to have": boot already auto-connected once, so the
+    // only way back here is a drop. Without this branch the user
+    // returns to a muted idle orb with no `Tap to start` affordance
+    // and no hint that a tap would reconnect. Silently re-drive the
+    // bring-up so the orb genuinely returns to `ready`.
+    //
+    // Guards keep this from firing in any other situation:
+    //   - `preselectedRobotId`        only the mobile single-robot
+    //                                 flow that owns an auto-connect;
+    //   - `fsm.current() === authenticated`  the post-drop resting
+    //                                 state (NOT `released`/handoff,
+    //                                 NOT bring-up, NOT a live convo);
+    //   - `robot?.isAuthenticated`    we still hold a valid HF token;
+    //   - `!session.isEstablished()`  the session really is gone, so
+    //                                 `doConnect()` does a clean fresh
+    //                                 connect instead of racing a live
+    //                                 one. `doConnect` flips to
+    //                                 `connecting` immediately, so the
+    //                                 `authenticated` guard also blocks
+    //                                 re-entry on rapid visibility
+    //                                 toggles.
+    if (
+      preselectedRobotId &&
+      fsm.current() === "authenticated" &&
+      robot?.isAuthenticated &&
+      !session.isEstablished()
+    ) {
+      void doConnect();
     }
   },
 });

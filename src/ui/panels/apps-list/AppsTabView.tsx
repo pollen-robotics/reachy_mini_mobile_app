@@ -62,6 +62,7 @@ import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
+import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import AppCompactTile from './AppCompactTile';
@@ -99,21 +100,21 @@ const RAIL_PLACEHOLDER_HEIGHT = 260;
 
 /**
  * Shared min-height for the pinned panel header row (label on the
- * left, `Edit` button on the right). The number is dictated by the
- * outlined `Button size="small"` we render on the right - its
- * actual rendered height is `fontSize × lineHeight + 2 × py +
- * 2 × border` ≈ 12 × 1.4 + 4 + 2 = ~23 px. We round to 28 to give
- * the chip a touch of vertical breathing room AND a clean rhythm
- * with the 8 px design grid.
+ * left, `Edit` button on the right). The `Edit` button now shares the
+ * rail action-chip style (`railActionButtonSx`: `TYPO.sm` × 1.4 +
+ * 2 × py(4px) + 2 × border ≈ 28 px). This min-height MUST stay >= that
+ * rendered button height: only then does the pinned header row settle
+ * at exactly `PINNED_HEADER_MIN_HEIGHT` (min-height wins over the
+ * button) and match the phantom row below. 32 clears the button with a
+ * touch of breathing room and lands on the 8 px design grid.
  *
  * The `IntroPanel` (empty state) reserves the SAME min-height for
  * its phantom header so the "no pins → first pin" transition keeps
  * the body's vertical rhythm pixel-stable. Without this, the
- * intro panel sits ~12 px shorter than the pinned panel and the
- * whole rail stack underneath jumps as soon as the user pins
- * their first app.
+ * intro panel sits shorter than the pinned panel and the whole rail
+ * stack underneath jumps as soon as the user pins their first app.
  */
-const PINNED_HEADER_MIN_HEIGHT = 28;
+const PINNED_HEADER_MIN_HEIGHT = 32;
 
 /**
  * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
@@ -130,7 +131,14 @@ const PANEL_SX = {
 } as const;
 
 const RAIL_PANEL_SX = {
-  pt: 3,
+  pt: 4,
+  pb: 0,
+} as const;
+
+// First rail sits right under the search panel's bottom divider, so it
+// needs far less top margin than the inter-rail gap above.
+const RAIL_PANEL_FIRST_SX = {
+  pt: 2.5,
   pb: 0,
 } as const;
 
@@ -445,7 +453,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     design. */}
                 {!filtered.isSearching && myApps.apps.length > 0 && (
                   <LazyMount minHeight={RAIL_PLACEHOLDER_HEIGHT}>
-                    <Box sx={RAIL_PANEL_SX}>
+                    <Box sx={RAIL_PANEL_FIRST_SX}>
                       <AppRail
                         label="Your apps"
                         subLabel={
@@ -475,9 +483,15 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                     glance. Sparse buckets (< MIN_RAIL_SIZE) were
                     already filtered out by `useFilteredApps`. */}
                 {!filtered.isSearching &&
-                  filtered.rails.map(bucket => (
+                  filtered.rails.map((bucket, idx) => (
                     <LazyMount key={bucket.descriptor.id} minHeight={RAIL_PLACEHOLDER_HEIGHT}>
-                      <Box sx={RAIL_PANEL_SX}>
+                      <Box
+                        sx={
+                          idx === 0 && myApps.apps.length === 0
+                            ? RAIL_PANEL_FIRST_SX
+                            : RAIL_PANEL_SX
+                        }
+                      >
                         <AppRail
                           label={bucket.descriptor.label}
                           count={bucket.apps.length}
@@ -847,21 +861,11 @@ function PinnedGrid({
           onClick={() => setEditMode(prev => !prev)}
           aria-pressed={editMode}
           aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
-          sx={{
-            flexShrink: 0,
-            fontSize: TYPO.xs,
-            fontWeight: FONT_WEIGHT.semibold,
-            // Sentence-case label - keep it as a verb the user
-            // recognises, not a SCREAMING button.
-            textTransform: 'none',
-            // Tight padding so the chip-style button fits the
-            // panel header rhythm without dwarfing the
-            // "PINNED APPS" label on its left.
-            minWidth: 0,
-            lineHeight: 1.4,
-            px: 1.25,
-            py: 0.25,
-          }}
+          // Same size + border language as the rail "See all" / "New"
+          // chips. Bigger than the old tight chip, so the shared
+          // PINNED_HEADER_MIN_HEIGHT is sized to clear it - keeping the
+          // no-pin (phantom) and pinned header rows the SAME height.
+          sx={railActionButtonSx}
         >
           {editMode ? 'Done' : 'Edit'}
         </Button>

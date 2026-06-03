@@ -2,7 +2,7 @@
  * PersonalityStore - "App-Store-style" personality picker.
  *
  * The catalog is laid out as a vertical scroll of horizontal rails,
- * one per personality "family" (Assistants, Characters, Oddballs),
+ * one per personality "family" (Assistants & coaches, Characters),
  * plus a "Yours" rail for custom personas.
  *
  * This mirrors the apps tab's rail rhythm (`AppRail` /
@@ -10,62 +10,64 @@
  * siblings.
  *
  * Self-contained + isolated: it reads the personalities store and
- * exposes an `onClose` contract, so the host (`ConversationPanel`)
+ * applies a pick live (no auto-close), so the host (`ConversationPanel`)
  * can swap it in/out in one line. The family taxonomy lives here (not
  * in the shared model) on purpose - it's a presentation concern of
  * this surface, and keeping it local means the data layer stays
  * untouched.
  *
- * Custom personas carry an always-visible "edit" pencil: editing your
- * own creation is a first-class, frequent action, so it lives right on
- * the card. Deletion is deliberately NOT here - it's a destructive
- * action on the user's own work, so it's tucked inside the editor (see
- * `CreatePersonalityModal`) where it takes an explicit confirmation.
+ * Creating: when the user has NO custom personas yet, a prominent
+ * illustrated CTA card sits above the catalog. Once they have at least
+ * one, that card gives way to a compact "+ New" button on the right of
+ * the "Yours" rail title (the create entry follows the customs). Editing
+ * a custom persona happens from the personality band's pencil (the
+ * active "select"); deletion is tucked inside the editor (see
+ * `CreatePersonalityModal`) behind an explicit confirmation.
  */
-import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
-import EditRoundedIcon from '@mui/icons-material/EditRounded';
+import { type ReactNode, useState } from 'react';
+import { Box, Button, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import reachyCreateProfile from '@/assets/reachy-create-profile.svg';
 
 import {
   type Personality,
   setActivePersonality,
   useActivePersonality,
+  useIsAvatarPending,
   usePersonalitiesCatalog,
 } from '@/features/personalities';
 import PersonaAvatar from '@/ui/design/PersonaAvatar';
+import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 interface PersonalityStoreProps {
-  onClose: () => void;
-  /** Open the editor for a custom persona (pencil tap). */
-  onEdit: (persona: Personality) => void;
   /** Open the "author a new persona" form. Surfaced as a dedicated CTA
    *  card at the top of the store (the band no longer carries a "+"). */
   onCreate: () => void;
 }
 
-/** Delay between picking a personality and returning to the orb, so the
- *  tile's selection feedback (active ring + press scale) is visible. */
-const SELECT_CLOSE_DELAY_MS = 500;
-
 /** Family taxonomy (presentation-only, local to this experiment).
- *  Three buckets: the two clean ones (helpful assistants, role-play
- *  characters) plus a catch-all for the personas that don't fit either
- *  - the self-aware robots and the running-gag bits. */
+ *  Two buckets: helpful assistants & coaches, and everything with a
+ *  role / costume / character (incl. Reachy itself and the self-aware
+ *  robots). */
 const FAMILIES: ReadonlyArray<{ id: string; label: string; blurb: string }> = [
-  { id: 'helpful', label: 'Assistants & coaches', blurb: 'Helpful, get something done with you.' },
   { id: 'character', label: 'Characters', blurb: 'A costume, an accent, a whole world.' },
-  { id: 'wildcard', label: 'Oddballs & wildcards', blurb: 'Weird, funny, gloriously off-script.' },
+  { id: 'helpful', label: 'Assistants & coaches', blurb: 'Helpful, get something done with you.' },
 ];
 
 const FAMILY_BY_ID: Record<string, string> = {
   // Assistants & coaches: actually try to help you do something.
-  'builtin:default': 'helpful',
   'builtin:chess_coach': 'helpful',
   'builtin:hype_bot': 'helpful',
-  // Characters: a clear role / costume / accent to play along with.
+  'builtin:quiz_host': 'helpful',
+  'builtin:language_buddy': 'helpful',
+  'builtin:zen_guide': 'helpful',
+  'builtin:bedtime_storyteller': 'helpful',
+  // Characters: a clear role / costume / accent to play along with -
+  // plus Reachy itself (first, via catalog order) and the self-aware
+  // robots, which the user grouped here.
+  'builtin:default': 'character',
   'builtin:noir_detective': 'character',
   'builtin:victorian_butler': 'character',
   'builtin:captain_circuit': 'character',
@@ -73,38 +75,62 @@ const FAMILY_BY_ID: Record<string, string> = {
   'builtin:time_traveler': 'character',
   'builtin:bored_teenager': 'character',
   'builtin:nature_documentarian': 'character',
-  // Oddballs & wildcards: self-aware robots + the running-gag bit.
-  'builtin:mars_rover': 'wildcard',
-  'builtin:cosmic_kitchen': 'wildcard',
-  'builtin:sorry_bro': 'wildcard',
+  'builtin:mars_rover': 'character',
+  'builtin:tiny_anxious_robot': 'character',
 };
 
-export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStoreProps) {
+/** Explicit display order within each family rail. Ids not listed here
+ *  fall back to the end of the rail, in catalog order. Hard constraints:
+ *  Reachy is ALWAYS the first character, Captain Circuit second; Language
+ *  Buddy opens the assistants rail. The rest is editorial. */
+const FAMILY_ORDER: Record<string, string[]> = {
+  character: [
+    'builtin:default', // Reachy - always first
+    'builtin:captain_circuit', // Captain Circuit - second
+    'builtin:mars_rover',
+    'builtin:tiny_anxious_robot',
+    'builtin:noir_detective',
+    'builtin:mad_scientist',
+    'builtin:time_traveler',
+    'builtin:victorian_butler',
+    'builtin:bored_teenager',
+    'builtin:nature_documentarian',
+  ],
+  helpful: [
+    'builtin:language_buddy', // first
+    'builtin:chess_coach',
+    'builtin:zen_guide',
+    'builtin:quiz_host',
+    'builtin:hype_bot',
+    'builtin:bedtime_storyteller',
+  ],
+};
+
+export function PersonalityStore({ onCreate }: PersonalityStoreProps) {
   const catalog = usePersonalitiesCatalog();
   const active = useActivePersonality();
 
-  const customs = catalog.filter(p => p.kind === 'custom');
-  const byFamily = (familyId: string) =>
-    catalog.filter(p => p.kind === 'builtin' && FAMILY_BY_ID[p.id] === familyId);
+  // Newest-first: the store appends new customs (oldest -> newest) and edits
+  // keep their slot, so reversing the insertion order surfaces the persona
+  // the user just made at the head of the "Yours" rail.
+  const customs = catalog.filter(p => p.kind === 'custom').reverse();
+  const byFamily = (familyId: string) => {
+    const order = FAMILY_ORDER[familyId] ?? [];
+    const rank = (id: string) => {
+      const i = order.indexOf(id);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return catalog
+      .filter(p => p.kind === 'builtin' && FAMILY_BY_ID[p.id] === familyId)
+      .sort((a, b) => rank(a.id) - rank(b.id));
+  };
 
-  // Defer the close after a pick so the tile's selection feedback (the
-  // active primary ring snapping on + the press scale) has time to play
-  // before the orb view returns - closing instantly swallowed it.
-  const closeTimerRef = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-    },
-    [],
-  );
-
+  // Apply the pick live and stay open: the store behaves like a gallery,
+  // so selecting a persona updates the active one immediately (the band
+  // above reflects it) while the user keeps browsing. Closing is an
+  // explicit action via the band's chevron.
   const pick = (id: string) => {
     if (id !== active.id) setActivePersonality(id);
-    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = window.setTimeout(() => {
-      closeTimerRef.current = null;
-      onClose();
-    }, SELECT_CLOSE_DELAY_MS);
   };
 
   return (
@@ -123,36 +149,53 @@ export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStore
       {/* SCROLL BODY. No internal header/close: the persistent
           personality band above (PersonalityPill) owns the identity
           + the toggle back to the orb.
-          `pt: 4` (32px) matches the Stack `spacing={4}` below the
-          CreateCard, so the card sits with symmetric breathing room
-          between the band above and the first rail title below (the
-          band->card gap used to be half the card->rail gap). */}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 4, pb: 4 }}>
+          `pt: 6` (48px) gives the first rail ("Yours") clear breathing
+          room below the band - the persona avatar disc now spills ~30px
+          down into the top of this scroll body, so a smaller pad made the
+          rail title start too high, tucked under the overflowing disc. */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 6, pb: 4 }}>
         <Stack spacing={3}>
-          {/* CREATE: dedicated CTA card, pinned above the rails. The
-              persistent band no longer carries a "+", so authoring a
-              new persona starts here. */}
-          <Box sx={{ px: 3 }}>
-            <CreateCard onCreate={onCreate} />
-          </Box>
+          {/* CREATE: a prominent illustrated CTA card, but ONLY until the
+              user has made their first persona. After that it would just
+              push the catalog down on every visit, so it collapses into a
+              compact "+ New" button on the "Yours" rail title instead. */}
+          {customs.length === 0 && (
+            <Box sx={{ px: 3 }}>
+              <CreateCard onCreate={onCreate} />
+            </Box>
+          )}
 
-          {/* YOURS: custom personas rail (only when the user has any).
-              The "create" entry lives in the persistent personality
-              band above (PersonalityPill's "+"), not here, so an empty
-              "Yours" rail never wastes vertical room above the
-              catalog. Each custom tile carries an always-visible edit
-              pencil; deletion lives inside the editor. */}
+          {/* YOURS: custom personas rail (only when the user has any),
+              with the create entry living as a "+ New" action on its
+              title. Editing a custom persona happens from the band's
+              pencil (the active "select"); deletion lives inside the
+              editor. */}
           {customs.length > 0 && (
-            <Rail label="Yours" blurb="The personalities you created.">
+            <Rail
+              label="Yours"
+              blurb="The personalities you created."
+              count={customs.length}
+              // Three-state create entry, scaling with how many customs
+              // the user owns:
+              //   1-2  -> a vertical "create" card tacked on as the last
+              //           tile in the rail (an in-between between the big
+              //           hero card and the bare button).
+              //   3+   -> the compact "+ New" button back on the title,
+              //           since by then the rail is busy enough that an
+              //           extra tile would just crowd it.
+              action={
+                customs.length >= 3 ? <NewPersonaButton onClick={onCreate} /> : undefined
+              }
+            >
               {customs.map(p => (
                 <PersonaTile
                   key={p.id}
                   persona={p}
                   active={p.id === active.id}
                   onClick={() => pick(p.id)}
-                  onEdit={() => onEdit(p)}
                 />
               ))}
+              {customs.length < 3 && <CreatePersonaTile onCreate={onCreate} />}
             </Rail>
           )}
 
@@ -161,7 +204,7 @@ export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStore
             const members = byFamily(family.id);
             if (members.length === 0) return null;
             return (
-              <Rail key={family.id} label={family.label} blurb={family.blurb}>
+              <Rail key={family.id} label={family.label} blurb={family.blurb} count={members.length}>
                 {members.map(p => (
                   <PersonaTile
                     key={p.id}
@@ -180,9 +223,11 @@ export function PersonalityStore({ onClose, onEdit, onCreate }: PersonalityStore
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * Create CTA card: full-width tappable surface above the rails. Dashed
- * primary outline + "+" disc so it reads as an "add" affordance rather
- * than a selectable persona tile.
+ * Create CTA card: full-width tappable surface shown above the rails
+ * ONLY before the first custom persona exists (afterwards a compact
+ * "+ New" button on the "Yours" rail takes over). Dashed primary outline
+ * + an on-brand rotating-Reachy illustration so it reads as a warm "make
+ * your own" invitation rather than a selectable persona tile.
  * ────────────────────────────────────────────────────────────────── */
 
 function CreateCard({ onCreate }: { onCreate: () => void }) {
@@ -201,9 +246,9 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
         textAlign: 'left',
         display: 'flex',
         alignItems: 'center',
-        gap: 1.75,
-        px: 2,
-        py: 1.75,
+        gap: 2,
+        px: 2.5,
+        py: 2.5,
         borderRadius: `${RADIUS.lg}px`,
         color: 'primary.main',
         bgcolor: alpha(theme.palette.primary.main, 0.06),
@@ -214,10 +259,35 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
         WebkitTapHighlightColor: 'transparent',
       }}
     >
+      {/* On-brand illustration (Reachy at a create-your-profile desk). */}
+      <Box
+        component="img"
+        src={reachyCreateProfile}
+        alt=""
+        aria-hidden
+        draggable={false}
+        sx={{ width: 76, height: 76, flexShrink: 0, objectFit: 'contain', userSelect: 'none' }}
+      />
+      <Stack sx={{ minWidth: 0, flex: 1, gap: 0.25 }}>
+        <Typography
+          sx={{
+            fontWeight: FONT_WEIGHT.semibold,
+            fontSize: TYPO.lg,
+            lineHeight: 1.2,
+            color: 'text.primary',
+          }}
+        >
+          Create a personality
+        </Typography>
+        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
+          Toss out an idea and watch Reachy bring it to life.
+        </Typography>
+      </Stack>
+      {/* "+" disc as the action cue, pinned right. */}
       <Box
         sx={{
-          width: 44,
-          height: 44,
+          width: 40,
+          height: 40,
           flexShrink: 0,
           borderRadius: '50%',
           display: 'grid',
@@ -225,24 +295,119 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
           bgcolor: alpha(theme.palette.primary.main, 0.12),
         }}
       >
-        <AddRoundedIcon sx={{ fontSize: 26 }} />
+        <AddRoundedIcon sx={{ fontSize: 24 }} />
       </Box>
-      <Stack sx={{ minWidth: 0 }}>
-        <Typography
-          sx={{
-            fontWeight: FONT_WEIGHT.semibold,
-            fontSize: TYPO.md,
-            lineHeight: 1.2,
-            color: 'text.primary',
-          }}
-        >
-          Create a personality
-        </Typography>
-        <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
-          Author your own - name, vibe, voice.
-        </Typography>
-      </Stack>
     </Box>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Compact "+ New" create button, pinned to the right of the "Yours"
+ * rail title once the user owns at least one custom persona.
+ * ────────────────────────────────────────────────────────────────── */
+
+function NewPersonaButton({ onClick }: { onClick: () => void }) {
+  // Mirrors the apps tab's "See all" rail button (AppRail) so the two
+  // browse surfaces share one button language: outlined primary, small,
+  // sentence-case, with the trailing glyph tucked in close.
+  return (
+    <Button
+      onClick={onClick}
+      variant="outlined"
+      color="primary"
+      size="small"
+      aria-label="Create a personality"
+      endIcon={<AddRoundedIcon sx={{ fontSize: TYPO.lg }} />}
+      sx={railActionButtonSx}
+    >
+      New
+    </Button>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Vertical "create" tile: a persona-tile-shaped CTA tacked onto the end
+ * of the "Yours" rail while the user owns 1-2 customs. Same footprint as
+ * a PersonaTile (so it aligns in the track) but dashed + primary-tinted
+ * with a "+" disc where the avatar would be, so it reads as "add one
+ * more" rather than a selectable persona. Above 2 customs the compact
+ * "+ New" title button takes over instead (see PersonalityStore).
+ * ────────────────────────────────────────────────────────────────── */
+
+function CreatePersonaTile({ onCreate }: { onCreate: () => void }) {
+  const theme = useTheme();
+  return (
+    <ButtonBase
+      onClick={onCreate}
+      aria-label="Create a personality"
+      focusRipple
+      sx={{
+        flexShrink: 0,
+        width: 146,
+        color: 'primary.main',
+        textAlign: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        // Match PersonaTile's box metrics so the tile lines up with its
+        // neighbours in the rail (top-anchored, same paddings + gap).
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        gap: 1.25,
+        px: 2,
+        pt: 3,
+        pb: 1.5,
+        borderRadius: `${RADIUS.lg}px`,
+        bgcolor: alpha(theme.palette.primary.main, 0.06),
+        border: `1.5px dashed ${alpha(theme.palette.primary.main, 0.5)}`,
+        transition: 'background-color 0.15s ease, transform 0.1s ease',
+        '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.1) },
+        '&:active': { transform: 'scale(0.99)' },
+        WebkitTapHighlightColor: 'transparent',
+      }}
+    >
+      {/* "+" disc sized like the 116px persona avatar so the caption
+          block below lines up across tiles. */}
+      <Box
+        sx={{
+          width: 116,
+          height: 116,
+          flexShrink: 0,
+          borderRadius: '50%',
+          display: 'grid',
+          placeItems: 'center',
+          bgcolor: alpha(theme.palette.primary.main, 0.1),
+          border: `1.5px dashed ${alpha(theme.palette.primary.main, 0.5)}`,
+        }}
+      >
+        <AddRoundedIcon sx={{ fontSize: 44 }} />
+      </Box>
+      <Typography
+        sx={{
+          fontWeight: FONT_WEIGHT.semibold,
+          fontSize: TYPO.sm,
+          lineHeight: 1.2,
+          color: 'primary.main',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        New
+      </Typography>
+      <Typography
+        sx={{
+          fontSize: TYPO.tiny,
+          fontStyle: 'italic',
+          color: 'text.secondary',
+          lineHeight: 1.35,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          minHeight: '2.7em',
+        }}
+      >
+        Dream up a character
+      </Typography>
+    </ButtonBase>
   );
 }
 
@@ -252,20 +417,54 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
  * "See all" / count chrome we don't want here).
  * ────────────────────────────────────────────────────────────────── */
 
-function Rail({ label, blurb, children }: { label: string; blurb?: string; children: ReactNode }) {
+function Rail({
+  label,
+  blurb,
+  count,
+  action,
+  children,
+}: {
+  label: string;
+  blurb?: string;
+  /** Number of personalities in this rail; rendered as a quiet,
+   *  low-opacity counter next to the title. */
+  count?: number;
+  /** Optional control pinned to the right of the title row (e.g. the
+   *  "+ New" create button on the "Yours" rail). */
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <Box>
       <Stack sx={{ px: 3, mb: 1.25 }}>
-        <Typography
-          sx={{
-            fontSize: TYPO.lg,
-            fontWeight: FONT_WEIGHT.semibold,
-            letterSpacing: '-0.2px',
-            lineHeight: 1.2,
-          }}
-        >
-          {label}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <Typography
+            sx={{
+              fontSize: TYPO.lg,
+              fontWeight: FONT_WEIGHT.semibold,
+              letterSpacing: '-0.2px',
+              lineHeight: 1.2,
+            }}
+          >
+            {label}
+          </Typography>
+          {count !== undefined && (
+            <Typography
+              aria-hidden
+              sx={{
+                fontSize: TYPO.sm,
+                fontWeight: FONT_WEIGHT.semibold,
+                lineHeight: 1.2,
+                color: 'text.primary',
+                opacity: 0.35,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {count}
+            </Typography>
+          )}
+          {action && <Box sx={{ ml: 'auto' }}>{action}</Box>}
+        </Box>
         {blurb && (
           <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
             {blurb}
@@ -297,18 +496,18 @@ function Rail({ label, blurb, children }: { label: string; blurb?: string; child
 
 /* ──────────────────────────────────────────────────────────────────
  * Persona tile: avatar + name + tagline. Sober (paper bg + hairline /
- * primary ring when active). Custom personas get an always-visible
- * edit pencil (top-right); built-ins don't.
+ * primary ring when active). Editing is NOT on the tile - it lives on
+ * the personality band (the "select"), which exposes a pencil for the
+ * active custom persona.
  * ────────────────────────────────────────────────────────────────── */
 
 interface PersonaTileProps {
   persona: Personality;
   active: boolean;
   onClick: () => void;
-  onEdit?: () => void;
 }
 
-function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
+function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
   const theme = useTheme();
   // Click counter for the avatar "pop": each tap bumps it, which
   // remounts the avatar wrapper via `key` and replays the spring
@@ -318,6 +517,10 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
   // with the rest of the app. `> 0` skips the very first render so tiles
   // don't pop on initial mount.
   const [popKey, setPopKey] = useState(0);
+  // Is this persona's avatar baking? Custom personas only ever cook
+  // (built-ins ship a fixed avatar), but the hook is cheap so we just
+  // ask for any id. Drives the cooking ring over the tile's portrait.
+  const cooking = useIsAvatarPending(persona.id);
   const handleClick = () => {
     setPopKey(k => k + 1);
     onClick();
@@ -386,7 +589,13 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
             },
           }}
         >
-          <PersonaAvatar src={persona.avatar} size={116} imageScale={1.52} />
+          <PersonaAvatar
+            src={persona.avatar}
+            size={116}
+            imageScale={1.52}
+            cooking={cooking}
+            name={persona.name}
+          />
         </Box>
         {/* Selection check. It's shown on every active tile, but the
             pop-in spring only plays on an actual user pick (`popKey >
@@ -439,6 +648,9 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
       >
         {persona.name}
       </Typography>
+      {/* Always the tagline - the avatar's cooking donut already signals
+          image generation, so we don't hijack the caption with a
+          "Generating image…" status. */}
       <Typography
         sx={{
           fontSize: TYPO.tiny,
@@ -455,53 +667,6 @@ function PersonaTile({ persona, active, onClick, onEdit }: PersonaTileProps) {
         {persona.tagline}
       </Typography>
 
-      {/* Edit affordance (customs only): always visible, primary
-          outlined. Editing one's own creation is a frequent, non-
-          destructive action so it sits right on the card. Deletion is
-          intentionally elsewhere (inside the editor, behind a confirm)
-          because it destroys the user's work. */}
-      {onEdit && (
-        <Box
-          component="span"
-          role="button"
-          tabIndex={0}
-          aria-label={`Edit ${persona.name}`}
-          onMouseDown={e => e.stopPropagation()}
-          onTouchStart={e => e.stopPropagation()}
-          onClick={e => {
-            e.stopPropagation();
-            onEdit();
-          }}
-          onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              e.stopPropagation();
-              onEdit();
-            }
-          }}
-          sx={{
-            position: 'absolute',
-            top: 10,
-            right: 10,
-            width: 30,
-            height: 30,
-            borderRadius: '50%',
-            display: 'grid',
-            placeItems: 'center',
-            // Primary outlined: paper fill so it reads on the white tile,
-            // primary hairline ring + primary glyph.
-            color: 'primary.main',
-            bgcolor: 'background.paper',
-            border: `1.5px solid ${theme.palette.primary.main}`,
-            boxShadow: `0 1px 4px ${alpha('#000', 0.08)}`,
-            '&:hover': {
-              bgcolor: alpha(theme.palette.primary.main, 0.1),
-            },
-          }}
-        >
-          <EditRoundedIcon sx={{ fontSize: 16 }} />
-        </Box>
-      )}
     </ButtonBase>
   );
 }

@@ -370,7 +370,11 @@ function AppPinnedTileImpl({
           // 3-column grid so the square scales with the viewport.
           aspectRatio: '1 / 1',
           borderRadius: `${RADIUS.lg}px`,
-          bgcolor: 'background.paper',
+          // Constant (near-)white plate in BOTH modes: app icons /
+          // logos are authored on the assumption of a light backing, so
+          // a dark paper plate in dark mode would muddy them. Slightly
+          // translucent (0.8) so it's not a stark pure-white block.
+          bgcolor: alpha(theme.palette.common.white, 0.15),
           // Subtle primary tint on the border so a pinned tile
           // reads as "user-curated / first-class" against the
           // divider-grey of generic surfaces, without screaming

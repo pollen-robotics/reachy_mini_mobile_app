@@ -1,159 +1,169 @@
 /**
  * Identity block rendered on the left side of the session top bar.
  *
- * Two-line layout, both rows left-aligned right after the avatar:
+ * Single-line layout, left-aligned, no avatar. Bordered pills sit to
+ * the right of the name, each icon/glyph + text:
  *
- *   ┌──┐  reachy_mini  [Wi-Fi]      ← row 1 : name (hero) + transport chip
- *   │🤖│  #abc12                    ← row 2 : short hardware id
- *   └──┘
+ *   Reachy_mini  [⌁ Lite]      [▮▮▮ 0 ms]
+ *   Reachy_mini  [≋ Wireless]  [▮▮▮ 38 ms]
  *
- * The split is intentional:
- *   - row 1 carries the **mutable / configurable** identity bits:
- *     the user-chosen `robotName` (changeable via the daemon) and
- *     the physical transport pill (Wi-Fi / USB / ...), which is
- *     "how am I reaching the robot right now" at a glance and is
- *     useful even outside a debug context (a quick eye-check that
- *     I'm not on the wrong link).
- *   - row 2 carries the **fixed fingerprint**: the short hardware
- *     id (immutable per machine), rendered in monospace so it
- *     reads as an identifier rather than a label.
+ *   - variant tag   : USB / Wi-Fi icon + the product SKU it maps onto
+ *                     (`Lite` wired / `Wireless` onboard). STABLE
+ *                     identity, not a health signal. Always present.
+ *   - latency tag   : RTT-driven signal bars + the exact `… ms` value
+ *                     (see `<LinkQualityBars>`). ALWAYS shown - an
+ *                     unknown / LAN-instant link reads as `0 ms` - so
+ *                     it's a permanent "is my link fast" glance.
  *
- * Reading top→bottom within the column: meaningful → technical.
+ * While the link is (re)connecting a transient toned mini-spinner pill
+ * appears (see `resolveTypeTag`). The routing topology label
+ * (`LAN` / `Direct` / `Relay`) was dropped as noise next to latency.
  *
- * Earlier revisions also surfaced the daemon version here, and a
- * live WebRTC transport badge (LAN / Direct / Relay + IP +
- * bitrate). Those signals are debug-grade only and now live in the
- * on-demand `<RobotInfoSheet>` opened from the `ⓘ` button in the
- * topbar's right action cluster. The transport chip stays here
- * because a quick "USB or Wi-Fi" read is everyday-grade
- * information, not debug-grade.
+ * Separate pills (not one grouped strip) were chosen so each module
+ * reads as its own discrete fact.
  *
- * The little Reachy avatar on the left is the same illustration
- * used on the discovery cards (just smaller), so the user
- * recognises "their" robot at a glance.
+ * The short hardware id used to live here (`#abc12`) but it's now
+ * surfaced in full inside the on-demand `<RobotInfoPanel>` (opened
+ * via the `ⓘ` button), where the complete identifier is copyable -
+ * the topbar is for everyday-grade identity, the panel for the
+ * technical fingerprint.
+ *
+ * Debug-grade detail (WebRTC kind label, IP, bitrate, exact latency,
+ * daemon version) all live in the on-demand `<RobotInfoPanel>` opened
+ * from the `ⓘ` button in the topbar's right action cluster.
  *
  * Pure presentational: the host (`RobotSessionScreen`) owns the
  * power-off button and any other actions; this component only
  * renders identity.
  */
-import { Box, Stack, Typography } from '@mui/material';
+import { CircularProgress, Stack, Typography } from '@mui/material';
 
-import RobotAvatar from '@/ui/design/RobotAvatar';
-import { TransportChip } from '@/ui/design/TransportChip';
-import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
+import type { ConversationTransportKind } from '@/features/conversation/engine/conversation-engine';
+import type { SessionPhase } from '@/features/robot-session/useRobotSession';
+import { linkQualityLevel } from '@/features/robot-session/transport-monitor';
+import { LinkQualityBars } from '@/ui/design/LinkQualityBars';
+import { MetaPill, TagLabel, VariantTag } from '@/ui/design/MetaPill';
+import { FONT_WEIGHT, STATUS, TYPO } from '@/ui/design/tokens';
+
+interface TypeTag {
+  label: string;
+  /** Border + text colour. Omitted = neutral (divider / text.secondary). */
+  tone?: string;
+  /** Pulse a leading dot - reserved for in-flight (info) states. */
+  pulse?: boolean;
+}
+
+/**
+ * Resolve the transient link-state tag (its own pill). We no longer
+ * surface the routing topology (`LAN` / `Direct` / `Relay`) - that was
+ * noise next to the always-on latency read - so this is now purely the
+ * in-flight lifecycle cue:
+ *
+ *   1. Connecting / Reconnecting - in-flight (info, mini spinner).
+ *   2. Otherwise                 - null (only the latency pill shows).
+ */
+function resolveTypeTag(phase: SessionPhase): TypeTag | null {
+  if (phase === 'bringing-up') return { label: 'Connecting', tone: STATUS.info, pulse: true };
+  if (phase === 'reacquiring') return { label: 'Reconnecting', tone: STATUS.info, pulse: true };
+  return null;
+}
+
+/**
+ * Format the rolling-min RTT as a compact, integer `… ms` tag value.
+ * Always returns a value: an unknown / not-yet-measured RTT reads as
+ * `0 ms` so the latency pill is a permanent fixture in the topbar.
+ */
+function formatLatencyTag(rttMs: number | null): string {
+  const ms = rttMs !== null && Number.isFinite(rttMs) && rttMs > 0 ? Math.round(rttMs) : 0;
+  return `${ms} ms`;
+}
 
 interface IdentityChipBarProps {
   robotName: string;
-  hardwareId: string | null;
-  /** Falls back to the peerId when the daemon hasn't shipped PR-1084 yet. */
-  fallbackId?: string | null;
   /** Physical transport string from the robot's central listing
-   *  (`wifi` / `usb` / …). Rendered via `<TransportChip>` to the
-   *  right of the robot name. */
+   *  (`wifi` / `usb` / …). Rendered via `<TransportChip>` (icon
+   *  only) to the right of the robot name. Stable identity signal
+   *  (desktop-tray daemon vs autonomous robot), kept always-on but
+   *  muted. */
   transport: string;
+  /** Live WebRTC candidate-pair classification. Drives the link-type
+   *  tag (LAN / Direct / Relay) and the quality bars. `null` (no
+   *  transport info yet) hides them. */
+  linkKind: ConversationTransportKind | null;
+  /** Rolling-min RTT (ms) on the selected pair, or `null` when the
+   *  platform doesn't expose it. Drives the quality bars + the
+   *  latency tag value. */
+  linkRttMs: number | null;
+  /** Current session lifecycle phase. Drives the transient
+   *  Connecting / Reconnecting state of the link-type tag. */
+  sessionPhase: SessionPhase;
 }
 
-const SHORT_ID_LENGTH = 5;
-/**
- * Avatar diameter inside the topbar. Sized to feel substantial
- * next to the two-line identity column without crowding the row.
- * The antennas overflow upwards from the disc by design (cf.
- * `RobotAvatar`); the topbar bg is `background.paper` and the
- * antennas SVG is dark, so the silhouette reads cleanly against
- * either palette.
- */
-const TOPBAR_AVATAR_SIZE = 44;
-/**
- * Small downward nudge that shifts the avatar disc to compensate
- * for the antennas overflowing the rim by ~6 px upwards. Without
- * this, `alignItems: 'center'` on the row centres the *disc*, not
- * the *visual silhouette* (disc + antenna overflow), so the whole
- * avatar reads as too high. Pushing it 4 px down re-centres the
- * silhouette around the row's true vertical midpoint.
- */
-const TOPBAR_AVATAR_VERTICAL_NUDGE_PX = 4;
+/** Mini spinner for in-flight (Connecting / Reconnecting) tags - reads
+ *  as "working on it / temporary" better than a static dot. */
+function TagSpinner({ color }: { color: string }) {
+  return <CircularProgress size={11} thickness={5.5} sx={{ color, flexShrink: 0 }} />;
+}
 
 export default function IdentityChipBar({
   robotName,
-  hardwareId,
-  fallbackId,
   transport,
+  linkKind,
+  linkRttMs,
+  sessionPhase,
 }: IdentityChipBarProps) {
-  const idTag = (hardwareId ?? fallbackId ?? '').slice(0, SHORT_ID_LENGTH);
-  // Em-dash placeholder so the row 2 layout stays stable if both
-  // hardwareId and fallbackId are missing (shouldn't happen in
-  // practice but the host's defensive early-return only handles
-  // the missing-peerId case, not a fully empty identity).
-  const idLabel = idTag ? `#${idTag}` : '—';
+  const typeTag = resolveTypeTag(sessionPhase);
+  // Latency is now a permanent indicator: always shown, even at `0 ms`
+  // (unknown / LAN-instant). Reads as a stable "link health" glance.
+  const latencyText = formatLatencyTag(linkRttMs);
 
   return (
-    <Stack
-      direction="row"
-      spacing={1.25}
-      sx={{
-        alignItems: 'center',
-        minWidth: 0,
-        flex: 1,
-      }}
-    >
-      <Box sx={{ mt: `${TOPBAR_AVATAR_VERTICAL_NUDGE_PX}px`, flexShrink: 0 }}>
-        <RobotAvatar size={TOPBAR_AVATAR_SIZE} />
-      </Box>
-      {/* Two-row column hugging the avatar. Row 1: name + transport
-          chip side by side, with the name allowed to ellipsis if
-          the screen is too narrow so the chip stays visible. Row 2:
-          the short hardware id alone. The host's own toolbar owns
-          the right edge for the power-off button. */}
-      <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{
-            alignItems: 'center',
-            minWidth: 0,
-          }}
-        >
-          <Typography
-            sx={{
-              minWidth: 0,
-              fontSize: TYPO.md,
-              fontWeight: FONT_WEIGHT.bold,
-              color: 'text.primary',
-              letterSpacing: '-0.1px',
-              lineHeight: 1.2,
-              // `flexShrink` lets the name truncate via ellipsis
-              // when the available column is too narrow, while
-              // the transport chip stays visible at its natural
-              // width to its right.
-              flexShrink: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            noWrap
-          >
-            {robotName}
-          </Typography>
-          <Box sx={{ flexShrink: 0 }}>
-            <TransportChip transport={transport} height={20} />
-          </Box>
-        </Stack>
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0, flex: 1 }}>
+      <Typography
+        sx={{
+          minWidth: 0,
+          fontSize: TYPO.md,
+          fontWeight: FONT_WEIGHT.bold,
+          color: 'text.primary',
+          letterSpacing: '-0.1px',
+          lineHeight: 1.2,
+          // Name truncates with an ellipsis when the row is too
+          // narrow so the meta pills stay visible to its right.
+          flexShrink: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          // Always show the name with a leading capital, without
+          // touching the rest (so "reachy_mini" -> "Reachy_mini",
+          // not "Reachy_Mini" like `capitalize` would do).
+          '&::first-letter': { textTransform: 'uppercase' },
+        }}
+        noWrap
+      >
+        {robotName}
+      </Typography>
 
-        <Typography
-          component="span"
-          title="Hardware id"
-          sx={{
-            fontSize: TYPO.xs,
-            fontFamily: 'monospace',
-            color: theme =>
-              theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.36)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {idLabel}
-        </Typography>
+      {/* Meta pills to the RIGHT of the name, each icon/glyph + text:
+            [⌁ Lite]  [▮▮▮ 38 ms]
+          plus a transient [spinner] while the link is (re)connecting.
+          The host's own toolbar owns the right edge for the power-off
+          button. */}
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
+        <VariantTag transport={transport} />
+        {typeTag && typeTag.pulse && typeTag.tone && (
+          // In-flight (Connecting / Reconnecting): just a mini spinner,
+          // no label - the toned spinner already reads as "working on it".
+          <MetaPill tone={typeTag.tone}>
+            <TagSpinner color={typeTag.tone} />
+          </MetaPill>
+        )}
+        <MetaPill>
+          <LinkQualityBars
+            level={linkQualityLevel(linkRttMs, linkKind ?? 'checking')}
+            title={`Link quality (${latencyText})`}
+          />
+          <TagLabel>{latencyText}</TagLabel>
+        </MetaPill>
       </Stack>
     </Stack>
   );

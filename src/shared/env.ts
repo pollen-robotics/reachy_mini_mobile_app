@@ -107,3 +107,26 @@ export const HF_REALTIME_WS_URL: string | null = (() => {
 export const WEBSITE_API_URL: string =
   (import.meta.env.VITE_REACHY_WEBSITE_URL as string | undefined) ??
   'https://pollen-robotics-reachy-mini-api.hf.space';
+
+/**
+ * Reachy Sticker Generator Space.
+ *
+ * FastAPI Space that turns a short visual theme into a transparent
+ * Reachy sticker (PNG + vectorised SVG). Used by the personality
+ * authoring flow to give custom personas a generated avatar.
+ *
+ * Endpoints (see `features/personalities/sticker-avatar.ts`):
+ *   - `POST /api/generate` `{ prompt, kind }` -> `{ png_url, svg_url, ... }`
+ *     (synchronous, ~1 min, 2 concurrent slots server-side).
+ *   - `GET  /api/queue` -> `{ queue_size }` (waiting-position hint).
+ *   - `GET  /api/community/<file>` -> the generated image bytes.
+ *
+ * Calls are routed through `@tauri-apps/plugin-http` (the Space serves
+ * no `Access-Control-Allow-Origin`), so the host must also be allowed
+ * in `src-tauri/capabilities/default.json`.
+ *
+ * Override at build time via `VITE_REACHY_STICKER_URL`.
+ */
+export const STICKER_API_URL: string =
+  (import.meta.env.VITE_REACHY_STICKER_URL as string | undefined) ??
+  'https://pollen-robotics-reachy-sticker-generator.hf.space';
