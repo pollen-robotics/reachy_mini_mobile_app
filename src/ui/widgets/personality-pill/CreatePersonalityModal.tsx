@@ -54,6 +54,7 @@ import {
   VIBE_MAX,
   useGenerationProgress,
   useVibeRoll,
+  useVoiceAudition,
 } from './create-personality';
 
 interface CreatePersonalityModalProps {
@@ -113,6 +114,7 @@ export function CreatePersonalityModal({
   const [voice, setVoice] = useState<string>(() =>
     normalizePersonalityVoice(editing?.voice),
   );
+  const { playingVoice, playSample } = useVoiceAudition();
 
   // Two-step delete confirmation (edit mode only): the first tap arms it,
   // the second commits. Deleting a custom persona destroys the user's own
@@ -277,9 +279,11 @@ export function CreatePersonalityModal({
 
   const selectVoice = useCallback(
     (v: string) => {
-      setVoice(normalizePersonalityVoice(v));
+      const normalized = normalizePersonalityVoice(v);
+      setVoice(normalized);
+      playSample(normalized);
     },
-    [],
+    [playSample],
   );
 
   const canSubmit = name.trim().length > 0 && instructions.trim().length > 0;
@@ -456,6 +460,7 @@ export function CreatePersonalityModal({
             onTaglineChange={setTagline}
             voice={voice}
             onVoiceChange={selectVoice}
+            playingVoice={playingVoice}
             instructions={instructions}
             onInstructionsChange={setInstructions}
             onBack={() => setDetailsOpen(false)}

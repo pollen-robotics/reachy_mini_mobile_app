@@ -20,6 +20,10 @@ export {
 } from './builtin';
 export type { VoiceId } from './builtin';
 export {
+  VOICE_SAMPLES,
+  getVoiceSampleUrl,
+} from './voice-samples';
+export {
   generatePersonality,
   generateRandomPersonality,
   generateRandomVibe,

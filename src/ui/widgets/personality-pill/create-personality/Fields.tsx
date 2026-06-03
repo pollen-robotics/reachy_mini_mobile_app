@@ -1,5 +1,5 @@
 /**
- * The classic persona form: name + tagline, a voice picker, and the
+ * The classic persona form: name + tagline, a voice picker that auditions on
  * system-prompt "Instructions" box that grows to fill the leftover height.
  * In create mode it's fronted by a "back to vibe generator" link; edit mode
  * opens straight here. Purely presentational - all state and handlers come
@@ -7,6 +7,7 @@
  */
 import { Box, Button, MenuItem, Stack, TextField } from '@mui/material';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
+import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
 import { AVAILABLE_VOICES, VOICE_DESCRIPTIONS } from '@/features/personalities';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
@@ -20,9 +21,12 @@ export interface CreatePersonalityFieldsProps {
   tagline: string;
   onTaglineChange: (value: string) => void;
   voice: string;
+  /** Selecting a voice also auditions it (caller wires playback). */
   onVoiceChange: (value: string) => void;
   instructions: string;
   onInstructionsChange: (value: string) => void;
+  /** The voice currently auditioning (pulses the speaker icon). */
+  playingVoice: string | null;
   /** Create mode only: return to the vibe-generator hero. */
   onBack: () => void;
 }
@@ -37,6 +41,7 @@ export function CreatePersonalityFields({
   onVoiceChange,
   instructions,
   onInstructionsChange,
+  playingVoice,
   onBack,
 }: CreatePersonalityFieldsProps) {
   return (
@@ -78,7 +83,7 @@ export function CreatePersonalityFields({
 
       {/* Identity: name + voice share one row, tagline sits below. The
           avatar - and its regenerate control - live on the persistent
-          personality band above. */}
+          personality band above. Picking a voice auditions it right away. */}
       <Stack spacing={2}>
         <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
           <TextField
@@ -107,6 +112,10 @@ export function CreatePersonalityFields({
             sx={{
               flex: 1,
               minWidth: 0,
+              '@keyframes voicePulse': {
+                '0%, 100%': { opacity: 0.45 },
+                '50%': { opacity: 1 },
+              },
             }}
             slotProps={{
               ...shrinkLabelSlotProps,
@@ -128,6 +137,16 @@ export function CreatePersonalityFields({
                       >
                         {v}
                       </Box>
+                      {v === playingVoice && (
+                        <VolumeUpRoundedIcon
+                          sx={{
+                            ml: 'auto',
+                            fontSize: 18,
+                            color: 'primary.main',
+                            animation: 'voicePulse 0.7s ease-in-out infinite',
+                          }}
+                        />
+                      )}
                     </Box>
                   );
                 },

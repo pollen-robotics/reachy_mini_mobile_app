@@ -10,6 +10,8 @@ export { useGenerationProgress } from './useGenerationProgress';
 export type { GenerationProgress } from './useGenerationProgress';
 export { useVibeRoll } from './useVibeRoll';
 export type { VibeRoll } from './useVibeRoll';
+export { useVoiceAudition } from './useVoiceAudition';
+export type { VoiceAudition } from './useVoiceAudition';
 
 export { CreatePersonalityHero } from './Hero';
 export type { CreatePersonalityHeroProps } from './Hero';
