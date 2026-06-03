@@ -190,7 +190,11 @@ function AppCompactTileImpl({
             height: 64,
             flexShrink: 0,
             borderRadius: `${RADIUS.md}px`,
-            bgcolor: 'background.paper',
+            // Constant (near-)white illustration plate in BOTH modes:
+            // app icons / logos assume a light backing, so a dark paper
+            // plate in dark mode would muddy them. Slightly translucent
+            // (0.8) so it's not a stark pure-white block.
+            bgcolor: alpha(theme.palette.common.white, 0.15),
             border: `1px solid ${theme.palette.divider}`,
             display: 'flex',
             alignItems: 'center',
