@@ -19,7 +19,7 @@
  *     "Clear memory" with a two-step confirm.
  */
 import { useState } from 'react';
-import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
+import { Box, Button, ButtonBase, ButtonGroup, Stack, Typography, alpha, useTheme } from '@mui/material';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import MicNoneOutlinedIcon from '@mui/icons-material/MicNoneOutlined';
@@ -48,10 +48,9 @@ import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 const REALTIME_BACKENDS: ReadonlyArray<{
   id: RealtimeBackendKind;
   label: string;
-  blurb: string;
 }> = [
-  { id: 'huggingface', label: 'Hugging Face', blurb: 'Open models, runs on HF Inference.' },
-  { id: 'openai', label: 'OpenAI', blurb: 'gpt-realtime via your HF-minted key.' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'huggingface', label: 'Hugging Face' },
 ];
 
 export function ConversationSettingsPanel() {
@@ -133,6 +132,61 @@ export function ConversationSettingsPanel() {
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 2, pb: 4 }}>
         <Stack spacing={4}>
+          {/* REALTIME BACKEND - which provider powers the live voice
+              session. Single-line ButtonGroup single-select. Read by the
+              engine at the next conversation start, so no live-apply path.
+              First param: it's the most structural choice in this panel. */}
+          <Section
+            label="Realtime backend"
+            blurb="Which provider powers the live voice conversation. Applies on the next conversation."
+          >
+            <Box sx={{ px: 3 }}>
+              <ButtonGroup
+                fullWidth
+                disableElevation
+                color="primary"
+                aria-label="Realtime backend"
+                sx={{ '& .MuiButtonGroup-grouped': { borderColor: theme.palette.primary.main } }}
+              >
+                {REALTIME_BACKENDS.map(opt => {
+                  const active = opt.id === realtimeBackend;
+                  return (
+                    <Button
+                      key={opt.id}
+                      onClick={() => setRealtimeBackend(opt.id)}
+                      aria-pressed={active}
+                      aria-label={`Use the ${opt.label} realtime backend`}
+                      variant="outlined"
+                      color="primary"
+                      disableRipple
+                      sx={{
+                        textTransform: 'none',
+                        fontSize: TYPO.sm,
+                        fontWeight: active ? FONT_WEIGHT.bold : FONT_WEIGHT.semibold,
+                        py: 1,
+                        color: 'primary.main',
+                        borderColor: 'primary.main',
+                        opacity: active ? 1 : 0.55,
+                        bgcolor: active
+                          ? 'background.paper'
+                          : alpha(theme.palette.primary.main, 0.12),
+                        WebkitTapHighlightColor: 'transparent',
+                        '&:hover': {
+                          borderColor: 'primary.main',
+                          bgcolor: active
+                            ? 'background.paper'
+                            : alpha(theme.palette.primary.main, 0.16),
+                        },
+                      }}
+                    >
+                      {opt.label}
+                    </Button>
+                  );
+                })}
+              </ButtonGroup>
+            </Box>
+          </Section>
+
           {/* LANGUAGE - compact wrapping chip row. A vertical 7-row list
               ate too much height; the chips fold the same options into
               ~1-2 rows (same pill treatment as the voice chips in
@@ -291,67 +345,6 @@ export function ConversationSettingsPanel() {
                 )}
               </Box>
             </Card>
-          </Section>
-
-          {/* REALTIME BACKEND - which provider powers the live voice
-              session. Two-chip single-select (same pill treatment as the
-              language row). Read by the engine at the next conversation
-              start, so no live-apply path. */}
-          <Section
-            label="Realtime backend"
-            blurb="Which provider powers the live voice conversation. Applies on the next conversation."
-          >
-            <Box sx={{ px: 3 }}>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {REALTIME_BACKENDS.map(opt => {
-                  const active = opt.id === realtimeBackend;
-                  return (
-                    <ButtonBase
-                      key={opt.id}
-                      onClick={() => setRealtimeBackend(opt.id)}
-                      aria-pressed={active}
-                      aria-label={`Use the ${opt.label} realtime backend`}
-                      sx={{
-                        flexDirection: 'column',
-                        alignItems: 'flex-start',
-                        gap: 0.25,
-                        px: 1.5,
-                        py: 1,
-                        borderRadius: `${RADIUS.sm}px`,
-                        textAlign: 'left',
-                        color: active ? 'primary.main' : 'text.primary',
-                        bgcolor: active
-                          ? alpha(theme.palette.primary.main, 0.1)
-                          : 'background.paper',
-                        border: `1.5px solid ${
-                          active ? theme.palette.primary.main : theme.palette.divider
-                        }`,
-                        transition: 'background-color 0.15s ease, border-color 0.15s ease',
-                        WebkitTapHighlightColor: 'transparent',
-                        '&:active': { transform: 'scale(0.97)' },
-                      }}
-                    >
-                      <Box
-                        component="span"
-                        sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.semibold }}
-                      >
-                        {opt.label}
-                      </Box>
-                      <Box
-                        component="span"
-                        sx={{
-                          fontSize: TYPO.xs,
-                          color: active ? 'primary.main' : 'text.secondary',
-                          opacity: active ? 0.9 : 1,
-                        }}
-                      >
-                        {opt.blurb}
-                      </Box>
-                    </ButtonBase>
-                  );
-                })}
-              </Box>
-            </Box>
           </Section>
         </Stack>
       </Box>
