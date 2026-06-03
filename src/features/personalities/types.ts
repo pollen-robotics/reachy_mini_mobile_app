@@ -57,4 +57,11 @@ export interface CustomPersonalityInput {
   instructions: string;
   voice?: string;
   glow?: string;
+  /**
+   * Avatar image src. Usually a generated-sticker data URI
+   * (`data:image/svg+xml;...` or `data:image/png;base64,...`). When
+   * omitted on create we fall back to `DEFAULT_AVATAR_URL`; when
+   * omitted on update we keep the persona's current avatar.
+   */
+  avatar?: string;
 }
