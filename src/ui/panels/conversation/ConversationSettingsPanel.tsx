@@ -32,19 +32,34 @@ import {
 } from '@/features/conversation-language';
 import {
   setMemoryEnabled,
+  setRealtimeBackend,
   setVisionEnabled,
   useMemoryEnabled,
+  useRealtimeBackend,
   useVisionEnabled,
 } from '@/features/conversation-settings';
+import type { RealtimeBackendKind } from '@/features/conversation/engine/realtime/types';
 import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
+
+/** Selectable realtime providers, in display order. Labels are
+ *  user-facing; ids match `RealtimeBackendKind`. */
+const REALTIME_BACKENDS: ReadonlyArray<{
+  id: RealtimeBackendKind;
+  label: string;
+  blurb: string;
+}> = [
+  { id: 'huggingface', label: 'Hugging Face', blurb: 'Open models, runs on HF Inference.' },
+  { id: 'openai', label: 'OpenAI', blurb: 'gpt-realtime via your HF-minted key.' },
+];
 
 export function ConversationSettingsPanel() {
   const theme = useTheme();
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
+  const realtimeBackend = useRealtimeBackend();
   const { facts, clear } = useMemoryStore();
 
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -276,6 +291,67 @@ export function ConversationSettingsPanel() {
                 )}
               </Box>
             </Card>
+          </Section>
+
+          {/* REALTIME BACKEND - which provider powers the live voice
+              session. Two-chip single-select (same pill treatment as the
+              language row). Read by the engine at the next conversation
+              start, so no live-apply path. */}
+          <Section
+            label="Realtime backend"
+            blurb="Which provider powers the live voice conversation. Applies on the next conversation."
+          >
+            <Box sx={{ px: 3 }}>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {REALTIME_BACKENDS.map(opt => {
+                  const active = opt.id === realtimeBackend;
+                  return (
+                    <ButtonBase
+                      key={opt.id}
+                      onClick={() => setRealtimeBackend(opt.id)}
+                      aria-pressed={active}
+                      aria-label={`Use the ${opt.label} realtime backend`}
+                      sx={{
+                        flexDirection: 'column',
+                        alignItems: 'flex-start',
+                        gap: 0.25,
+                        px: 1.5,
+                        py: 1,
+                        borderRadius: `${RADIUS.sm}px`,
+                        textAlign: 'left',
+                        color: active ? 'primary.main' : 'text.primary',
+                        bgcolor: active
+                          ? alpha(theme.palette.primary.main, 0.1)
+                          : 'background.paper',
+                        border: `1.5px solid ${
+                          active ? theme.palette.primary.main : theme.palette.divider
+                        }`,
+                        transition: 'background-color 0.15s ease, border-color 0.15s ease',
+                        WebkitTapHighlightColor: 'transparent',
+                        '&:active': { transform: 'scale(0.97)' },
+                      }}
+                    >
+                      <Box
+                        component="span"
+                        sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.semibold }}
+                      >
+                        {opt.label}
+                      </Box>
+                      <Box
+                        component="span"
+                        sx={{
+                          fontSize: TYPO.xs,
+                          color: active ? 'primary.main' : 'text.secondary',
+                          opacity: active ? 0.9 : 1,
+                        }}
+                      >
+                        {opt.blurb}
+                      </Box>
+                    </ButtonBase>
+                  );
+                })}
+              </Box>
+            </Box>
           </Section>
         </Stack>
       </Box>

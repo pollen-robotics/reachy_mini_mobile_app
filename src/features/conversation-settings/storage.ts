@@ -14,8 +14,15 @@
  * line; the in-memory store stays authoritative for the session.
  */
 
+import type { RealtimeBackendKind } from '@/features/conversation/engine/realtime/types';
+
 const VISION_KEY = 'reachyMini.conversationSettings.visionEnabled';
 const MEMORY_KEY = 'reachyMini.conversationSettings.memoryEnabled';
+const BACKEND_KEY = 'reachyMini.conversationSettings.realtimeBackend';
+
+/** Default realtime provider. Hugging Face is the shipped default; the
+ *  OpenAI path is opt-in via the settings toggle. */
+const DEFAULT_BACKEND: RealtimeBackendKind = 'huggingface';
 
 function safeStorage(): Storage | null {
   if (typeof localStorage === 'undefined') return null;
@@ -59,4 +66,28 @@ export function readMemoryEnabled(): boolean {
 
 export function writeMemoryEnabled(value: boolean): void {
   writeBool(MEMORY_KEY, value);
+}
+
+/** Read the selected realtime backend. Unknown / missing values fall
+ *  back to the shipped default (`huggingface`). */
+export function readRealtimeBackend(): RealtimeBackendKind {
+  const storage = safeStorage();
+  if (!storage) return DEFAULT_BACKEND;
+  try {
+    const raw = storage.getItem(BACKEND_KEY);
+    return raw === 'openai' || raw === 'huggingface' ? raw : DEFAULT_BACKEND;
+  } catch (err) {
+    console.warn('[conversation-settings] failed to read', BACKEND_KEY, err);
+    return DEFAULT_BACKEND;
+  }
+}
+
+export function writeRealtimeBackend(value: RealtimeBackendKind): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(BACKEND_KEY, value);
+  } catch (err) {
+    console.warn('[conversation-settings] failed to write', BACKEND_KEY, err);
+  }
 }

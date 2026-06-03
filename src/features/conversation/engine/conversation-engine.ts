@@ -124,13 +124,18 @@ import { installBackgroundResilience } from "@/features/robot-session/background
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import { createHuggingFaceBridge } from "./bridge/huggingface-bridge";
+import { createRealtimeBackend } from "./realtime";
+import type { RealtimeBackend } from "./realtime/types";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
-import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
+import {
+  getRealtimeBackend,
+  isMemoryEnabled,
+  isVisionEnabled,
+} from "../../conversation-settings";
 import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
@@ -372,7 +377,7 @@ let robot: ReachyMiniInstance | null = null;
 // needs to forward `sendToolResponse` calls to it at runtime. The
 // late `=` assignment below resolves the cycle without forward
 // declarations or class wrappers.
-let realtimeBridge: ReturnType<typeof createHuggingFaceBridge> | null = null;
+let realtimeBridge: RealtimeBackend | null = null;
 
 // Head-motion + antennas oscillator. The actual `HeadWobbler` and
 // `AntennasOscillator` instances live inside their respective
@@ -1100,9 +1105,8 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // motion controllers and audio analysers. The bridge itself stays
 // blissfully unaware of any of that.
 
-realtimeBridge = createHuggingFaceBridge({
+realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
   getRobot: () => robot,
-  getHfToken: readHfTokenFromStorage,
   // Resolve the voice lazily (re-read on every `buildClient()` so
   // a personality switch picks up the new voice on the next
   // reconnect, without needing to rebuild the bridge). Falls back

@@ -21,7 +21,7 @@
  * (useful for any future side-channel) or be reverted for cleanliness.
  */
 
-import type { RealtimePort } from "../engine/bridge/huggingface-bridge";
+import type { RealtimePort } from "../engine/realtime/types";
 import { createProvider } from "./providers/factory";
 import { createSceneInjector } from "./scene-injector";
 import { createScenePoller } from "./scene-poller";
