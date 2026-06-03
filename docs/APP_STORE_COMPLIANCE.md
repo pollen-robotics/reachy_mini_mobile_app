@@ -379,8 +379,8 @@ want to win on.
 > **Implementation status (2026-05-29).** This section is the
 > *original* plan. For where each item actually stands today, see
 > [`APP_STORE_AUDIT_2026-05.md`](./APP_STORE_AUDIT_2026-05.md). In
-> short: the four UGC pillars (§ 6.1) shipped, the OpenAI key
-> migration shipped, and the remaining hard blockers are the
+> short: the four UGC pillars (§ 6.1) shipped, the voice-backend
+> credential migration shipped, and the remaining hard blockers are the
 > server-side catalog kill switch (§ 6.2.2) and pre-publication
 > moderation (§ 6.2.1). Note that the report mechanism shipped
 > against **HF Trust & Safety** (a `<spaceUrl>?report=true` deeplink),
@@ -505,7 +505,7 @@ Estimated effort: 0.5 day, mostly legal review.
   - HF account information (token, username) used to authenticate
     against Hugging Face.
   - Audio and video recorded for the conversation feature; not stored
-    on our servers; sent to OpenAI Realtime API per the conversation
+    on our servers; sent to the HF realtime backend per the conversation
     feature.
   - Third-party apps loaded from the catalog operate independently
     and are subject to the privacy policy of their author.

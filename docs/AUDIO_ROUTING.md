@@ -10,7 +10,7 @@ microphone and speaker live (the robot vs the phone).
 **Read this before touching any of:**
 
 - `src/features/conversation/engine/conversation-engine.ts`
-- `src/features/conversation/engine/bridge/openai-bridge.ts`
+- `src/features/conversation/engine/bridge/huggingface-bridge.ts`
 - `src/features/conversation-settings/{store,storage,index}.ts`
 - `src/ui/panels/conversation/ConversationSettingsPanel.tsx`
 
@@ -20,12 +20,12 @@ microphone and speaker live (the robot vs the phone).
 
 ### 1.1 Today's topology
 
-The conversation is a WebRTC pipeline between the robot and the OpenAI
-Realtime API, brokered by the phone. Audio is **fully on the robot**:
+The conversation is a pipeline between the robot and the HF realtime
+backend, brokered by the phone. Audio is **fully on the robot**:
 
 - **Mic input** = `robotMicTrack` (the robot's on-board mic, received on
-  `robot._pc`) is passed as `inputTrack` to `OpenaiRealtimeClient`.
-- **Speaker output** = OpenAI's output track is routed via
+  `robot._pc`) is passed as `inputTrack` to the realtime bridge.
+- **Speaker output** = the assistant output track is routed via
   `routeOutputToRobot()` (`audioSender.replaceTrack(...)`) to the
   robot's speaker. A hidden, muted `<audio>` element keeps the inbound
   track decoding.
@@ -39,7 +39,7 @@ This is exactly **state 1** below; states 2 and 3 do not exist yet.
 ### 1.2 Why this is cheap to do
 
 Input and output are already parameterised `MediaStreamTrack`s:
-`openaiBridge.connect(track)` takes the input track as an argument, and
+`realtimeBridge.connect(track)` takes the input track as an argument, and
 `routeOutputToRobot()` is the single output-routing point. The 3 states
 reduce to **two independent levers**.
 
@@ -163,8 +163,8 @@ earpiece or headphones, Reachy connected but resting in its woken pose).
 
 ### Step 3 - Bridge: parameterised output sink
 
-**`bridge/openai-bridge.ts`**
-- Add to `OpenaiBridgeDeps`: `speakerSink: () => "robot" | "phone"`
+**`bridge/huggingface-bridge.ts`**
+- Add to the bridge deps: `speakerSink: () => "robot" | "phone"`
   (lazy getter, re-read on every `buildClient()`).
 - Generalise `routeOutputToRobot(track)` into `routeOutput(track)`:
   - `"robot"` -> current behaviour (`replaceTrack` + muted sink).
@@ -181,7 +181,7 @@ earpiece or headphones, Reachy connected but resting in its woken pose).
 - Read `const route = getAudioRoute()` once. Derive `micSource`,
   `speakerSink`, `robotEmbodimentActive`.
 - Resolve `inputTrack`:
-  - `micSource === "robot"` -> `openaiBridge.getRobotMicTrack(robot)`.
+  - `micSource === "robot"` -> `realtimeBridge.getRobotMicTrack(robot)`.
   - `micSource === "phone"` -> `await capturePhoneMic({ echoCancellation:
     route === "phone-duplex" })`.
 - `audioMonitors.startMic(inputTrack)` on the resolved track (the orb
@@ -277,7 +277,7 @@ platform-specific work is native and differs sharply.
 |---------|-----------------|------------------------------|
 | Phone-mic permission prompt | WKWebView prompts on first `getUserMedia`; `NSMicrophoneUsageDescription` already declared | Requires `RECORD_AUDIO` in the manifest **and** a `WebChromeClient.onPermissionRequest` bridge - see `docs/ANDROID_PERMISSIONS.md` § 5 |
 | Continuous capture (states 2/3) | Works once granted | **Depends on the Android permission bridge being wired** (currently pre-Android-target) |
-| Play on phone + capture (state 2) | Needs `PlayAndRecord` audio-session category; validate the `<audio>` element actually outputs while the mic is live | Validate the WebView plays the OpenAI track while holding `RECORD_AUDIO` |
+| Play on phone + capture (state 2) | Needs `PlayAndRecord` audio-session category; validate the `<audio>` element actually outputs while the mic is live | Validate the WebView plays the assistant track while holding `RECORD_AUDIO` |
 | Privacy indicator | Orange dot while our capture stream is live (expected in states 2/3, must clear on stop) | Mic indicator (Android 12+); same expectation |
 | Background audio | `UIBackgroundModes = audio` already set | Foreground-service decision is deferred (`ANDROID_PERMISSIONS.md` § 6) - background behaviour for phone-mic modes inherits that decision |
 
@@ -298,7 +298,7 @@ platform-specific work is native and differs sharply.
 ### 6.2 Validation matrix
 
 - [ ] **iOS**: states 2 + 3 capture from the phone mic; state 2 plays
-      OpenAI audio through the phone speaker; orange indicator clears on
+      assistant audio through the phone speaker; orange indicator clears on
       stop; state 1 unchanged.
 - [ ] **Android**: same path once the `WebChromeClient` bridge is wired;
       mic indicator clears on stop.
@@ -315,7 +315,7 @@ platform-specific work is native and differs sharply.
 | `conversation-settings/store.ts` | +~25 lines |
 | `conversation-settings/index.ts` | re-exports |
 | `conversation/engine/capture-phone-mic.ts` | **new**, lazy capture + `stop()`, ~45 lines |
-| `bridge/openai-bridge.ts` | parameterised sink, ~35 lines |
+| `bridge/huggingface-bridge.ts` | parameterised sink, ~35 lines |
 | `conversation-engine.ts` | route selection + motion gating + lazy capture + eager release, ~55 lines |
 | `ConversationSettingsPanel.tsx` | "Audio" section, ~90 lines |
 
