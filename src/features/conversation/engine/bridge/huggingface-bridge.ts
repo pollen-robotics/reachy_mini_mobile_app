@@ -12,18 +12,49 @@ import {
 } from "../huggingface-realtime";
 import { ROBOT_TOOLS } from "../tools";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
-import type {
-  RealtimeBackend,
-  RealtimeBackendDeps,
-  RealtimePort,
-  RealtimeStatusKind,
-  RealtimeToolCallEvent,
-} from "../realtime/types";
 
-/** HF-specific deps: the shared contract plus the user's HF token getter
- *  (the provider auth the factory injects). */
-export interface HuggingFaceBridgeDeps extends RealtimeBackendDeps {
+export type RealtimeStatusKind =
+  | "connected"
+  | "user-speaking"
+  | "processing"
+  | "ai-speaking";
+
+export interface RealtimeToolCallEvent {
+  callId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface RealtimePort {
+  sendEvent: (event: Record<string, unknown>) => void;
+  onUserTranscript: (cb: (text: string) => void) => () => void;
+}
+
+export interface HuggingFaceBridgeDeps {
+  getRobot: () => ReachyMiniInstance | null;
   getHfToken: () => string | null;
+  voice: string | (() => string);
+  composeInstructions: () => string;
+  tools?: typeof ROBOT_TOOLS | (() => typeof ROBOT_TOOLS);
+  onStatus: (status: RealtimeStatusKind) => void;
+  onOutputTrack: (track: MediaStreamTrack) => void;
+  onToolCall: (call: RealtimeToolCallEvent) => void;
+  onReconnecting: () => void;
+  onFatalError: (err: Error) => void;
+}
+
+export interface HuggingFaceBridge {
+  connect: (robotMicTrack: MediaStreamTrack) => Promise<void>;
+  close: () => Promise<void>;
+  sendToolResponse: (
+    callId: string,
+    result: { ok: boolean; message: string },
+  ) => boolean;
+  isReconnecting: () => boolean;
+  resetReconnectCounter: () => void;
+  getRobotMicTrack: (robotInstance: ReachyMiniInstance) => MediaStreamTrack | null;
+  setMicMuted: (muted: boolean) => void;
+  getRealtimePort: () => RealtimePort;
 }
 
 const RECONNECT_BACKOFF_MS = 500;
@@ -31,7 +62,7 @@ const RECONNECT_MAX_ATTEMPTS = 1;
 
 export function createHuggingFaceBridge(
   deps: HuggingFaceBridgeDeps,
-): RealtimeBackend {
+): HuggingFaceBridge {
   let client: HuggingFaceRealtimeClient | null = null;
   let audioSink: HTMLAudioElement | null = null;
   let reconnecting = false;

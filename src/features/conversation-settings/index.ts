@@ -7,14 +7,11 @@
  * `setMemoryEnabled()` mutations for the settings panel toggles.
  */
 export {
-  getRealtimeBackend,
   isMemoryEnabled,
   isVisionEnabled,
   setMemoryEnabled,
-  setRealtimeBackend,
   setVisionEnabled,
   subscribe as subscribeConversationSettings,
   useMemoryEnabled,
-  useRealtimeBackend,
   useVisionEnabled,
 } from './store';

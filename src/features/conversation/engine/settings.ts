@@ -9,6 +9,10 @@
  * allocator or a direct local websocket configured in `shared/env.ts`.
  */
 
+import { HF_DEFAULT_VOICE } from "./huggingface-realtime";
+
+export const DEFAULT_VOICE = HF_DEFAULT_VOICE;
+
 export const DEFAULT_INSTRUCTIONS =
   'You are Reachy Mini, a small friendly robot companion. ' +
   'Keep replies short, warm, and spoken. Avoid long monologues. ' +
@@ -35,11 +39,13 @@ export const DEFAULT_INSTRUCTIONS =
   "remembering, just acknowledge naturally (\"got it\", \"noted\").";
 
 export interface Settings {
+  voice: string;
   instructions: string;
 }
 
 export function loadSettings(): Settings {
   return {
+    voice: DEFAULT_VOICE,
     instructions: DEFAULT_INSTRUCTIONS,
   };
 }
