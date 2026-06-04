@@ -118,24 +118,19 @@ import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/
 import { loadSettings, type Settings } from "./settings";
 import { readHfTokenFromStorage } from "./hf-token";
 import { memoryStore } from "./memory";
-import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
+import { getActivePersonality } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import { createRealtimeBackend } from "./realtime";
-import type { RealtimeBackend } from "./realtime/types";
+import { createHuggingFaceBridge } from "./bridge/huggingface-bridge";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
-import {
-  getRealtimeBackend,
-  isMemoryEnabled,
-  isVisionEnabled,
-} from "../../conversation-settings";
+import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
 import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
@@ -377,7 +372,7 @@ let robot: ReachyMiniInstance | null = null;
 // needs to forward `sendToolResponse` calls to it at runtime. The
 // late `=` assignment below resolves the cycle without forward
 // declarations or class wrappers.
-let realtimeBridge: RealtimeBackend | null = null;
+let realtimeBridge: ReturnType<typeof createHuggingFaceBridge> | null = null;
 
 // Head-motion + antennas oscillator. The actual `HeadWobbler` and
 // `AntennasOscillator` instances live inside their respective
@@ -1105,17 +1100,19 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // motion controllers and audio analysers. The bridge itself stays
 // blissfully unaware of any of that.
 
-realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
+realtimeBridge = createHuggingFaceBridge({
   getRobot: () => robot,
-  // Resolve the voice lazily (re-read on every `buildClient()` so a
-  // personality OR backend switch picks up the right voice on the next
-  // reconnect, without rebuilding the bridge). The persona pins one
-  // voice per backend; we pick the entry for the active backend and let
-  // `resolvePersonaVoice` snap it onto that backend's catalog (falling
-  // back to the backend default for a stale/unknown id).
+  getHfToken: readHfTokenFromStorage,
+  // Resolve the voice lazily (re-read on every `buildClient()` so
+  // a personality switch picks up the new voice on the next
+  // reconnect, without needing to rebuild the bridge). Falls back
+  // to the engine's `DEFAULT_VOICE` when the active personality
+  // doesn't override it.
   voice: () => {
     const personality = getActivePersonality();
-    return resolvePersonaVoice(personality.voices, getRealtimeBackend());
+    return personality.voice && personality.voice.length > 0
+      ? personality.voice
+      : settings.voice;
   },
   composeInstructions: () => {
     // Snapshot the user's long-term memory ONCE per connection. We

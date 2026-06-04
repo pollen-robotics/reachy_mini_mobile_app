@@ -16,13 +16,8 @@
  * requirement, so the app stays usable even when the host browser
  * refuses to store anything.
  */
-import {
-  DEFAULT_AVATAR_URL,
-  DEFAULT_GLOW,
-  DEFAULT_PERSONALITY_ID,
-  snapVoiceForBackend,
-} from './builtin';
-import type { PersonaVoices, Personality } from './types';
+import { DEFAULT_AVATAR_URL, DEFAULT_GLOW, DEFAULT_PERSONALITY_ID } from './builtin';
+import type { Personality } from './types';
 
 const ACTIVE_KEY = 'reachyMini.personalities.activeId';
 const CUSTOM_KEY = 'reachyMini.personalities.custom';
@@ -146,30 +141,8 @@ function normaliseCustom(
     name: raw.name,
     tagline: typeof raw.tagline === 'string' ? raw.tagline : '',
     instructions: raw.instructions,
-    voices: normaliseVoices(raw as Record<string, unknown>),
+    voice: typeof raw.voice === 'string' ? raw.voice : '',
     glow: typeof raw.glow === 'string' ? raw.glow : DEFAULT_GLOW,
     avatar: typeof raw.avatar === 'string' ? raw.avatar : DEFAULT_AVATAR_URL,
-  };
-}
-
-/**
- * Resolve a persona's per-backend voices from a stored record, snapping
- * each id to its backend catalog. Migrates legacy entries that pre-date
- * the per-backend model: those stored a single `voice` (an HF speaker),
- * which becomes the HF voice while OpenAI falls back to its default.
- */
-function normaliseVoices(raw: Record<string, unknown>): PersonaVoices {
-  const stored = raw.voices;
-  if (stored && typeof stored === 'object') {
-    const v = stored as Record<string, unknown>;
-    return {
-      huggingface: snapVoiceForBackend('huggingface', v.huggingface),
-      openai: snapVoiceForBackend('openai', v.openai),
-    };
-  }
-  // Legacy single-voice record (HF speaker id).
-  return {
-    huggingface: snapVoiceForBackend('huggingface', raw.voice),
-    openai: snapVoiceForBackend('openai', undefined),
   };
 }

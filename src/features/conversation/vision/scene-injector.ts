@@ -14,7 +14,7 @@
  * direct user utterance.
  */
 
-import type { RealtimePort } from "../engine/realtime/types";
+import type { RealtimePort } from "../engine/bridge/huggingface-bridge";
 import type { SceneTrigger } from "./types";
 
 export interface SceneInjector {

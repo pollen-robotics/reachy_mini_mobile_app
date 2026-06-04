@@ -6,16 +6,19 @@
  * React hooks (`useActivePersonality`, `usePersonalitiesCatalog`) and
  * the mutation helpers (`setActivePersonality`, `addCustomPersonality`).
  */
-export type { CustomPersonalityInput, PersonaVoices, Personality, PersonalityKind } from './types';
+export type { CustomPersonalityInput, Personality, PersonalityKind } from './types';
 export {
+  AVAILABLE_VOICES,
   BUILTIN_PERSONALITIES,
   DEFAULT_AVATAR_URL,
   DEFAULT_GLOW,
   DEFAULT_PERSONALITY_ID,
   GLOW_PALETTE,
+  VOICE_DESCRIPTIONS,
   getDefaultPersonality,
-  resolvePersonaVoice,
 } from './builtin';
+export type { VoiceId } from './builtin';
+export { VOICE_SAMPLES, getVoiceSampleUrl } from './voice-samples';
 export {
   generatePersonality,
   generateRandomPersonality,

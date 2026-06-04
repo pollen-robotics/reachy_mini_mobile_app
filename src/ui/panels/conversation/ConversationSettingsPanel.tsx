@@ -19,7 +19,7 @@
  *     "Clear memory" with a two-step confirm.
  */
 import { useState } from 'react';
-import { Box, Button, ButtonBase, ButtonGroup, Stack, Typography, alpha, useTheme } from '@mui/material';
+import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import MicNoneOutlinedIcon from '@mui/icons-material/MicNoneOutlined';
@@ -32,33 +32,19 @@ import {
 } from '@/features/conversation-language';
 import {
   setMemoryEnabled,
-  setRealtimeBackend,
   setVisionEnabled,
   useMemoryEnabled,
-  useRealtimeBackend,
   useVisionEnabled,
 } from '@/features/conversation-settings';
-import type { RealtimeBackendKind } from '@/features/conversation/engine/realtime/types';
 import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
-
-/** Selectable realtime providers, in display order. Labels are
- *  user-facing; ids match `RealtimeBackendKind`. */
-const REALTIME_BACKENDS: ReadonlyArray<{
-  id: RealtimeBackendKind;
-  label: string;
-}> = [
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'huggingface', label: 'Hugging Face' },
-];
 
 export function ConversationSettingsPanel() {
   const theme = useTheme();
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
-  const realtimeBackend = useRealtimeBackend();
   const { facts, clear } = useMemoryStore();
 
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -132,61 +118,6 @@ export function ConversationSettingsPanel() {
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 2, pb: 4 }}>
         <Stack spacing={4}>
-          {/* REALTIME BACKEND - which provider powers the live voice
-              session. Single-line ButtonGroup single-select. Read by the
-              engine at the next conversation start, so no live-apply path.
-              First param: it's the most structural choice in this panel. */}
-          <Section
-            label="Realtime backend"
-            blurb="Which provider powers the live voice conversation. Applies on the next conversation."
-          >
-            <Box sx={{ px: 3 }}>
-              <ButtonGroup
-                fullWidth
-                disableElevation
-                color="primary"
-                aria-label="Realtime backend"
-                sx={{ '& .MuiButtonGroup-grouped': { borderColor: theme.palette.primary.main } }}
-              >
-                {REALTIME_BACKENDS.map(opt => {
-                  const active = opt.id === realtimeBackend;
-                  return (
-                    <Button
-                      key={opt.id}
-                      onClick={() => setRealtimeBackend(opt.id)}
-                      aria-pressed={active}
-                      aria-label={`Use the ${opt.label} realtime backend`}
-                      variant="outlined"
-                      color="primary"
-                      disableRipple
-                      sx={{
-                        textTransform: 'none',
-                        fontSize: TYPO.sm,
-                        fontWeight: active ? FONT_WEIGHT.bold : FONT_WEIGHT.semibold,
-                        py: 1,
-                        color: 'primary.main',
-                        borderColor: 'primary.main',
-                        opacity: active ? 1 : 0.55,
-                        bgcolor: active
-                          ? 'background.paper'
-                          : alpha(theme.palette.primary.main, 0.12),
-                        WebkitTapHighlightColor: 'transparent',
-                        '&:hover': {
-                          borderColor: 'primary.main',
-                          bgcolor: active
-                            ? 'background.paper'
-                            : alpha(theme.palette.primary.main, 0.16),
-                        },
-                      }}
-                    >
-                      {opt.label}
-                    </Button>
-                  );
-                })}
-              </ButtonGroup>
-            </Box>
-          </Section>
-
           {/* LANGUAGE - compact wrapping chip row. A vertical 7-row list
               ate too much height; the chips fold the same options into
               ~1-2 rows (same pill treatment as the voice chips in
