@@ -137,7 +137,7 @@ export function ConversationPanel({
   // mirrors this state via its `open` prop.
   //
   // We deliberately auto-close the picker when a conversation
-  // becomes live: an OpenAI session firing while the user is still
+  // becomes live: a backend session firing while the user is still
   // browsing the picker would feel like the app skipped a beat.
   // Same idea on engine errors - the user needs to see the orb's
   // error state, not a stale picker.
@@ -209,7 +209,7 @@ export function ConversationPanel({
   }, [active]);
 
   // Mid-conversation personality switch: when the user picks a new
-  // personality while the OpenAI client is live, restart the
+  // personality while the realtime client is live, restart the
   // conversation parts so the new instructions + voice take effect.
   //
   // We skip the restart on the very first render (the store ALWAYS
@@ -234,7 +234,7 @@ export function ConversationPanel({
   // restart effect above: `composeInstructions()` (in the engine)
   // reads the active language lazily from the store, so the only
   // thing this panel needs to do on a language change is drop the
-  // live OpenAI client and bring it back. The next handshake then
+  // live realtime client and bring it back. The next handshake then
   // picks up the new prompt fragment automatically.
   //
   // Skip rules:
@@ -267,7 +267,7 @@ export function ConversationPanel({
   /**
    * Tap on the orb's stop side button.
    *
-   * Drops the conversation parts (D layer) only - OpenAI client,
+   * Drops the conversation parts (D layer) only - realtime client,
    * antennas oscillator, head wobbler, audio monitors. The WebRTC
    * session stays up, motors stay enabled, the robot stays awake.
    * The engine parks back in `ready` so the user can tap the orb
@@ -327,7 +327,7 @@ export function ConversationPanel({
         <Box sx={{ maxWidth: 720, mx: 'auto' }}>
           {/* Disable the persona switcher while a conversation is
               live: changing the active persona mid-call would
-              force a stop+start of the OpenAI client and audibly
+              force a stop+start of the realtime client and audibly
               cut Reachy off mid-sentence. The pill stays mounted
               and keeps showing the current persona, but loses its
               hover / chevron + carries an aria hint explaining
@@ -554,7 +554,13 @@ export function ConversationPanel({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: 'primary.main',
+                    // Greyed (not primary) while a live call locks it - same
+                    // treatment as the personality band's chevron/pencil - so
+                    // it reads as inert without dimming the whole strip cell.
+                    color:
+                      conversationEngaged || session.engineState === 'error'
+                        ? 'action.disabled'
+                        : 'primary.main',
                     // Active (panel open): a clean white card surface that
                     // pops off the strip's `background.default` canvas, rather
                     // than the old primary tint that read grey-ish.
@@ -563,7 +569,7 @@ export function ConversationPanel({
                     '&:hover': {
                       bgcolor: settingsOpen ? 'background.paper' : 'action.hover',
                     },
-                    '&.Mui-disabled': { opacity: 0.45 },
+                    '&.Mui-disabled': { color: 'action.disabled' },
                     WebkitTapHighlightColor: 'transparent',
                   }}
                 >

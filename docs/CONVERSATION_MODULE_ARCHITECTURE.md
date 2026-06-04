@@ -66,7 +66,7 @@ Already well-factored and reusable:
   `RealtimePort` side-channel. Fully swappable and isolated.
 - `tools/tool-call-handler.ts` - tool dispatch decoupled via injected
   `sendToolResponse`.
-- `bridge/openai-bridge.ts` - already a transport adapter shape.
+- `bridge/huggingface-bridge.ts` - already a transport adapter shape.
 
 The problem - a single god-object:
 
@@ -98,9 +98,8 @@ features/conversation/
     tools.ts                 # tool registry
   adapters/                  # implementations of the ports
     realtime/
-      openai/                # openai-bridge + openai-realtime + ephemeral-key
-      huggingface/           # hf-bridge + hf-realtime + hf-token
-      index.ts               # createRealtimeBackend(kind, deps)
+      huggingface/           # huggingface-bridge + huggingface-realtime + hf-token
+      index.ts               # createRealtimeBackend(kind, deps) only if a second backend returns
     robot/robot-session-adapter.ts
     motion/motion-adapter.ts
     memory/local-storage-memory.ts
@@ -166,7 +165,7 @@ closure.
 Narrow on purpose. The orchestrator imports only these.
 
 ```ts
-// ports/realtime-backend.ts  -> two real impls (OpenAI, HF) => a true port
+// ports/realtime-backend.ts  -> add only if a second real backend returns
 export interface RealtimeBackend { /* see backend abstraction doc */ }
 
 // ports/robot.ts  -> one impl, but faked in orchestrator tests
@@ -201,8 +200,10 @@ export interface ToolRegistry {
 
 Honesty about which are "real" ports vs "test seams":
 
-- `RealtimeBackend`, `VlmProvider` = **real ports** (polymorphic today),
-  get a factory.
+- `VlmProvider` = **real port** (polymorphic today), gets a factory.
+- `RealtimeBackend` should become a real port only if a second voice
+  backend returns. Today the HF bridge is the only implementation, so a
+  provider factory would be dead weight.
 - `RobotPort`, `MotionPort`, `MemoryPort`, `ToolRegistry` = **single
   implementation**; the interface exists only so the orchestrator is
   testable with fakes. No factory, no registry, no ceremony.
@@ -248,17 +249,19 @@ module lacks today.
 | `instructions` | pure: given personality/memory/vision/language, assert prompt |
 | `turn-pipeline` | orchestrator + fakes: assert call order, failure handling |
 | `tool-dispatch` | fake `ToolRegistry`, assert dispatch + `sendToolResponse` |
-| adapters (openai/hf/robot/...) | thin; contract test shared across realtime adapters |
+| adapters (hf/robot/...) | thin; add shared realtime contract tests only if a second backend returns |
 
-Shared contract test: one spec both realtime adapters must pass
-(status fan-out, tool response, mute, reconnect-once, clean close).
+Future shared contract test: if a second realtime adapter returns, one
+spec both adapters must pass (status fan-out, tool response, mute,
+reconnect-once, clean close).
 
 ## Migration (incremental, never a big-bang)
 
 Each step compiles, ships, and is independently revertable.
 
-1. **Backend port** (per the backend doc): interface + factory, both
-   bridges behind it. Smallest seam, highest leverage.
+1. **Backend boundary** (per the backend doc): keep the HF bridge as the
+   named boundary the engine consumes. Add an interface + factory only if
+   a second real voice backend returns.
 2. **Extract `instructions.ts`** as a pure function (today inline in the
    closure). Pure, easy, unblocks testing prompt logic.
 3. **Extract `turn-pipeline.ts`** from `runConversationParts`, keep
@@ -279,7 +282,7 @@ structural finish and can lag without blocking the backend work.
 ## Out of scope
 
 - Speech-to-speech vs cascaded STT/LLM/TTS choice: we use a single
-  realtime transport (OpenAI / HF); the cascaded-pipeline literature
+  realtime transport (HF); the cascaded-pipeline literature
   informs the *orchestration* patterns, not the transport.
 - Server-side / daemon changes (playback flush lives partly in the
   robot backend; track it there).

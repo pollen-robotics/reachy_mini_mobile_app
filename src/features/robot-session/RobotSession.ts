@@ -47,7 +47,7 @@
  *     the orchestrator: it calls session methods, then transitions
  *     its FSM. This keeps `RobotSession` free of the
  *     conversation-state vocabulary (`listening`, `ai-speaking`, …).
- *   - Any conversation pipeline (OpenAI bridge, motion, audio,
+ *   - Any conversation pipeline (realtime bridge, motion, audio,
  *     tools). Those are pure conversation concerns.
  *   - Host-facing callbacks (`onStateChange`, `onLevels`, …). The
  *     engine forwards them.

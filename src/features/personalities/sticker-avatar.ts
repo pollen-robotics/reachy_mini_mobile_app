@@ -28,7 +28,7 @@
  */
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
-import { readHfTokenFromStorage } from '@/features/conversation/engine/ephemeral-key';
+import { readHfTokenFromStorage } from '@/features/conversation/engine/hf-token';
 import { STICKER_API_URL } from '@/shared/env';
 
 import type { CustomPersonalityInput } from './types';

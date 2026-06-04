@@ -19,7 +19,7 @@
  * prompt and `getUserMedia` rejects with `NotAllowedError`.
  *
  * In both cases we don't actually need the phone's microphone (audio
- * is captured on the robot, the phone only renders the OpenAI track):
+ * is captured on the robot, the phone only renders the assistant track):
  * we immediately stop the returned tracks. The function is idempotent
  * - subsequent calls are no-ops once the first grant has gone through.
  *

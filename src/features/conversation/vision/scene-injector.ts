@@ -14,7 +14,7 @@
  * direct user utterance.
  */
 
-import type { RealtimePort } from "../engine/bridge/openai-bridge";
+import type { RealtimePort } from "../engine/realtime/types";
 import type { SceneTrigger } from "./types";
 
 export interface SceneInjector {

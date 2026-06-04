@@ -4,7 +4,7 @@
  * The host imports `ConversationPanel` and treats the rest of the
  * module as a black box. Everything else under this directory is an
  * internal implementation detail (the engine, the motion modules,
- * the orb, OpenAI Realtime wiring, memory, permissions). Do NOT
+ * the orb, HF realtime wiring, memory, permissions). Do NOT
  * re-export internal types from here unless they're part of the
  * documented host contract.
  *
@@ -14,21 +14,17 @@
  *   - It opens its own WebRTC + DataChannel session against the HF
  *     central relay, using the token + preselected peer id passed
  *     in by the host.
- *   - It handles the OpenAI Realtime audio bridge (mic ↔ AI ↔
- *     robot speaker) via direct WebRTC to OpenAI.
+ *   - It handles the HF realtime audio bridge (robot mic ↔ AI ↔
+ *     robot speaker) via a backend WebSocket.
  *   - It plays robot-side motion (head wobble, antennas, tool-call
  *     dances) over the SDK's data channel.
- *   - It teardown cleanly on unmount: closes the OpenAI peer,
+ *   - It teardown cleanly on unmount: closes the realtime backend,
  *     stops the SDK session, releases motors via `goto_sleep`.
  *
- * Configuration: the engine mints per-user OpenAI Realtime
- * ephemeral keys via the website's `/api/openai/ephemeral`
- * endpoint at conversation-start time (see `engine/ephemeral-key.ts`).
- * No build-time secret is required. The engine will surface a
- * "Sign in to Hugging Face" UI message if the user isn't
- * authenticated when they try to start a conversation; otherwise
- * the orb spins / motors engage and the AI voice comes online
- * after the SDP handshake.
+ * Configuration: the engine uses the app-managed Hugging Face
+ * realtime session allocator by default, or a direct websocket when
+ * configured in `shared/env.ts`. No build-time model-provider secret
+ * is required.
  */
 
 export type {

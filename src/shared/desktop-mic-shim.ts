@@ -13,7 +13,7 @@
  *
  *   2. `@pollen-robotics/reachy-mini-sdk` — inside `startSession()`,
  *      grabs an audio track so the WebRTC sender is negotiated
- *      sendrecv. We immediately replace that track with OpenAI's
+ *      sendrecv. We immediately replace that track with the assistant
  *      output via `replaceTrack`, then call `releaseSdkPhoneMic` once
  *      the swap is done.
  *
@@ -21,7 +21,7 @@
  * desktop, no Android permission prompt to drive). But in
  * `yarn tauri:dev` on Mac the SDK call still opens the host
  * microphone for several seconds (ICE handshake + DC + bringup +
- * OpenAI handshake) — long enough to evict Discord / Zoom / etc.
+ * backend handshake) — long enough to evict Discord / Zoom / etc.
  * from the system input device.
  *
  * How
@@ -60,7 +60,7 @@
  *   - `iosMicUnlock` logs a warn, its caller `.catch(() => undefined)`s.
  *   - The SDK falls back to a silent oscillator track served from
  *     `AudioContext`, which the bridge happily replaces with the
- *     OpenAI output via `audioSender.replaceTrack(...)`. Conversation
+ *     assistant output via `audioSender.replaceTrack(...)`. Conversation
  *     keeps working end-to-end on desktop dev.
  *
  * Scope

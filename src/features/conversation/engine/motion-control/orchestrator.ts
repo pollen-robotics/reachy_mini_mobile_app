@@ -35,11 +35,11 @@
  *
  * 3. Tests can drive the orchestrator with a fake SDK and assert
  *    "after onUserSpeak() the dispatcher saw a setAntennas(0,0)"
- *    without spinning up the FSM, OpenAI or background-resilience.
+ *    without spinning up the FSM, realtime backend, or background-resilience.
  *
  * What the orchestrator does NOT own
  * ──────────────────────────────────
- * - The OpenAI bridge close: that's external slow work. Callers
+ * - The realtime bridge close: that's external slow work. Callers
  *   pass it as `stop({ concurrentTask })` so the glide-to-neutral
  *   runs in parallel with the bridge close (saving ~bridge-close-ms
  *   off teardown latency).
@@ -97,8 +97,8 @@ export interface MotionStopOptions {
    *  just fight the daemon-side sleep animation). */
   glide: boolean;
   /** Optional awaitable the orchestrator races AGAINST the glide.
-   *  Typical use: pass `openaiBridge.close()` so the bridge tears
-   *  its WebRTC peer down in parallel with the head ease-out
+   *  Typical use: pass `realtimeBridge.close()` so the bridge tears
+   *  the backend session down in parallel with the head ease-out
    *  rather than sequentially after it. The orchestrator does NOT
    *  inspect the task - any failure throws back to the caller. */
   concurrentTask?: Promise<unknown>;
@@ -110,8 +110,8 @@ export interface MotionOrchestrator {
    *  running tick), then start the antennas oscillator. The
    *  wobbler waits for its AI audio track via `attachAiOutput`. */
   startSession(): void;
-  /** Bind the OpenAI assistant audio track to the wobbler. Called
-   *  from the OpenAI bridge's `onOutputTrack` callback once the
+  /** Bind the assistant audio track to the wobbler. Called
+   *  from the realtime bridge's `onOutputTrack` callback once the
    *  inbound track lands. Idempotent across reconnects (the
    *  wobbler tears its previous instance down on `start`). */
   attachAiOutput(assistantTrack: MediaStreamTrack): void;
@@ -133,14 +133,14 @@ export interface MotionOrchestrator {
   /** Reachy is generating speech audio. Resume the antennas
    *  oscillator if it was frozen. */
   onAiSpeak(): void;
-  /** OpenAI is "thinking" between user-speak and ai-speak.
+  /** Backend is "thinking" between user-speak and ai-speak.
    *  Resume the antennas oscillator so the robot doesn't look
    *  frozen mid-turn. */
   onProcessing(): void;
   /** Back to listening: the AI response is fully done (silence
    *  detected on the AI track). Resume the antennas oscillator. */
   onListening(): void;
-  /** OpenAI bridge is rebuilding its WebRTC peer. The wobbler's
+  /** Realtime bridge is rebuilding its backend session. The wobbler's
    *  input track is about to go away, so stop it; freeze the
    *  antennas so the orb doesn't keep oscillating during the
    *  reconnect spinner. */
@@ -197,7 +197,7 @@ export function createMotionOrchestrator(
 
       if (glide) {
         // Gentle exit: ease the head + antennas to neutral in
-        // parallel with `concurrentTask` (typically the OpenAI
+        // parallel with `concurrentTask` (typically the realtime
         // bridge close) so the iframe / next conversation takes
         // over a calmly-posed robot. The glide flushes its final
         // neutral frame through the dispatcher, so we stop the

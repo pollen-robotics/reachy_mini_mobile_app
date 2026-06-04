@@ -30,165 +30,37 @@
 import { OpenaiRealtimeClient, type RealtimeStatus } from "../openai-realtime";
 import { ROBOT_TOOLS } from "../tools";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
+import type {
+  RealtimeBackend,
+  RealtimeBackendDeps,
+  RealtimePort,
+  RealtimeStatusKind,
+  RealtimeToolCallEvent,
+} from "../realtime/types";
 
 /**
- * Subset of `RealtimeStatus` the engine cares about. The bridge
- * filters out the lifecycle states (`idle`, `closed`, `error`) and
- * forwards only the conversation-relevant transitions.
+ * OpenAI-specific deps: the shared contract plus the async ephemeral-key
+ * getter and the realtime model id (the provider auth + config the
+ * factory injects). Everything else (`voice`, `composeInstructions`,
+ * the `on*` callbacks, …) comes from `RealtimeBackendDeps`.
  */
-export type OpenaiStatusKind =
-  | "connected"
-  | "user-speaking"
-  | "processing"
-  | "ai-speaking";
-
-export interface OpenaiToolCallEvent {
-  callId: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-
-/**
- * Generic side-channel port exposed to modules that need to interact
- * with the OpenAI Realtime data channel without owning the client
- * lifecycle (vision, future memory/telemetry, …).
- *
- * The port is **reconnect-survivable**: callers subscribe once and
- * the bridge re-attaches the listeners on every fresh `buildClient()`
- * (transparent reconnect, mid-session personality switch, etc.). On
- * the send side, calling `sendEvent` while the bridge has no live
- * client (between an error and the silent retry's handshake) is a
- * silent no-op - which is the expected behaviour for passive
- * side-channels (the next tick simply tries again).
- */
-export interface RealtimePort {
-  /** Send a raw client event to the active OpenAI Realtime data
-   *  channel. No-op when no live client exists or the data channel
-   *  isn't open yet. */
-  sendEvent: (event: Record<string, unknown>) => void;
-  /** Subscribe to completed user-side STT transcripts. The callback
-   *  fires once per finalised user utterance with the full text.
-   *  Returns an unsubscribe function. */
-  onUserTranscript: (cb: (text: string) => void) => () => void;
-}
-
-export interface OpenaiBridgeDeps {
-  /** Live SDK accessor. The bridge needs the robot's
-   *  `RTCPeerConnection` to plug the AI output track into the
-   *  robot's audio sender. Returns null while we're pre-connect. */
-  getRobot: () => ReachyMiniInstance | null;
-
-  // ─── Construction settings ──────────────────────────────────────────
+export interface OpenaiBridgeDeps extends RealtimeBackendDeps {
   /**
    * Async getter for an OpenAI Realtime ephemeral key. Forwarded
    * verbatim to `OpenaiRealtimeClient.RealtimeOptions.getApiKey`,
-   * which calls it once per SDP handshake. The mobile shell wires
-   * this to `mintEphemeralKey` in
-   * `features/conversation/engine/ephemeral-key.ts`.
-   *
-   * We deliberately accept a function (not a string) here so the
-   * bridge stays alive across the ~10-minute ephemeral lifetime
-   * window: a reconnect that crosses the boundary mints a fresh
-   * key without rebuilding the whole bridge.
+   * which calls it once per SDP handshake (wired to `mintEphemeralKey`).
+   * A function (not a string) so a reconnect crossing the ~10 min key
+   * lifetime mints a fresh key without rebuilding the bridge.
    */
   getApiKey: () => Promise<string>;
+  /** OpenAI Realtime model id (e.g. `gpt-realtime-2`). */
   model: string;
-  /**
-   * OpenAI voice id. Accepts either a static string OR a getter
-   * function. The getter form lets the host swap the voice between
-   * reconnects (e.g. when the user picks a different personality
-   * with a different voice profile) without rebuilding the whole
-   * bridge: the next `buildClient()` simply re-reads the value.
-   */
-  voice: string | (() => string);
-  /**
-   * Compose the system prompt at connect time. We resolve it lazily
-   * (rather than passing a static string) so the engine can fold a
-   * fresh memory-store digest into the instructions on every
-   * reconnect, without the bridge having to know about memory.
-   *
-   * Same lazy-resolution lets the host swap personalities live: the
-   * next reconnect will pick up the new instructions automatically.
-   */
-  composeInstructions: () => string;
-  /** Tool descriptors handed to the model. The default is the
-   *  engine's curated `ROBOT_TOOLS` set, but kept overridable so a
-   *  test or a future variant can pass a narrower list.
-   *
-   *  Accepts either a static array OR a getter, mirroring `voice`:
-   *  the getter form is re-evaluated on every `buildClient()` so the
-   *  host can narrow the set between reconnects (e.g. drop the memory
-   *  tools when the user disables long-term memory) without rebuilding
-   *  the whole bridge. */
-  tools?: typeof ROBOT_TOOLS | (() => typeof ROBOT_TOOLS);
-
-  // ─── Outwards events (forwarded to the engine) ──────────────────────
-  /** Forwarded `OpenaiRealtimeClient.on("status")`. */
-  onStatus: (status: OpenaiStatusKind) => void;
-  /** Forwarded `OpenaiRealtimeClient.on("outputTrack")`. The bridge
-   *  has already routed the track to the robot's speaker by the time
-   *  this fires, so the engine just needs to wire its motion +
-   *  level-monitor side effects. */
-  onOutputTrack: (track: MediaStreamTrack) => void;
-  /** Forwarded `OpenaiRealtimeClient.on("toolCall")`. The engine
-   *  feeds it to its tool-call handler, which sends a response back
-   *  through the bridge's `sendToolResponse()`. */
-  onToolCall: (call: OpenaiToolCallEvent) => void;
-  /** Fired when the bridge starts a transparent reconnect attempt.
-   *  The engine reacts by pausing motion agents (their input track
-   *  is about to go away) and dropping the orb to a transient
-   *  "starting" visual. */
-  onReconnecting: () => void;
-  /** Fired when the bridge has exhausted its one-shot retry budget.
-   *  The engine reacts by flipping the FSM to `error` and surfacing
-   *  a user-facing message. */
-  onFatalError: (err: Error) => void;
-}
-
-export interface OpenaiBridge {
-  /** Open a fresh OpenAI session bound to `robotMicTrack`. Returns
-   *  once the SDP handshake has resolved. */
-  connect: (robotMicTrack: MediaStreamTrack) => Promise<void>;
-  /** Tear down the OpenAI peer + audio sink. Safe to call
-   *  repeatedly; idempotent. Does NOT clear the reconnect-attempts
-   *  counter (use `resetReconnectCounter()` for that). */
-  close: () => Promise<void>;
-  /** Send a tool response to the active client. Returns false if
-   *  there's no live client (e.g. the engine raced a teardown). */
-  sendToolResponse: (
-    callId: string,
-    result: { ok: boolean; message: string },
-  ) => boolean;
-  /** Whether a transparent reconnect is currently in flight. The
-   *  engine reads this to gate UI transitions (e.g. don't surface a
-   *  fresh `error` while we're already retrying). */
-  isReconnecting: () => boolean;
-  /** Reset the per-session reconnect counter. The engine calls this
-   *  on every fresh `doStart()` so a previous flaky session doesn't
-   *  poison the new one. */
-  resetReconnectCounter: () => void;
-  /** Resolve the robot's microphone track from its peer connection.
-   *  Pure helper kept here because mic ↔ AI plumbing is part of the
-   *  bridge's responsibility. */
-  getRobotMicTrack: (robotInstance: ReachyMiniInstance) => MediaStreamTrack | null;
-  /** Mute/unmute the user's voice into OpenAI by gating the robot-mic
-   *  track the bridge routes to the Realtime client. Replaces the
-   *  SDK's `setMicMuted`, which is a no-op since the SDK dropped its
-   *  getUserMedia stream (1.8.0+). State persists across transparent
-   *  reconnects. */
-  setMicMuted: (muted: boolean) => void;
-  /** Generic side-channel port for modules that need to interact
-   *  with the Realtime data channel without owning the client
-   *  lifecycle (vision, future memory/telemetry). The port survives
-   *  transparent reconnects: subscribe once at boot, the bridge
-   *  re-attaches listeners on every fresh client build. */
-  getRealtimePort: () => RealtimePort;
 }
 
 const RECONNECT_BACKOFF_MS = 500;
 const RECONNECT_MAX_ATTEMPTS = 1;
 
-export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
+export function createOpenaiBridge(deps: OpenaiBridgeDeps): RealtimeBackend {
   let client: OpenaiRealtimeClient | null = null;
   let openaiSink: HTMLAudioElement | null = null;
   let reconnecting = false;
@@ -283,7 +155,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
       }
     });
 
-    next.on("toolCall", (call: OpenaiToolCallEvent) => {
+    next.on("toolCall", (call: RealtimeToolCallEvent) => {
       try {
         deps.onToolCall(call);
       } catch (err) {
@@ -550,7 +422,7 @@ export function createOpenaiBridge(deps: OpenaiBridgeDeps): OpenaiBridge {
  * status additions on the SDK side stay an explicit decision (allow
  * vs forward vs swallow) rather than a silent change in behaviour.
  */
-function isForwardableStatus(status: RealtimeStatus): status is OpenaiStatusKind {
+function isForwardableStatus(status: RealtimeStatus): status is RealtimeStatusKind {
   switch (status) {
     case "connected":
     case "user-speaking":

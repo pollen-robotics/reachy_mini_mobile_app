@@ -13,7 +13,7 @@
  *     `core.gates.movePlaying` only, without dragging the rest of
  *     the engine into its dep shape.
  *   - Test-ability: `createEngineCore({...})` can be instantiated
- *     in a test without an SDK, an OpenAI key, or a DOM.
+ *     in a test without an SDK, backend session, or a DOM.
  *
  * What lives here vs elsewhere
  * ────────────────────────────
@@ -49,7 +49,7 @@ export type { Fsm } from "./fsm";
 export type { Gate } from "./gate";
 
 export interface EngineCoreGates {
-  /** True once the conversation parts (antennas, OpenAI, wobbler)
+  /** True once the conversation parts (antennas, backend, wobbler)
    *  are running. Read by the host handle to short-circuit
    *  `startConversation()`, by `tearDownConversationPipeline()` to
    *  short-circuit when there's nothing to stop, and by the boot
@@ -63,7 +63,7 @@ export interface EngineCoreGates {
   convoActiveRequested: Gate;
   /** Terminal flag flipped by `handle.unmount()`. Every async
    *  entrypoint short-circuits on this so a late effect (visibility
-   *  resume, OpenAI reconnect, etc.) can't poke a torn-down engine. */
+   *  resume, backend reconnect, etc.) can't poke a torn-down engine. */
   unmounted: Gate;
   /** True while a tool-call choreography is playing. Read by the
    *  wobbler + antennas controllers so they yield their 30 Hz
@@ -85,7 +85,7 @@ export interface CreateEngineCoreOptions {
   /** Initial value for the `convoActiveRequested` gate. Defaults
    *  to `true` (Space-app behaviour: tap once → talking); the
    *  mobile shell passes `false` so the wake-up animation can
-   *  play without the antennas / OpenAI firing in parallel. */
+   *  play without the antennas / backend firing in parallel. */
   convoActiveRequested: boolean;
   /** Diagnostic label prefixed to every FSM transition log. Pass
    *  `null` to silence (tests). */

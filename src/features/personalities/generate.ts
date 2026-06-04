@@ -32,17 +32,22 @@
  * Output contract
  * ---------------
  * We request JSON-schema structured output (`response_format`) so capable
- * providers return a schema-valid object directly - the voice is even
- * constrained to the real `AVAILABLE_VOICES` enum. The router enables this
- * only where a provider advertises support and degrades to a plain request
- * otherwise, so we STILL parse defensively (models love to wrap JSON in prose
- * or ```json fences). The result is validated + clamped to the same limits the
- * manual form enforces, and the voice is snapped to a real `AVAILABLE_VOICES`
- * id so the picker always lands on a selectable chip.
+ * providers return a schema-valid object directly - the two voices are even
+ * constrained to the real `HF_VOICES` / `OPENAI_VOICES` enums. The router
+ * enables this only where a provider advertises support and degrades to a
+ * plain request otherwise, so we STILL parse defensively (models love to wrap
+ * JSON in prose or ```json fences). The result is validated + clamped to the
+ * same limits the editor enforces, and each voice is snapped onto its backend
+ * catalog so a stale id never reaches a realtime session.
+ *
+ * Voices: the persona authors one voice PER realtime backend (Hugging Face +
+ * OpenAI). There is no manual voice picker; the model picks both to match the
+ * persona's energy and the engine resolves the right one at connect time.
  */
 
-import { readHfTokenFromStorage } from "@/features/conversation/engine/ephemeral-key";
-import { AVAILABLE_VOICES } from "./builtin";
+import { readHfTokenFromStorage } from "@/features/conversation/engine/hf-token";
+import { HF_VOICES, OPENAI_VOICES, snapVoiceForBackend } from "./builtin";
+import type { PersonaVoices } from "./types";
 import { HfRouterError, routerChatCompletion } from "@/features/hf";
 
 /**
@@ -70,15 +75,15 @@ const DESCRIPTION_MAX = 240;
 
 /**
  * JSON Schema for structured-output generation. Mirrors the prose contract in
- * `SYSTEM_PROMPT` (and the manual form's clamps) so capable providers return a
- * schema-valid persona directly. `maxLength` matches the clamps below;
- * `voice` is constrained to the real voice ids so the picker always lands on a
- * selectable chip. `additionalProperties: false` keeps replies tight.
+ * `SYSTEM_PROMPT` (and the editor's clamps) so capable providers return a
+ * schema-valid persona directly. `maxLength` matches the clamps below; the two
+ * voices are constrained to their backend catalogs so a stale id never reaches
+ * a realtime session. `additionalProperties: false` keeps replies tight.
  */
 const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "tagline", "instructions", "voice"],
+  required: ["name", "tagline", "instructions", "voice_huggingface", "voice_openai"],
   properties: {
     name: {
       type: "string",
@@ -96,10 +101,15 @@ const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "System prompt for the persona, using '## IDENTITY', '## RESPONSE RULES', then optional '## QUIRKS'.",
     },
-    voice: {
+    voice_huggingface: {
       type: "string",
-      enum: [...AVAILABLE_VOICES],
-      description: "Voice id matching the persona's energy.",
+      enum: [...HF_VOICES],
+      description: "Hugging Face voice id matching the persona's energy.",
+    },
+    voice_openai: {
+      type: "string",
+      enum: [...OPENAI_VOICES],
+      description: "OpenAI voice id matching the persona's energy.",
     },
   },
 };
@@ -163,7 +173,8 @@ export interface GeneratedPersonality {
   name: string;
   tagline: string;
   instructions: string;
-  voice: string;
+  /** One voice per realtime backend, snapped to each backend catalog. */
+  voices: PersonaVoices;
 }
 
 /**
@@ -276,10 +287,11 @@ const SYSTEM_PROMPT = [
   "",
   "Always answer with a SINGLE JSON object and NOTHING else. No prose, no",
   "markdown, no code fences. The object MUST have exactly these keys:",
-  '  "name"         string, <= 24 chars, a punchy display name (Title Case).',
-  '  "tagline"      string, <= 60 chars, one playful line describing the vibe.',
-  '  "instructions" string, the system prompt for the persona (see rules).',
-  '  "voice"        string, one of the allowed voice ids listed below.',
+  '  "name"              string, <= 24 chars, a punchy display name (Title Case).',
+  '  "tagline"           string, <= 60 chars, one playful line describing the vibe.',
+  '  "instructions"      string, the system prompt for the persona (see rules).',
+  '  "voice_huggingface" string, one of the Hugging Face voice ids listed below.',
+  '  "voice_openai"      string, one of the OpenAI voice ids listed below.',
   "",
   "Rules for the instructions field:",
   "- Write it as a system prompt addressed to the robot, in English.",
@@ -291,8 +303,10 @@ const SYSTEM_PROMPT = [
   "- Stay in character and never mention being an AI or a system prompt.",
   "- Keep the whole instructions field under ~1000 characters.",
   "",
-  `Allowed voice ids: ${AVAILABLE_VOICES.join(", ")}.`,
-  "Pick the voice that best matches the persona's energy.",
+  `Allowed Hugging Face voice ids: ${HF_VOICES.join(", ")}.`,
+  `Allowed OpenAI voice ids: ${OPENAI_VOICES.join(", ")}.`,
+  "Pick the voice from each list that best matches the persona's energy;",
+  "the two picks should evoke the same character on their respective backend.",
 ].join("\n");
 
 function buildUserPrompt(vibe: string): string {
@@ -562,7 +576,10 @@ function parsePersonaJson(raw: string): GeneratedPersonality | null {
     name,
     tagline: clampString(obj.tagline, TAGLINE_MAX),
     instructions,
-    voice: snapVoice(obj.voice),
+    voices: {
+      huggingface: snapVoiceForBackend("huggingface", obj.voice_huggingface),
+      openai: snapVoiceForBackend("openai", obj.voice_openai),
+    },
   };
 }
 
@@ -597,16 +614,4 @@ function clampString(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
   return trimmed.length > max ? trimmed.slice(0, max).trimEnd() : trimmed;
-}
-
-/** Map the model's voice guess onto a real `AVAILABLE_VOICES` id.
- *  Case-insensitive exact match; falls back to the first (neutral
- *  default) voice so the picker always has a valid selection. */
-function snapVoice(value: unknown): string {
-  if (typeof value === "string") {
-    const needle = value.trim().toLowerCase();
-    const hit = AVAILABLE_VOICES.find((v) => v.toLowerCase() === needle);
-    if (hit) return hit;
-  }
-  return AVAILABLE_VOICES[0];
 }

@@ -1,19 +1,19 @@
 /**
- * Static OpenAI Realtime tool descriptors + the head-pose lookup
+ * Static realtime tool descriptors + the head-pose lookup
  * table the model targets via `move_head`.
  *
  * Pure data: no runtime dependencies, no side effects. The engine
- * imports these and registers them with the OpenAI client at
+ * imports these and registers them with the realtime backend at
  * conversation start.
  *
- * Schema mirrors the Realtime API's tool schema: a `name`, a free-
+ * Schema mirrors the backend's Realtime API tool schema: a `name`, a free-
  * text `description` (the model's only hint about when to call the
  * tool, so write them like prompt fragments) and a JSON-Schema
  * `parameters` block.
  */
 
 import { MOVE_CATALOG, MOVE_IDS } from '../motion/move-player';
-import type { RealtimeTool } from './openai-realtime';
+import type { RealtimeTool } from './huggingface-realtime';
 
 /**
  * Predefined head poses (roll/pitch/yaw in degrees) the model can

@@ -2,14 +2,14 @@
  * Head wobble generator - JS port of the Python
  * `reachy_mini_conversation_app/audio/speech_tapper.py` + `head_wobbler.py`.
  *
- * Purpose: take the assistant's outgoing voice (the audio OpenAI plays back
+ * Purpose: take the assistant's outgoing voice (the backend audio played back
  * through the robot) and drive small, organic head sways + nods in sync with
  * the speech, so Reachy "comes alive" while talking.
  *
- * The Python version sampled raw PCM base64 deltas over the OpenAI WebSocket
- * API; we instead hook a Web Audio `AnalyserNode` to the remote
- * `MediaStreamTrack` (which is how audio reaches us in WebRTC mode). Both
- * yield the same loudness envelope we need to modulate the sine oscillators.
+ * The Python version sampled raw PCM base64 deltas over the realtime
+ * WebSocket; we hook a Web Audio `AnalyserNode` to the assistant
+ * `MediaStreamTrack` produced by the mobile bridge. Both yield the same
+ * loudness envelope we need to modulate the sine oscillators.
  *
  * The SDK only exposes rotational `setHeadPose(roll, pitch, yaw)` in degrees,
  * so we drop the small (±mm-range) translations from the original Python

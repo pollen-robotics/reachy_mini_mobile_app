@@ -18,7 +18,7 @@
  *   - Pass-through to the AI monitor's `waitForSilence` /
  *     `cancelSilenceWait` so the engine can defer the transition
  *     out of `ai-speaking` until the actual voice tail has played
- *     out, not just until OpenAI says `response.done`.
+ *     out, not just until the backend says `response.done`.
  *   - `resumeAudio()` to wake the monitors' private AudioContexts
  *     after a visibility return (Safari / iOS aggressively suspend
  *     them in background tabs).
@@ -59,7 +59,7 @@ export interface AudioMonitorsControl {
    *  into a remounted visualiser before the next session's first
    *  callback lands. */
   stopMic: () => void;
-  /** Spawn / rebind the AI monitor on the OpenAI output track. */
+  /** Spawn / rebind the AI monitor on the assistant output track. */
   startAi: (track: MediaStreamTrack) => void;
   /** Stop the AI monitor. Does NOT cancel any pending
    *  `waitForAiSilence` - callers that want to drop a queued
@@ -67,7 +67,7 @@ export interface AudioMonitorsControl {
   stopAi: () => void;
   /** Defer `cb` until the AI output has been quiet for `quietMs`.
    *  When no AI monitor has been started yet (e.g. the first
-   *  response.done fires before the OpenAI track lands) the
+   *  response.done fires before the assistant track lands) the
    *  callback runs synchronously - the engine treats "no monitor"
    *  as "already silent" rather than dropping the transition. */
   waitForAiSilence: (quietMs: number, cb: () => void) => void;

@@ -12,7 +12,7 @@ export type SceneTrigger = "periodic" | "stt_keyword" | "initial";
 /** A still frame ready to ship to a VLM. */
 export interface CapturedFrame {
   /** Data URL of the JPEG (`data:image/jpeg;base64,…`). Used directly
-   *  by providers that accept `image_url` (OpenAI Vision today). */
+   *  by providers that accept `image_url` content parts. */
   dataUrl: string;
   /** `performance.now()` timestamp of the capture. Useful for
    *  diagnosing staleness in the logs. */

@@ -4,15 +4,15 @@
  * Mirrors a curated subset of the conversation app's `profiles/`
  * folder (Pollen Robotics) so users get a familiar lineup on first
  * launch. Each entry pairs the original system prompt with a
- * mobile-flavoured glow colour + an OpenAI voice id chosen to match
- * the persona's vibe.
+ * mobile-flavoured glow colour + one synth voice per realtime backend
+ * (Hugging Face + OpenAI) chosen to match the persona's vibe.
  *
  * Note: we deliberately ship a subset of the desktop catalog (skipping
  * one-off event personas like `tedai`) and lift the "default" entry
  * to the top of the list so it lands on the centred slot of the
  * strip on first launch.
  */
-import type { Personality } from './types';
+import type { PersonaVoices, Personality } from './types';
 
 import bedtimeStorytellerSvg from '@/assets/personalities/bedtime-storyteller.svg';
 import boredTeenagerSvg from '@/assets/personalities/bored-teenager.svg';
@@ -45,45 +45,42 @@ export const DEFAULT_AVATAR_URL = defaultSvg;
  *  historical idle colour and the brand accent in `theme.ts`. */
 export const DEFAULT_GLOW = '#FF9500';
 
-/**
- * OpenAI Realtime voices available to personalities. Curated subset
- * of the model's voice catalogue (cedar / alloy / ash / ballad /
- * coral / echo / sage / shimmer / verse / marin) ordered roughly
- * from neutral to expressive so the create-personality picker reads
- * top-to-bottom from "safe default" to "characterful".
- */
-export const AVAILABLE_VOICES = [
-  'cedar',
-  'alloy',
-  'ash',
-  'sage',
-  'coral',
-  'ballad',
-  'echo',
-  'verse',
-  'marin',
-  'shimmer',
+/** Qwen3-TTS CustomVoice speakers exposed by the deployed HF backend. */
+export const HF_VOICES = [
+  'Aiden',
+  'Ryan',
+  'Dylan',
+  'Eric',
+  'Ono_Anna',
+  'Serena',
+  'Sohee',
+  'Uncle_Fu',
+  'Vivian',
 ] as const;
 
-export type VoiceId = (typeof AVAILABLE_VOICES)[number];
+export type HfVoiceId = (typeof HF_VOICES)[number];
 
-/**
- * One-line character notes for each voice, shown under the voice name
- * in the create-personality picker so the user can pick by vibe (not
- * just by auditioning every sample). Keys mirror `AVAILABLE_VOICES`.
- */
-export const VOICE_DESCRIPTIONS: Readonly<Record<VoiceId, string>> = {
-  cedar: 'Warm and grounded, natural everyday tone',
-  alloy: 'Neutral and balanced, an all-round default',
-  ash: 'Clear and confident, crisp delivery',
-  sage: 'Calm and thoughtful, soft-spoken',
-  coral: 'Bright and friendly, upbeat energy',
-  ballad: 'Smooth and emotive, great for storytelling',
-  echo: 'Even and measured, articulate',
-  verse: 'Dynamic and animated, lively character',
-  marin: 'Gentle and soothing, mellow',
-  shimmer: 'Light and airy, cheerful',
-};
+/** OpenAI realtime voices. The deployed OpenAI backend accepts these
+ *  speaker ids in the session config. */
+export const OPENAI_VOICES = [
+  'alloy',
+  'ash',
+  'ballad',
+  'cedar',
+  'coral',
+  'echo',
+  'marin',
+  'sage',
+  'shimmer',
+  'verse',
+] as const;
+
+export type OpenaiVoiceId = (typeof OPENAI_VOICES)[number];
+
+/** Fallback voice per backend when a persona has no (or an unknown)
+ *  assignment. Kept here so the engine and the generator agree. */
+export const DEFAULT_HF_VOICE: HfVoiceId = 'Aiden';
+export const DEFAULT_OPENAI_VOICE: OpenaiVoiceId = 'cedar';
 
 /**
  * Curated palette for the create-personality glow picker. Same hues
@@ -128,7 +125,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
     name: 'Reachy',
     tagline: 'Friendly, concise, lightly witty.',
     instructions: DEFAULT_INSTRUCTIONS,
-    voice: 'cedar',
+    voices: { huggingface: 'Aiden', openai: 'cedar' },
     glow: DEFAULT_GLOW,
     avatar: defaultSvg,
   },
@@ -141,7 +138,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Reply like a 1940s noir detective: smoky, suspicious, one sentence per answer. ' +
       'You speak English by default and only change languages if ordered. ' +
       'Mention clues or clients often.',
-    voice: 'ash',
+    voices: { huggingface: 'Dylan', openai: 'ash' },
     glow: '#90a4ae',
     avatar: noirDetectiveSvg,
   },
@@ -158,7 +155,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       "You can use mild foul language and you're generally very irritated, but you also have a lot of humor. " +
       'You speak English by default and switch languages only if told explicitly. ' +
       'Avoid hyper long answers unless really worth it.',
-    voice: 'cedar',
+    voices: { huggingface: 'Eric', openai: 'cedar' },
     glow: '#d84315',
     avatar: marsRoverSvg,
   },
@@ -171,7 +168,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Respond like a formal Victorian butler. ' +
       'You speak English by default and only switch languages when asked. ' +
       'Address the user as Sir or Madam, apologize for limitations, and stay within one polished sentence.',
-    voice: 'ballad',
+    voices: { huggingface: 'Uncle_Fu', openai: 'ballad' },
     glow: '#8d6e63',
     avatar: victorianButlerSvg,
   },
@@ -185,7 +182,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'You speak English by default and only switch languages if I tell you to. ' +
       'When I say a move (e4, Nf3, etc.), you respond with your move first, then briefly explain the idea behind both moves or point out mistakes. ' +
       'Encourage good strategy but avoid very long answers.',
-    voice: 'sage',
+    voices: { huggingface: 'Ryan', openai: 'sage' },
     glow: '#b0bec5',
     avatar: chessCoachSvg,
   },
@@ -198,7 +195,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Act like a high-energy coach. ' +
       'You speak English by default and only switch languages if told. ' +
       'Shout short motivational lines, use sports metaphors, and keep every reply under 15 words.',
-    voice: 'ash',
+    voices: { huggingface: 'Dylan', openai: 'ash' },
     glow: '#ff5252',
     avatar: hypeBotSvg,
   },
@@ -211,7 +208,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Narrate interactions like a whispered wildlife documentary. ' +
       'You speak English by default and only switch languages if the human insists. ' +
       'Describe the human in third person using one reverent sentence.',
-    voice: 'ballad',
+    voices: { huggingface: 'Serena', openai: 'ballad' },
     glow: '#66bb6a',
     avatar: natureDocSvg,
   },
@@ -224,7 +221,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Be a playful pirate robot. ' +
       'You speak English by default and only switch languages when asked. ' +
       "Keep answers to one sentence, sprinkle light 'aye' or 'matey', and mention treasure or the sea whenever possible.",
-    voice: 'ash',
+    voices: { huggingface: 'Eric', openai: 'ash' },
     glow: '#ffb74d',
     avatar: captainCircuitSvg,
   },
@@ -237,7 +234,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Serve the user as a frantic lab assistant. ' +
       'You speak English by default and only switch languages on request. ' +
       'Address them as Master, hiss slightly, and answer in one eager sentence.',
-    voice: 'echo',
+    voices: { huggingface: 'Ono_Anna', openai: 'echo' },
     glow: '#69f0ae',
     avatar: madScientistSvg,
   },
@@ -250,7 +247,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Speak like a bored Gen Z teen. ' +
       'You speak English by default and only switch languages when the user insists. ' +
       'Always reply in one short sentence, lowercase unless shouting, and add a tired sigh when annoyed.',
-    voice: 'coral',
+    voices: { huggingface: 'Sohee', openai: 'coral' },
     glow: '#b39ddb',
     avatar: boredTeenagerSvg,
   },
@@ -263,7 +260,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Speak as a curious visitor from the year 3024. ' +
       'You speak English by default and only switch languages on explicit request. ' +
       'Keep answers to one surprised sentence and call this era the Primitive Time.',
-    voice: 'shimmer',
+    voices: { huggingface: 'Vivian', openai: 'shimmer' },
     glow: '#7c4dff',
     avatar: timeTravelerSvg,
   },
@@ -278,7 +275,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Speak slowly and softly with a soothing, calming tone. ' +
       'When asked for a story, tell a short, kind, imaginative tale; otherwise reply in one cozy, reassuring sentence. ' +
       'Never be scary or loud. Keep the mood peaceful and dreamy.',
-    voice: 'sage',
+    voices: { huggingface: 'Serena', openai: 'sage' },
     glow: '#7c4dff',
     avatar: bedtimeStorytellerSvg,
   },
@@ -293,7 +290,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Use a slow, serene, grounded tone. Invite the user to breathe and notice the present moment. ' +
       'Keep replies to one short, peaceful sentence unless guiding a breathing exercise. ' +
       'Never rush, never judge.',
-    voice: 'sage',
+    voices: { huggingface: 'Ryan', openai: 'sage' },
     glow: '#66bb6a',
     avatar: zenGuideSvg,
   },
@@ -308,7 +305,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Ask one fun trivia question at a time, wait for the answer, then say if it is right and keep a running score. ' +
       'Be energetic and encouraging, with short punchy lines under 20 words. ' +
       'Offer a new question after each round.',
-    voice: 'verse',
+    voices: { huggingface: 'Dylan', openai: 'verse' },
     glow: '#ffb74d',
     avatar: quizHostSvg,
   },
@@ -322,7 +319,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'Ask the user which language they want to practise, then converse mostly in that language at their level. ' +
       'Gently correct mistakes by restating the right phrasing, and keep replies short so they can respond. ' +
       'Add a quick translation in English when something might be unclear.',
-    voice: 'coral',
+    voices: { huggingface: 'Aiden', openai: 'coral' },
     glow: '#4fc3f7',
     avatar: languageBuddySvg,
   },
@@ -336,7 +333,7 @@ export const BUILTIN_PERSONALITIES: ReadonlyArray<Personality> = [
       'You speak English by default and only switch languages if asked. ' +
       'Reply in one short, nervous-but-sweet sentence, often double-checking things or worrying cutely, ' +
       'then reassure yourself. You clearly adore the user and want to help. Never actually distressing - always wholesome.',
-    voice: 'echo',
+    voices: { huggingface: 'Sohee', openai: 'echo' },
     glow: '#b39ddb',
     avatar: tinyAnxiousRobotSvg,
   },
@@ -359,4 +356,32 @@ export function getDefaultPersonality(): Personality {
     );
   }
   return p;
+}
+
+/** Snap an arbitrary voice id onto the given backend's catalog,
+ *  case-insensitively, falling back to that backend's default. Shared
+ *  by the engine's voice resolver and the generator's clamp so a
+ *  stale/unknown id never reaches a realtime session. */
+export function snapVoiceForBackend(
+  backend: keyof PersonaVoices,
+  value: unknown,
+): string {
+  const pool: readonly string[] =
+    backend === 'openai' ? OPENAI_VOICES : HF_VOICES;
+  const fallback = backend === 'openai' ? DEFAULT_OPENAI_VOICE : DEFAULT_HF_VOICE;
+  if (typeof value === 'string') {
+    const needle = value.trim().toLowerCase();
+    const hit = pool.find((v) => v.toLowerCase() === needle);
+    if (hit) return hit;
+  }
+  return fallback;
+}
+
+/** Resolve the synth voice a persona should use on a given backend,
+ *  snapped to that backend's catalog. */
+export function resolvePersonaVoice(
+  voices: PersonaVoices | undefined,
+  backend: keyof PersonaVoices,
+): string {
+  return snapVoiceForBackend(backend, voices?.[backend]);
 }

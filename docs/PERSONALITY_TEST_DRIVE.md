@@ -17,11 +17,11 @@ Two possible flavours:
    "Hello, who are you?", "What can you do?") to the HF Inference
    Providers router using the *current* `instructions` as the system
    prompt, and renders the replies as chat bubbles inside the modal.
-   The user reads the tone instantly. Voice stays auditionable via the
-   existing voice chips (`getVoiceSampleUrl`).
+   The user reads the tone instantly. Voice choice stays visible through
+   the existing HF voice descriptions.
 
 2. **Voice test-drive (richer, needs server work)**
-   Actually speak a generated line in the persona's chosen OpenAI
+   Actually speak a generated line in the persona's chosen HF realtime
    voice.
 
 ## Why it is deferred
@@ -31,18 +31,15 @@ Two possible flavours:
   `readHfTokenFromStorage()` + `tauriFetch`). It was cut only to keep
   the current change focused on generation.
 - The **voice** flavour is *not* trivial today:
-  - There is no TTS endpoint available to the app. `WEBSITE_API_URL`
-    only exposes `POST /api/openai/ephemeral` (Realtime client secret)
-    and `GET /api/js-apps`.
-  - The OpenAI voices are only auditionable via **pre-recorded bundled
-    samples** with fixed text (`features/personalities/voice-samples.ts`,
-    `getVoiceSampleUrl`). They cannot speak arbitrary generated text.
-  - The ephemeral key is consumed once during the Realtime WebRTC SDP
-    handshake; it is not a general TTS credential.
-  - Speaking generated text in a specific OpenAI voice would require a
-    new server-side TTS proxy (e.g. `POST /api/openai/tts` minting from
-    the master `OPENAI_API_KEY`, mirroring the ephemeral mint flow), or
-    routing TTS through HF Inference Providers.
+  - There is no standalone TTS endpoint available to the app. The
+    realtime session allocator returns a conversation websocket URL, not
+    a reusable text-to-speech API.
+  - The old pre-recorded voice samples were removed with the HF voice
+    migration, so the create/edit form cannot audition arbitrary
+    generated text locally.
+  - Speaking generated text in a specific HF voice would require either
+    a small server-side TTS proxy or a dedicated HF realtime/TTS preview
+    endpoint with per-user rate limiting.
 
 ## Suggested implementation when picked up
 
@@ -60,19 +57,18 @@ Two possible flavours:
 ### Voice test-drive (later, multi-repo)
 
 - Add a server endpoint on the Reachy Mini API Space that proxies TTS
-  (OpenAI `gpt-4o-mini-tts` / `tts-1`, or HF Inference) authenticated by
-  the user's HF token, with per-user rate limiting (mirror
-  `/api/openai/ephemeral`).
+  (HF Inference, or the realtime backend if it exposes a preview API)
+  authenticated by the user's HF token, with per-user rate limiting.
 - Client: play the returned audio in the selected voice for a generated
   sample line.
 
 ## Pointers
 
-- Auth/token source: `features/conversation/engine/ephemeral-key.ts`
+- Auth/token source: `features/conversation/engine/hf-token.ts`
   (`readHfTokenFromStorage()`).
 - HF router call pattern + CORS-bypass via `@tauri-apps/plugin-http`:
   `features/conversation/vision/providers/hf-vlm-provider.ts`.
 - Tauri capability already allows `https://router.huggingface.co/*`
   (`src-tauri/capabilities/default.json`).
-- Voices catalogue + samples: `features/personalities/builtin.ts`
-  (`AVAILABLE_VOICES`), `features/personalities/voice-samples.ts`.
+- Voices catalogue: `features/personalities/builtin.ts`
+  (`AVAILABLE_VOICES`, `VOICE_DESCRIPTIONS`).

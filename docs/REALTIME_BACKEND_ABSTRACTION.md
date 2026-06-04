@@ -1,164 +1,116 @@
-# Realtime backend abstraction - plan
+# Realtime backend abstraction
 
-Status: draft. Owner: `@tfrere`. Target implementation lives in
+Status: **implemented**. Owner: `@tfrere`. Lives in
 `src/features/conversation/engine/`.
 
-This document is the single source of truth for making the conversation's
-**realtime LLM backend swappable**: today the engine is hard-wired to
-OpenAI Realtime; we want it to sit behind one thin boundary so that
-Hugging Face realtime (Andi's backend, PR pollen-robotics/reachy_mini_mobile_app#48)
-can run in parallel, and so OpenAI can later be deleted without touching
-the conversation pipeline.
+The conversation's realtime LLM backend is **swappable at runtime**. The
+engine talks to one interface (`RealtimeBackend`) and never to a concrete
+provider. Two providers ship today - **Hugging Face** (default) and
+**OpenAI** - and the user picks one from the conversation settings panel.
 
 **Read this before touching any of:**
 
-- `src/features/conversation/engine/conversation-engine.ts`
+- `src/features/conversation/engine/realtime/types.ts` (the contract)
+- `src/features/conversation/engine/realtime/index.ts` (the factory)
+- `src/features/conversation/engine/bridge/huggingface-bridge.ts`
 - `src/features/conversation/engine/bridge/openai-bridge.ts`
-- `src/features/conversation/engine/openai-realtime.ts`
-- `src/features/conversation/engine/ephemeral-key.ts`
+- `src/features/conversation/engine/conversation-engine.ts` (the single
+  wiring point)
 
-## Goal
-
-- The engine talks to **one interface** (`RealtimeBackend`), never to a
-  concrete provider.
-- Adding or removing a provider = adding/deleting one implementation file
-  plus one `case` in a factory. Zero changes to the pipeline.
-- End state: OpenAI is deletable in a single, self-contained PR.
-
-## Non-goals (explicit anti over-engineering guardrails)
-
-- **No** generic plugin registry / DI container. There are exactly two
-  providers; a `switch` is enough. Revisit only if a third appears.
-- **No** abstract `CredentialProvider` hierarchy. Each provider owns its
-  auth internally (OpenAI mints an ephemeral key; HF calls a session
-  allocator). Auth is an implementation detail, not a shared concept.
-- **No** rewrite of `conversation-engine.ts`. We touch only the ~15 lines
-  that wire the bridge. The god-object refactor is a separate effort.
-- **Rule of thumb:** the interface is justified because it has **two real
-  implementations running today**. If it ever has one, it is dead weight.
-
-## Target architecture
+## Architecture
 
 ```
 conversation-engine.ts
-        │  (depends on the interface only)
+        │  depends on the interface only; reads the selected kind from
+        │  conversation-settings and passes provider-agnostic deps
         ▼
-  RealtimeBackend  ◀── interface (the named contract that the two
-        ▲              bridges already satisfy de facto)
-        │
-  createRealtimeBackend(kind, deps)   ◀── factory, ~10 lines, switch
-        │
-   ┌────┴───────────────┐
-   ▼                    ▼
-openai-bridge.ts   huggingface-bridge.ts
-   │                    │
-openai-realtime.ts  huggingface-realtime.ts
-ephemeral-key.ts    hf-token.ts
+  createRealtimeBackend(kind, deps)        ◀── realtime/index.ts (factory)
+        │  injects provider auth here, never in the engine
+   ┌────┴───────────────────┐
+   ▼                        ▼
+huggingface-bridge.ts   openai-bridge.ts
+   │   getHfToken            │   getApiKey (mintEphemeralKey) + model
+huggingface-realtime.ts  openai-realtime.ts
+hf-token.ts              ephemeral-key.ts
 ```
 
-The boundary is the existing bridge surface. `OpenaiBridgeDeps` and
-`HuggingFaceBridgeDeps` (PR #48) are already almost identical, so we are
-**naming a contract that already exists**, not inventing one.
+All four bridge/client files satisfy the same `RealtimeBackend` contract.
+`RealtimeStatusKind`, `RealtimeToolCallEvent`, `RealtimePort`,
+`RealtimeBackendDeps` and `RealtimeBackend` are defined once in
+`realtime/types.ts`; both bridges import them.
 
-## The interface
+## The contract (`realtime/types.ts`)
 
-Derived 1:1 from what `conversation-engine` consumes today. No new
-concepts.
+`RealtimeBackendDeps` is the provider-agnostic deps the engine supplies
+(`getRobot`, `voice`, `composeInstructions`, `tools?`, and the `on*`
+callbacks). **Provider auth is intentionally NOT in it**: HF reads the
+user's stored token, OpenAI mints a short-lived ephemeral key. Each
+bridge extends the shared deps with its own credential:
 
 ```ts
-// src/features/conversation/engine/realtime/types.ts
-export type RealtimeBackendKind = "openai" | "huggingface";
-
-export interface RealtimeBackendDeps {
-  getRobot: () => ReachyMiniInstance | null;
-  voice: string | (() => string);
-  composeInstructions: () => string;
-  tools?: typeof ROBOT_TOOLS | (() => typeof ROBOT_TOOLS);
-  onStatus: (status: RealtimeStatusKind) => void;
-  onOutputTrack: (track: MediaStreamTrack) => void;
-  onToolCall: (call: RealtimeToolCallEvent) => void;
-  onReconnecting: () => void;
-  onFatalError: (err: Error) => void;
+interface HuggingFaceBridgeDeps extends RealtimeBackendDeps {
+  getHfToken: () => string | null;
 }
-
-export interface RealtimeBackend {
-  connect: (robotMicTrack: MediaStreamTrack) => Promise<void>;
-  close: () => Promise<void>;
-  sendToolResponse: (
-    callId: string,
-    result: { ok: boolean; message: string },
-  ) => boolean;
-  setMicMuted: (muted: boolean) => void;
-  isReconnecting: () => boolean;
-  resetReconnectCounter: () => void;
-  getRobotMicTrack: (robot: ReachyMiniInstance) => MediaStreamTrack | null;
-  getRealtimePort: () => RealtimePort;
+interface OpenaiBridgeDeps extends RealtimeBackendDeps {
+  getApiKey: () => Promise<string>;
+  model: string;
 }
 ```
 
-Provider-specific auth (`getApiKey` / ephemeral key vs `getHfToken` /
-allocator) stays **inside** each bridge's `deps`, not in the shared
-interface.
-
-## The factory
+## The factory (`realtime/index.ts`)
 
 ```ts
-// src/features/conversation/engine/realtime/index.ts
 export function createRealtimeBackend(
   kind: RealtimeBackendKind,
   deps: RealtimeBackendDeps,
 ): RealtimeBackend {
   switch (kind) {
+    case "openai":
+      return createOpenaiBridge({ ...deps, getApiKey: mintEphemeralKey, model: OPENAI_REALTIME_MODEL });
     case "huggingface":
       return createHuggingFaceBridge({ ...deps, getHfToken: readHfTokenFromStorage });
-    case "openai":
-      return createOpenaiBridge({ ...deps, getApiKey: mintEphemeralKey });
   }
 }
 ```
 
-Selection via `VITE_REALTIME_BACKEND` (`shared/env.ts`), default `openai`
-until HF latency is validated on real hardware.
+The factory is the only place that injects provider auth. Adding a
+provider = one `case` here + its bridge file. The engine is untouched.
 
-## Migration steps
+## Selection (runtime)
 
-1. Cherry-pick **only** the new HF files from PR #48:
-   `huggingface-realtime.ts`, `bridge/huggingface-bridge.ts`,
-   `hf-token.ts`, and their tests. Ignore the ~40 cosmetic-rename files,
-   which conflict with in-flight personalities work.
-2. Add `realtime/types.ts` (interface) and `realtime/index.ts` (factory).
-3. Make both bridges return `RealtimeBackend` (type-only change; they
-   already match).
-4. In `conversation-engine.ts`, replace the direct `createOpenaiBridge`
-   call with `createRealtimeBackend(REALTIME_BACKEND, deps)`. This is the
-   only pipeline edit.
-5. Add `VITE_REALTIME_BACKEND` to `shared/env.ts` + `.env.example`.
+The active provider is a persisted setting, not a build flag:
 
-## OpenAI removal (end state)
+- Stored in `conversation-settings` (`realtimeBackend`, localStorage key
+  `reachyMini.conversationSettings.realtimeBackend`), default
+  `huggingface`.
+- UI: a two-chip selector in `ConversationSettingsPanel`
+  (`useRealtimeBackend` / `setRealtimeBackend`).
+- The engine reads `getRealtimeBackend()` lazily at each (re)connect and
+  passes it to the factory. The settings cog is disabled while a
+  conversation is live, so a change always applies on the **next**
+  conversation start - there is no live-swap path to reason about.
 
-When HF is validated and we drop OpenAI, the PR is mechanical and
+Optional build-time override of the OpenAI model:
+`VITE_OPENAI_REALTIME_MODEL` (defaults to `gpt-realtime-2`).
+
+## Provider notes
+
+- **Hugging Face**: PCM over WebSocket. The user's HF token (from the
+  OAuth flow, mirrored into `sessionStorage.hf_token`) authenticates the
+  session directly via `readHfTokenFromStorage`.
+- **OpenAI**: WebRTC. The phone never holds an OpenAI key; it POSTs its
+  HF token to the website's `/api/openai/ephemeral` endpoint, which mints
+  a ~10 min client secret (`ephemeral-key.ts`). That endpoint must be
+  reachable for the OpenAI path to start.
+
+## Dropping a provider (end state)
+
+If a provider is ever retired, the change is mechanical and
 self-contained:
 
-- Delete `bridge/openai-bridge.ts`, `openai-realtime.ts`,
-  `ephemeral-key.ts`.
-- Remove the `"openai"` case + the `RealtimeBackendKind` union member.
-- Remove the `/api/openai/ephemeral` reference from `.env.example`.
+- Delete its bridge + client (+ `ephemeral-key.ts` for OpenAI).
+- Remove its `case` and its `RealtimeBackendKind` member.
+- Drop its chip from `REALTIME_BACKENDS` in `ConversationSettingsPanel`.
 
 No change to `conversation-engine.ts`, motion, vision, tools, or the FSM.
-That isolation is the whole point of this plan.
-
-## Testing
-
-- Reuse the bridge mock pattern from `huggingface-bridge.test.ts`.
-- One shared spec asserting both bridges honor the `RealtimeBackend`
-  contract (status fan-out, tool response, mute, reconnect-once).
-- Keep provider-specific tests (URL normalization, session config) local
-  to each provider.
-
-## Risks
-
-- HF transports PCM over WebSocket (no native WebRTC jitter buffer); the
-  manual scheduling/drain in `huggingface-realtime.ts` must hold on
-  degraded mobile networks. Validate before flipping the default.
-- HF realtime is younger than `gpt-realtime-2`; keep OpenAI as the default
-  until measured parity.
+That isolation is the whole point.

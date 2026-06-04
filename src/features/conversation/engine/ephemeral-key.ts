@@ -55,6 +55,7 @@
  *   with the HTTP status attached for diagnostics.
  */
 import { WEBSITE_API_URL } from "@/shared/env";
+import { readHfTokenFromStorage } from "./hf-token";
 
 export type EphemeralKeyReason = "hf_token_missing" | "mint_failed";
 
@@ -87,37 +88,10 @@ const CACHE_SAFETY_BUFFER_MS = 60 * 1000;
 
 let cached: CachedEphemeral | null = null;
 
-/**
- * Read the HF access token from sessionStorage (where
- * `useRemoteHfToken` mirrors localStorage on app boot). We
- * deliberately read from sessionStorage rather than localStorage
- * because:
- *
- *   1. The SDK already uses sessionStorage as its single source of
- *      truth for the bearer; reading from the same place keeps the
- *      mobile shell consistent.
- *   2. sessionStorage is what `useRemoteHfToken.syncSessionStorage`
- *      keeps in sync on every state change, so it reflects "current
- *      user" without us having to subscribe to a React hook from a
- *      non-React module.
- *
- * Exported so the vision module (`features/conversation/vision/`)
- * can reuse the exact same source-of-truth without duplicating the
- * key name + try-block. Both consumers go through this single
- * accessor so a future migration (cookie, OS-keychain, secure
- * enclave) only touches one place.
- */
-export function readHfTokenFromStorage(): string | null {
-  if (typeof sessionStorage === "undefined") return null;
-  try {
-    const raw = sessionStorage.getItem("hf_token");
-    if (!raw) return null;
-    const trimmed = raw.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  } catch {
-    return null;
-  }
-}
+// `readHfTokenFromStorage` used to live here; it was hoisted to
+// `./hf-token` so the HF realtime backend (which has no ephemeral-key
+// concept) can read the token without dragging in the OpenAI minting
+// logic. We re-use that single source of truth here.
 
 /**
  * Mint a fresh OpenAI Realtime ephemeral key, or return a

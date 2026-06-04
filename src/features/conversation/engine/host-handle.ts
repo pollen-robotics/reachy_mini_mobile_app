@@ -71,7 +71,7 @@ export interface ConversationHandleDeps {
   disposeVision: () => void;
 
   // ─── Conversation gates (mutable) ─────────────────────────────────
-  /** True once the conversation parts (antennas, OpenAI, wobbler) are
+  /** True once the conversation parts (antennas, backend, wobbler) are
    *  running. Prevents double-start. */
   isConversationStarted: () => boolean;
   /** True when the host has opted into running the conversation
@@ -80,7 +80,7 @@ export interface ConversationHandleDeps {
   setConvoActiveRequested: (value: boolean) => void;
 
   // ─── Pipeline composites ──────────────────────────────────────────
-  /** Bring the antennas oscillator + OpenAI Realtime + wobbler up. */
+  /** Bring the antennas oscillator + HF realtime + wobbler up. */
   runConversationParts: () => Promise<void>;
   /** Tear the conversation pipeline down. `glide: true` adds a 700 ms
    *  ease-out to neutral (`stopConversation` /
@@ -235,7 +235,7 @@ export function createConversationHandle(
       // "Lite" teardown: stop the conversation pipeline (D layer) but
       // leave the SDK / DataChannel alive so the daemon proxy keeps
       // working. The helper takes care of the convo gate, motion
-      // controllers, OpenAI bridge, audio monitors and gentle
+      // controllers, realtime bridge, audio monitors and gentle
       // ease-out to neutral. It is also idempotent when no
       // conversation is currently running.
       await tearDownConversationPipeline({ glide: true });
@@ -262,9 +262,9 @@ export function createConversationHandle(
       if (isUnmounted()) return;
       // Mid-session personality switch: the active personality is read
       // lazily by both `composeInstructions` and the `voice` getter
-      // (see `createOpenaiBridge` deps), so the next reconnect
+      // (see `createHuggingFaceBridge` deps), so the next reconnect
       // automatically picks up the new instructions + voice. We just
-      // need to drop the live OpenAI client and bring it back.
+      // need to drop the live realtime client and bring it back.
       //
       // No-op when the conversation isn't running: a future
       // `startConversation()` will already pull the fresh personality

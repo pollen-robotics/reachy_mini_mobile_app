@@ -3,14 +3,14 @@
  *
  * Stops every audio track captured by the SDK's `_micStream` so the
  * iOS audio session lets go of its "phone mic captured" claim once
- * the OpenAI bridge has swapped the WebRTC sender for the assistant
+ * the realtime bridge has swapped the WebRTC sender for the assistant
  * audio track.
  *
  * Background. The vendored SDK calls `getUserMedia({audio:true})`
  * during `startSession()` (`_enableMicrophone: true`) and stashes
  * the resulting MediaStream as `_micStream`, then attaches its
  * tracks to the WebRTC `_pc` as audio senders. Even though we
- * immediately swap those senders' tracks for OpenAI's output via
+ * immediately swap those senders' tracks for the assistant output via
  * `audioSender.replaceTrack(...)` and the SDK's tracks have
  * `enabled = false` from creation, iOS still considers the phone
  * mic "captured" by the app for as long as a non-stopped
@@ -21,7 +21,7 @@
  *
  * Stopping the captured tracks here releases the iOS audio
  * session's mic claim. The WebRTC sender is unaffected because the
- * bridge already swapped it for the OpenAI track above; the tracks
+ * bridge already swapped it for the assistant track above; the tracks
  * we're stopping are dangling references the SDK no longer pumps
  * data into. Idempotent against subsequent `runConversationParts()`
  * calls (a re-acquire after release): the SDK regenerates

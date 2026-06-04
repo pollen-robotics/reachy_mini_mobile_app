@@ -2,7 +2,7 @@
  * Reachy Mini · voice conversation engine.
  *
  * This file is the orchestrator for the CONVERSATION feature. It owns
- * the FSM and the conversation pipeline (OpenAI Realtime, motion,
+ * the FSM and the conversation pipeline (HF realtime, motion,
  * tools, audio monitors) and drives a `RobotSession` instance for
  * everything session-related (SDK boot, WebRTC handshake, wake/sleep
  * trajectories, release/reacquire for iframe handoffs).
@@ -13,12 +13,12 @@
  *   authenticated → click → session.ensureConnected() / robot.connect()
  *   connected  → select a robot ⇒ ready
  *   ready      → click → session.start() + session.wakeUp() +
- *                        OpenAI Realtime WebRTC
+ *                        HF realtime WebSocket
  *   streaming  (listening / user-speaking / ai-speaking)
  *
  * Audio routing (robot = hub):
- *   robot mic track (received on robot._pc) ─▶ OpenAI input track
- *   OpenAI output track                     ─▶ robot audio sender (replaceTrack)
+ *   robot mic track (received on robot._pc) ─▶ HF realtime input PCM
+ *   HF output PCM track                     ─▶ robot audio sender (replaceTrack)
  *
  * Layered architecture
  * ────────────────────
@@ -61,7 +61,7 @@
  *                              orchestration, composes everything
  *                              below.
  *     types.ts                 Public types (Handle, AppState, …).
- *     settings.ts              OpenAI / voice user preferences.
+ *     settings.ts              Realtime voice / prompt defaults.
  *     memory.ts                Long-term memory (`remember` tool).
  *     audioLevelMonitor.ts     `MicLevelMonitor` + `AiLevelMonitor`
  *                              classes driving the orb visuals.
@@ -70,7 +70,7 @@
  *                              cached mic level, `waitForAiSilence`
  *                              fallback, audio-context resume.
  *     release-sdk-phone-mic.ts Releases the iOS phone-mic claim
- *                              after the OpenAI bridge has swapped
+ *                              after the realtime bridge has swapped
  *                              the WebRTC sender's track.
  *     robot-events.ts          SDK `addEventListener` wiring
  *                              (probes, robotsChanged, sessionStopped,
@@ -79,10 +79,11 @@
  *                              every method the React host calls
  *                              (lifecycle, volume, joystick, …).
  *     trajectoryGate.ts        Daemon-trajectory yield flag.
- *     tools.ts                 OpenAI tool descriptors + head poses.
+ *     tools.ts                 Realtime tool descriptors + head poses.
  *
- *     bridge/openai-bridge.ts  OpenAI Realtime client lifecycle:
- *                              SDP handshake, audio sink, output
+ *     bridge/huggingface-bridge.ts
+ *                              HF realtime client lifecycle:
+ *                              WebSocket handshake, audio sink, output
  *                              track routing to the robot speaker,
  *                              silent one-shot reconnect.
  *
@@ -92,7 +93,7 @@
  *       pose-dispatcher.ts     30 Hz coalescing tick to the daemon.
  *
  *     tools/
- *       tool-call-handler.ts   OpenAI tool dispatch (move_head,
+ *       tool-call-handler.ts   Realtime tool dispatch (move_head,
  *                              play_move, remember, forget) + lazy
  *                              `MovePlayer` + pose-restore timer.
  */
@@ -115,25 +116,26 @@ import { applyAudioStartupConfig } from "./audio-startup-config";
 import { createAudioMonitorsControl } from "./audio-monitors-control";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { loadSettings, type Settings } from "./settings";
-import {
-  EphemeralKeyError,
-  mintEphemeralKey,
-  readHfTokenFromStorage,
-} from "./ephemeral-key";
+import { readHfTokenFromStorage } from "./hf-token";
 import { memoryStore } from "./memory";
-import { getActivePersonality } from "@/features/personalities";
+import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import { createOpenaiBridge } from "./bridge/openai-bridge";
+import { createRealtimeBackend } from "./realtime";
+import type { RealtimeBackend } from "./realtime/types";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
-import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
+import {
+  getRealtimeBackend,
+  isMemoryEnabled,
+  isVisionEnabled,
+} from "../../conversation-settings";
 import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
@@ -193,7 +195,7 @@ const onStateChange: ((state: AppState) => void) | null =
 //
 // Lifecycle-wise the monitor follows the SESSION PC (layer C), NOT the
 // conversation pipeline (layer D): the badge is therefore active any
-// time the SDK pc is up, regardless of whether the OpenAI Realtime
+// time the SDK pc is up, regardless of whether the HF realtime
 // conversation has been started.
 const onTransportChange: ((info: ConversationTransportInfo) => void) | null =
   typeof options.onTransportChange === "function" ? options.onTransportChange : null;
@@ -290,7 +292,7 @@ const emitConnectionAttempt = (
 // Initial `convoActiveRequested`: defaults to true (Space-app
 // behaviour: tap once → talking). Mobile shell passes `false` so the
 // WebRTC DC is brought up during the wake-up animation while the
-// antennas / OpenAI / wobbler stay quiet until the user explicitly
+// antennas / backend / wobbler stay quiet until the user explicitly
 // hits "Start conversation".
 const core = createEngineCore({
   initialState: "connecting",
@@ -304,7 +306,7 @@ const { conversationStarted, convoActiveRequested, unmounted, movePlaying } =
 // pretty name for `fsm.set`.
 const setState = fsm.set;
 
-// Settings, defaults, OpenAI tool descriptors and head-pose lookup
+// Settings, defaults, tool descriptors and head-pose lookup
 // table all live in their own modules now to keep this file focused
 // on the FSM + orchestration:
 //   - `./settings.ts` → `Settings`, `loadSettings()`, defaults, storage keys
@@ -365,8 +367,8 @@ const settings: Settings = loadSettings();
 // internally).
 let robot: ReachyMiniInstance | null = null;
 
-// OpenAI session lifecycle (client + audio sink + reconnect
-// counters + reconnecting flag) is owned end-to-end by the OpenAI
+// Realtime backend lifecycle (client + audio sink + reconnect
+// counters + reconnecting flag) is owned end-to-end by the HF
 // bridge below. The engine just observes its events and drives the
 // FSM + motion controllers in reaction.
 //
@@ -375,7 +377,7 @@ let robot: ReachyMiniInstance | null = null;
 // needs to forward `sendToolResponse` calls to it at runtime. The
 // late `=` assignment below resolves the cycle without forward
 // declarations or class wrappers.
-let openaiBridge: ReturnType<typeof createOpenaiBridge> | null = null;
+let realtimeBridge: RealtimeBackend | null = null;
 
 // Head-motion + antennas oscillator. The actual `HeadWobbler` and
 // `AntennasOscillator` instances live inside their respective
@@ -390,7 +392,7 @@ let openaiBridge: ReturnType<typeof createOpenaiBridge> | null = null;
 // Mic + AI level monitors moved to `audioMonitors` (created above
 // alongside the host-callback wrapping). They drive the orb's
 // `--audio-level`, `--bar0..--bar4`, and `--ai-audio-level` CSS
-// custom properties from the inbound mic / OpenAI output tracks,
+// custom properties from the inbound mic / assistant output tracks,
 // and expose the `waitForSilence` tail-end probe + the cached
 // `getMicLevel()` value used by the React orb.
 
@@ -417,7 +419,7 @@ const videoCache = session.videoCache;
 session.setTransportListener(onTransportChange);
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
-// by the OpenAI bridge. The engine exposes `openaiBridge.isReconnecting()`
+// by the realtime bridge. The engine exposes `realtimeBridge.isReconnecting()`
 // as a read-only view for the few sites that need it.
 
 // Screen keep-awake is no longer driven from the engine. The host
@@ -474,6 +476,15 @@ if (onErrorMessageChange) {
       );
     }
   });
+}
+
+function emitErrorMessage(message: string | null): void {
+  if (!onErrorMessageChange) return;
+  try {
+    onErrorMessageChange(message);
+  } catch (err) {
+    console.warn("[conversation-engine] onErrorMessageChange threw:", err);
+  }
 }
 
 // 3. Daemon-side motor mode dedup, see `syncMotorModeForState` below.
@@ -597,7 +608,7 @@ async function handleOrbClick(): Promise<void> {
         // are enabled. The user just tapped the orb to opt into the
         // AI side: flip `convoActiveRequested` so re-entries do not
         // bounce back to `ready` if the runner is interrupted, and
-        // run the conversation pipeline (OpenAI handshake, audio
+        // run the conversation pipeline (HF backend handshake, audio
         // pumps, motion modules). `runConversationParts` itself
         // re-arms `setState("starting")` to keep the orb honest.
         convoActiveRequested.on();
@@ -622,16 +633,16 @@ async function handleOrbClick(): Promise<void> {
 }
 
 function applyMicMuted(next: boolean): void {
-  // Mute = gate the robot's mic track we forward to OpenAI, so the
+  // Mute = gate the robot's mic track we forward to the HF backend, so the
   // assistant stops HEARING the user (matches the MicOff button).
   //
   // This goes through the bridge, NOT `robot.setMicMuted()`: since
   // SDK 1.8.0 the SDK no longer owns a getUserMedia stream, so its
   // `setMicMuted` is a silent no-op (it gates a null `_micStream`).
-  // The bridge owns the robot-mic→OpenAI routing, so the gate lives
+  // The bridge owns the robot-mic→backend routing, so the gate lives
   // there and survives transparent reconnects.
   try {
-    openaiBridge?.setMicMuted(next);
+    realtimeBridge?.setMicMuted(next);
   } catch (err) {
     console.warn("[conversation-engine] setMicMuted failed:", err);
   }
@@ -731,17 +742,12 @@ async function doStart(): Promise<void> {
     `[shell-webrtc] doStart: entering, selectedRobotId = ${session.getSelectedRobotId()}, robot.state = ${robot.state}`,
   );
 
-  // The OpenAI key gate used to live here, gating `robot.startSession()`
-  // entirely. That was the wrong layer: `startSession()` is what opens
-  // the WebRTC DataChannel that the daemon proxy (`http_proxy` over
-  // DC) rides on, and the daemon proxy is needed for the daemon-status
-  // pill, the wake/sleep choreography, and the `engine.bringup`
-  // watchdog regardless of whether a conversation will run. The mobile
-  // shell wants the robot connected first (so the user lands in a
-  // working session screen), and only asks for the OpenAI key when
-  // they explicitly hit "Start conversation". The gate now lives in
-  // `runConversationParts()` so the WebRTC negotiation is unblocked
-  // for users without an OpenAI key.
+  // Backend connection is deliberately not part of `startSession()`:
+  // that call opens the WebRTC DataChannel used by the daemon proxy
+  // (`http_proxy` over DC), which is needed for daemon-status, wake /
+  // sleep choreography, and bring-up watchdogs even before the user
+  // starts talking. The HF websocket is opened lazily in
+  // `runConversationParts()` after the user starts the conversation.
 
   setState("starting");
 
@@ -820,7 +826,7 @@ async function doStart(): Promise<void> {
   // continue with the conversation parts. The mobile app gates the
   // conversation pipeline behind a "user clicked Start" UI flag (see
   // `handle.startConversation()`), so we may end up parking here with
-  // a live DC and no antennas/OpenAI - that's the desired state during
+  // a live DC and no antennas / backend - that's the desired state during
   // the wake-up animation. `setSessionEstablished` flips so the host
   // can pick up where we left off when it flips the gate.
   setSessionEstablished(true);
@@ -831,7 +837,7 @@ async function doStart(): Promise<void> {
     // here and surface the `ready` state so the host can render
     // the orb's "press to start" affordance. The user's tap on
     // the orb routes through `handleOrbClick("ready")` which
-    // calls `runConversationParts()` to bring up OpenAI Realtime
+    // calls `runConversationParts()` to bring up HF realtime
     // + the audio pumps + motion modules.
     console.log(
       `[DIAG] doStart: setState("ready") at t+${Math.round(performance.now() - tDoStart0)}ms`,
@@ -845,7 +851,7 @@ async function doStart(): Promise<void> {
 
 /**
  * The conversation pipeline proper: antenna oscillator, head wobbler,
- * OpenAI Realtime client, mic plumbing. Split out of `doStart` so the
+ * HF realtime client, mic plumbing. Split out of `doStart` so the
  * mobile app can defer it until the user is in the right view (the
  * SDK / DataChannel is brought up earlier because it doubles as the
  * daemon proxy transport during wake-up).
@@ -858,60 +864,17 @@ async function doStart(): Promise<void> {
 async function runConversationParts(): Promise<void> {
   if (!robot || conversationStarted.get()) return;
 
-  // OpenAI access gate. We used to check a build-time-baked API key
-  // here; the mobile shell now mints per-user ephemeral keys against
-  // the website's `/api/openai/ephemeral` endpoint (see
-  // `./ephemeral-key.ts`), so the only failure mode pre-handshake
-  // is "the user isn't signed in to Hugging Face". That is normally
-  // impossible by the time the engine boots (the auth gate in
-  // `App.tsx` keeps the UI on the sign-in screen until a token is
-  // in `sessionStorage`), but we still defensively probe so a stale
-  // state or a token-expiry race surfaces as a clear UI message
-  // instead of a vague handshake failure two seconds later.
-  // Arm the "starting" UI *before* the ephemeral-key mint so the orb
-  // flips to its connecting spinner the instant the user taps. The mint
-  // is a network round-trip to the website's `/api/openai/ephemeral`
-  // endpoint (hundreds of ms on a cold first start) and used to run
-  // while the state was still `ready`, leaving the orb visually idle
-  // during that latency. From the deferred (tap-to-start) path the FSM
-  // is in `ready` here; from the auto-start path it's already
-  // `starting`, so this is a no-op there.
-  if (fsm.current() === "ready") setState("starting");
-
-  try {
-    await mintEphemeralKey();
-  } catch (err) {
-    const message =
-      err instanceof EphemeralKeyError && err.reason === "hf_token_missing"
-        ? "Sign in to Hugging Face to start a conversation"
-        : "Could not reach the OpenAI key service. Retry in a moment.";
-    if (onErrorMessageChange) {
-      try {
-        onErrorMessageChange(message);
-      } catch (callbackErr) {
-        console.warn(
-          "[conversation-engine] onErrorMessageChange threw:",
-          callbackErr,
-        );
-      }
-    }
-    console.warn("[conversation-engine] ephemeral key prefetch failed:", err);
-    convoActiveRequested.off();
-    // The robot side stays usable - DataChannel is alive, motors are
-    // enabled, wake-up has played - so drop back to `ready` and let
-    // the user retry by tapping the orb again once they've fixed the
-    // upstream condition (signed in, network back, ...).
-    if (fsm.current() === "starting") setState("ready");
-    return;
-  }
-
+  emitErrorMessage(null);
   conversationStarted.on();
 
-  // ("starting" was already armed before the mint above, so the orb's
-  // connecting spinner has been showing since the user's tap.)
+  // Arm the "starting" UI before the HF backend handshake so the orb
+  // flips to its connecting spinner the instant the user taps. From the
+  // deferred (tap-to-start) path the FSM is in `ready` here; from the
+  // auto-start path it's already `starting`, so this is a no-op there.
+  if (fsm.current() === "ready") setState("starting");
 
   // Grab the robot's incoming audio track (the robot's microphone).
-  const robotMicTrack = openaiBridge?.getRobotMicTrack(robot) ?? null;
+  const robotMicTrack = realtimeBridge?.getRobotMicTrack(robot) ?? null;
   if (!robotMicTrack) {
     conversationStarted.off();
     onFatalError(new Error("Could not find the robot's microphone track"));
@@ -933,12 +896,11 @@ async function runConversationParts(): Promise<void> {
 
   // Reset the bridge's per-session retry budget so a stale failure
   // from a previous run can't poison this fresh handshake.
-  openaiBridge?.resetReconnectCounter();
+  realtimeBridge?.resetReconnectCounter();
   try {
-    await openaiBridge?.connect(robotMicTrack);
+    await realtimeBridge?.connect(robotMicTrack);
   } catch (err) {
-    conversationStarted.off();
-    onFatalError(err);
+    await recoverConversationStartFailure(err);
     return;
   }
 
@@ -960,17 +922,17 @@ async function runConversationParts(): Promise<void> {
   // a previous session left on the bridge — a new session must never
   // inherit a stale mute. Transparent reconnects, by contrast, go
   // through `bridge.connect()` which re-applies the live mute state.
-  openaiBridge?.setMicMuted(false);
+  realtimeBridge?.setMicMuted(false);
 
   // Release the iOS phone-microphone claim now that the bridge has
-  // replaced the SDK's outgoing audio sender with OpenAI's output
+  // replaced the SDK's outgoing audio sender with the assistant output
   // track.
   //
   // Background. The vendored SDK calls `getUserMedia({audio:true})`
   // during `startSession()` (`_enableMicrophone: true`) and stashes
   // the resulting MediaStream as `_micStream`, then attaches its
   // tracks to the WebRTC `_pc` as audio senders. Even though we
-  // immediately swap those senders' tracks for OpenAI's output via
+  // immediately swap those senders' tracks for the assistant output via
   // `audioSender.replaceTrack(...)` and the SDK's tracks have
   // `enabled = false` from creation, iOS still considers the phone
   // mic "captured" by the app for as long as a non-stopped
@@ -982,13 +944,30 @@ async function runConversationParts(): Promise<void> {
   //
   // Stopping the captured tracks here releases the iOS audio
   // session's mic claim. The WebRTC sender is unaffected because
-  // the bridge already swapped it for the OpenAI track above; the
+  // the bridge already swapped it for the assistant track above; the
   // tracks we're stopping are dangling references the SDK no
   // longer pumps data into. Idempotent against subsequent
   // `runConversationParts()` calls (a re-acquire after release):
   // the SDK regenerates `_micStream` on every `startSession`, so
   // this stop runs exactly once per session.
   releaseSdkPhoneMic(robot);
+}
+
+async function recoverConversationStartFailure(err: unknown): Promise<void> {
+  console.warn("[conversation-engine] HF realtime startup failed:", err);
+  emitErrorMessage(formatRecoverableConversationStartError(err));
+  await tearDownConversationPipeline({ glide: true });
+  if (!unmounted.get() && session.isEstablished()) {
+    setState("ready");
+  }
+}
+
+function formatRecoverableConversationStartError(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  if (/\b(401|403)\b|auth|authorization|unauthorized|forbidden/i.test(detail)) {
+    return "Hugging Face authorization failed. Sign in again and retry.";
+  }
+  return "Could not start the Hugging Face conversation. Retry in a moment.";
 }
 
 /**
@@ -1002,7 +981,7 @@ function setSessionEstablished(value: boolean): void {
 
 // ─── Tool-call handler ─────────────────────────────────────────────────
 //
-// `tools/tool-call-handler.ts` owns the OpenAI tool-call dispatch
+// `tools/tool-call-handler.ts` owns the realtime tool-call dispatch
 // (`move_head`, `play_move`, `remember`, `forget`), the lazily-created
 // `MovePlayer`, and the head-pose restore timer. We feed it the
 // engine state it needs through getters and listen to its
@@ -1019,7 +998,7 @@ const toolCallHandler = createToolCallHandler({
   // realistically happen anyway), plus the post-teardown window
   // after `unmount()`.
   sendToolResponse: (callId, result) =>
-    openaiBridge?.sendToolResponse(callId, result) ?? false,
+    realtimeBridge?.sendToolResponse(callId, result) ?? false,
   onMoveStart: () => {
     movePlaying.on();
   },
@@ -1112,12 +1091,12 @@ const motion = createMotionOrchestrator({
 const backgroundAudioKeeper: BackgroundAudioKeeper =
   createBackgroundAudioKeeper();
 
-// ─── OpenAI bridge ─────────────────────────────────────────────────────
+// ─── Hugging Face realtime bridge ──────────────────────────────────────
 //
-// `bridge/openai-bridge.ts` owns the entire OpenAI Realtime session:
-//   - Client construction + SDP handshake
+// `bridge/huggingface-bridge.ts` owns the realtime backend session:
+//   - Client construction + WebSocket handshake
 //   - Routing the AI output track to the robot's audio sender
-//   - Hidden `<audio>` sink so browsers actually decode the inbound track
+//   - Hidden `<audio>` sink so browsers actually pump the generated track
 //   - One-shot transparent reconnect on transient errors
 //   - Mic-track lookup helper
 //
@@ -1126,28 +1105,21 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // motion controllers and audio analysers. The bridge itself stays
 // blissfully unaware of any of that.
 
-openaiBridge = createOpenaiBridge({
+realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
   getRobot: () => robot,
-  // Each handshake pulls a fresh-enough ephemeral key from the
-  // website server (`/api/openai/ephemeral`). The mint module
-  // owns its own cache + invalidation so the bridge can simply
-  // `await deps.getApiKey()` every connect/reconnect.
-  getApiKey: mintEphemeralKey,
-  model: settings.model,
-  // Resolve the voice lazily (re-read on every `buildClient()` so
-  // a personality switch picks up the new voice on the next
-  // reconnect, without needing to rebuild the bridge). Falls back
-  // to the engine's `DEFAULT_VOICE` when the active personality
-  // doesn't override it.
+  // Resolve the voice lazily (re-read on every `buildClient()` so a
+  // personality OR backend switch picks up the right voice on the next
+  // reconnect, without rebuilding the bridge). The persona pins one
+  // voice per backend; we pick the entry for the active backend and let
+  // `resolvePersonaVoice` snap it onto that backend's catalog (falling
+  // back to the backend default for a stale/unknown id).
   voice: () => {
     const personality = getActivePersonality();
-    return personality.voice && personality.voice.length > 0
-      ? personality.voice
-      : settings.voice;
+    return resolvePersonaVoice(personality.voices, getRealtimeBackend());
   },
   composeInstructions: () => {
     // Snapshot the user's long-term memory ONCE per connection. We
-    // intentionally don't push live updates to the OpenAI session: a
+    // intentionally don't push live updates to the realtime session: a
     // `remember` call mid-conversation already carries its fact in
     // the tool-call transcript, so the model knows it's saved
     // without needing the prompt to be re-pushed. The next session
@@ -1196,7 +1168,7 @@ openaiBridge = createOpenaiBridge({
       : ROBOT_TOOLS.filter((t) => t.name !== "remember" && t.name !== "forget"),
   onStatus: (status) => {
     // Once the user has tapped stop we park the orb in `stopping`
-    // (spinner) and run a gentle ~700 ms teardown. The OpenAI bridge
+    // (spinner) and run a gentle ~700 ms teardown. The HF bridge
     // can still emit a trailing status as it closes (a final
     // `connected` from the in-flight response completing, or a late
     // activity flip) which would otherwise call `setState("listening")`
@@ -1206,27 +1178,11 @@ openaiBridge = createOpenaiBridge({
     if (fsm.current() === "stopping") return;
     switch (status) {
       case "connected":
-        // `connected` arrives from the SDK both (a) when the WebRTC
-        // pipe is up for the very first time and (b) when a response
-        // completes. In the latter case the trigger used to be
-        // `response.done`, which fires before any of Reachy's audio
-        // has finished playing - we would flip back to `listening`
-        // up to a second early. The bridge now waits for the GA
-        // WebRTC-only `output_audio_buffer.stopped` server event
-        // before flipping to `connected`, so by the time we land
-        // here the server has drained its outbound buffer for this
-        // response. Reference:
-        // https://platform.openai.com/docs/guides/realtime-conversations#client-and-server-events-for-audio-in-webrtc
-        //
-        // That leaves only the playout chain to absorb: the local
-        // jitter / playout buffer (~150 ms via PLAYOUT_DELAY_HINT_S
-        // in openai-realtime.ts) plus whatever Reachy's own audio
-        // pipeline buffers downstream. We use the output analyser
-        // as a precise tail-end probe (the orb is still listening
-        // to the actual track) with a much shorter quiet window
-        // than before; 400 ms is enough to ride out the playout
-        // buffer without keeping the speaker icon up for a noticeable
-        // beat past the actual audio.
+        // The websocket backend marks `connected` after its queued
+        // PCM output has drained. We still use the analyser as a
+        // precise tail-end probe so the orb does not snap back to
+        // listening while Reachy's speaker is finishing the last
+        // syllable.
         if (fsm.current() === "ai-speaking") {
           audioMonitors.waitForAiSilence(400, () => {
             // Another event may have moved us elsewhere in the
@@ -1269,7 +1225,7 @@ openaiBridge = createOpenaiBridge({
     void toolCallHandler.handleToolCall(call);
   },
   onReconnecting: () => {
-    // The bridge is rebuilding the OpenAI peer. Pause motion
+    // The bridge is rebuilding the realtime backend connection. Pause motion
     // (their input track is about to go away) and drop the orb
     // back to a transient "starting" visual.
     setState("starting");
@@ -1291,7 +1247,7 @@ openaiBridge = createOpenaiBridge({
 //
 // Lifecycle:
 //   - `start()` after a successful Realtime handshake (in
-//     `runConversationParts`, post `openaiBridge.connect`).
+//     `runConversationParts`, post `realtimeBridge.connect`).
 //   - `stop()` whenever the conversation pipeline goes down but the
 //     engine may bring it back (`teardown`, `stopConversation`,
 //     `releaseSessionKeepAwake`). `stop()` is idempotent.
@@ -1305,12 +1261,12 @@ openaiBridge = createOpenaiBridge({
 // -------
 // The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits
 // Hugging Face's Inference Providers router
-// (`router.huggingface.co/v1/responses`) with the USER'S OWN HF
+// (`router.huggingface.co/v1/chat/completions`) with the USER'S OWN HF
 // token - the same token already in `sessionStorage.hf_token` for
-// the OpenAI Realtime ephemeral mint flow. This deliberately
-// decouples vision from the OpenAI Realtime pipeline:
+// the realtime backend allocator. This deliberately decouples vision
+// from the voice pipeline:
 //
-//   - No master OpenAI key on the wire (would require a server-side
+//   - No master model-provider key on the wire (would require a server-side
 //     proxy and we'd own the bill).
 //   - Per-user billing: each user's calls land on their own HF tier
 //     ($0.10/mo free, $2/mo on PRO, pay-as-you-go beyond), so a
@@ -1320,9 +1276,9 @@ openaiBridge = createOpenaiBridge({
 //     touch vision; changing the VLM model is a one-line config
 //     edit in `vision/config.ts` (no app rebuild needed if the
 //     env override `VITE_VISION_HF_MODEL` is used).
-const vision: VisionHandle | null = openaiBridge
+const vision: VisionHandle | null = realtimeBridge
   ? attachVision({
-      realtime: openaiBridge.getRealtimePort(),
+      realtime: realtimeBridge.getRealtimePort(),
       getVideoStream: () => videoCache.get(),
       getHfToken: readHfTokenFromStorage,
     })
@@ -1332,7 +1288,7 @@ const vision: VisionHandle | null = openaiBridge
  * Common tear-down of the conversation pipeline (D layer).
  *
  * Three orchestration paths all need to stop the vision poller,
- * tool-call handler, antennas / wobbler, OpenAI bridge, pose
+ * tool-call handler, antennas / wobbler, realtime bridge, pose
  * dispatcher, audio monitors and background audio keeper in the
  * exact same order:
  *
@@ -1360,7 +1316,7 @@ const vision: VisionHandle | null = openaiBridge
  *   1. clear `convoActiveRequested` so a concurrent
  *      `startConversation()` doesn't race the tear-down;
  *   2. stop vision / tools / wobbler / antennas synchronously;
- *   3. close the OpenAI bridge (awaited in parallel with the glide
+ *   3. close the realtime bridge (awaited in parallel with the glide
  *      when `glide === true`);
  *   4. stop the pose dispatcher, level monitors, background keeper;
  *   5. mute the robot mic so any in-flight audio doesn't leak;
@@ -1388,7 +1344,7 @@ async function tearDownConversationPipeline({
   movePlaying.off();
 
   // Tear the motion stack down. `glide: true` plays a 700 ms
-  // ease-out to neutral in parallel with the OpenAI bridge close
+  // ease-out to neutral in parallel with the realtime bridge close
   // so the next bring-up (or the iframe handover) inherits a
   // calmly-posed robot. `glide: false` is the power-off path:
   // `gotoSleep` is about to own the head + antennas trajectory
@@ -1397,9 +1353,9 @@ async function tearDownConversationPipeline({
   // after the glide + bridge close have settled.
   await motion.stop({
     glide,
-    concurrentTask: openaiBridge?.close(),
+    concurrentTask: realtimeBridge?.close(),
   });
-  openaiBridge?.resetReconnectCounter();
+  realtimeBridge?.resetReconnectCounter();
 
   audioMonitors.stopMic();
   audioMonitors.stopAi();
@@ -1409,7 +1365,7 @@ async function tearDownConversationPipeline({
   backgroundAudioKeeper.stop();
 
   // Mute the robot mic so any in-flight audio frames don't leak
-  // through to the speakers while the OpenAI client is gone. Safe
+  // through to the speakers while the realtime client is gone. Safe
   // on the power-off path too - the session is about to be torn
   // down anyway; `handleHostStop` unmutes again after `teardown()`
   // returns when it's a stop-not-power-off.
@@ -1491,16 +1447,7 @@ async function onFatalError(err: unknown): Promise<void> {
   // message goes through a dedicated callback so the host can show it
   // as a tooltip / detail line under the orb without us reaching into
   // the DOM.
-  if (onErrorMessageChange) {
-    try {
-      onErrorMessageChange(message);
-    } catch (callbackErr) {
-      console.warn(
-        "[conversation-engine] onErrorMessageChange threw:",
-        callbackErr,
-      );
-    }
-  }
+  emitErrorMessage(message);
   await teardown();
 }
 
@@ -1527,10 +1474,10 @@ async function boot(): Promise<void> {
     // app handles HF OAuth itself via `useRemoteHfToken` /
     // `oauthLoopback` rather than letting the SDK initiate it.
     signalingUrl: CENTRAL_SIGNALING_URL,
-    // Negotiate the audio tracks up front so the OpenAI Realtime
+    // Negotiate the audio tracks up front so the HF realtime
     // bridge has them ready when the user taps the orb to start
     // the conversation. Without this, the SDK doesn't open the
-    // mic-side transceiver and `openaiBridge.getRobotMicTrack(robot)`
+    // mic-side transceiver and `realtimeBridge.getRobotMicTrack(robot)`
     // returns undefined when `runConversationParts()` runs.
     enableMicrophone: true,
   });
@@ -1579,16 +1526,14 @@ async function boot(): Promise<void> {
     //
     // We drive `doConnect()` unconditionally whenever a robot is
     // preselected: that path only opens the SSE signaling channel
-    // and the RTCPeerConnection / DataChannel (no OpenAI involvement),
+    // and the RTCPeerConnection / DataChannel (no backend involvement),
     // and without that DataChannel the daemon proxy (`http_proxy`
     // over DC) is unreachable - the daemon-status pill, the wake /
     // sleep choreography, and the engine.bringup watchdog in
     // `useSessionController` would all stay stuck pending forever.
-    // OpenAI Realtime credentials are minted lazily inside
-    // `runConversationParts` (via `mintEphemeralKey`), so any
-    // upstream failure there surfaces as a clean fall-back to
-    // `ready` with a UI message - no need to gate the connect
-    // step on it.
+    // The HF realtime websocket is opened lazily inside
+    // `runConversationParts`, so any backend failure there surfaces
+    // after the robot is already awake and the daemon proxy is usable.
     if (preselectedRobotId) {
       // Awaited (no longer fire-and-forget): the unmount path uses
       // the parent boot promise as a "boot still in flight" guard

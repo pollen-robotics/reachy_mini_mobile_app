@@ -121,7 +121,7 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // We route through `onFatalError()` (which sets state to `error`,
     // emits the message, and runs `teardown()` for us) so the host
     // gets the SAME visible surface as for any other engine failure
-    // (per-attempt timeout, libnice crash recovery, OpenAI fatal,
+    // (per-attempt timeout, libnice crash recovery, backend fatal,
     // mic introuvable, etc.): a full-screen `<SessionErrorView>` with
     // a single "Back" CTA that returns the user to the picker.
     //
@@ -133,7 +133,7 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // also keeps the cleanup deterministic: the next time the user
     // picks the same robot from the scan view, the engine remounts on
     // a fresh slate (motors disabled, no stale session reference, no
-    // half-running OpenAI client).
+    // half-running realtime client).
     session.setSelectedRobotId(null);
     applyMicMuted(false);
     await onFatalError(

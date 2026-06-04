@@ -3,7 +3,7 @@
  *
  * Writes a tuned batch of XVF3800 parameters once the WebRTC DataChannel
  * is live and the robot has woken up. Without this batch the mic is too
- * quiet for the OpenAI Realtime loop and the noise gate is overly
+ * quiet for the realtime voice loop and the noise gate is overly
  * aggressive — see issue #21 / upstream PR #1058.
  *
  * Best-effort: a missing audio board (Lite / dev / loose USB cable) is
