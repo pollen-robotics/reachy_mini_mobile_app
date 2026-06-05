@@ -60,6 +60,11 @@ const HF_TEXT_MODEL =
  *  but bounded so a stuck provider doesn't hang the button forever. */
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/** Inactivity cap for the STREAMING generation path: abort if no chunk has
+ *  arrived for this long. Reset on every chunk, so a slow-but-progressing
+ *  reply is never cut - only a genuinely stalled stream is. */
+const STREAM_IDLE_TIMEOUT_MS = 20_000;
+
 /** Field clamps. Mirror the manual form (`CreatePersonalityModal`'s
  *  `NAME_MAX` / `TAGLINE_MAX`) so a generated persona is indistinguishable
  *  from a hand-authored one once it lands in the fields. */
@@ -78,7 +83,11 @@ const DESCRIPTION_MAX = 240;
 const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["name", "tagline", "instructions", "voice"],
+  // `voice` is ordered BEFORE `instructions` on purpose: providers stream the
+  // JSON in property order, and `instructions` is the long (~1000 char) tail.
+  // Emitting `voice` first lets the picker surface it right after `tagline`
+  // instead of waiting for the whole instructions block to stream.
+  required: ["name", "tagline", "voice", "instructions"],
   properties: {
     name: {
       type: "string",
@@ -90,16 +99,16 @@ const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
       maxLength: TAGLINE_MAX,
       description: "One playful line describing the vibe.",
     },
+    voice: {
+      type: "string",
+      enum: [...AVAILABLE_VOICES],
+      description: "Voice id matching the persona's energy.",
+    },
     instructions: {
       type: "string",
       maxLength: INSTRUCTIONS_MAX,
       description:
         "System prompt for the persona, using '## IDENTITY', '## RESPONSE RULES', then optional '## QUIRKS'.",
-    },
-    voice: {
-      type: "string",
-      enum: [...AVAILABLE_VOICES],
-      description: "Voice id matching the persona's energy.",
     },
   },
 };
@@ -185,6 +194,203 @@ export async function generatePersonality(
   return runPersonaChat(buildUserPrompt(vibe));
 }
 
+export interface StreamPersonalityOptions {
+  /** Fired whenever one or more top-level fields have FULLY streamed in
+   *  (closing quote seen). Carries the cumulative partial so far, so the
+   *  caller can fill its UI slots progressively - the `name` lands first
+   *  (it's the first key in the schema), driving the monogram, then
+   *  `tagline` / `voice`. `instructions` is the long tail and isn't
+   *  surfaced here (it's not shown during the generation beat). */
+  onPartial: (partial: Partial<GeneratedPersonality>) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Streaming twin of {@link generatePersonality}: same prompt / schema /
+ * validation, but reads the reply with `stream: true` and surfaces each
+ * top-level field via `onPartial` the instant it finishes streaming. This
+ * powers the progressive reveal in the dedicated generation view - the
+ * persona's name (hence its monogram) shows up ~1s in instead of waiting
+ * for the whole object. Resolves to the same validated `GeneratedPersonality`
+ * as the non-streaming path once the stream completes.
+ */
+export async function streamPersonality(
+  description: string,
+  opts: StreamPersonalityOptions,
+): Promise<GeneratedPersonality> {
+  const vibe = description.trim().slice(0, DESCRIPTION_MAX);
+  if (!vibe) {
+    throw new GeneratePersonalityError(
+      "empty_description",
+      "describe the personality in a sentence first",
+    );
+  }
+
+  const hfToken = readHfTokenFromStorage();
+  if (!hfToken) {
+    throw new GeneratePersonalityError(
+      "hf_token_missing",
+      "no HF token in sessionStorage; sign in to Hugging Face first",
+    );
+  }
+
+  // Inactivity guard: rather than a fixed wall-clock cap (which would cut a
+  // slow-but-progressing generation), abort only when the stream goes silent
+  // for STREAM_IDLE_TIMEOUT_MS. The timer is reset on every chunk below, and
+  // any caller-supplied signal is chained in so an external cancel still wins.
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  let idleTimer = window.setTimeout(
+    () => controller.abort(),
+    STREAM_IDLE_TIMEOUT_MS,
+  );
+  const bumpIdleTimer = () => {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(
+      () => controller.abort(),
+      STREAM_IDLE_TIMEOUT_MS,
+    );
+  };
+
+  let response: Response;
+  try {
+    response = await routerChatCompletion({
+      baseModel: HF_TEXT_MODEL,
+      hfToken,
+      signal: controller.signal,
+      structuredOutput: { name: "reachy_persona", schema: PERSONA_JSON_SCHEMA },
+      body: {
+        // Headroom for the full object: instructions alone can run ~1200 chars
+        // (~400 tokens) plus name/tagline/voice + JSON syntax. 700 truncated
+        // mid-instructions, leaving the object unclosed and unparseable.
+        max_tokens: 1100,
+        temperature: 0.9,
+        stream: true,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: buildUserPrompt(vibe) },
+        ],
+      },
+    });
+  } catch (err) {
+    window.clearTimeout(idleTimer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    throw fromRouterError(err);
+  }
+
+  if (!response.body) {
+    window.clearTimeout(idleTimer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    throw new GeneratePersonalityError(
+      "bad_response",
+      "HF router returned an empty stream body",
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  // Track what we've already emitted so we only fire `onPartial` when a new
+  // field actually completes (avoids redundant re-renders per token).
+  let emitted: Partial<GeneratedPersonality> = {};
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bumpIdleTimer();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          const delta = json.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta) {
+            full += delta;
+            const next = extractStreamingFields(full);
+            if (
+              next.name !== emitted.name ||
+              next.tagline !== emitted.tagline ||
+              next.voice !== emitted.voice
+            ) {
+              emitted = next;
+              opts.onPartial(next);
+            }
+          }
+        } catch {
+          // Ignore keepalives / partial JSON between chunks.
+        }
+      }
+    }
+  } catch (err) {
+    // Surface an idle-timeout abort as a friendly retryable error rather than
+    // a raw DOMException (a caller-driven cancel propagates as AbortError).
+    if (controller.signal.aborted && !opts.signal?.aborted) {
+      throw new GeneratePersonalityError(
+        "request_failed",
+        "the model stream stalled - give it another try",
+      );
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(idleTimer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    reader.releaseLock();
+  }
+
+  const parsed = parsePersonaJson(full);
+  if (!parsed) {
+    throw new GeneratePersonalityError(
+      "bad_response",
+      `could not parse personality JSON from stream: ${full.slice(0, 200)}`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Pull whatever top-level string fields have FULLY streamed in so far out
+ * of a partial JSON buffer. Only matches values whose closing quote is
+ * already present (the regex demands it), so a half-streamed field simply
+ * isn't reported until it's complete. `instructions` is deliberately
+ * skipped - it's the long tail and isn't shown during generation.
+ */
+function extractStreamingFields(raw: string): Partial<GeneratedPersonality> {
+  const out: Partial<GeneratedPersonality> = {};
+  const name = matchJsonStringValue(raw, "name");
+  if (name != null) out.name = clampString(name, NAME_MAX);
+  const tagline = matchJsonStringValue(raw, "tagline");
+  if (tagline != null) out.tagline = clampString(tagline, TAGLINE_MAX);
+  const voice = matchJsonStringValue(raw, "voice");
+  if (voice != null) out.voice = snapVoice(voice);
+  return out;
+}
+
+/** Capture a COMPLETE JSON string value for `key` from a (possibly partial)
+ *  buffer - i.e. only once the closing unescaped quote has streamed in.
+ *  Returns the unescaped value, or `null` if the field is absent/unfinished. */
+function matchJsonStringValue(raw: string, key: string): string | null {
+  const re = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+  const m = re.exec(raw);
+  if (!m) return null;
+  try {
+    return JSON.parse(`"${m[1]}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Invent a wholly original personality with no user input ("surprise
  * me"). We steer the model toward variety with a few randomly drawn
@@ -234,7 +440,9 @@ async function runPersonaChat(
       // (same model) otherwise, so `parsePersonaJson` stays the safety net.
       structuredOutput: { name: "reachy_persona", schema: PERSONA_JSON_SCHEMA },
       body: {
-        max_tokens: 700,
+        // Headroom so a verbose instructions block doesn't get truncated and
+        // leave the JSON object unclosed (see the streaming path).
+        max_tokens: 1100,
         temperature: 0.9,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
@@ -278,8 +486,8 @@ const SYSTEM_PROMPT = [
   "markdown, no code fences. The object MUST have exactly these keys:",
   '  "name"         string, <= 24 chars, a punchy display name (Title Case).',
   '  "tagline"      string, <= 60 chars, one playful line describing the vibe.',
-  '  "instructions" string, the system prompt for the persona (see rules).',
   '  "voice"        string, one of the allowed voice ids listed below.',
+  '  "instructions" string, the system prompt for the persona (see rules).',
   "",
   "Rules for the instructions field:",
   "- Write it as a system prompt addressed to the robot, in English.",
@@ -545,25 +753,87 @@ function extractContent(payload: ChatCompletionPayload | null): string {
  */
 function parsePersonaJson(raw: string): GeneratedPersonality | null {
   const jsonText = extractJsonObject(raw);
-  if (!jsonText) return null;
-
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(jsonText) as Record<string, unknown>;
-  } catch {
-    return null;
+  if (jsonText) {
+    try {
+      const obj = JSON.parse(jsonText) as Record<string, unknown>;
+      const name = clampString(obj.name, NAME_MAX);
+      const instructions = clampString(obj.instructions, INSTRUCTIONS_MAX);
+      if (name && instructions) {
+        return {
+          name,
+          tagline: clampString(obj.tagline, TAGLINE_MAX),
+          instructions,
+          voice: snapVoice(obj.voice),
+        };
+      }
+    } catch {
+      // Fall through to the lenient salvage below.
+    }
   }
 
-  const name = clampString(obj.name, NAME_MAX);
-  const instructions = clampString(obj.instructions, INSTRUCTIONS_MAX);
+  // Lenient fallback for a truncated / malformed payload (e.g. the model hit
+  // the token cap mid-instructions, so the object never closed and the strict
+  // parse above bailed). Recover the fields field-by-field - a clamped partial
+  // prompt is far better UX than a hard "generation failed".
+  return salvagePersonaJson(raw);
+}
+
+/**
+ * Best-effort field recovery from a buffer that isn't valid JSON (typically a
+ * stream cut off before the closing quote/brace). Pulls each top-level string
+ * value independently; for `instructions` it also accepts an UNTERMINATED
+ * value (everything up to the cut), since that's the field most likely to be
+ * truncated. Returns `null` only when name or instructions can't be salvaged.
+ */
+function salvagePersonaJson(raw: string): GeneratedPersonality | null {
+  const name = clampString(matchJsonStringValue(raw, "name"), NAME_MAX);
+  let instructions = clampString(
+    matchJsonStringValue(raw, "instructions"),
+    INSTRUCTIONS_MAX,
+  );
+  if (!instructions) {
+    instructions = clampString(matchUnterminatedString(raw, "instructions"), INSTRUCTIONS_MAX);
+  }
   if (!name || !instructions) return null;
 
   return {
     name,
-    tagline: clampString(obj.tagline, TAGLINE_MAX),
+    tagline: clampString(matchJsonStringValue(raw, "tagline"), TAGLINE_MAX),
     instructions,
-    voice: snapVoice(obj.voice),
+    voice: snapVoice(matchJsonStringValue(raw, "voice")),
   };
+}
+
+/** Capture a string value for `key` even when its closing quote never streamed
+ *  in: read from the opening quote to either the closing unescaped quote or the
+ *  end of the buffer, then JSON-unescape (tolerating a dangling backslash). */
+function matchUnterminatedString(raw: string, key: string): string {
+  const open = new RegExp(`"${key}"\\s*:\\s*"`).exec(raw);
+  if (!open) return "";
+  const start = open.index + open[0].length;
+  let body = "";
+  let escaped = false;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escaped) {
+      body += ch;
+      escaped = false;
+    } else if (ch === "\\") {
+      escaped = true;
+      body += ch;
+    } else if (ch === '"') {
+      break; // reached the (real) closing quote
+    } else {
+      body += ch;
+    }
+  }
+  // Drop a dangling escape so JSON.parse doesn't choke on `..."foo\`.
+  const safe = body.replace(/\\+$/, "");
+  try {
+    return JSON.parse(`"${safe}"`) as string;
+  } catch {
+    return "";
+  }
 }
 
 /** Extract the first balanced top-level JSON object from a string,

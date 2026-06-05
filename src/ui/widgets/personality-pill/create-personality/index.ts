@@ -4,10 +4,8 @@
  * the logic hooks (generation progress, voice audition, vibe roll), and the
  * presentational pieces (Hero, Fields, Actions).
  */
-export { GEN_STEPS, NAME_MAX, TAGLINE_MAX, VIBE_MAX, ctaSx, diceBtnSx, genBtnSx, shrinkLabelSlotProps } from './constants';
+export { NAME_MAX, TAGLINE_MAX, VIBE_MAX, ctaSx, diceBtnSx, genBtnSx, shrinkLabelSlotProps } from './constants';
 
-export { useGenerationProgress } from './useGenerationProgress';
-export type { GenerationProgress } from './useGenerationProgress';
 export { useVoiceAudition } from './useVoiceAudition';
 export type { VoiceAudition } from './useVoiceAudition';
 export { useVibeRoll } from './useVibeRoll';
@@ -15,6 +13,8 @@ export type { VibeRoll } from './useVibeRoll';
 
 export { CreatePersonalityHero } from './Hero';
 export type { CreatePersonalityHeroProps } from './Hero';
+export { CreatePersonalityGenerating } from './Generating';
+export type { CreatePersonalityGeneratingProps } from './Generating';
 export { CreatePersonalityFields } from './Fields';
 export type { CreatePersonalityFieldsProps } from './Fields';
 export { CreatePersonalityActions } from './Actions';

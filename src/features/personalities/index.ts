@@ -24,11 +24,13 @@ export {
   generateRandomPersonality,
   generateRandomVibe,
   streamRandomVibe,
+  streamPersonality,
   GeneratePersonalityError,
 } from './generate';
 export type {
   GeneratedPersonality,
   GeneratePersonalityReason,
+  StreamPersonalityOptions,
 } from './generate';
 export {
   addCustomPersonality,
@@ -42,6 +44,7 @@ export {
   subscribe as subscribePersonalities,
   updateCustomPersonality,
   useActivePersonality,
+  useAvatarPendingSince,
   useIsAvatarPending,
   usePersonalitiesCatalog,
 } from './store';

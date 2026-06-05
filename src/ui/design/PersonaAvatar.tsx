@@ -62,8 +62,11 @@ export default function PersonaAvatar({
         flexShrink: 0,
         position: 'relative',
         borderRadius: '50%',
-        bgcolor:
-          theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)',
+        // Always a light hairline border (matching the top band's avatar
+        // disc). Skeleton (baking) state fills the disc white; otherwise the
+        // stage is transparent so only the border frames the portrait.
+        bgcolor: cooking ? 'background.paper' : 'transparent',
+        border: `1px solid ${theme.palette.divider}`,
         ...(boxShadow ? { boxShadow } : null),
         overflow: 'visible',
         display: 'grid',

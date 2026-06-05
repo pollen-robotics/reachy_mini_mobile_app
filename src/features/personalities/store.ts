@@ -322,6 +322,16 @@ export function useIsAvatarPending(id: string): boolean {
   return useSyncExternalStore(subscribe, () => state.pendingAvatars.has(id));
 }
 
+/** React hook: the wall-clock ms at which this persona's avatar bake was
+ *  marked pending, or `null` if it isn't baking. Lets a progress cue anchor to
+ *  the real elapsed time (surviving remounts) instead of its own mount. */
+export function useAvatarPendingSince(id: string): number | null {
+  return useSyncExternalStore(
+    subscribe,
+    () => state.pendingAvatars.get(id) ?? null,
+  );
+}
+
 /** React hook reading the currently active personality. Re-renders
  *  whenever the active id (or the resolved catalog) changes. */
 export function useActivePersonality(): Personality {

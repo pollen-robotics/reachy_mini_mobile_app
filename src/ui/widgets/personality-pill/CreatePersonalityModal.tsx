@@ -13,11 +13,11 @@
  * This file is the ORCHESTRATOR: it owns the form state + side effects
  * (generation, sticker avatar, persona draft channel) and wires three
  * presentational pieces from `./create-personality`:
- *   - `CreatePersonalityHero`    - the create-mode "describe a vibe" landing
- *   - `CreatePersonalityFields`  - the classic name/voice/instructions form
- *   - `CreatePersonalityActions` - the sticky Create / Save+Delete plate
- * plus the logic hooks `useGenerationProgress`, `useVoiceAudition`, and
- * `useVibeRoll`.
+ *   - `CreatePersonalityHero`       - the create-mode "describe a vibe" landing
+ *   - `CreatePersonalityGenerating` - the dedicated generate + reveal screen
+ *   - `CreatePersonalityFields`     - the classic name/voice/instructions form
+ *   - `CreatePersonalityActions`    - the sticky Create / Save+Delete plate
+ * plus the logic hooks `useVoiceAudition` and `useVibeRoll`.
  *
  * Visual contract
  * ───────────────
@@ -26,7 +26,7 @@
  * `Dialog`, because the rest of the app does fullscreen-from-the-root that
  * way and `Dialog`'s focus-trap fights the WebView keyboard on mobile.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Stack, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
@@ -39,10 +39,10 @@ import {
   type Personality,
   addCustomPersonality,
   clearPersonaDraft,
-  generatePersonality,
   removeCustomPersonality,
   setActivePersonality,
   setPersonaDraft,
+  streamPersonality,
   updateCustomPersonality,
 } from '@/features/personalities';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
@@ -51,9 +51,9 @@ import { useStickerAvatar } from './useStickerAvatar';
 import {
   CreatePersonalityActions,
   CreatePersonalityFields,
+  CreatePersonalityGenerating,
   CreatePersonalityHero,
   VIBE_MAX,
-  useGenerationProgress,
   useVibeRoll,
   useVoiceAudition,
 } from './create-personality';
@@ -95,6 +95,14 @@ interface CreatePersonalityModalProps {
    * is kept for any caller that wants the classic overlay.
    */
   embedded?: boolean;
+  /**
+   * (Embedded mode) Fired when the form enters/leaves its full-panel "Meet"
+   * phase (create-mode generation + reveal). The host uses it to hide its
+   * persistent personality band so this view fills the panel area - WITHOUT
+   * covering the app's top bar / bottom nav. Always fired with `false` on
+   * unmount so a mid-reveal close can't strand the band hidden.
+   */
+  onImmersiveChange?: (immersive: boolean) => void;
 }
 
 export function CreatePersonalityModal({
@@ -103,6 +111,7 @@ export function CreatePersonalityModal({
   editing = null,
   onDeleted,
   embedded = false,
+  onImmersiveChange,
 }: CreatePersonalityModalProps) {
   const isEdit = editing !== null;
 
@@ -131,73 +140,57 @@ export function CreatePersonalityModal({
   const [genMode, setGenMode] = useState<'describe' | 'random' | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const generating = genMode !== null;
-  // Cycling status phrases + faux progress sliver while "Generate" runs.
-  const { step: genStep, progress: genProgress } = useGenerationProgress(
-    genMode === 'describe',
-  );
+  // Voice as authored by the stream, kept separate from the form's `voice`
+  // (which carries a manual-mode default). Empty until the model actually
+  // picks one, so the generation view shows a skeleton rather than the
+  // default voice before the LLM has chosen.
+  const [genVoice, setGenVoice] = useState('');
+
+  // Create-mode screen machine: the "describe a vibe" landing ('idea') hands
+  // off to a dedicated full-screen generation view ('generating'), then to a
+  // short celebratory beat ('reveal') once the persona is committed + active,
+  // before the overlay closes. Edit mode and the manual on-ramp ignore this
+  // (they use `detailsOpen` below).
+  const [phase, setPhase] = useState<'idea' | 'generating' | 'reveal'>('idea');
 
   // Progressive disclosure. `detailsOpen` swaps the centred "magic" landing
-  // (create mode) for the classic form; edit mode and any successful
-  // generation open it straight away.
+  // (create mode) for the classic form; edit mode opens it straight away, and
+  // the manual on-ramp flips it on.
   const [detailsOpen, setDetailsOpen] = useState(isEdit);
 
-  // Shared runner: drives the spinner/error state and pre-fills the form
-  // from whichever generator (typed vibe or full-random) resolves.
-  const runGenerator = useCallback(
-    async (mode: 'describe' | 'random', run: () => Promise<GeneratedPersonality>) => {
-      if (generating) return;
-      setGenError(null);
-      setGenMode(mode);
-      try {
-        const result = await run();
-        setName(result.name);
-        setTagline(result.tagline);
-        setInstructions(result.instructions);
-        if (result.voice) setVoice(result.voice);
-        // Reveal the form so the user sees what was authored.
-        setDetailsOpen(true);
-      } catch (err) {
-        console.warn('[personalities] generation failed:', err);
-        if (
-          err instanceof GeneratePersonalityError &&
-          err.reason === 'hf_token_missing'
-        ) {
-          setGenError('Sign in to Hugging Face first to generate a personality.');
-        } else if (
-          err instanceof GeneratePersonalityError &&
-          err.reason === 'overloaded'
-        ) {
-          // Transient provider overload (429/503): not the user's fault and
-          // retryable, so say so plainly instead of dumping a status code.
-          setGenError('Hugging Face is busy right now - give it a moment and try again.');
-        } else if (
-          err instanceof GeneratePersonalityError &&
-          err.reason === 'model_unavailable'
-        ) {
-          // None of the fallback models is reachable for this account:
-          // actionable, point the user at enabling an Inference Provider.
-          setGenError(
-            'No inference provider is enabled for the generation models. Enable one in your Hugging Face settings (Inference Providers), then try again.',
-          );
-        } else if (err instanceof GeneratePersonalityError) {
-          // Surface the underlying reason/message so a router 400 / model
-          // routing error is diagnosable in-app instead of a generic
-          // "try again" dead end.
-          setGenError(`Generation failed (${err.reason}): ${err.message}`);
-        } else {
-          setGenError("Couldn't generate that one - give it another try.");
-        }
-      } finally {
-        setGenMode(null);
-      }
-    },
-    [generating],
-  );
-
-  const handleGenerate = useCallback(() => {
-    if (vibe.trim().length === 0) return;
-    void runGenerator('describe', () => generatePersonality(vibe));
-  }, [runGenerator, vibe]);
+  // Map a generation failure onto the modal-facing error copy. Shared so the
+  // (streaming) generate path stays lean and the messaging stays consistent.
+  const reportGenError = useCallback((err: unknown) => {
+    console.warn('[personalities] generation failed:', err);
+    if (
+      err instanceof GeneratePersonalityError &&
+      err.reason === 'hf_token_missing'
+    ) {
+      setGenError('Sign in to Hugging Face first to generate a personality.');
+    } else if (
+      err instanceof GeneratePersonalityError &&
+      err.reason === 'overloaded'
+    ) {
+      // Transient provider overload (429/503): not the user's fault and
+      // retryable, so say so plainly instead of dumping a status code.
+      setGenError('Hugging Face is busy right now - give it a moment and try again.');
+    } else if (
+      err instanceof GeneratePersonalityError &&
+      err.reason === 'model_unavailable'
+    ) {
+      // None of the fallback models is reachable for this account:
+      // actionable, point the user at enabling an Inference Provider.
+      setGenError(
+        'No inference provider is enabled for the generation models. Enable one in your Hugging Face settings (Inference Providers), then try again.',
+      );
+    } else if (err instanceof GeneratePersonalityError) {
+      // Surface the underlying reason/message so a router 400 / model routing
+      // error is diagnosable in-app instead of a generic "try again" dead end.
+      setGenError(`Generation failed (${err.reason}): ${err.message}`);
+    } else {
+      setGenError("Couldn't generate that one - give it another try.");
+    }
+  }, []);
 
   // The "Randomize" die seeds ONLY the description box with a fresh vibe (it
   // streams a sentence in, falling back to a local idea on failure). The
@@ -339,6 +332,92 @@ export function CreatePersonalityModal({
     onCreated();
   };
 
+  // Commit a freshly generated persona immediately (create mode): persist it,
+  // make it active, and kick the portrait baking in the background (it patches
+  // in by id once ready). Mirrors `handleSubmit`'s create path but reads the
+  // just-generated values directly (form state may not have flushed yet). The
+  // user's vibe doubles as a vivid sticker prompt when no theme is crafted.
+  const commitGeneratedPersona = useCallback(
+    (result: GeneratedPersonality) => {
+      const input = {
+        name: result.name.trim(),
+        tagline: result.tagline.trim(),
+        instructions: result.instructions.trim(),
+        voice: result.voice || AVAILABLE_VOICES[0],
+        glow: DEFAULT_GLOW,
+      };
+      const id = addCustomPersonality(input).id;
+      setActivePersonality(id);
+      if (!sticker.dataUri && !stickerCooking) {
+        sticker.generate(sticker.theme.trim() || vibe.trim() || input.name);
+      }
+      sticker.adoptPersona(id);
+    },
+    [sticker, stickerCooking, vibe],
+  );
+
+  // Generate (create mode): hand off to the dedicated full-screen view and
+  // STREAM the persona in, filling each slot as it lands (name first, hence
+  // the monogram, then tagline + voice). Once the object resolves we commit +
+  // activate the persona and hold a short reveal beat before closing. On
+  // failure, drop back to the idea screen where the error is shown.
+  const handleGenerate = useCallback(() => {
+    if (vibe.trim().length === 0 || generating) return;
+    setGenError(null);
+    setGenMode('describe');
+    // Clear the slots so the generation view starts as skeletons and fills in
+    // progressively as the stream lands each field.
+    setName('');
+    setTagline('');
+    setInstructions('');
+    setGenVoice('');
+    setPhase('generating');
+    void (async () => {
+      try {
+        const result = await streamPersonality(vibe, {
+          onPartial: partial => {
+            if (partial.name !== undefined) setName(partial.name);
+            if (partial.tagline !== undefined) setTagline(partial.tagline);
+            if (partial.voice !== undefined) setGenVoice(partial.voice);
+          },
+        });
+        // Settle the form to the validated result (instructions + final voice).
+        setName(result.name);
+        setTagline(result.tagline);
+        setInstructions(result.instructions);
+        setGenVoice(result.voice);
+        if (result.voice) setVoice(result.voice);
+        commitGeneratedPersona(result);
+        setPhase('reveal');
+      } catch (err) {
+        reportGenError(err);
+        setPhase('idea');
+      } finally {
+        setGenMode(null);
+      }
+    })();
+  }, [vibe, generating, commitGeneratedPersona, reportGenError]);
+
+  // Latest `onCreated` kept in a ref so the reveal timer below depends ONLY
+  // on `phase`. Otherwise a fresh `onCreated` identity (the host re-renders
+  // constantly while the portrait bakes) would re-run the effect, clear the
+  // pending timeout, and reset it every render - so the beat would never fire
+  // until renders settled (~when the image finished). That was the "it waits
+  // for the image to end" bug.
+  const onCreatedRef = useRef(onCreated);
+  useEffect(() => {
+    onCreatedRef.current = onCreated;
+  });
+
+  // Reveal beat: once the persona is born + active, hold the celebratory
+  // screen briefly, then close. The portrait keeps baking and lands on the
+  // persistent band a moment later (a second mini-reveal).
+  useEffect(() => {
+    if (phase !== 'reveal') return;
+    const timer = window.setTimeout(() => onCreatedRef.current(), 1600);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
+
   const handleDelete = () => {
     if (!isEdit || !editing) return;
     if (!confirmingDelete) {
@@ -349,11 +428,26 @@ export function CreatePersonalityModal({
     (onDeleted ?? onCreated)();
   };
 
+  // The create-mode "Meet" flow (generation + reveal) should take over the
+  // panel area - replacing the personality band above it - WITHOUT covering the
+  // app's top bar / bottom nav. We don't go `position: fixed` (that would eat
+  // the whole viewport); instead we tell the host (`onImmersiveChange`) to hide
+  // its personality band while this phase is up, so our embedded body simply
+  // grows to fill the freed space. Edit mode and the idea/manual screens stay
+  // embedded under the band.
+  const meetOverlay = embedded && !isEdit && phase !== 'idea';
+  const notifyImmersive = onImmersiveChange;
+  useEffect(() => {
+    notifyImmersive?.(meetOverlay);
+  }, [meetOverlay, notifyImmersive]);
+  // Always clear the flag when the form unmounts, so a close mid-reveal can't
+  // leave the host's band hidden.
+  useEffect(() => () => notifyImmersive?.(false), [notifyImmersive]);
   return (
     <Box
       role={embedded ? 'group' : 'dialog'}
       aria-modal={embedded ? undefined : 'true'}
-      aria-label={embedded ? 'Create a personality' : undefined}
+      aria-label={embedded ? 'Create your own agent' : undefined}
       aria-labelledby={embedded ? undefined : 'create-personality-title'}
       sx={
         embedded
@@ -410,7 +504,7 @@ export function CreatePersonalityModal({
               letterSpacing: '-0.3px',
             }}
           >
-            {isEdit ? 'Edit personality' : 'Create a personality'}
+            {isEdit ? 'Edit personality' : 'Create your own agent'}
           </Typography>
           <IconButton aria-label="Cancel" onClick={onCancel} edge="end" color="primary">
             <CloseIcon />
@@ -433,19 +527,29 @@ export function CreatePersonalityModal({
           // Extra top breathing room in embedded mode: the personality band
           // above now lets its avatar disc spill downward, so the first
           // field needs clearance to not sit under the overflowing circle.
-          pt: embedded ? 7 : 3,
+          // The fullscreen Meet overlay has no band above it, so it drops back
+          // to the normal padding.
+          pt: embedded && !meetOverlay ? 7 : 3,
           pb: 3,
         }}
       >
-        {!isEdit && !detailsOpen ? (
+        {!isEdit && phase !== 'idea' ? (
+          // Dedicated generation screen: the model authors the persona
+          // ('generating'), then a short reveal beat once it's committed +
+          // active ('reveal'), before the overlay closes.
+          <CreatePersonalityGenerating
+            ready={phase === 'reveal'}
+            name={name}
+            tagline={tagline}
+            voice={genVoice}
+            onCancel={onCancel}
+          />
+        ) : !isEdit && !detailsOpen ? (
           <CreatePersonalityHero
             vibe={vibe}
             onVibeChange={setVibe}
             generating={generating}
             rolling={rolling}
-            genMode={genMode}
-            genStep={genStep}
-            genProgress={genProgress}
             genError={genError}
             onGenerate={handleGenerate}
             onRandom={handleRandom}

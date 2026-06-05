@@ -186,6 +186,9 @@ export function ConversationPanel({
   //     the user sees the updated (or removed) card.
   const [formMode, setFormMode] = useState<PersonaFormMode>(null);
   const formOpen = formMode !== null;
+  // True while the create form is in its full-panel "Meet" phase: the band is
+  // hidden so the form fills the panel area (top bar / bottom nav stay put).
+  const [immersiveForm, setImmersiveForm] = useState(false);
   // Band trailing affordance: closes any open form, else opens create.
   const toggleForm = useCallback(() => {
     setSettingsOpen(false);
@@ -206,6 +209,7 @@ export function ConversationPanel({
     setSettingsOpen(false);
     setPickerOpen(false);
     setFormMode(null);
+    setImmersiveForm(false);
   }, [active]);
 
   // Mid-conversation personality switch: when the user picks a new
@@ -317,7 +321,10 @@ export function ConversationPanel({
           flexShrink: 0,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
-          display: settingsOpen ? 'none' : 'block',
+          // Hidden while settings are open OR while the create form is in its
+          // full-panel "Meet" phase, so the body slot below expands to fill the
+          // freed space (the app's top bar / bottom nav stay put either way).
+          display: settingsOpen || immersiveForm ? 'none' : 'block',
           // Let the persona avatar disc spill slightly past the band's
           // bottom divider and paint OVER the body slot below it.
           position: 'relative',
@@ -639,6 +646,7 @@ export function ConversationPanel({
           <CreatePersonalityModal
             key={formMode.kind === 'edit' ? formMode.persona.id : 'create'}
             embedded
+            onImmersiveChange={setImmersiveForm}
             editing={formMode.kind === 'edit' ? formMode.persona : null}
             onCancel={closeForm}
             onCreated={() => {

@@ -42,10 +42,13 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import {
   type Personality,
   useActivePersonality,
+  useAvatarPendingSince,
   useIsAvatarPending,
   usePersonaDraft,
 } from '@/features/personalities';
 import CookingMonogram from '@/ui/design/CookingMonogram';
+import ShimmerText from '@/ui/design/ShimmerText';
+import PieTimer from '@/ui/design/PieTimer';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface PersonalityPillProps {
@@ -129,9 +132,9 @@ export function PersonalityPill({
   // Title mirrors the live name while authoring (falling back to the
   // static label until the user types one); otherwise the shown persona.
   const title = draftActive
-    ? draft.name.trim() || (creating ? 'Create a personality' : shown.name)
+    ? draft.name.trim() || (creating ? 'Create your agent' : shown.name)
     : creating
-      ? 'Create a personality'
+      ? 'Create your agent'
       : shown.name;
   // Regenerate control (edit only): the band hosts the avatar's
   // regenerate button now, anchored on the disc, since the avatar never
@@ -151,6 +154,9 @@ export function PersonalityPill({
   // persona id yet, so the registry watches nothing (draft owns it).
   const registryCooking = useIsAvatarPending(creating ? '' : shown.id);
   const avatarCooking = (draftActive ? draft.cooking : false) || registryCooking;
+  // Real bake start time (from the store) so the progress pie reflects actual
+  // elapsed time and survives band remounts instead of restarting.
+  const cookingSince = useAvatarPendingSince(creating ? '' : shown.id);
 
   return (
     // Row wrapper. The band itself is NOT a button: only the chevron (the
@@ -264,14 +270,14 @@ export function PersonalityPill({
           // than "loading, wait". The real image fades in once it lands.
           <CookingMonogram name={(draftActive ? draft.name : shown.name) || ''} size={100} />
         ) : creating && !draftAvatar ? (
-          // Authoring a NEW persona, no avatar baking yet: show the
-          // monogram of the typed name as soon as there is one (identity
-          // from the first frame), falling back to a neutral "?" while the
-          // name is still empty. No shimmer here - nothing is cooking.
+          // Authoring a NEW persona, no avatar baking yet: show the monogram
+          // placeholder. The shimmer only kicks in once the user has typed a
+          // name - while it's still the neutral "?" the disc stays static, so
+          // nothing animates before there's actually a persona taking shape.
           <CookingMonogram
             name={draftActive ? draft.name : ''}
             size={100}
-            shimmer={false}
+            shimmer={(draftActive ? draft.name : '').trim().length > 0}
           />
         ) : (
           <Box
@@ -424,26 +430,14 @@ export function PersonalityPill({
             identity (Personality / <name>) never changes mid-bake - just
             a quiet "Generating image…" with a softly pulsing wand. */}
         {avatarCooking && (
-          <Typography
-            component="span"
-            sx={{
-              fontSize: TYPO.xs,
-              fontWeight: FONT_WEIGHT.medium,
-              color: 'primary.main',
-              lineHeight: 1.2,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 0.5,
-              '@keyframes eyebrowCookPulse': {
-                '0%, 100%': { opacity: 0.55 },
-                '50%': { opacity: 1 },
-              },
-              animation: 'eyebrowCookPulse 1.4s ease-in-out infinite',
-            }}
-          >
-            <AutoFixHighRoundedIcon sx={{ fontSize: 13 }} />
-            Generating image…
-          </Typography>
+          // "Working" cue: a tiny pie that fills over the ~80s bake, left of a
+          // shimmer text (phase-locked to / counter-phase with the disc).
+          <Stack direction="row" spacing={0.625} sx={{ alignItems: 'center' }}>
+            <PieTimer size={11} startedAt={cookingSince ?? undefined} />
+            <ShimmerText sx={{ fontSize: TYPO.xs, fontWeight: FONT_WEIGHT.medium, lineHeight: 1.2 }}>
+              Generating image…
+            </ShimmerText>
+          </Stack>
         )}
         {/* The persona's tagline used to live here too; it was
             redundant with the dropdown grid (each card already

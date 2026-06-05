@@ -257,7 +257,13 @@ export function ConversationSettingsPanel() {
                       component="button"
                       type="button"
                       onClick={() => setConfirmingClear(false)}
-                      sx={ghostBtnSx(theme.palette.primary.main)}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.primary.main),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${alpha(theme.palette.primary.main, 0.45)}`,
+                      }}
                     >
                       Keep
                     </Box>
@@ -268,7 +274,13 @@ export function ConversationSettingsPanel() {
                         clear();
                         setConfirmingClear(false);
                       }}
-                      sx={ghostBtnSx(theme.palette.error.main)}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.error.main),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${alpha(theme.palette.error.main, 0.45)}`,
+                      }}
                     >
                       Delete forever
                     </Box>

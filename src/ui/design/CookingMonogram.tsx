@@ -18,8 +18,15 @@
  *
  * Pure design-layer primitive (MUI only) so it can sit on any avatar disc.
  */
+import { useMemo } from 'react';
 import { Box } from '@mui/material';
 import { alpha } from '@mui/material/styles';
+
+/** Shimmer cycle length. Shared so every instance runs the same period and
+ *  can be phase-locked to the wall clock (see `shimmerDelay`). Exported so
+ *  sibling "working" cues (e.g. the band's "Generating image…" text shimmer)
+ *  can lock to the exact same period + wall-clock phase. */
+export const SHIMMER_PERIOD_MS = 1600;
 
 interface CookingMonogramProps {
   /** Persona name; its first character becomes the monogram. */
@@ -41,6 +48,11 @@ export default function CookingMonogram({
   shimmer = true,
 }: CookingMonogramProps) {
   const initial = name.trim().charAt(0).toUpperCase() || '?';
+  // Phase-lock every shimmer to the wall clock: a negative delay equal to
+  // `-(mountTime mod period)` makes each instance's cycle align to the same
+  // global grid (start ≡ 0 mod period), so monograms mounted at different
+  // times still sweep in unison instead of each starting from its own mount.
+  const shimmerDelay = useMemo(() => -(Date.now() % SHIMMER_PERIOD_MS), []);
   return (
     <Box
       aria-hidden
@@ -85,7 +97,10 @@ export default function CookingMonogram({
                 theme.palette.text.primary,
                 0.05,
               )} 50%, transparent 100%)`,
-            animation: 'cookShimmer 1.6s ease-in-out infinite',
+            animation: `cookShimmer ${SHIMMER_PERIOD_MS}ms ease-in-out infinite`,
+            // Negative delay anchored to the wall clock => all instances are
+            // in phase regardless of when they mounted.
+            animationDelay: `${shimmerDelay}ms`,
             '@keyframes cookShimmer': {
               '0%': { backgroundPosition: '-150% 0' },
               '100%': { backgroundPosition: '250% 0' },

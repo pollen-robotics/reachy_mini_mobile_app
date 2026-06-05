@@ -48,16 +48,6 @@ export const diceBtnSx = {
   },
 } as const;
 
-/** Playful status lines cycled on the Generate button while the model
- *  authors the persona. Order roughly matches what the single LLM call
- *  produces (name -> voice -> prompt). */
-export const GEN_STEPS = [
-  'Imagining a character…',
-  'Choosing a name…',
-  'Finding the right voice…',
-  'Writing its personality…',
-] as const;
-
 /**
  * When the floating label shrinks onto the outline it must sit over a solid
  * fill, otherwise the border draws straight through the text. The form sits
