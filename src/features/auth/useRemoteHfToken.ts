@@ -26,6 +26,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import { DEV_HF_TOKEN, DEV_HF_USERNAME } from '@/shared/env';
+
 const STORAGE_KEY = 'remote_hf_token';
 const USERNAME_KEY = 'remote_hf_username';
 
@@ -110,6 +112,18 @@ export function useRemoteHfToken(): RemoteHfTokenState {
   // of any descendant component (no useEffect race window).
   const [{ token, username }, setState] = useState(() => {
     const stored = readStored();
+    // Dev-only fallback: when nothing is persisted yet and a
+    // `VITE_DEV_HF_TOKEN` is configured (desktop `tauri:dev`, where
+    // the in-app OAuth session does not exist), seed it as if the
+    // user had just signed in. Persisting it means a later `clear()`
+    // (sign-out) still wins for the rest of the session instead of
+    // the env token re-seeding on every render. `DEV_HF_TOKEN` is
+    // `null` in production builds (see `shared/env.ts`).
+    if (!stored.token && DEV_HF_TOKEN) {
+      writeStored(DEV_HF_TOKEN, DEV_HF_USERNAME);
+      syncSessionStorage(DEV_HF_TOKEN, DEV_HF_USERNAME);
+      return { token: DEV_HF_TOKEN, username: DEV_HF_USERNAME };
+    }
     syncSessionStorage(stored.token, stored.username);
     return stored;
   });

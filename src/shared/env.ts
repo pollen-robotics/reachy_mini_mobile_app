@@ -130,3 +130,40 @@ export const WEBSITE_API_URL: string =
 export const STICKER_API_URL: string =
   (import.meta.env.VITE_REACHY_STICKER_URL as string | undefined) ??
   'https://pollen-robotics-reachy-sticker-generator.hf.space';
+
+/**
+ * Dev-only Hugging Face token used to skip the OAuth sign-in screen
+ * when running `tauri:dev` on a desktop WebView.
+ *
+ * The in-app `ASWebAuthenticationSession` flow only exists on iOS /
+ * Android, so on a desktop dev build there is no way to actually sign
+ * in. Setting `VITE_DEV_HF_TOKEN` in `.env.local` lets
+ * `useRemoteHfToken` seed the token on first boot so the app drops you
+ * straight onto the scan screen.
+ *
+ * Hard-gated behind `import.meta.env.DEV`: in any production build
+ * (`vite build`) `DEV` is statically `false`, so this resolves to
+ * `null` and gets tree-shaken away. The value can never ship in a
+ * release bundle even if the env var is accidentally present in CI.
+ *
+ * Consumers:
+ *   - `features/auth/useRemoteHfToken.ts` (boot-time seed fallback)
+ */
+export const DEV_HF_TOKEN: string | null = (() => {
+  if (!import.meta.env.DEV) return null;
+  const raw = import.meta.env.VITE_DEV_HF_TOKEN as string | undefined;
+  const trimmed = raw?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed : null;
+})();
+
+/**
+ * Optional display username paired with {@link DEV_HF_TOKEN}. Purely
+ * cosmetic (the welcome-back banner / SDK `robot.username`); falls back
+ * to a placeholder when omitted. Same dev-only gating as the token.
+ */
+export const DEV_HF_USERNAME: string | null = (() => {
+  if (!import.meta.env.DEV) return null;
+  const raw = import.meta.env.VITE_DEV_HF_USERNAME as string | undefined;
+  const trimmed = raw?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed : null;
+})();
