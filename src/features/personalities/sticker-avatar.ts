@@ -101,6 +101,10 @@ interface StickerJob {
   status?: string;
   queue_size?: number;
   detail?: string;
+  /** Async backend only: server-suggested delay before the next poll
+   *  (ms). Lets the backend throttle clients centrally under load
+   *  instead of relying on our fixed interval. */
+  retry_after_ms?: number;
 }
 
 /** Resolve a (possibly relative) sticker URL against the Space host. */
@@ -292,9 +296,46 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
+ * Parse a `Retry-After` header into milliseconds. Accepts both the
+ * delta-seconds form (`Retry-After: 5`) and the HTTP-date form. Returns
+ * `null` when absent or unparseable so the caller can fall back to its
+ * own cadence.
+ */
+function parseRetryAfter(res: Response): number | null {
+  const raw = res.headers.get('retry-after');
+  if (!raw) return null;
+  const secs = Number(raw);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(raw);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - Date.now());
+}
+
+/**
+ * Exponential backoff with jitter, clamped to `max`. The jitter
+ * (±20%) de-synchronises many clients retrying at once so a recovering
+ * status endpoint doesn't get hammered by a synchronised retry wave.
+ */
+function backoffMs(attempt: number, base: number, max: number): number {
+  const exp = Math.min(max, base * 2 ** Math.max(0, attempt - 1));
+  return Math.round(exp * (0.8 + Math.random() * 0.4));
+}
+
+/**
  * Poll an async sticker job until it produces an image. Follows the
  * server-provided `status_url` when present (so the server keeps full
  * control of its routes), else falls back to `/api/jobs/{job_id}`.
+ *
+ * Scalability note: a job that's already accepted server-side can take
+ * a while, during which the STATUS endpoint itself may be throttled
+ * (429/503) or hit a transient network blip - especially under load.
+ * Treating those as a hard failure would abandon a job that's still
+ * generating. So we tolerate a bounded streak of transient failures
+ * with exponential backoff, and only surface `StickerOverloadedError`
+ * if they persist. Cadence is server-driven when a `Retry-After`
+ * header or a `retry_after_ms` body field is present, so the backend
+ * can centrally pace clients instead of relying on our fixed interval.
+ * The global timeout still caps the whole wait.
  */
 async function pollStickerJob(
   handle: StickerJob,
@@ -306,8 +347,16 @@ async function pollStickerJob(
     : `${STICKER_BASE}/api/jobs/${handle.job_id}`;
 
   const POLL_INTERVAL_MS = 3000;
+  const MAX_BACKOFF_MS = 30_000;
   const TIMEOUT_MS = 5 * 60 * 1000;
+  // How many consecutive transient failures (throttle / network blip)
+  // we ride out before giving up. Generous because the global timeout
+  // is the real ceiling; this just stops an infinite hammer if the
+  // status endpoint is permanently gone.
+  const MAX_TRANSIENT_FAILURES = 6;
+
   const startedAt = Date.now();
+  let transientFailures = 0;
 
   for (;;) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -315,13 +364,41 @@ async function pollStickerJob(
       throw new Error('Sticker generation timed out');
     }
 
-    const res = await tauriFetch(url, {
-      method: 'GET',
-      headers: stickerAuthHeaders(),
-      signal,
-    });
-    if (res.status === 429 || res.status === 503) throw new StickerOverloadedError();
+    let res: Response;
+    try {
+      res = await tauriFetch(url, {
+        method: 'GET',
+        headers: stickerAuthHeaders(),
+        signal,
+      });
+    } catch (err) {
+      // Network blip on the status poll - the job may still be alive.
+      // Back off and retry rather than killing it; rethrow on abort or
+      // once the streak exceeds the budget.
+      if (signal?.aborted) throw err;
+      transientFailures += 1;
+      if (transientFailures > MAX_TRANSIENT_FAILURES) throw err;
+      await delay(backoffMs(transientFailures, POLL_INTERVAL_MS, MAX_BACKOFF_MS), signal);
+      continue;
+    }
+
+    if (res.status === 429 || res.status === 503) {
+      // The status endpoint itself is throttled under load. The job is
+      // most likely still generating, so back off (honouring any
+      // server-provided Retry-After) and retry instead of abandoning it.
+      // Only surface overload after a sustained streak.
+      transientFailures += 1;
+      if (transientFailures > MAX_TRANSIENT_FAILURES) throw new StickerOverloadedError();
+      const wait =
+        parseRetryAfter(res) ?? backoffMs(transientFailures, POLL_INTERVAL_MS, MAX_BACKOFF_MS);
+      await delay(wait, signal);
+      continue;
+    }
+
     if (!res.ok) throw new Error(`Sticker job poll failed (${res.status})`);
+
+    // Any clean contact resets the transient-failure streak.
+    transientFailures = 0;
 
     const data = (await res.json()) as StickerJob;
     if (hasStickerImage(data)) return data;
@@ -333,7 +410,12 @@ async function pollStickerJob(
     const size = typeof data.queue_size === 'number' ? data.queue_size : 0;
     onStatus?.(size > 0 ? 'queued' : 'generating', size);
 
-    await delay(POLL_INTERVAL_MS, signal);
+    // Server-driven cadence wins (header, then body field); else our
+    // steady interval. Lets the backend pace clients centrally at scale.
+    const wait =
+      parseRetryAfter(res) ??
+      (typeof data.retry_after_ms === 'number' ? data.retry_after_ms : POLL_INTERVAL_MS);
+    await delay(wait, signal);
   }
 }
 
