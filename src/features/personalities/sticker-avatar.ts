@@ -29,7 +29,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 import { readHfTokenFromStorage } from '@/features/conversation/engine/hf-token';
-import { STICKER_API_URL } from '@/shared/env';
+import { STICKER_API_URL, STICKER_THEME_MODEL } from '@/shared/env';
 
 import type { CustomPersonalityInput } from './types';
 import { routerChatCompletion } from '@/features/hf';
@@ -49,11 +49,10 @@ const STICKER_AVATAR_PADDING = 0.2;
  *  appended directly (the env value may or may not carry one). */
 const STICKER_BASE = STICKER_API_URL.replace(/\/$/, '');
 
-/** Text model used to craft the visual theme. Small + widely served
- *  on the HF router; overridable for tuning without a code change. */
-export const STICKER_AVATAR_MODEL: string =
-  (import.meta.env.VITE_REACHY_STICKER_THEME_MODEL as string | undefined) ??
-  'Qwen/Qwen2.5-7B-Instruct';
+/** Text model used to craft the visual theme. Sourced from the env
+ *  funnel (`VITE_REACHY_STICKER_THEME_MODEL`); re-exported under this
+ *  feature-local name to keep the public personalities API stable. */
+export const STICKER_AVATAR_MODEL: string = STICKER_THEME_MODEL;
 
 /** UI-facing lifecycle of a single avatar generation. */
 export type StickerStatus =

@@ -41,6 +41,7 @@
  * already pinned to `https://router.huggingface.co/*`.
  */
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { HF_MODEL_CHAIN, HF_ROUTER_POLICY } from "@/shared/env";
 import {
   fetchModelCatalog,
   modelSupportsStructuredOutput,
@@ -59,45 +60,18 @@ export const HF_ROUTER_CHAT_URL =
 export type RouterPolicy = "auto" | "fastest" | "cheapest" | "preferred";
 
 /** Default routing policy. `preferred` respects the user's HF Inference
- *  Provider settings order; override via `VITE_HF_ROUTER_POLICY`. */
-const DEFAULT_POLICY: RouterPolicy = (() => {
-  const raw = (
-    import.meta.env?.VITE_HF_ROUTER_POLICY as string | undefined
-  )?.trim();
-  if (
-    raw === "auto" ||
-    raw === "fastest" ||
-    raw === "cheapest" ||
-    raw === "preferred"
-  ) {
-    return raw;
-  }
-  return "preferred";
-})();
+ *  Provider settings order; override via `VITE_HF_ROUTER_POLICY`. Read
+ *  + validated in the env funnel (`shared/env.ts`). */
+const DEFAULT_POLICY: RouterPolicy = HF_ROUTER_POLICY;
 
 /**
  * Broadly-served instruct models tried (in order, auto-provider) when the
  * caller's preferred model is overloaded or not enabled for the account.
  * Ordered large -> small so we keep quality when possible but still land
- * on something a minimal account can reach. Override via
- * `VITE_HF_MODEL_CHAIN` (comma-separated model ids).
+ * on something a minimal account can reach. Sourced (and overridable via
+ * `VITE_HF_MODEL_CHAIN`) from the env funnel (`shared/env.ts`).
  */
-const DEFAULT_MODEL_CHAIN: string[] = (() => {
-  const raw = import.meta.env?.VITE_HF_MODEL_CHAIN as string | undefined;
-  if (raw && raw.trim()) {
-    return raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-  return [
-    "meta-llama/Llama-3.3-70B-Instruct",
-    "Qwen/Qwen2.5-72B-Instruct",
-    "meta-llama/Llama-3.1-8B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-  ];
-})();
+const DEFAULT_MODEL_CHAIN: string[] = HF_MODEL_CHAIN;
 
 /** A 429/503 (or a body mentioning overload) is a transient provider
  *  overload, surfaced as a distinct, retry-friendly state. */

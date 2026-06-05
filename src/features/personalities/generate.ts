@@ -42,18 +42,13 @@
  */
 
 import { readHfTokenFromStorage } from "@/features/conversation/engine/hf-token";
+import { PERSONALITY_HF_MODEL } from "@/shared/env";
 import { AVAILABLE_VOICES } from "./builtin";
 import { HfRouterError, routerChatCompletion } from "@/features/hf";
 
-/**
- * Text model used to author personalities. Override via
- * `VITE_PERSONALITY_HF_MODEL` for A/B tests. Defaults to a broadly
- * served instruct model on the HF router; append `:<provider>` /
- * `:fastest` / `:cheapest` to pin a routing policy.
- */
-const HF_TEXT_MODEL =
-  (import.meta.env?.VITE_PERSONALITY_HF_MODEL as string | undefined) ??
-  "Qwen/Qwen2.5-72B-Instruct";
+/** Text model used to author personalities. Sourced from the env
+ *  funnel (`VITE_PERSONALITY_HF_MODEL`, see `shared/env.ts`). */
+const HF_TEXT_MODEL = PERSONALITY_HF_MODEL;
 
 /** Hard wall-time cap on the generation call. Generous vs the vision
  *  poller (this is a one-off, user-initiated request behind a spinner)

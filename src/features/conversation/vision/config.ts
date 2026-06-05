@@ -1,8 +1,9 @@
 /**
  * Vision module configuration.
  *
- * All knobs that the rest of the module reads live here. Env vars are
- * read at build time via Vite (`import.meta.env`). The killswitch is
+ * All knobs that the rest of the module reads live here. Env-driven
+ * knobs come from the typed env funnel (`shared/env.ts`), never from
+ * `import.meta.env` directly. The killswitch is
  * intentionally absent: the feature is always on. Disable it by
  * removing the `attachVision(...)` call in the engine (and ideally
  * the whole `vision/` folder - see `docs/VISION.md` § 12).
@@ -13,6 +14,8 @@
  * the full rationale; the `VlmProvider` interface stays so adding
  * a second provider is a one-file change.
  */
+
+import { VISION_HF_MODEL } from '@/shared/env';
 
 export const VISION_CONFIG = {
   // Polling cadence + initial capture delay. The initial capture
@@ -61,9 +64,7 @@ export const VISION_CONFIG = {
   // specific routing policy (e.g. `zai-org/GLM-4.5V:novita`). The
   // default omits the suffix, which is equivalent to `:fastest`.
   // Source: `GET huggingface.co/api/models/<id>?expand=inferenceProviderMapping`.
-  hfVlmModel:
-    (import.meta.env?.VITE_VISION_HF_MODEL as string | undefined) ??
-    "zai-org/GLM-4.5V",
+  hfVlmModel: VISION_HF_MODEL,
 
   // Hygiene. Cap the VLM call wall-time and the resulting text to
   // protect the Realtime context from a runaway provider.
