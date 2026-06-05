@@ -83,11 +83,25 @@ export class StickerOverloadedError extends Error {
   }
 }
 
-interface GenerateResponse {
-  id: string;
-  prompt: string;
-  png_url: string;
-  svg_url: string | null;
+/**
+ * Response shape of `/api/generate` (and of a poll on `/api/jobs/{id}`).
+ *
+ * The current backend answers synchronously: the image URLs are present
+ * right away. A future async/queue backend may instead hand back a job
+ * handle (`job_id`/`status_url`, no image yet) that we poll until the
+ * image URLs appear. A payload is "ready" once it carries an image URL.
+ */
+interface StickerJob {
+  id?: string;
+  prompt?: string;
+  png_url?: string;
+  svg_url?: string | null;
+  /** Async backend only: handle + status to poll until ready. */
+  job_id?: string;
+  status_url?: string;
+  status?: string;
+  queue_size?: number;
+  detail?: string;
 }
 
 /** Resolve a (possibly relative) sticker URL against the Space host. */
@@ -208,9 +222,12 @@ export async function craftStickerTheme(
  * Generate a sticker avatar for a visual theme and inline it as a data
  * URI. Reports progress via `onStatus` (`queued`/`generating`).
  *
- * The POST is synchronous server-side (~1 min); we flip to `generating`
- * once a slot frees up. The image bytes are fetched separately and
- * base64-inlined so the result survives offline.
+ * Transport-agnostic on purpose, so the shipped app survives a server-side
+ * move from the current synchronous endpoint to an async/queue backend
+ * WITHOUT an app update: the `POST` either returns the finished image
+ * (current behaviour) or a job handle that we then poll until it resolves.
+ * The image bytes are fetched separately and base64-inlined so the result
+ * survives offline.
  */
 export async function generateStickerAvatar(
   theme: string,
@@ -243,10 +260,94 @@ export async function generateStickerAvatar(
     throw new Error(detail || `Sticker generation failed (${res.status})`);
   }
 
-  const data = (await res.json()) as GenerateResponse;
+  const payload = (await res.json()) as StickerJob;
 
-  // Prefer the vector SVG (crisp at any size, matches the built-in
-  // avatars); fall back to the PNG.
+  // Synchronous backend (current): the image URLs are already here.
+  // Async backend (future): poll the job handle until they appear.
+  const data = hasStickerImage(payload)
+    ? payload
+    : await pollStickerJob(payload, { signal, onStatus });
+
+  return inlineStickerResult(data, prompt, signal);
+}
+
+/** A payload is usable once it exposes at least one image URL. */
+function hasStickerImage(job: StickerJob): boolean {
+  return Boolean(job.png_url || job.svg_url);
+}
+
+/** Resolve after `ms`, or reject early if `signal` aborts. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * Poll an async sticker job until it produces an image. Follows the
+ * server-provided `status_url` when present (so the server keeps full
+ * control of its routes), else falls back to `/api/jobs/{job_id}`.
+ */
+async function pollStickerJob(
+  handle: StickerJob,
+  opts: { signal?: AbortSignal; onStatus?: (status: StickerStatus, queueSize: number) => void },
+): Promise<StickerJob> {
+  const { signal, onStatus } = opts;
+  const url = handle.status_url
+    ? absoluteUrl(handle.status_url)
+    : `${STICKER_BASE}/api/jobs/${handle.job_id}`;
+
+  const POLL_INTERVAL_MS = 3000;
+  const TIMEOUT_MS = 5 * 60 * 1000;
+  const startedAt = Date.now();
+
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (Date.now() - startedAt > TIMEOUT_MS) {
+      throw new Error('Sticker generation timed out');
+    }
+
+    const res = await tauriFetch(url, {
+      method: 'GET',
+      headers: stickerAuthHeaders(),
+      signal,
+    });
+    if (res.status === 429 || res.status === 503) throw new StickerOverloadedError();
+    if (!res.ok) throw new Error(`Sticker job poll failed (${res.status})`);
+
+    const data = (await res.json()) as StickerJob;
+    if (hasStickerImage(data)) return data;
+    if (data.status === 'failed' || data.status === 'canceled') {
+      if (/overloaded/i.test(data.detail ?? '')) throw new StickerOverloadedError(data.detail);
+      throw new Error(data.detail || 'Sticker generation failed');
+    }
+
+    const size = typeof data.queue_size === 'number' ? data.queue_size : 0;
+    onStatus?.(size > 0 ? 'queued' : 'generating', size);
+
+    await delay(POLL_INTERVAL_MS, signal);
+  }
+}
+
+/**
+ * Fetch the generated image(s) and inline as a data URI. Prefers the
+ * vector SVG (crisp at any size, matches the built-in avatars); falls
+ * back to the PNG.
+ */
+async function inlineStickerResult(
+  data: StickerJob,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<StickerAvatarResult> {
   if (data.svg_url) {
     try {
       const svgRes = await tauriFetch(absoluteUrl(data.svg_url), {
@@ -269,6 +370,7 @@ export async function generateStickerAvatar(
     }
   }
 
+  if (!data.png_url) throw new Error('Sticker result missing image URL');
   const pngRes = await tauriFetch(absoluteUrl(data.png_url), {
     method: 'GET',
     headers: stickerAuthHeaders(),
