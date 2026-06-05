@@ -168,7 +168,6 @@ export function CreatePersonalityHero({
         multiline
         rows={3}
         disabled={generating || rolling}
-        autoFocus
         onKeyDown={e => {
           // Cmd/Ctrl+Enter submits the box; plain Enter stays a newline.
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
