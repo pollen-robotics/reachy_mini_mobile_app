@@ -62,6 +62,8 @@ import {
   BottomNavigation,
   BottomNavigationAction,
   Box,
+  CircularProgress,
+  Fade,
   IconButton,
   Stack,
   Typography,
@@ -209,6 +211,31 @@ function ConnectedSession({
   useEffect(() => {
     if (tab === 'apps') setAppsMounted(true);
   }, [tab]);
+
+  // Tab-switch spinner. Every conv <-> apps switch shows a centered
+  // spinner over the content column for a MINIMUM of 250 ms so the
+  // transition reads as a deliberate beat rather than an instant
+  // cut. It naturally lasts longer when needed: the target tab's own
+  // loading state (e.g. `AppsTabView`'s first-paint / fetch spinner)
+  // takes over seamlessly once this minimum cover lifts, since both
+  // render the same centered spinner on the same `background.default`
+  // surface. Driven through `handleTabChange` (not raw `setTab`) so
+  // the cover only fires on a real switch, never on a no-op re-tap.
+  const [tabSpinner, setTabSpinner] = useState(false);
+  const tabSpinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    },
+    []
+  );
+  const handleTabChange = (value: Tab): void => {
+    if (leaving || value === tab) return;
+    if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    setTabSpinner(true);
+    setTab(value);
+    tabSpinnerTimerRef.current = setTimeout(() => setTabSpinner(false), 250);
+  };
   /**
    * App selected from the catalog; non-null while the iframe overlay
    * is being prepared (`releasing`), shown (`ready`), or closing
@@ -628,14 +655,47 @@ function ConnectedSession({
               <ConnectingView state="connecting" />
             </Overlay>
           )}
+
+          {/* Tab-switch cover: a centered spinner shown for the
+              minimum-duration beat after a conv <-> apps switch (see
+              `handleTabChange`). Sits above both tab columns in the
+              content area (below the header + bottom nav) so the new
+              tab hydrates underneath it without flashing a half-built
+              frame. Fades in/out for a smooth transition, and uses a
+              high local `zIndex` (10) so it covers the Apps tab's
+              sticky search bar (`zIndex: 2`), which would otherwise
+              poke through the cover. */}
+          <Fade in={tabSpinner} timeout={{ enter: 0, exit: 350 }} unmountOnExit>
+            <Box
+              sx={theme => ({
+                position: 'absolute',
+                // Full-bleed: the content column is `maxWidth`-capped
+                // and centered, but the Apps tab escapes to `100vw`,
+                // so an `inset: 0` cover would leave the tab content
+                // peeking past its left/right edges. Span the whole
+                // viewport width instead so the cover is flush.
+                top: 0,
+                bottom: 0,
+                left: '50%',
+                width: '100vw',
+                transform: 'translateX(-50%)',
+                zIndex: 10,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                bgcolor: theme.palette.background.default,
+              })}
+            >
+              <CircularProgress size={32} sx={{ color: 'grey.300' }} />
+            </Box>
+          </Fade>
         </Box>
 
         <BottomNavigation
           value={tab}
           showLabels
           onChange={(_, value: Tab) => {
-            if (leaving) return;
-            setTab(value);
+            handleTabChange(value);
           }}
           sx={theme => ({
             flexShrink: 0,

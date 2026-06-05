@@ -167,6 +167,24 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const isLoading = state.kind === 'loading';
   const hasError = state.kind === 'error';
 
+  // First-paint gate. The catalog is usually prefetched at the App
+  // root (`usePrefetchApps`), so by the time this tab mounts the
+  // data is already cached and the network `loading` state never
+  // shows - yet mounting the full browse tree (pinned grid +
+  // intro carousel + every category rail with its tiles/icons) in
+  // one synchronous pass still hitches the UI for a few hundred ms
+  // on first open. We defer that heavy tree by one animation frame
+  // so the spinner below paints immediately; the content then
+  // mounts on the next frame, turning a frozen blank tab into a
+  // clean "spinner → content" reveal. Runs once per mount, and the
+  // tab stays mounted across tab switches (hidden via CSS), so this
+  // cost is paid only the first time the user opens Apps.
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setContentReady(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // Search query is owned here. Deferred via React 18's
   // `useDeferredValue` so the input stays buttery while the
   // filtering pass on a few dozen apps catches up. At our scale
@@ -247,25 +265,28 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
 
   const showFlatList = focusedBucket !== null || filtered.isSearching;
 
-  // Initial empty / loading / error states. Rendered inside the
-  // scroll container so they share the panel rhythm without
-  // needing a dedicated chrome above.
+  // Shared loading screen: a centered spinner that fills the tab
+  // height. Shown while the heavy browse tree is still gated behind
+  // the first-paint frame (`!contentReady`) AND while the catalog
+  // fetch is genuinely in flight with nothing cached yet.
+  const loadingScreen = (
+    <FullHeightCenter>
+      <Stack spacing={2} sx={{ alignItems: 'center' }}>
+        <CircularProgress size={32} sx={{ color: 'grey.300' }} />
+        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
+          Loading apps…
+        </Typography>
+      </Stack>
+    </FullHeightCenter>
+  );
+
   const initialPlaceholder = (() => {
-    if (isLoading && apps.length === 0) {
-      return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
-          <CenteredHint>
-            <CircularProgress size={20} />
-            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
-              Asking the Hub for available apps…
-            </Typography>
-          </CenteredHint>
-        </Box>
-      );
+    if (!contentReady || (isLoading && apps.length === 0)) {
+      return loadingScreen;
     }
     if (hasError && apps.length === 0) {
       return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
+        <FullHeightCenter>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               Couldn't reach the Hub
@@ -282,12 +303,12 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               Retry
             </Button>
           </CenteredHint>
-        </Box>
+        </FullHeightCenter>
       );
     }
     if (apps.length === 0) {
       return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
+        <FullHeightCenter>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               No apps yet
@@ -296,7 +317,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               The Reachy Mini catalog is empty - check back soon.
             </Typography>
           </CenteredHint>
-        </Box>
+        </FullHeightCenter>
       );
     }
     return null;
@@ -956,6 +977,31 @@ function SearchInput({
         },
       }}
     />
+  );
+}
+
+/**
+ * Full-height centering wrapper for the tab's initial states
+ * (loading spinner, error, empty). Fills the scroll body's
+ * height (`minHeight: 100%` resolves against the flex:1 scroll
+ * container) and centers its child both axes, so the spinner
+ * reads as a proper "loading the whole view" screen rather than
+ * a small hint pinned to the top.
+ */
+function FullHeightCenter({ children }: { children: React.ReactNode }) {
+  return (
+    <Box
+      sx={{
+        minHeight: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        ...COLUMN_SX,
+        py: 6,
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 
