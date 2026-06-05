@@ -272,6 +272,20 @@ jobs:
         # Disabling signing for this job (only) avoids the check
         # entirely. The signed device build runs in `ios-release` with
         # its own keychain + provisioning profile setup.
+        #
+        # We also force-link AuthenticationServices.framework here.
+        # `tauri-plugin-auth-session` (HF OAuth via
+        # ASWebAuthenticationSession) makes the Rust staticlib
+        # (`libapp.a`) reference `_ASWebAuthenticationSessionErrorDomain`.
+        # On the *device* SDK the framework gets autolinked, but the
+        # *simulator* link drops it, so the unsigned sim build fails at
+        # the link step with:
+        #   Undefined symbols for architecture arm64:
+        #     "_ASWebAuthenticationSessionErrorDomain"
+        #   ld: symbol(s) not found for architecture arm64
+        # The regenerated project has no OTHER_LDFLAGS at all, so we
+        # inject one. `$(inherited)` keeps any default flags Xcode would
+        # otherwise apply.
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
@@ -291,6 +305,7 @@ jobs:
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
               '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
               '\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "";\n'
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework AuthenticationServices";\n'
           )
           new_content, n = re.subn(
               r'(buildSettings = \{\n)',
