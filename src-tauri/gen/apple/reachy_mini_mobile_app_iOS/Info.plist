@@ -20,6 +20,23 @@
 	<string>0.1.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Apps launched inside Reachy Mini may request your location to provide location-aware features (for example, a guided tour).</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -27,6 +44,10 @@
 		<string>arm64</string>
 		<string>metal</string>
 	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDefault</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -36,28 +57,7 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
-	<key>UIRequiresFullScreen</key>
-	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleDefault</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Apps launched inside Reachy Mini may request your location to provide location-aware features (for example, a guided tour).</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
 </dict>
 </plist>
