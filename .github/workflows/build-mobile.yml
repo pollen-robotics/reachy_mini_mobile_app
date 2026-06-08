@@ -8,13 +8,16 @@ name: Build mobile
 # ─────────────────────────────────────────────────
 # A release NEVER requires bumping tauri.conf.json / package.json.
 # On a `vX.Y.Z` tag push the signed jobs derive the marketing version
-# (X.Y.Z) from the tag and inject it at build time:
-#   - iOS    : `--config '{"version":"X.Y.Z", ...}'` → CFBundleShortVersionString
-#   - Android: patched `versionName = "X.Y.Z"` in build.gradle.kts
-# Build numbers stay pinned to github.run_number (CFBundleVersion /
-# versionCode) so every upload is unique. The version in
-# tauri.conf.json / package.json is only the local-dev / non-tag
-# default; it is overridden on every tagged release.
+# (X.Y.Z) from the tag and inject it at build time via `--config version`:
+#   - iOS    : CFBundleShortVersionString := X.Y.Z; CFBundleVersion
+#              (build number) := github.run_number.
+#   - Android: versionName := X.Y.Z; versionCode := Tauri-derived from
+#              the version (major*1_000_000 + minor*1_000 + patch),
+#              monotonic as long as the marketing version increases.
+# The in-app version (__APP_VERSION__ on the splash) is baked by Vite
+# from the APP_VERSION env, also exported from the tag, so it matches.
+# The version in tauri.conf.json / package.json is only the local-dev /
+# non-tag default; it is overridden on every tagged release.
 #
 # What this workflow builds today
 # ───────────────────────────────
@@ -75,12 +78,13 @@ on:
         # signs + uploads to Play Internal) even though we're on a
         # branch and not a tag. Useful for validating the
         # release/signing/Play-upload pipeline without burning a tag.
-        # versionCode is still derived from `github.run_number` so
-        # each manual run gets a fresh code Play will accept; the
-        # versionName comes from `tauri.conf.json` here (no tag to
-        # derive from), so testers see that string with a higher
-        # build number. On a real tag push the versionName is taken
-        # from the tag instead (see the Gradle patch step).
+        # On a non-tag run, versionName / versionCode come from
+        # tauri.conf.json (no tag to derive from), so the Play upload
+        # may be rejected for a duplicate versionCode unless the config
+        # version was bumped first — this hatch is mainly for validating
+        # the build + signing, not for repeat Play uploads. On a real
+        # tag push the version comes from the tag (see the build step's
+        # `--config version`).
         description: 'Run signed Android release (Play Internal upload)'
         type: boolean
         default: false
@@ -1324,8 +1328,8 @@ jobs:
             done
           fi
 
-      - name: Patch Android Gradle config (minSdk, applicationId, versionCode, signing)
-        # The debug job only patches minSdk. Release adds three more:
+      - name: Patch Android Gradle config (minSdk, applicationId, signing)
+        # The debug job only patches minSdk. Release adds two more:
         #
         # - applicationId: Tauri derives it from `tauri.conf.json`'s
         #   identifier (com.pollen-robotics.reachy-mini) by replacing
@@ -1337,10 +1341,9 @@ jobs:
         #   stay as-generated, since Android allows applicationId to
         #   differ from the source package.
         #
-        # - versionCode: Play rejects re-uploads with a versionCode
-        #   that's already been used. We pin it to GITHUB_RUN_NUMBER
-        #   (monotonically increasing across the entire repo) so each
-        #   tag push gets a fresh code without manual coordination.
+        # versionName / versionCode are NOT patched here (Tauri re-syncs
+        # them from config on every build); they come from the git tag
+        # via `--config version` on the build step below.
         #
         # - signingConfigs.release + buildTypes.release.signingConfig:
         #   wires our keystore (decoded above) into the release build.
@@ -1368,36 +1371,14 @@ jobs:
               print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
           s = s2
 
-          # 2. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
-          run_no = int(os.environ["GITHUB_RUN_NUMBER"])
-          s3 = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {run_no}', s, count=1)
-          if s3 == s:
-              # Some Tauri versions don't emit versionCode at all; inject one.
-              s3 = re.sub(
-                  r'(defaultConfig\s*\{)',
-                  rf'\1\n        versionCode = {run_no}',
-                  s,
-                  count=1,
-              )
-          s = s3
-
-          # 2b. versionName := git tag (single source of truth for the
-          #     marketing version testers see). A release never bumps
-          #     tauri.conf.json / package.json: push `vX.Y.Z` and the
-          #     AAB ships versionName X.Y.Z. On a non-tag run
-          #     (workflow_dispatch) we leave the generated versionName
-          #     (from tauri.conf.json) untouched.
-          if os.environ.get("GITHUB_REF_TYPE") == "tag":
-              version_name = os.environ["GITHUB_REF_NAME"].lstrip("v")
-              s_vn = re.sub(
-                  r'versionName\s*=\s*"[^"]*"',
-                  f'versionName = "{version_name}"',
-                  s,
-                  count=1,
-              )
-              if s_vn == s:
-                  print("::warning::versionName pattern not matched — leaving as generated.", file=sys.stderr)
-              s = s_vn
+          # NB: versionName / versionCode are intentionally NOT patched
+          # here. Tauri re-syncs both from the (effective) config on
+          # every `tauri android build`, overwriting any gradle edit, so
+          # patching them here is a no-op. They are instead driven from
+          # the git tag via `--config version` on the build step below:
+          # versionName := X.Y.Z and versionCode := derived by Tauri
+          # (major*1_000_000 + minor*1_000 + patch), which is monotonic
+          # as long as the marketing version increases.
 
           # 3. signingConfigs block — read from env at build time.
           signing_block = (
@@ -1563,15 +1544,23 @@ jobs:
         # (downloaded from the workflow run page if needed); AAB for
         # the Play upload below.
         #
-        # On a tag, export APP_VERSION so Vite bakes the in-app version
-        # (__APP_VERSION__) from the tag, matching the patched
-        # versionName. Non-tag runs fall back to package.json.
+        # On a tag, the marketing version comes from the tag:
+        #   - `--config version` makes Tauri set versionName := X.Y.Z and
+        #     derive a fresh versionCode (no gradle patching, which Tauri
+        #     would overwrite anyway).
+        #   - APP_VERSION makes Vite bake the same string into the in-app
+        #     version (__APP_VERSION__ on the splash).
+        # Non-tag runs fall back to tauri.conf.json / package.json.
         run: |
           set -euxo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            export APP_VERSION="${GITHUB_REF_NAME#v}"
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+            export APP_VERSION="$MARKETING_VERSION"
+            CONFIG=$(jq -nc --arg v "$MARKETING_VERSION" '{version:$v}')
+            yarn tauri android build --apk --aab --config "$CONFIG"
+          else
+            yarn tauri android build --apk --aab
           fi
-          yarn tauri android build --apk --aab
 
       - name: Locate signed outputs
         id: pack
