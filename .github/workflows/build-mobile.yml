@@ -4,6 +4,18 @@ name: Build mobile
 #   - push to a `v*` tag         → builds iOS + Android, uploads to the matching release
 #   - manual dispatch            → builds iOS + Android as artifacts (no release attach)
 #
+# Versioning (single source of truth = the git tag)
+# ─────────────────────────────────────────────────
+# A release NEVER requires bumping tauri.conf.json / package.json.
+# On a `vX.Y.Z` tag push the signed jobs derive the marketing version
+# (X.Y.Z) from the tag and inject it at build time:
+#   - iOS    : `--config '{"version":"X.Y.Z", ...}'` → CFBundleShortVersionString
+#   - Android: patched `versionName = "X.Y.Z"` in build.gradle.kts
+# Build numbers stay pinned to github.run_number (CFBundleVersion /
+# versionCode) so every upload is unique. The version in
+# tauri.conf.json / package.json is only the local-dev / non-tag
+# default; it is overridden on every tagged release.
+#
 # What this workflow builds today
 # ───────────────────────────────
 # iOS    : *simulator* build (`aarch64-apple-ios-sim`). No code signing required,
@@ -65,9 +77,10 @@ on:
         # release/signing/Play-upload pipeline without burning a tag.
         # versionCode is still derived from `github.run_number` so
         # each manual run gets a fresh code Play will accept; the
-        # versionName comes from `tauri.conf.json` (testers see the
-        # same string as the most recent tag, just with a higher
-        # build number).
+        # versionName comes from `tauri.conf.json` here (no tag to
+        # derive from), so testers see that string with a higher
+        # build number. On a real tag push the versionName is taken
+        # from the tag instead (see the Gradle patch step).
         description: 'Run signed Android release (Play Internal upload)'
         type: boolean
         default: false
@@ -965,7 +978,21 @@ jobs:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -uxo pipefail
-          BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" '{bundle:{iOS:{bundleVersion:$bv}}}')
+          # Marketing version (CFBundleShortVersionString) is derived
+          # from the git tag, so a release never requires bumping
+          # tauri.conf.json / package.json: push `vX.Y.Z` and the build
+          # ships X.Y.Z. The build number (CFBundleVersion) stays pinned
+          # to github.run_number so each upload is unique. On a non-tag
+          # run (workflow_dispatch) we keep the version from
+          # tauri.conf.json and only override the build number.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+            BUNDLE_VERSION_CONFIG=$(jq -nc --arg v "$MARKETING_VERSION" --arg bv "${{ github.run_number }}" \
+              '{version:$v, bundle:{iOS:{bundleVersion:$bv}}}')
+          else
+            BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" \
+              '{bundle:{iOS:{bundleVersion:$bv}}}')
+          fi
           echo "Injecting Tauri config override: $BUNDLE_VERSION_CONFIG"
           yarn tauri ios build --target aarch64 \
             --export-method app-store-connect \
@@ -1334,6 +1361,24 @@ jobs:
                   count=1,
               )
           s = s3
+
+          # 2b. versionName := git tag (single source of truth for the
+          #     marketing version testers see). A release never bumps
+          #     tauri.conf.json / package.json: push `vX.Y.Z` and the
+          #     AAB ships versionName X.Y.Z. On a non-tag run
+          #     (workflow_dispatch) we leave the generated versionName
+          #     (from tauri.conf.json) untouched.
+          if os.environ.get("GITHUB_REF_TYPE") == "tag":
+              version_name = os.environ["GITHUB_REF_NAME"].lstrip("v")
+              s_vn = re.sub(
+                  r'versionName\s*=\s*"[^"]*"',
+                  f'versionName = "{version_name}"',
+                  s,
+                  count=1,
+              )
+              if s_vn == s:
+                  print("::warning::versionName pattern not matched — leaving as generated.", file=sys.stderr)
+              s = s_vn
 
           # 3. signingConfigs block — read from env at build time.
           signing_block = (
