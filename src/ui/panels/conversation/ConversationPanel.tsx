@@ -442,7 +442,10 @@ export function ConversationPanel({
                   : session.errorMessage
               }
             />
-            <ConversationToolToast label={session.toolToastLabel} />
+            <ConversationToolToast
+              label={session.toolToastLabel}
+              variant={session.toolToastVariant}
+            />
           </Stack>
         </Box>
 

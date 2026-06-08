@@ -1,15 +1,15 @@
 /**
- * The classic persona form: name + tagline, a voice picker that auditions on
- * select, and the system-prompt "Instructions" box that grows to fill the
- * leftover height. In create mode it's fronted by a "back to vibe generator"
- * link; edit mode opens straight here. Purely presentational - all state and
- * handlers (including voice playback) come from props.
+ * The classic persona form: name + tagline and the system-prompt
+ * "Instructions" box that grows to fill the leftover height. In create
+ * mode it's fronted by a "back to vibe generator" link; edit mode opens
+ * straight here. There is no voice picker: the voice is derived
+ * automatically from the persona (built-ins ship a curated pair, the
+ * generator authors one). Purely presentational - all state and handlers
+ * come from props.
  */
-import { Box, Button, MenuItem, Stack, TextField } from '@mui/material';
+import { Button, Stack, TextField } from '@mui/material';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
-import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
-import { AVAILABLE_VOICES, VOICE_DESCRIPTIONS } from '@/features/personalities';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import { NAME_MAX, TAGLINE_MAX, shrinkLabelSlotProps } from './constants';
@@ -20,13 +20,8 @@ export interface CreatePersonalityFieldsProps {
   onNameChange: (value: string) => void;
   tagline: string;
   onTaglineChange: (value: string) => void;
-  voice: string;
-  /** Selecting a voice also auditions it (caller wires playback). */
-  onVoiceChange: (value: string) => void;
   instructions: string;
   onInstructionsChange: (value: string) => void;
-  /** The voice currently auditioning (pulses the speaker icon). */
-  playingVoice: string | null;
   /** Create mode only: return to the vibe-generator hero. */
   onBack: () => void;
 }
@@ -37,11 +32,8 @@ export function CreatePersonalityFields({
   onNameChange,
   tagline,
   onTaglineChange,
-  voice,
-  onVoiceChange,
   instructions,
   onInstructionsChange,
-  playingVoice,
   onBack,
 }: CreatePersonalityFieldsProps) {
   return (
@@ -81,102 +73,26 @@ export function CreatePersonalityFields({
         </Button>
       )}
 
-      {/* Identity: name + voice share one row, tagline sits below. The
-          avatar - and its regenerate control - live on the persistent
-          personality band above. Picking a voice auditions it right away
-          (a short bundled sample plays and the speaker icon pulses). */}
+      {/* Identity: name then tagline. The avatar - and its regenerate
+          control - live on the persistent personality band above. The
+          voice is no longer chosen here: it's derived automatically from
+          the persona. */}
       <Stack spacing={2}>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
-          <TextField
-            label="Name"
-            required
-            value={name}
-            onChange={e => onNameChange(e.target.value.slice(0, NAME_MAX))}
-            fullWidth
-            size="small"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            sx={{ flex: 1, minWidth: 0 }}
-            slotProps={{
-              ...shrinkLabelSlotProps,
-              input: { sx: { borderRadius: `${RADIUS.md}px` } },
-            }}
-          />
-          <TextField
-            select
-            label="Voice"
-            value={voice}
-            onChange={e => onVoiceChange(e.target.value)}
-            fullWidth
-            size="small"
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              '@keyframes voicePulse': {
-                '0%, 100%': { opacity: 0.45 },
-                '50%': { opacity: 1 },
-              },
-            }}
-            slotProps={{
-              ...shrinkLabelSlotProps,
-              input: { sx: { borderRadius: `${RADIUS.md}px` } },
-              select: {
-                // Closed display: voice name + a pulsing speaker while that
-                // voice's sample is auditioning.
-                renderValue: selected => {
-                  const v = selected as string;
-                  if (!v) return '';
-                  return (
-                    <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                      <Box
-                        component="span"
-                        sx={{
-                          textTransform: 'capitalize',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {v}
-                      </Box>
-                      {v === playingVoice && (
-                        <VolumeUpRoundedIcon
-                          sx={{
-                            ml: 'auto',
-                            fontSize: 18,
-                            color: 'primary.main',
-                            animation: 'voicePulse 0.7s ease-in-out infinite',
-                          }}
-                        />
-                      )}
-                    </Box>
-                  );
-                },
-              },
-            }}
-          >
-            {AVAILABLE_VOICES.map(v => (
-              <MenuItem
-                key={v}
-                value={v}
-                sx={{ alignItems: 'flex-start', py: 1, whiteSpace: 'normal' }}
-              >
-                <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <Box component="span" sx={{ textTransform: 'capitalize', lineHeight: 1.3 }}>
-                    {v}
-                  </Box>
-                  <Box
-                    component="span"
-                    sx={{ fontSize: 12, lineHeight: 1.3, color: 'text.secondary' }}
-                  >
-                    {VOICE_DESCRIPTIONS[v]}
-                  </Box>
-                </Box>
-              </MenuItem>
-            ))}
-          </TextField>
-        </Stack>
+        <TextField
+          label="Name"
+          required
+          value={name}
+          onChange={e => onNameChange(e.target.value.slice(0, NAME_MAX))}
+          fullWidth
+          size="small"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          slotProps={{
+            ...shrinkLabelSlotProps,
+            input: { sx: { borderRadius: `${RADIUS.md}px` } },
+          }}
+        />
         <TextField
           label="Tagline"
           placeholder="a one-line vibe"

@@ -165,9 +165,13 @@ describe('buildHfSessionConfig', () => {
       audio: {
         input: {
           format: { type: 'audio/pcm', rate: null },
+          transcription: { model: 'gpt-4o-transcribe', language: 'en' },
           turn_detection: {
             type: 'server_vad',
             interrupt_response: true,
+            threshold: 0.6,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
           },
         },
         output: {
@@ -185,7 +189,30 @@ describe('buildHfSessionConfig', () => {
       ],
     });
     const audioInput = (config.audio as { input: Record<string, unknown> }).input;
-    expect(audioInput).not.toHaveProperty('transcription');
+    expect(audioInput).toHaveProperty('transcription');
+  });
+
+  it('defaults the transcription language to English when none is given', () => {
+    const config = buildHfSessionConfig({
+      instructions: '',
+      voice: 'Aiden',
+      tools: [],
+    });
+    expect(config).toMatchObject({
+      audio: { input: { transcription: { language: 'en' } } },
+    });
+  });
+
+  it('uses the provided transcription language', () => {
+    const config = buildHfSessionConfig({
+      instructions: '',
+      voice: 'Aiden',
+      tools: [],
+      transcriptionLanguage: 'fr',
+    });
+    expect(config).toMatchObject({
+      audio: { input: { transcription: { model: 'gpt-4o-transcribe', language: 'fr' } } },
+    });
   });
 
   it('falls back to the default HF voice for unsupported saved voices', () => {

@@ -10,8 +10,8 @@
  *     settings panel toggles).
  *
  * Two independent booleans:
- *   - `visionEnabled`: gates the passive scene-awareness module
- *     (`vision?.start()`) and its system-prompt appendix.
+ *   - `visionEnabled`: gates the on-demand `look` tool and its
+ *     system-prompt appendix (when off, the model never gets `look`).
  *   - `memoryEnabled`: gates the long-term memory prompt digest and
  *     the `remember` / `forget` tools handed to the model.
  *
@@ -22,10 +22,14 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import type { RealtimeBackendKind } from '@/features/conversation/engine/realtime/types';
+
 import {
   readMemoryEnabled,
+  readRealtimeBackend,
   readVisionEnabled,
   writeMemoryEnabled,
+  writeRealtimeBackend,
   writeVisionEnabled,
 } from './storage';
 
@@ -33,6 +37,7 @@ type Listener = () => void;
 
 let visionEnabled = readVisionEnabled();
 let memoryEnabled = readMemoryEnabled();
+let realtimeBackend = readRealtimeBackend();
 const listeners = new Set<Listener>();
 
 function emit(): void {
@@ -64,6 +69,12 @@ export function isMemoryEnabled(): boolean {
   return memoryEnabled;
 }
 
+/** The realtime provider the next conversation will connect through.
+ *  Read lazily by the engine at each (re)connect. */
+export function getRealtimeBackend(): RealtimeBackendKind {
+  return realtimeBackend;
+}
+
 /* ─── Mutations (persist + notify in the same tick) ───────────────── */
 
 export function setVisionEnabled(value: boolean): void {
@@ -80,6 +91,13 @@ export function setMemoryEnabled(value: boolean): void {
   emit();
 }
 
+export function setRealtimeBackend(value: RealtimeBackendKind): void {
+  if (value === realtimeBackend) return;
+  realtimeBackend = value;
+  writeRealtimeBackend(value);
+  emit();
+}
+
 /* ─── React hooks ─────────────────────────────────────────────────── */
 
 /** React hook reading whether vision (scene-awareness) is enabled.
@@ -92,4 +110,10 @@ export function useVisionEnabled(): boolean {
  *  Re-renders on every store mutation. */
 export function useMemoryEnabled(): boolean {
   return useSyncExternalStore(subscribe, isMemoryEnabled);
+}
+
+/** React hook reading the selected realtime backend. Re-renders on
+ *  every store mutation (drives the settings-panel selector). */
+export function useRealtimeBackend(): RealtimeBackendKind {
+  return useSyncExternalStore(subscribe, getRealtimeBackend);
 }

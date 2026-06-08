@@ -74,6 +74,7 @@ describe('createHuggingFaceBridge', () => {
       getRobot: () => null,
       getHfToken: () => 'hf-token',
       voice: 'Aiden',
+      transcriptionLanguage: 'en',
       composeInstructions: () => 'Be concise.',
       onStatus: vi.fn(),
       onOutputTrack: vi.fn(),

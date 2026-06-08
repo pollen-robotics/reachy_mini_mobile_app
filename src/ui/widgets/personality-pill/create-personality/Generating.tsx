@@ -4,7 +4,7 @@
  *
  * ONE unified screen rather than a two-step generating-then-reveal flow: an
  * identity card that materialises in place. The persona STREAMS in field by
- * field - each slot (disc/monogram, name, tagline, voice) shows a skeleton
+ * field - each slot (disc/monogram, name, tagline) shows a skeleton
  * until its own value arrives, then swaps to the real thing (the name lands
  * first, so the monogram pops ~1s in). `ready` only flips the status line to
  * "Ready to talk" and drops the cancel affordance once the object is fully
@@ -15,8 +15,6 @@
  * Purely presentational: all state/handlers come from props.
  */
 import { Box, Button, CircularProgress, Skeleton, Stack, Typography } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import RecordVoiceOverRoundedIcon from '@mui/icons-material/RecordVoiceOverRounded';
 
 import CookingMonogram from '@/ui/design/CookingMonogram';
 import ShimmerText from '@/ui/design/ShimmerText';
@@ -36,7 +34,6 @@ export interface CreatePersonalityGeneratingProps {
   /** Authored persona fields (meaningful once `ready`). */
   name: string;
   tagline: string;
-  voice: string;
   /** Back out of an in-flight generation (only while not `ready`). */
   onCancel: () => void;
 }
@@ -45,16 +42,14 @@ export function CreatePersonalityGenerating({
   ready,
   name,
   tagline,
-  voice,
   onCancel,
 }: CreatePersonalityGeneratingProps) {
   // Drive each slot by the presence of its own value rather than the global
   // `ready`: as the persona streams in, the name lands first, then the
-  // tagline, then the voice - each swapping its skeleton for the real value
-  // the instant it arrives. (The disc always shows the shimmer monogram.)
+  // tagline - each swapping its skeleton for the real value the instant it
+  // arrives. (The disc always shows the shimmer monogram.)
   const hasName = name.trim().length > 0;
   const hasTagline = tagline.trim().length > 0;
-  const hasVoice = voice.trim().length > 0;
   return (
     <Stack
       spacing={1.5}
@@ -82,7 +77,7 @@ export function CreatePersonalityGenerating({
       <Box
         sx={{
           position: 'relative',
-          width: '100%',
+          width: '80%',
           maxWidth: 320,
           // Room for the disc's top half to spill above the card.
           mt: `${DISC_SIZE / 2}px`,
@@ -118,9 +113,8 @@ export function CreatePersonalityGenerating({
             <CookingMonogram name={name} size={DISC_SIZE} shimmer />
           </Box>
 
-          {/* Two grouped blocks with a generous gap between them, tight rhythm
-              within: IDENTITY (kicker + name + tagline) then ATTRIBUTES (traits
-              + voice). The hierarchy reads as "who they are" / "how they sound". */}
+          {/* IDENTITY block: kicker + name + tagline. The voice is derived
+              automatically from the persona, so it isn't surfaced here. */}
           <Stack spacing={2.5} sx={{ alignItems: 'center' }}>
             <Stack spacing={0.75} sx={{ alignItems: 'center', width: '100%' }}>
               <Typography
@@ -189,29 +183,6 @@ export function CreatePersonalityGenerating({
                   </>
                 )}
               </Box>
-            </Stack>
-
-            <Stack spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
-              {hasVoice ? (
-                <Stack
-                  direction="row"
-                  spacing={0.875}
-                  sx={{
-                    alignItems: 'center',
-                    px: 1.5,
-                    py: 0.5,
-                    borderRadius: 999,
-                    bgcolor: t => alpha(t.palette.text.primary, 0.05),
-                  }}
-                >
-                  <RecordVoiceOverRoundedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                  <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-                    {voice}
-                  </Typography>
-                </Stack>
-              ) : (
-                <Skeleton variant="rounded" width={116} height={28} sx={{ borderRadius: 999 }} />
-              )}
             </Stack>
           </Stack>
         </Box>
