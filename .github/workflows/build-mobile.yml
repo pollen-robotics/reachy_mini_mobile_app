@@ -509,6 +509,21 @@ jobs:
               if s2 == s:
                   print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
               s = s2
+          # Lock the app to portrait (Android rotation block; mirrors the
+          # iOS UISupportedInterfaceOrientations=Portrait in Info.plist).
+          # The whole layout assumes a tall ~420px column; landscape breaks
+          # the orb + safe-area math. Added to the MainActivity <activity>.
+          if "screenOrientation" not in s:
+              s2 = re.sub(
+                  r'(android:name="[^"]*MainActivity")',
+                  r'\1\n            android:screenOrientation="portrait"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::warning::MainActivity activity not matched for screenOrientation.", file=sys.stderr)
+              else:
+                  print("Locked MainActivity to portrait.")
+              s = s2
           if "RECORD_AUDIO" not in s:
               perms = (
                   '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
@@ -1398,6 +1413,21 @@ jobs:
               )
               if s2 == s:
                   print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+          # Lock the app to portrait (Android rotation block; mirrors the
+          # iOS UISupportedInterfaceOrientations=Portrait in Info.plist).
+          # The whole layout assumes a tall ~420px column; landscape breaks
+          # the orb + safe-area math. Added to the MainActivity <activity>.
+          if "screenOrientation" not in s:
+              s2 = re.sub(
+                  r'(android:name="[^"]*MainActivity")',
+                  r'\1\n            android:screenOrientation="portrait"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::warning::MainActivity activity not matched for screenOrientation.", file=sys.stderr)
+              else:
+                  print("Locked MainActivity to portrait.")
               s = s2
           if "RECORD_AUDIO" not in s:
               perms = (
