@@ -1004,6 +1004,10 @@ jobs:
             MARKETING_VERSION="${GITHUB_REF_NAME#v}"
             BUNDLE_VERSION_CONFIG=$(jq -nc --arg v "$MARKETING_VERSION" --arg bv "${{ github.run_number }}" \
               '{version:$v, bundle:{iOS:{bundleVersion:$bv}}}')
+            # In-app version (__APP_VERSION__ on the splash) is baked by
+            # Vite from APP_VERSION; export it so it matches the native
+            # CFBundleShortVersionString set just above.
+            export APP_VERSION="$MARKETING_VERSION"
           else
             BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" \
               '{bundle:{iOS:{bundleVersion:$bv}}}')
@@ -1558,7 +1562,16 @@ jobs:
         # `--apk --aab` produces both: APK for sideload-on-device QA
         # (downloaded from the workflow run page if needed); AAB for
         # the Play upload below.
-        run: yarn tauri android build --apk --aab
+        #
+        # On a tag, export APP_VERSION so Vite bakes the in-app version
+        # (__APP_VERSION__) from the tag, matching the patched
+        # versionName. Non-tag runs fall back to package.json.
+        run: |
+          set -euxo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            export APP_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          yarn tauri android build --apk --aab
 
       - name: Locate signed outputs
         id: pack

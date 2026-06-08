@@ -14,7 +14,12 @@ const host = process.env.TAURI_DEV_HOST;
 const pkg = JSON.parse(
   readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'),
 ) as { version: string };
-const APP_VERSION = pkg.version;
+// The git tag is the single source of truth for a release version:
+// on a `vX.Y.Z` tag the CI exports `APP_VERSION` so the in-app version
+// (splash, About) matches the native bundle version without anyone
+// bumping package.json. Locally / on non-tag builds we fall back to
+// package.json. A leading `v` from the raw tag is stripped.
+const APP_VERSION = (process.env.APP_VERSION || pkg.version).replace(/^v/, '');
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
