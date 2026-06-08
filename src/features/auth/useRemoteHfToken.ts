@@ -99,6 +99,38 @@ function syncSessionStorage(token: string | null, username: string | null): void
   }
 }
 
+/**
+ * Whether an HF token is a JWT whose `exp` has already passed.
+ *
+ * The OAuth tokens minted by the in-app HF sign-in are JWTs with a
+ * ~30-day `exp`. The far-future `hf_token_expires` stamp above
+ * deliberately hides that from the SDK (so the central-tolerant
+ * connect path keeps working on a slightly-stale token) — but it also
+ * means the app's auth gate, which only checks `!token`, would replay
+ * a long-dead token forever: every direct HF call (whoami,
+ * /api/spaces, the vision VLM router) 401s and there is no in-app way
+ * to recover. This predicate lets the gate treat an expired token as
+ * "needs sign-in" so the user re-auths into a fresh token.
+ *
+ * Returns false for null, opaque (non-JWT) personal access tokens, or
+ * an undecodable payload: we only declare expiry when we can
+ * positively read a past `exp`. 60 s skew avoids boundary flapping.
+ */
+export function isHfTokenExpired(token: string | null): boolean {
+  if (!token) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false; // opaque PAT — assume valid
+  try {
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
+    );
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 < Date.now() - 60_000;
+  } catch {
+    return false;
+  }
+}
+
 export interface RemoteHfTokenState {
   token: string | null;
   username: string | null;
