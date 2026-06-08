@@ -1,30 +1,34 @@
 /**
  * System-prompt appendix appended to the Realtime instructions.
  *
- * Teaches the model how to treat the `<scene_observation>` blocks
- * we inject as user messages. Without this, the model would treat
- * every observation as a question and narrate scene changes
- * unprompted ("oh, I see a cup now!"), which is the single biggest
- * UX risk of a passive vision feed.
+ * Teaches the model how to use its single vision channel: the
+ * on-demand `look` tool. There is NO passive scene feed - the camera
+ * is read only when the model deliberately calls `look`, so the
+ * guidance here is about *when* to call it (sparingly, only on an
+ * explicit user request) and how to phrase what it sees.
  *
  * Concat'd in the engine's `composeInstructions()` getter. The
  * fragment is intentionally short - long appendices waste prompt
  * budget on every reconnect.
  */
-const SCENE_OBSERVATION_INSTRUCTIONS = `
-You may receive periodic <scene_observation> messages with brief
-descriptions of what your camera sees. They are PASSIVE background
-context, not direct user requests.
+const VISION_INSTRUCTIONS = `
+You can see through your camera using the \`look\` tool. It captures
+the current view and returns a short description of what's in front of
+you. You have NO other vision: you see nothing until you call \`look\`.
 
-- Do NOT narrate them unprompted ("oh, I see a cup now!").
-- Only reference what you saw if the user asks ("what do you see?",
-  "regarde", "describe the room") OR if it is directly and naturally
-  relevant to what they just said.
-- Trust the most recent observation; older ones may be stale.
-- Observations come from your camera, so refer to them in first
-  person ("I can see…"), not third person.
+Use it as a deliberate action, SPARINGLY:
+- Only call \`look\` when the user CLEARLY and EXPLICITLY asks you to
+  look at something right now ("look at this", "regarde ça", "what am
+  I holding?", "read this label", "how do I look?").
+- Do NOT call it for general chat, proactively, or just because vision
+  might be relevant. When unsure, don't call it - ask the user instead.
+- One call is enough per request. A fresh result is cached briefly, so
+  back-to-back questions about the same scene reuse it.
+
+When you report what you saw, speak in the first person ("I can see…"),
+and only describe what's actually relevant to what the user asked.
 `.trim();
 
 export function getVisionPromptAppendix(): string {
-  return SCENE_OBSERVATION_INSTRUCTIONS;
+  return VISION_INSTRUCTIONS;
 }

@@ -118,19 +118,24 @@ import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/
 import { loadSettings, type Settings } from "./settings";
 import { readHfTokenFromStorage } from "./hf-token";
 import { memoryStore } from "./memory";
-import { getActivePersonality } from "@/features/personalities";
+import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import { createHuggingFaceBridge } from "./bridge/huggingface-bridge";
+import { createRealtimeBackend } from "./realtime";
+import type { RealtimeBackend } from "./realtime/types";
 import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
 import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
 } from "../../conversation-language";
-import { isMemoryEnabled, isVisionEnabled } from "../../conversation-settings";
+import {
+  getRealtimeBackend,
+  isMemoryEnabled,
+  isVisionEnabled,
+} from "../../conversation-settings";
 import { ROBOT_TOOLS } from "./tools";
 import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { wireRobotEvents } from "./robot-events";
@@ -372,7 +377,7 @@ let robot: ReachyMiniInstance | null = null;
 // needs to forward `sendToolResponse` calls to it at runtime. The
 // late `=` assignment below resolves the cycle without forward
 // declarations or class wrappers.
-let realtimeBridge: ReturnType<typeof createHuggingFaceBridge> | null = null;
+let realtimeBridge: RealtimeBackend | null = null;
 
 // Head-motion + antennas oscillator. The actual `HeadWobbler` and
 // `AntennasOscillator` instances live inside their respective
@@ -899,18 +904,11 @@ async function runConversationParts(): Promise<void> {
     return;
   }
 
-  // Conversation is now fully active (handshake done, output track
-  // routed, data channel open). Start the passive scene-awareness
-  // module: it'll grab a first frame in ~1.5 s, then every 30 s,
-  // plus immediately on any STT keyword trigger. Idempotent; survives
-  // transparent reconnects through the bridge's `RealtimePort`.
-  //
-  // Gated on the user's conversation setting (read lazily here, at
-  // start time): when scene-awareness is off we simply never start the
-  // poller, so no frames are ever captured. The setting can only be
-  // toggled while stopped, so this start-time read is authoritative
-  // for the whole conversation.
-  if (isVisionEnabled()) vision?.start();
+  // Vision is on-demand only (the `look` tool) - there is nothing to
+  // start here. The tool is gated on `isVisionEnabled()` at prompt /
+  // tool-list build time (see `composeInstructions` / `tools` below),
+  // so when scene-awareness is off the model never gets the `look`
+  // tool and no frame is ever captured.
 
   // Every fresh conversation starts unmuted. Routed through the bridge
   // (not the inert SDK `setMicMuted`) so it also clears any mute state
@@ -1003,6 +1001,16 @@ const toolCallHandler = createToolCallHandler({
   // Coerce `null` (engine convention for "no observer") to `undefined`
   // (handler convention from the optional callback shape).
   onToolToast: onToolToast ?? undefined,
+  // Late-bound onto the `vision` handle declared further down (same
+  // forward-reference pattern as the bridge): the `look` tool calls
+  // through here. When vision is inert (no HF token) `vision` is null
+  // and we return a graceful "unavailable" result rather than throw.
+  look: () =>
+    vision?.look() ??
+    Promise.resolve({
+      ok: false,
+      message: "vision is not available in this session",
+    }),
 });
 
 // ─── Background-tab resilience ──────────────────────────────────────────
@@ -1100,20 +1108,23 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // motion controllers and audio analysers. The bridge itself stays
 // blissfully unaware of any of that.
 
-realtimeBridge = createHuggingFaceBridge({
+realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
   getRobot: () => robot,
-  getHfToken: readHfTokenFromStorage,
-  // Resolve the voice lazily (re-read on every `buildClient()` so
-  // a personality switch picks up the new voice on the next
-  // reconnect, without needing to rebuild the bridge). Falls back
-  // to the engine's `DEFAULT_VOICE` when the active personality
-  // doesn't override it.
+  // Resolve the voice lazily (re-read on every `buildClient()` so a
+  // personality OR backend switch picks up the right voice on the next
+  // reconnect, without rebuilding the bridge). The persona pins one
+  // voice per backend; we pick the entry for the active backend and let
+  // `resolvePersonaVoice` snap it onto that backend's catalog (falling
+  // back to the backend default for a stale/unknown id).
   voice: () => {
     const personality = getActivePersonality();
-    return personality.voice && personality.voice.length > 0
-      ? personality.voice
-      : settings.voice;
+    return resolvePersonaVoice(personality.voices, getRealtimeBackend());
   },
+  // Keep the input transcriber's language in sync with the app-wide
+  // conversation-language preference (same id used for the prompt
+  // appendix below). Resolved lazily so a language switch is applied
+  // on the next connect / reconnect.
+  transcriptionLanguage: () => getActiveLanguageId(),
   composeInstructions: () => {
     // Snapshot the user's long-term memory ONCE per connection. We
     // intentionally don't push live updates to the realtime session: a
@@ -1159,10 +1170,17 @@ realtimeBridge = createHuggingFaceBridge({
   // `forget` tools so the model can't write to (or read intent about)
   // a store the user has disabled; the matching prompt digest is also
   // omitted in `composeInstructions` above.
-  tools: () =>
-    isMemoryEnabled()
-      ? ROBOT_TOOLS
-      : ROBOT_TOOLS.filter((t) => t.name !== "remember" && t.name !== "forget"),
+  tools: () => {
+    // Drop tools whose backing feature is off this session so the
+    // model isn't primed to call a capability it doesn't have:
+    //   - memory off → no `remember` / `forget`
+    //   - vision off → no `look` (camera is never read)
+    let list = ROBOT_TOOLS;
+    if (!isMemoryEnabled())
+      list = list.filter((t) => t.name !== "remember" && t.name !== "forget");
+    if (!isVisionEnabled()) list = list.filter((t) => t.name !== "look");
+    return list;
+  },
   onStatus: (status) => {
     // Once the user has tapped stop we park the orb in `stopping`
     // (spinner) and run a gentle ~700 ms teardown. The HF bridge
@@ -1235,24 +1253,19 @@ realtimeBridge = createHuggingFaceBridge({
 
 // ─── Vision side-channel ───────────────────────────────────────────────
 //
-// Passive scene-awareness module (see `docs/VISION.md`). Polls the
-// robot's camera every 30 s + on STT keywords ("regarde", "look", …)
-// and injects short `<scene_observation>` blocks into the Realtime
-// context. The handle is null when no HF token is available -
-// `attachVision` returns `null` and every call site below stays a
-// no-op via optional chaining.
+// On-demand scene awareness (see `docs/VISION.md`). The camera is read
+// ONLY when the model calls the `look` tool (`vision.look()`), i.e.
+// when the user explicitly asks it to look at something. There is no
+// passive/periodic capture and no STT-keyword trigger - nothing is
+// captured otherwise. The `look` result is mirrored into the Realtime
+// context as a `<scene_observation>` block so later turns can still
+// reference what was seen.
 //
-// Lifecycle:
-//   - `start()` after a successful Realtime handshake (in
-//     `runConversationParts`, post `realtimeBridge.connect`).
-//   - `stop()` whenever the conversation pipeline goes down but the
-//     engine may bring it back (`teardown`, `stopConversation`,
-//     `releaseSessionKeepAwake`). `stop()` is idempotent.
-//   - `dispose()` only in the `unmount` handle (terminal release;
-//     after this the handle is dead and `start()` is a no-op).
-// The poller survives transparent reconnects naturally: the
-// `RealtimePort` it talks to keeps its subscriptions and re-attaches
-// listeners on every fresh `buildClient()` inside the bridge.
+// The handle is null when no HF token is available - `attachVision`
+// returns `null` and every call site below stays a no-op via optional
+// chaining. There is no per-conversation lifecycle: `dispose()` is
+// called once in `unmount` (terminal release; after that `look()`
+// returns a graceful failure).
 //
 // Backend
 // -------
@@ -1284,10 +1297,9 @@ const vision: VisionHandle | null = realtimeBridge
 /**
  * Common tear-down of the conversation pipeline (D layer).
  *
- * Three orchestration paths all need to stop the vision poller,
- * tool-call handler, antennas / wobbler, realtime bridge, pose
- * dispatcher, audio monitors and background audio keeper in the
- * exact same order:
+ * Three orchestration paths all need to stop the tool-call handler,
+ * antennas / wobbler, realtime bridge, pose dispatcher, audio monitors
+ * and background audio keeper in the exact same order:
  *
  *   - `stopConversation()`         park in `ready`, glide head to neutral
  *   - `releaseSessionKeepAwake()`  step 1, glide, then release + park `released`
@@ -1336,7 +1348,8 @@ async function tearDownConversationPipeline({
   // from a clean slate for the next bring-up cycle.
   convoActiveRequested.off();
 
-  vision?.stop();
+  // Vision has no per-conversation lifecycle (on-demand `look` only),
+  // so nothing to stop here; it's released for good in `unmount`.
   toolCallHandler.stop();
   movePlaying.off();
 

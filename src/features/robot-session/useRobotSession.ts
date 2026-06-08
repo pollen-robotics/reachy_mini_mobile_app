@@ -67,6 +67,9 @@ export interface RobotSessionHandle {
   micMuted: boolean;
   /** Most recent tool-call toast label, or null when dismissed. */
   toolToastLabel: string | null;
+  /** Visual intent of the current tool-call toast. `"error"` when the
+   *  last surfaced tool call failed (e.g. a VLM error behind `look`). */
+  toolToastVariant: "info" | "error";
   /** Whether the engine has reached `ready` (or further) at least
    *  once on the current session. Sticky: stays true through
    *  releases / re-acquires until `tearDown()` resets it. */
@@ -267,6 +270,9 @@ export function useRobotSession({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [toolToastLabel, setToolToastLabel] = useState<string | null>(null);
+  const [toolToastVariant, setToolToastVariant] = useState<"info" | "error">(
+    "info",
+  );
   const [hasReachedReady, setHasReachedReady] = useState(false);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
@@ -356,6 +362,7 @@ export function useRobotSession({
         onToolToast: (event: ConversationToolToastEvent) => {
           if (cancelToken.cancelled) return;
           setToolToastLabel(event.label);
+          setToolToastVariant(event.variant ?? "info");
           const dismiss = Math.max(event.durationMs, TOOL_TOAST_MIN_MS);
           window.setTimeout(() => {
             if (cancelToken.cancelled) return;
@@ -575,6 +582,7 @@ export function useRobotSession({
     errorMessage,
     micMuted,
     toolToastLabel,
+    toolToastVariant,
     hasReachedReady,
     connectionAttempt,
     webrtcTransport,

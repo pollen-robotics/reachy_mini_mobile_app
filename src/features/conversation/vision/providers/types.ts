@@ -4,7 +4,7 @@
  * Keeping this interface even with a single concrete provider today
  * is cheap (~10 lines) and pays for itself the moment we add a
  * second provider (HF SmolVLM, a local Tauri inference plugin, …):
- * none of the scene poller / injector / capture logic has to change.
+ * none of the `look` / injector / capture logic has to change.
  */
 
 import type { CapturedFrame, DescribeOptions } from "../types";
