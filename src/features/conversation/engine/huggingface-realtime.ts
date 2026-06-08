@@ -28,6 +28,16 @@ const WS_BUFFERED_AMOUNT_LIMIT = 512 * 1024;
 const OUTPUT_START_LEAD_S = 0.04;
 const OUTPUT_DRAIN_PAD_MS = 250;
 const RESPONSE_DONE_FALLBACK_MS = 5_000;
+// Backstop for the "tool call in flight" processing hold. When the
+// model calls a tool, the tool-call response completes (`response.done`)
+// long before the follow-up spoken response arrives - in between we run
+// the tool (e.g. the `look` VLM round-trip, ~1-2 s) and then fire
+// `response.create`. We keep the status on `processing` across that gap
+// so the orb keeps reading "thinking" instead of flashing back to idle.
+// This timer only fires if the follow-up response never materialises
+// (network hiccup), so we never get stuck showing "thinking" forever.
+// Sized above the vision VLM timeout (8 s) plus follow-up headroom.
+const TOOL_CALL_PROCESSING_FALLBACK_MS = 15_000;
 
 export type RealtimeStatus =
   | "idle"
@@ -57,6 +67,13 @@ export interface HuggingFaceRealtimeOptions {
   instructions: string;
   inputTrack: MediaStreamTrack;
   tools?: RealtimeTool[];
+  /**
+   * ISO 639-1 code (e.g. `"en"`, `"fr"`) passed to the input
+   * transcription model so it doesn't guess the spoken language.
+   * Sourced from the app-wide conversation-language preference;
+   * defaults to English when omitted.
+   */
+  transcriptionLanguage?: string;
 }
 
 type EventMap = {
@@ -91,6 +108,11 @@ export class HuggingFaceRealtimeClient {
   private status: RealtimeStatus = "idle";
   private intentionalClose = false;
   private responseDoneFallbackTimer: number | null = null;
+  // True between a tool call being dispatched and its follow-up
+  // response starting, so `response.done` for the tool-call response
+  // itself doesn't bounce the status back to idle mid-round-trip.
+  private toolCallPendingResponse = false;
+  private toolCallSafetyTimer: number | null = null;
 
   readonly options: HuggingFaceRealtimeOptions;
 
@@ -127,9 +149,41 @@ export class HuggingFaceRealtimeClient {
   }
 
   private markAudible(): void {
+    // The follow-up response is now producing audio, so any pending
+    // tool-call processing hold is satisfied - release its backstop.
+    this.clearToolCallProcessingHold();
     if (this.status === "ai-speaking") return;
     if (this.status === "closed" || this.status === "error") return;
     this.setStatus("ai-speaking");
+  }
+
+  /** Arm the "tool call in flight" hold: keep `processing` until the
+   *  follow-up response speaks (or the backstop fires). */
+  private beginToolCallProcessingHold(): void {
+    this.toolCallPendingResponse = true;
+    if (this.toolCallSafetyTimer !== null) {
+      window.clearTimeout(this.toolCallSafetyTimer);
+    }
+    this.toolCallSafetyTimer = window.setTimeout(() => {
+      this.toolCallSafetyTimer = null;
+      this.toolCallPendingResponse = false;
+      // Only force idle if we're still parked on `processing` waiting
+      // for a follow-up that never came.
+      if (this.status === "processing") {
+        console.warn(
+          "[hf-realtime] tool-call follow-up never arrived; leaving processing",
+        );
+        this.setStatus("connected");
+      }
+    }, TOOL_CALL_PROCESSING_FALLBACK_MS);
+  }
+
+  private clearToolCallProcessingHold(): void {
+    this.toolCallPendingResponse = false;
+    if (this.toolCallSafetyTimer !== null) {
+      window.clearTimeout(this.toolCallSafetyTimer);
+      this.toolCallSafetyTimer = null;
+    }
   }
 
   async connect(): Promise<void> {
@@ -196,6 +250,7 @@ export class HuggingFaceRealtimeClient {
               instructions: this.options.instructions,
               voice: this.options.voice,
               tools: this.options.tools ?? [],
+              transcriptionLanguage: this.options.transcriptionLanguage,
             }),
           });
 
@@ -267,6 +322,7 @@ export class HuggingFaceRealtimeClient {
   async close(): Promise<void> {
     this.intentionalClose = true;
     this.clearResponseDoneFallback();
+    this.clearToolCallProcessingHold();
 
     this.inputStreamer?.stop();
     this.inputStreamer = null;
@@ -351,6 +407,18 @@ export class HuggingFaceRealtimeClient {
         if (this.status === "ai-speaking") {
           this.markConnectedAfterOutputDrain();
         } else if (this.status === "processing") {
+          // A tool-call response completes (no audio) well before its
+          // follow-up spoken response: `sendToolResponse` always fires
+          // a `response.create`, so a follow-up is guaranteed. Consume
+          // the hold once and stay on `processing` so the orb keeps
+          // showing "thinking" across the tool round-trip (e.g. the
+          // `look` VLM call) instead of flashing back to idle. The
+          // backstop timer covers the (rare) case where no follow-up
+          // ever arrives.
+          if (this.toolCallPendingResponse) {
+            this.toolCallPendingResponse = false;
+            break;
+          }
           this.setStatus("connected");
         }
         break;
@@ -416,6 +484,11 @@ export class HuggingFaceRealtimeClient {
           args = {};
         }
         if (callId && name) {
+          // Hold the orb on "thinking" across the tool round-trip: the
+          // tool-call `response.done` lands almost immediately, but the
+          // actual work (and the follow-up spoken response) is still to
+          // come. Without this the status bounces to idle mid-look.
+          this.beginToolCallProcessingHold();
           this.emit("toolCall", { callId, name, arguments: args });
         }
         break;
@@ -476,6 +549,7 @@ export function buildHfSessionConfig(options: {
   instructions: string;
   voice: string;
   tools: RealtimeTool[];
+  transcriptionLanguage?: string;
 }): Record<string, unknown> {
   return {
     type: "realtime",
@@ -483,9 +557,28 @@ export function buildHfSessionConfig(options: {
     audio: {
       input: {
         format: { type: "audio/pcm", rate: null },
+        transcription: {
+          model: "gpt-4o-transcribe",
+          // Bias the transcriber toward the user-selected conversation
+          // language instead of letting it auto-detect (which drifts on
+          // short / accented utterances). Falls back to English.
+          language: options.transcriptionLanguage ?? "en",
+        },
+        // Aligned with the on-robot conversation app's tuning. The
+        // robot's mic and speaker sit a few cm apart in the same
+        // shell, so residual speaker echo / room noise easily trips
+        // a false barge-in (which cancels the in-flight response and
+        // flips the orb back to listening mid-utterance). Raising the
+        // activation threshold above the 0.5 default - plus explicit
+        // padding / hangover - keeps real interruptions working while
+        // ignoring the robot hearing itself. See
+        // `reachy_mini_conversation_app/.../huggingface_realtime.py`.
         turn_detection: {
           type: "server_vad",
           interrupt_response: true,
+          threshold: 0.6,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
         },
       },
       output: {

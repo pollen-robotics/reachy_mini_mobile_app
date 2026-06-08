@@ -75,6 +75,31 @@ export const ROBOT_TOOLS: RealtimeTool[] = [
     },
   },
   {
+    name: 'look',
+    description:
+      'Take a deliberate camera snapshot RIGHT NOW and get a short ' +
+      'description of what you currently see. This is a LAST-RESORT, ' +
+      'on-demand action - use it sparingly. You already receive passive ' +
+      'scene notes periodically; rely on those by default.\n' +
+      'ONLY call `look` when the user CLEARLY and EXPLICITLY asks you to ' +
+      'look at / inspect something right now, e.g. "look at this", ' +
+      '"regarde ça", "what am I holding?", "read this label", "how do I ' +
+      'look?", "tell me what you see now". The request must be an ' +
+      'unambiguous instruction to use your eyes on the present moment.\n' +
+      'Do NOT call it otherwise: not for small talk, not proactively, not ' +
+      'because vision "might" help, not to re-confirm something a recent ' +
+      'passive observation already covers, and not when the user is only ' +
+      'speaking generally. When in doubt, do NOT call it - answer from the ' +
+      'latest passive observation or just ask the user. One call fully ' +
+      'answers the moment (repeated calls within seconds return the same ' +
+      'cached view).',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'remember',
     description:
       'Save ONE short fact about the user to your long-term memory so ' +

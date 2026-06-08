@@ -80,7 +80,7 @@ export interface HfVlmProviderOptions {
    *  invocation so a token rotation mid-session (user signs out
    *  and back in) is picked up without rebuilding the provider.
    *  Returns `null` when no token is in sessionStorage; the
-   *  provider then throws so the poller can skip this tick. */
+   *  provider then throws so `look` reports a graceful failure. */
   getHfToken: () => string | null;
   /** Model id. Defaults to `VISION_CONFIG.hfVlmModel`. The HF
    *  router accepts `<owner>/<model>` (auto-routes to fastest
@@ -109,10 +109,10 @@ export class HfVlmProvider implements VlmProvider {
       throw new Error("HfVlmProvider: no HF token in sessionStorage");
     }
 
-    const prompt = buildPrompt(opts.userHint);
+    const prompt = buildPrompt();
 
-    // Wire the external abort signal (poller-driven) with a local
-    // hard timeout. Whichever fires first cancels `fetch`.
+    // Wire any external abort signal with a local hard timeout.
+    // Whichever fires first cancels `fetch`.
     const controller = new AbortController();
     const onExternalAbort = (): void => controller.abort();
     if (opts.abortSignal) {
@@ -130,10 +130,10 @@ export class HfVlmProvider implements VlmProvider {
     try {
       // Single-model call: vision is multimodal, so we must NOT fall back
       // across the router's default TEXT instruct chain (those can't read an
-      // image). `discover: false` skips the catalog GET on the vision hot
-      // path (the poller runs this ~60x/hour). The router still applies the
-      // provider-selection policy and raises a classified `HfRouterError` on
-      // failure (caller's poller skips the tick on any throw).
+      // image). `discover: false` skips the catalog GET (no need to probe
+      // the catalogue on a user-initiated `look`). The router still applies
+      // the provider-selection policy and raises a classified `HfRouterError`
+      // on failure (caller surfaces it as a failed `look`).
       const response = await routerChatCompletion({
         baseModel: this.model,
         models: [this.model],
@@ -172,6 +172,11 @@ export class HfVlmProvider implements VlmProvider {
             rawJson.length > 400 ? "…" : ""
           }`,
         );
+        // A common culprit with reasoning VLMs (e.g. GLM-4.5V): the
+        // model spends the whole `max_tokens` budget in
+        // `reasoning_content` and emits an empty `content`. We surface
+        // it as a clean failure so `look` can tell the user it
+        // couldn't get a clear view rather than hanging.
         throw new Error("HF VLM returned empty description");
       }
       return description;
@@ -265,20 +270,12 @@ function extractText(payload: VlmResponsePayload): string {
  * produces a single factual sentence we can drop into the Realtime
  * context.
  */
-function buildPrompt(userHint?: string): string {
-  const base =
+function buildPrompt(): string {
+  return (
     "Describe what you see in this image in 1-2 short sentences. " +
     "Focus on: people, objects, environment, notable scene state. " +
-    'Do NOT add caveats, opinions, or "I can see" prefixes. Just describe.';
-  if (userHint && userHint.trim().length > 0) {
-    const safeHint = userHint.replace(/[\r\n"]/g, " ").trim().slice(0, 240);
-    return (
-      base +
-      `\nThe user just said: "${safeHint}". ` +
-      "Bias your description toward what they likely care about."
-    );
-  }
-  return base;
+    'Do NOT add caveats, opinions, or "I can see" prefixes. Just describe.'
+  );
 }
 
 /**

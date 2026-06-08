@@ -72,10 +72,40 @@ export class MicLevelMonitor {
   // 5 log-spaced bands over the first ~128 bins of a 1024-FFT @ 48 kHz
   // (~47 Hz per bin), covering the bulk of speech energy (~180 Hz to 6 kHz).
   private static readonly BAND_EDGES = [4, 8, 16, 32, 64, 128];
-  private static readonly LOG1P_10 = Math.log1p(10);
+  // Log compression gain. The robot's far-field mic delivers a quiet,
+  // low-dynamic signal (unity gain by design - see the on-robot app's
+  // `startup_config.py`), so normal speaking voice sat in the bottom
+  // of the old `log1p(v*10)` curve and the bars barely twitched.
+  // A steeper curve lifts that low end so a conversational voice
+  // visibly fills the bars without users having to raise their voice.
+  private static readonly BAND_COMPRESS_GAIN = 26;
+  private static readonly LOG1P_GAIN = Math.log1p(
+    MicLevelMonitor.BAND_COMPRESS_GAIN,
+  );
   private static compress(v: number): number {
-    return Math.log1p(v * 10) / MicLevelMonitor.LOG1P_10;
+    return (
+      Math.log1p(v * MicLevelMonitor.BAND_COMPRESS_GAIN) /
+      MicLevelMonitor.LOG1P_GAIN
+    );
   }
+
+  // Noise-gate floor on the time-domain RMS. The robot ships us the
+  // XVF3800's *processed* (post-AEC/NS) output, but that stream still
+  // has a measurable residual floor (~0.0073 RMS / -42.7 dBFS measured
+  // on a quiet room: fan, USB, AEC residual). Without gating, the
+  // boosted visualiser renders that floor as a permanent ~20% reading
+  // and the bars "swim" in noise between words. We subtract this floor
+  // so the orb sits at true zero when nobody is talking. Set a touch
+  // above the measured floor for headroom across robots / fan states.
+  private static readonly NOISE_FLOOR_RMS = 0.012;
+  // Pre-gain applied to the denoised RMS before the [0,1] curve. Tuned
+  // so a normal speaking voice fills the upper half without clipping.
+  private static readonly RMS_GAIN = 14;
+  // How fast the speech gate fully opens above the floor: the bands are
+  // multiplied by `min(1, denoisedRms * GATE_OPEN)` so that when only
+  // the noise floor is present (denoised ≈ 0) every bar is forced to 0,
+  // regardless of the broadband FFT energy the noise still carries.
+  private static readonly GATE_OPEN = 45;
 
   constructor(private readonly options: AudioLevelMonitorOptions) {}
 
@@ -120,10 +150,23 @@ export class MicLevelMonitor {
       let sum = 0;
       for (let i = 0; i < tbuf.length; i++) sum += tbuf[i] * tbuf[i];
       const rms = Math.sqrt(sum / tbuf.length);
-      const boosted = Math.min(1, Math.pow(rms * 6, 0.7));
+      // Subtract the residual noise floor first, then lift what's left:
+      // a gentle exponent (0.6) pushes a normal speaking voice into the
+      // visible upper half of [0,1] while the floor subtraction keeps
+      // the orb at true zero when nobody is talking.
+      const denoised = Math.max(0, rms - MicLevelMonitor.NOISE_FLOOR_RMS);
+      const boosted = Math.min(
+        1,
+        Math.pow(denoised * MicLevelMonitor.RMS_GAIN, 0.6),
+      );
       const levelAttack = boosted > this.level ? 0.55 : 0.12;
       this.level += (boosted - this.level) * levelAttack;
       targetStyle?.setProperty('--audio-level', this.level.toFixed(3));
+
+      // Speech gate derived from the denoised RMS: when only the noise
+      // floor is present this collapses to 0 and forces every bar down,
+      // regardless of the broadband FFT energy the noise still carries.
+      const speechGate = Math.min(1, denoised * MicLevelMonitor.GATE_OPEN);
 
       an.getByteFrequencyData(fbuf);
       const edges = MicLevelMonitor.BAND_EDGES;
@@ -132,7 +175,8 @@ export class MicLevelMonitor {
         const hi = edges[b + 1];
         let bandSum = 0;
         for (let j = lo; j < hi; j++) bandSum += fbuf[j];
-        const raw = MicLevelMonitor.compress(bandSum / (hi - lo) / 255);
+        const raw =
+          MicLevelMonitor.compress(bandSum / (hi - lo) / 255) * speechGate;
         const bandAttack = raw > this.bands[b] ? 0.35 : 0.12;
         this.bands[b] += (raw - this.bands[b]) * bandAttack;
         const clamped = Math.min(1, this.bands[b]);

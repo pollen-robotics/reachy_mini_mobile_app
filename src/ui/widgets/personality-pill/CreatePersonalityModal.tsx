@@ -5,8 +5,9 @@
  * (`addCustomPersonality`, localStorage persistence, the `custom:<slug>`
  * id form) but never exposed a UI to author one. This overlay closes
  * that gap: it collects the user-facing knobs of a persona (name, tagline,
- * instructions, voice), hands them to `addCustomPersonality`, then
- * immediately makes the new persona the active one.
+ * instructions), hands them to `addCustomPersonality`, then immediately
+ * makes the new persona the active one. The synth voice is applied
+ * automatically (no picker) - derived from the persona by the data layer.
  *
  * Structure
  * ─────────
@@ -15,9 +16,9 @@
  * presentational pieces from `./create-personality`:
  *   - `CreatePersonalityHero`       - the create-mode "describe a vibe" landing
  *   - `CreatePersonalityGenerating` - the dedicated generate + reveal screen
- *   - `CreatePersonalityFields`     - the classic name/voice/instructions form
+ *   - `CreatePersonalityFields`     - the classic name/tagline/instructions form
  *   - `CreatePersonalityActions`    - the sticky Create / Save+Delete plate
- * plus the logic hooks `useVoiceAudition` and `useVibeRoll`.
+ * plus the logic hook `useVibeRoll`.
  *
  * Visual contract
  * ───────────────
@@ -31,7 +32,6 @@ import { Box, IconButton, Stack, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
 import {
-  AVAILABLE_VOICES,
   DEFAULT_AVATAR_URL,
   DEFAULT_GLOW,
   GeneratePersonalityError,
@@ -55,7 +55,6 @@ import {
   CreatePersonalityHero,
   VIBE_MAX,
   useVibeRoll,
-  useVoiceAudition,
 } from './create-personality';
 
 interface CreatePersonalityModalProps {
@@ -121,7 +120,6 @@ export function CreatePersonalityModal({
   const [name, setName] = useState(() => editing?.name ?? '');
   const [tagline, setTagline] = useState(() => editing?.tagline ?? '');
   const [instructions, setInstructions] = useState(() => editing?.instructions ?? '');
-  const [voice, setVoice] = useState<string>(() => editing?.voice || AVAILABLE_VOICES[0]);
 
   // Two-step delete confirmation (edit mode only): the first tap arms it,
   // the second commits. Deleting a custom persona destroys the user's own
@@ -129,8 +127,9 @@ export function CreatePersonalityModal({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // "Magic" generation (create mode only): the user types a one-line vibe
-  // and we ask a model to author the four knobs (name / tagline /
-  // instructions / voice), then pre-fill the form below so they can tweak.
+  // and we ask a model to author the knobs (name / tagline / instructions /
+  // voice), then pre-fill the form below so they can tweak. The voice is
+  // applied automatically (no picker), so it never surfaces in the form.
   // Kept out of edit mode so a regenerate never silently clobbers a persona
   // the user is deliberately editing.
   const [vibe, setVibe] = useState('');
@@ -140,11 +139,6 @@ export function CreatePersonalityModal({
   const [genMode, setGenMode] = useState<'describe' | 'random' | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const generating = genMode !== null;
-  // Voice as authored by the stream, kept separate from the form's `voice`
-  // (which carries a manual-mode default). Empty until the model actually
-  // picks one, so the generation view shows a skeleton rather than the
-  // default voice before the LLM has chosen.
-  const [genVoice, setGenVoice] = useState('');
 
   // Create-mode screen machine: the "describe a vibe" landing ('idea') hands
   // off to a dedicated full-screen generation view ('generating'), then to a
@@ -268,31 +262,20 @@ export function CreatePersonalityModal({
   // active persona.
   useEffect(() => () => clearPersonaDraft(), []);
 
-  // Voice audition: selecting a voice writes form state here and asks the
-  // hook to play its bundled sample.
-  const { playingVoice, playSample } = useVoiceAudition();
-  const selectVoice = useCallback(
-    (v: string) => {
-      setVoice(v);
-      playSample(v);
-    },
-    [playSample],
-  );
-
   const canSubmit = name.trim().length > 0 && instructions.trim().length > 0;
 
   // Edit mode only: has anything actually changed vs the persona we opened?
   // A pristine editor has nothing to write, so we disable "Save" until the
   // user touches a field (or a fresh sticker lands). Create mode is always
   // considered "dirty" - `canSubmit` alone gates it. Comparisons mirror the
-  // field initialisers (trimmed values, empty-voice -> first-voice fallback).
+  // field initialisers (trimmed values). The voice is no longer editable
+  // here, so it never contributes to dirtiness.
   const editDirty =
     !isEdit || !editing
       ? true
       : name.trim() !== editing.name ||
         tagline.trim() !== (editing.tagline ?? '') ||
         instructions.trim() !== editing.instructions ||
-        voice !== (editing.voice || AVAILABLE_VOICES[0]) ||
         sticker.dataUri != null;
 
   const handleSubmit = () => {
@@ -301,7 +284,9 @@ export function CreatePersonalityModal({
       name: name.trim(),
       tagline: tagline.trim(),
       instructions: instructions.trim(),
-      voice,
+      // No voice picker: omit `voices` so the data layer keeps the
+      // persona's existing pair on edit, or derives the defaults on a
+      // manual create. The generator path sets it via `commitGeneratedPersona`.
       // Accent colour is no longer user-facing - we still hand the data
       // layer the default glow so the persona shape stays unchanged.
       glow: DEFAULT_GLOW,
@@ -343,7 +328,9 @@ export function CreatePersonalityModal({
         name: result.name.trim(),
         tagline: result.tagline.trim(),
         instructions: result.instructions.trim(),
-        voice: result.voice || AVAILABLE_VOICES[0],
+        // The generator authors an HF voice from the vibe; the data layer
+        // derives the matching OpenAI voice. No manual picker.
+        voices: { huggingface: result.voice },
         glow: DEFAULT_GLOW,
       };
       const id = addCustomPersonality(input).id;
@@ -358,9 +345,10 @@ export function CreatePersonalityModal({
 
   // Generate (create mode): hand off to the dedicated full-screen view and
   // STREAM the persona in, filling each slot as it lands (name first, hence
-  // the monogram, then tagline + voice). Once the object resolves we commit +
-  // activate the persona and hold a short reveal beat before closing. On
-  // failure, drop back to the idea screen where the error is shown.
+  // the monogram, then tagline). Once the object resolves we commit +
+  // activate the persona and hold a short reveal beat before closing. The
+  // voice is applied automatically by the data layer, so it isn't surfaced.
+  // On failure, drop back to the idea screen where the error is shown.
   const handleGenerate = useCallback(() => {
     if (vibe.trim().length === 0 || generating) return;
     setGenError(null);
@@ -370,7 +358,6 @@ export function CreatePersonalityModal({
     setName('');
     setTagline('');
     setInstructions('');
-    setGenVoice('');
     setPhase('generating');
     void (async () => {
       try {
@@ -378,15 +365,12 @@ export function CreatePersonalityModal({
           onPartial: partial => {
             if (partial.name !== undefined) setName(partial.name);
             if (partial.tagline !== undefined) setTagline(partial.tagline);
-            if (partial.voice !== undefined) setGenVoice(partial.voice);
           },
         });
-        // Settle the form to the validated result (instructions + final voice).
+        // Settle the form to the validated result (instructions land last).
         setName(result.name);
         setTagline(result.tagline);
         setInstructions(result.instructions);
-        setGenVoice(result.voice);
-        if (result.voice) setVoice(result.voice);
         commitGeneratedPersona(result);
         setPhase('reveal');
       } catch (err) {
@@ -541,7 +525,6 @@ export function CreatePersonalityModal({
             ready={phase === 'reveal'}
             name={name}
             tagline={tagline}
-            voice={genVoice}
             onCancel={onCancel}
           />
         ) : !isEdit && !detailsOpen ? (
@@ -562,11 +545,8 @@ export function CreatePersonalityModal({
             onNameChange={setName}
             tagline={tagline}
             onTaglineChange={setTagline}
-            voice={voice}
-            onVoiceChange={selectVoice}
             instructions={instructions}
             onInstructionsChange={setInstructions}
-            playingVoice={playingVoice}
             onBack={() => setDetailsOpen(false)}
           />
         )}
