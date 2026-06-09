@@ -9,7 +9,7 @@ Read it before touching the codebase.
 Tauri 2 client (iOS / Android / desktop) for **Reachy Mini**. The user
 signs in with Hugging Face, picks a robot from their account, and gets:
 
-1. A live conversation panel (orb + audio bridge + OpenAI Realtime).
+1. A live conversation panel (orb + audio bridge + HF realtime backend).
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
 3. A robot tab with camera feed + audio sliders + manual head joystick.
 
@@ -50,7 +50,7 @@ features/
 ├── auth/           HF OAuth + token storage + central robot listing
 ├── apps/           HF Hub app catalog fetching + embed URL builder
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
-└── conversation/   OpenAI Realtime engine + audio bridge + motion + tools + memory
+└── conversation/   HF realtime voice engine + audio bridge + motion + tools + memory
 ```
 
 Each feature folder contains its own `types.ts`, services, React
@@ -82,12 +82,12 @@ Sibling modules in `features/robot-session/` provide the helpers
 The conversation engine instantiates ONE `RobotSession` per
 `mountConversation` and uses it as a building block for the
 high-level conversation flow (which it owns via the FSM + the
-OpenAI / motion / tools / audio pipeline).
+HF realtime / motion / tools / audio pipeline).
 
 #### `features/conversation/` - CONVERSATION layer (D)
 
 `engine/conversation-engine.ts` is the orchestrator. It owns the FSM,
-the conversation pipeline (OpenAI Realtime client, motion controllers,
+the conversation pipeline (HF realtime client, motion controllers,
 tool-call handler, audio level monitors), and the host-facing handle
 (`startConversation`, `setMicMuted`, `requestStop`, …). It DRIVES the
 session for everything session-related (start, wakeUp, release, …)
@@ -225,11 +225,11 @@ useful commands.
 
 | File | What |
 |------|------|
-| `docs/CONNECTION_FLOW.md` | End-to-end specification of auth + discovery + session lifecycle |
-| `docs/ROADMAP.md` | What's next on the product side |
-| `docs/VISION.md` | Design for the (future) standalone scene-awareness module |
+| `docs/APP_STORE_COMPLIANCE.md` | Apple / Google review policy framework + pre-submission action plan |
+| `docs/APP_STORE_AUDIT_2026-05.md` | Submission-readiness gap analysis (what actually blocks a build today) |
+| `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
+| `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
-| `docs/WEBRTC_LOGS.md` | PR plan for streaming daemon journalctl over WebRTC |
 
 ## Notes for HF Space authors
 

@@ -26,6 +26,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import { DEV_HF_TOKEN, DEV_HF_USERNAME } from '@/shared/env';
+
 const STORAGE_KEY = 'remote_hf_token';
 const USERNAME_KEY = 'remote_hf_username';
 
@@ -97,6 +99,38 @@ function syncSessionStorage(token: string | null, username: string | null): void
   }
 }
 
+/**
+ * Whether an HF token is a JWT whose `exp` has already passed.
+ *
+ * The OAuth tokens minted by the in-app HF sign-in are JWTs with a
+ * ~30-day `exp`. The far-future `hf_token_expires` stamp above
+ * deliberately hides that from the SDK (so the central-tolerant
+ * connect path keeps working on a slightly-stale token) — but it also
+ * means the app's auth gate, which only checks `!token`, would replay
+ * a long-dead token forever: every direct HF call (whoami,
+ * /api/spaces, the vision VLM router) 401s and there is no in-app way
+ * to recover. This predicate lets the gate treat an expired token as
+ * "needs sign-in" so the user re-auths into a fresh token.
+ *
+ * Returns false for null, opaque (non-JWT) personal access tokens, or
+ * an undecodable payload: we only declare expiry when we can
+ * positively read a past `exp`. 60 s skew avoids boundary flapping.
+ */
+export function isHfTokenExpired(token: string | null): boolean {
+  if (!token) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false; // opaque PAT — assume valid
+  try {
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
+    );
+    if (typeof payload.exp !== 'number') return false;
+    return payload.exp * 1000 < Date.now() - 60_000;
+  } catch {
+    return false;
+  }
+}
+
 export interface RemoteHfTokenState {
   token: string | null;
   username: string | null;
@@ -110,6 +144,18 @@ export function useRemoteHfToken(): RemoteHfTokenState {
   // of any descendant component (no useEffect race window).
   const [{ token, username }, setState] = useState(() => {
     const stored = readStored();
+    // Dev-only fallback: when nothing is persisted yet and a
+    // `VITE_DEV_HF_TOKEN` is configured (desktop `tauri:dev`, where
+    // the in-app OAuth session does not exist), seed it as if the
+    // user had just signed in. Persisting it means a later `clear()`
+    // (sign-out) still wins for the rest of the session instead of
+    // the env token re-seeding on every render. `DEV_HF_TOKEN` is
+    // `null` in production builds (see `shared/env.ts`).
+    if (!stored.token && DEV_HF_TOKEN) {
+      writeStored(DEV_HF_TOKEN, DEV_HF_USERNAME);
+      syncSessionStorage(DEV_HF_TOKEN, DEV_HF_USERNAME);
+      return { token: DEV_HF_TOKEN, username: DEV_HF_USERNAME };
+    }
     syncSessionStorage(stored.token, stored.username);
     return stored;
   });

@@ -54,7 +54,6 @@ import { useCallback, type MouseEvent } from 'react';
 import {
   Box,
   Button,
-  Chip,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
@@ -69,8 +68,10 @@ import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutlineOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import SettingsBrightnessOutlinedIcon from '@mui/icons-material/SettingsBrightnessOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { setThemeMode, useThemeMode, type ThemeMode } from '@/features/theme-preference';
@@ -319,28 +320,38 @@ export default function HelpAndSupportOverlay({ onClose }: HelpAndSupportOverlay
             -> Hidden authors") is the cleanest answer. */}
         {hiddenAuthors.ids.length > 0 && (
           <Section label="Hidden authors">
-            <Box sx={{ p: 1.5 }}>
-              <Stack
-                direction="row"
+            {/* Header row: short caption + "Show all" reset. The
+                caption uses the same surface-text colour as the
+                other section bodies so it visually anchors as a
+                sub-header rather than a tappable row. */}
+            <Box
+              sx={theme => ({
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                px: 1.5,
+                py: 1.25,
+                borderBottom: `1px solid ${theme.palette.divider}`,
+              })}
+            >
+              <Typography
                 sx={{
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  mb: 1,
+                  flex: 1,
+                  fontSize: TYPO.xs,
+                  color: 'text.secondary',
+                  lineHeight: 1.4,
                 }}
               >
-                <Typography
-                  sx={{
-                    fontSize: TYPO.xs,
-                    color: 'text.secondary',
-                  }}
-                >
-                  Tap the cross to show this author&apos;s apps again.
-                </Typography>
+                Tap <Box component="span" sx={{ fontWeight: FONT_WEIGHT.semibold, color: 'text.primary' }}>Show again</Box> to bring an author&apos;s apps back to the catalog.
+              </Typography>
+              {hiddenAuthors.ids.length > 1 && (
                 <Button
                   size="small"
                   onClick={() => hiddenAuthors.clear()}
                   sx={{
+                    flexShrink: 0,
                     fontSize: TYPO.xs,
+                    fontWeight: FONT_WEIGHT.semibold,
                     textTransform: 'none',
                     color: 'text.secondary',
                     minWidth: 0,
@@ -349,29 +360,76 @@ export default function HelpAndSupportOverlay({ onClose }: HelpAndSupportOverlay
                 >
                   Show all
                 </Button>
-              </Stack>
-              <Box
-                sx={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 0.75,
-                }}
-              >
-                {hiddenAuthors.ids.map(author => (
-                  <Chip
-                    key={author}
-                    label={author}
-                    variant="outlined"
-                    size="small"
-                    onDelete={() => hiddenAuthors.unhide(author)}
-                    sx={{
-                      fontFamily: 'monospace',
-                      fontSize: TYPO.xs,
-                    }}
-                  />
-                ))}
-              </Box>
+              )}
             </Box>
+            {/* One row per hidden author. Same visual rhythm as
+                the other settings rows in this overlay (48 px
+                min height, divider between rows, edge-to-edge),
+                with a clear "Show again" outlined button on the
+                right so the unhide affordance is unambiguous. */}
+            {hiddenAuthors.ids.map(author => (
+              <Box
+                key={author}
+                sx={theme => ({
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.25,
+                  px: 1.5,
+                  py: 1,
+                  minHeight: 52,
+                  '&:not(:last-of-type)': {
+                    borderBottom: `1px solid ${theme.palette.divider}`,
+                  },
+                })}
+              >
+                <Box
+                  sx={{
+                    flexShrink: 0,
+                    color: 'text.secondary',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 24,
+                    height: 24,
+                  }}
+                >
+                  <PersonOutlineRoundedIcon fontSize="small" />
+                </Box>
+                <Typography
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontFamily: 'monospace',
+                    fontSize: TYPO.sm,
+                    fontWeight: FONT_WEIGHT.semibold,
+                    color: 'text.primary',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {author}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<VisibilityOutlinedIcon sx={{ fontSize: TYPO.md }} />}
+                  onClick={() => hiddenAuthors.unhide(author)}
+                  aria-label={`Show apps from ${author} again`}
+                  sx={{
+                    flexShrink: 0,
+                    fontSize: TYPO.xs,
+                    fontWeight: FONT_WEIGHT.semibold,
+                    textTransform: 'none',
+                    borderWidth: 1.5,
+                    '&:hover': { borderWidth: 1.5 },
+                    '& .MuiButton-startIcon': { mr: 0.5 },
+                  }}
+                >
+                  Show again
+                </Button>
+              </Box>
+            ))}
           </Section>
         )}
 

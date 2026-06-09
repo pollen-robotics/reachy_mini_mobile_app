@@ -123,6 +123,7 @@
  */
 import { Box, CircularProgress, IconButton, Stack, Typography, useTheme } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
@@ -132,6 +133,7 @@ import {
   type EmbedCredsBundle,
 } from '@/features/apps/buildEmbedUrl';
 import type { AppEntry } from '@/features/apps/types';
+import { APPS_QUERY_KEY, type CatalogPayload } from '@/features/apps/useApps';
 import { APP_HANDOFF_TIMINGS } from '@/features/robot-session/timings';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
@@ -209,9 +211,40 @@ export default function AppIframeOverlay({
 }: AppIframeOverlayProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+  const queryClient = useQueryClient();
 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>('waiting-release');
   const [connectingStep, setConnectingStep] = useState<ConnectingStep>(null);
+
+  /**
+   * Effective app entry used to build the iframe URL and label
+   * the toolbar. Starts as the caller-supplied snapshot (which is
+   * what the user clicked from the apps list, possibly from a
+   * stale catalog cache: `useApps()` ships with `staleTime:
+   * Infinity` so a same-session catalog refetch only happens via
+   * the explicit "refresh" button or the self-healing path below).
+   *
+   * Self-healing path: on a load failure (timeout, embed error)
+   * we invalidate + refetch the catalog once and look up the
+   * fresh entry for this `app.id`. If the catalog now reports a
+   * different SDK (e.g. an upstream Space was just migrated from
+   * `sdk: docker` to `sdk: static`, flipping the subdomain
+   * pattern from `<slug>.hf.space` to `<slug>.static.hf.space`),
+   * we swap `effectiveApp` to the fresh copy and reset the load
+   * phase so the iframe retries against the correct URL. The
+   * user sees a fleeting "didn't load" frame followed by a
+   * successful boot instead of a permanent error.
+   *
+   * Rename / deletion: if the fresh catalog no longer carries an
+   * entry for `app.id`, we leave the error UI up - we have no
+   * server-side alias map to follow the rename, and a renamed
+   * Space's old slug 404s the same as a deleted one. The catalog
+   * has been refreshed in-place though, so the apps list behind
+   * the overlay will show the new state as soon as the user
+   * closes us.
+   */
+  const [effectiveApp, setEffectiveApp] = useState<AppEntry>(app);
+  const recoveryAttemptedRef = useRef(false);
 
   // "Closing" beat. Sits orthogonal to `loadPhase` because the
   // user can request a close from any phase (waiting-release,
@@ -268,6 +301,11 @@ export default function AppIframeOverlay({
   // hash (`#creds=`) and the protocol-v1 `host:init` we post on
   // iframe load read from the same `EmbedCredsBundle`, so the two
   // channels can never drift on theme / signaling URL / config.
+  //
+  // Reads from `effectiveApp` (not the prop) so the URL we mount
+  // and the metadata we ship over postMessage both follow the
+  // self-healing swap when the catalog reports a fresher SDK for
+  // this id.
   const embedCtx: AppEmbedContext = useMemo(
     () => ({
       hfToken,
@@ -275,18 +313,18 @@ export default function AppIframeOverlay({
       robotPeerId,
       robotName,
       theme: isDark ? 'dark' : 'light',
-      appName: app.name,
+      appName: effectiveApp.name,
     }),
-    [hfToken, hfUsername, robotPeerId, robotName, isDark, app.name]
+    [hfToken, hfUsername, robotPeerId, robotName, isDark, effectiveApp.name]
   );
 
   const credsBundle: EmbedCredsBundle = useMemo(
-    () => buildEmbedCreds(embedCtx, app.name),
-    [embedCtx, app.name]
+    () => buildEmbedCreds(embedCtx, effectiveApp.name),
+    [embedCtx, effectiveApp.name]
   );
 
   const url: string = useMemo(() => {
-    const built = buildAppEmbedUrl(app.id, app.sdk, embedCtx);
+    const built = buildAppEmbedUrl(effectiveApp.id, effectiveApp.sdk, embedCtx);
     // Dev-only diagnostic: surface the full iframe URL (including the
     // `#hf_token=…` fragment) so the developer can copy-paste it into
     // a desktop browser to inspect the embedded app's console /
@@ -294,10 +332,10 @@ export default function AppIframeOverlay({
     // carries an HF access token; do NOT enable this in production
     // builds.
     if (import.meta.env.DEV) {
-      console.info(`[app-iframe] embed URL for ${app.id}\n${built}`);
+      console.info(`[app-iframe] embed URL for ${effectiveApp.id}\n${built}`);
     }
     return built;
-  }, [app.id, app.sdk, embedCtx]);
+  }, [effectiveApp.id, effectiveApp.sdk, embedCtx]);
 
   // Origin we'll target with `postMessage`. Derived from the
   // already-built embed URL so it stays in sync with the
@@ -597,6 +635,87 @@ export default function AppIframeOverlay({
     };
   }, [loadPhase]);
 
+  /**
+   * Self-healing on a failed embed load.
+   *
+   * The catalog hook (`useApps`) ships with `staleTime: Infinity`
+   * so once a session has fetched it, the cache is treated as
+   * fresh for the rest of the JS session. That's a deliberate
+   * cost optimisation - the catalog rarely changes within a
+   * session - but it has a sharp edge: when an app's upstream
+   * Space changes its SDK (e.g. a `sdk: docker` Space migrated
+   * to `sdk: static`), the runtime subdomain flips from
+   * `<slug>.hf.space` to `<slug>.static.hf.space` and every
+   * client still holding the stale catalog points its iframe at
+   * a 404. Until a cold restart or an explicit "refresh" tap,
+   * the user just sees "didn't load" on every retry.
+   *
+   * This effect closes that loop: the FIRST time we land in the
+   * `error` phase for this mount, we
+   *
+   *   1. invalidate the `useApps` cache so its observers see
+   *      the new data on next render,
+   *   2. force a `refetchQueries` against the catalog so we
+   *      don't depend on an observer being currently mounted,
+   *   3. look up the fresh entry for `effectiveApp.id`,
+   *   4. if the catalog now disagrees on `sdk` (the only field
+   *      that changes the iframe URL), swap `effectiveApp` to
+   *      the fresh copy and reset the load phase. The `url`
+   *      memo recomputes off `effectiveApp.sdk`, the iframe
+   *      navigates to the new src, and we re-enter the loading
+   *      pipeline cleanly.
+   *
+   * Guarded by `recoveryAttemptedRef` so a flapping iframe
+   * (e.g. a Space that's genuinely 5xx-ing) can't loop on this
+   * branch and DoS the catalog endpoint. One try per mount; if
+   * the retry also fails, the regular error UI sticks. The user
+   * gets the catalog refresh either way, so closing + reopening
+   * the apps list always reflects current state.
+   *
+   * Rename / deletion is not auto-recoverable here (no
+   * alias map on the catalog yet), but the refetch we trigger
+   * still updates the cache so the apps tab shows reality on
+   * its next render.
+   */
+  useEffect(() => {
+    if (loadPhase !== 'error') return;
+    if (recoveryAttemptedRef.current) return;
+    recoveryAttemptedRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await queryClient.refetchQueries({ queryKey: APPS_QUERY_KEY });
+        if (cancelled) return;
+        const data = queryClient.getQueryData<CatalogPayload>(APPS_QUERY_KEY);
+        const fresh = data?.apps.find(a => a.id === effectiveApp.id);
+        if (!fresh) return;
+        if (fresh.sdk === effectiveApp.sdk) return;
+        // Catalog disagrees with what we tried - the snapshot we
+        // mounted with was stale. Re-arm the load against the
+        // fresh entry. We restart at `loading` because we already
+        // saw `released` (the only way to reach `error` from
+        // here), and we reset `connectingStep` so the spinner
+        // caption doesn't carry over from the previous attempt.
+        if (import.meta.env.DEV) {
+          console.info(
+            `[app-iframe] recovery: catalog now reports sdk=${fresh.sdk} ` +
+              `for ${effectiveApp.id} (was ${effectiveApp.sdk}), retrying`
+          );
+        }
+        setEffectiveApp(fresh);
+        setConnectingStep(null);
+        setLoadPhase('loading');
+      } catch (err) {
+        console.warn('[apps] catalog refresh during embed-error recovery failed:', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPhase, queryClient, effectiveApp.id, effectiveApp.sdk]);
+
   return (
     <Box
       sx={{
@@ -642,7 +761,7 @@ export default function AppIframeOverlay({
             vertical footprint as the title so the bar doesn't grow
             taller. Renders the author's `icon.svg`/`icon.png` when
             available, falls back to the front-matter emoji. */}
-        <AppIcon app={app} size={24} />
+        <AppIcon app={effectiveApp} size={24} />
         {/* App name flush left, primary close button flush right.
             Mirrors native iOS/Android sheet conventions: identifier
             anchors the user, exit affordance is in the thumb-reach
@@ -659,7 +778,7 @@ export default function AppIframeOverlay({
           }}
           noWrap
         >
-          {app.name}
+          {effectiveApp.name}
         </Typography>
         {/* Per-app actions kebab. Apple guideline 1.2 (UGC) wants
             a Report affordance on every surface where the user
@@ -678,8 +797,8 @@ export default function AppIframeOverlay({
             the host's `session.reacquire()` upstream so the
             conversation slot comes back. */}
         <AppActionsMenu
-          app={app}
-          ariaLabel={`Actions for ${app.name}`}
+          app={effectiveApp}
+          ariaLabel={`Actions for ${effectiveApp.name}`}
           buttonSx={{ p: 0.5 }}
           onAfterHideAuthor={requestClose}
         />
@@ -705,7 +824,7 @@ export default function AppIframeOverlay({
           <iframe
             ref={iframeRef}
             src={loadPhase === 'waiting-release' ? 'about:blank' : url}
-            title={app.name}
+            title={effectiveApp.name}
             // Permissions Policy delegation for the iframe-hosted HF
             // Space. Each capability is explicitly scoped to the
             // iframe's own origin (`'src'`, i.e. the `*.hf.space`
@@ -717,32 +836,31 @@ export default function AppIframeOverlay({
             // Token rationale:
             //   - microphone  : voice / chat Spaces (`getUserMedia({audio})`)
             //   - camera      : vision / AR Spaces (`getUserMedia({video})`)
-            //   - geolocation : tour-guide / location-aware Spaces
             //   - autoplay    : media playback without prior user gesture
             //   - clipboard-* : text / image copy-paste from inside the Space
             //
             // Each token needs a matching OS-side authorisation:
-            //   - iOS  : `NSMicrophoneUsageDescription`,
-            //            `NSCameraUsageDescription`,
-            //            `NSLocationWhenInUseUsageDescription`
-            //            in `src-tauri/Info.plist`. Missing the
-            //            Camera key while granting the iframe token
+            //   - iOS  : `NSMicrophoneUsageDescription` and
+            //            `NSCameraUsageDescription` in
+            //            `src-tauri/Info.plist`. Missing the Camera
+            //            key while granting the iframe token
             //            HARD-crashes the WKWebView process on
             //            recent iOS - non-optional.
-            //   - Android : `RECORD_AUDIO`, `CAMERA`,
-            //               `ACCESS_FINE_LOCATION` in the generated
+            //   - Android : `RECORD_AUDIO`, `CAMERA` in the generated
             //               `AndroidManifest.xml`, plus a custom
             //               `WebChromeClient` in `MainActivity.kt`
-            //               that maps `onPermissionRequest` and
-            //               `onGeolocationPermissionsShowPrompt` to
-            //               the OS grants. Tauri's default WebView
-            //               denies iframe permission requests
-            //               otherwise. Full runbook in
-            //               `docs/ANDROID_PERMISSIONS.md`. The
-            //               Android target itself isn't initialised
-            //               in this repo today; the iframe tokens
-            //               are harmless until then.
-            allow="microphone 'src'; camera 'src'; geolocation 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
+            //               that maps `onPermissionRequest` to the
+            //               OS grants. Tauri's default WebView denies
+            //               iframe permission requests otherwise.
+            //               Full runbook in `docs/ANDROID_PERMISSIONS.md`.
+            //
+            // Geolocation is intentionally NOT delegated: no Space
+            // surfaces a location feature today and the extra prompt
+            // string (`NSLocationWhenInUseUsageDescription`,
+            // `ACCESS_FINE_LOCATION`) is an App Review red flag for a
+            // capability we don't actually use. Re-add when a Space
+            // genuinely needs `navigator.geolocation`.
+            allow="microphone 'src'; camera 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'"
             onLoad={() => {
               // Iframe done parsing the bundle - move to
               // `connecting`. The overlay stays up; we'll only
@@ -819,7 +937,7 @@ export default function AppIframeOverlay({
           <PhaseOverlay>
             <CircularProgress size={28} />
             <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-              {`Closing ${app.name}…`}
+              {`Closing ${effectiveApp.name}…`}
             </Typography>
           </PhaseOverlay>
         )}
@@ -831,7 +949,7 @@ export default function AppIframeOverlay({
           <PhaseOverlay>
             <CircularProgress size={28} />
             <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
-              {phaseCaption(loadPhase, connectingStep, app.name)}
+              {phaseCaption(loadPhase, connectingStep, effectiveApp.name)}
             </Typography>
           </PhaseOverlay>
         )}
@@ -839,7 +957,7 @@ export default function AppIframeOverlay({
         {!isClosing && loadPhase === 'error' && (
           <PhaseOverlay>
             <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
-              {app.name} didn't load
+              {effectiveApp.name} didn't load
             </Typography>
             <Typography
               sx={{

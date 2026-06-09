@@ -2,9 +2,9 @@
  * Apps catalog hook (TanStack Query).
  *
  * Single source: the curated catalog served by the public Reachy
- * Mini website Space:
+ * Mini API Space (host centralized in `@/shared/env`):
  *
- *   GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps
+ *   GET https://pollen-robotics-reachy-mini-api.hf.space/api/js-apps
  *
  * The endpoint pre-filters JS apps server-side (so we no longer
  * filter on the `reachy_mini_js_app` tag client-side) and attaches
@@ -17,25 +17,54 @@
  * ever iframe them at their HF Space runtime URL. So a single fetch
  * + minimal normalization is enough.
  *
- * Caching strategy: ONE fetch per JS session.
+ * Caching strategy: short-staleness + opportunistic revalidation.
  * ────────────────────────────────────────────
- * The catalog rarely changes within a session, the user can't
- * change it, and re-fetching on every Apps-tab visit just adds a
- * "loading…" flash for no information gain. Through TanStack
+ * The catalog rarely changes within a session, but it CAN change
+ * (an upstream Space migrates its SDK from docker→static, a new
+ * app gets listed, an app gets renamed), and a permanently stale
+ * cache makes those changes invisible until the user manually
+ * taps "refresh" or cold-starts the shell. Through TanStack
  * Query we get:
  *
  *   1. A single shared cache slot keyed by `APPS_QUERY_KEY` -
  *      every `useApps()` consumer subscribes to it, every
  *      `prefetchApps()` writes into it, no double fetches.
- *   2. `staleTime: Infinity` - the data is treated as fresh for
- *      the whole JS session. Cold starts (Tauri WebView reload,
- *      app relaunch) drop the in-memory cache naturally, which
- *      gives the "fetch on every app start" behaviour without
- *      any TTL math.
- *   3. `refetch()` for the explicit "Refresh" button on the Apps
+ *   2. `staleTime: 5 min` - the data is treated as fresh for
+ *      5 minutes. Inside that window, mounting / focusing /
+ *      reconnecting NEVER triggers a refetch (zero useless
+ *      traffic during normal interactive use). Past the window,
+ *      we let the natural triggers below revalidate the cache
+ *      WITHOUT polling - no `refetchInterval`, no thundering
+ *      herd at scale.
+ *   3. `refetchOnWindowFocus: 'always'` - when the user puts the
+ *      app in the background and brings it back, we revalidate
+ *      the catalog. Combined with `staleTime: 5min`, this means
+ *      a one-tap focus inside the 5-minute window costs nothing
+ *      (TanStack treats data as fresh and skips the fetch),
+ *      while a focus after a longer pause re-pulls the catalog
+ *      ahead of the user's next interaction.
+ *   4. `refetchOnReconnect: 'always'` - same idea for the
+ *      offline→online edge: when the device regains connectivity,
+ *      we revalidate whatever it tried to view offline. Reuses
+ *      the freshness window so a brief network blip doesn't
+ *      trigger an extra fetch.
+ *   5. `refetch()` for the explicit "Refresh" button on the Apps
  *      tab. Keeps the previous list visible while the refetch is
  *      in flight (`isFetching`), so a transient hub hiccup
  *      doesn't blank the surface.
+ *
+ * Self-healing fallback: the iframe overlay (`AppIframeOverlay`)
+ * has a Couche-2 recovery that invalidates this cache and retries
+ * once on iframe-load failures, so an SDK migration that happens
+ * mid-session still self-corrects without waiting for the
+ * 5-minute staleness window.
+ *
+ * Scale note: ~10k clients × ~5 focus/reconnect refetches/day ≈
+ * 50k req/day on `/api/js-apps`, spread organically by user
+ * activity (not synchronised to a server timer). The endpoint
+ * sets `Cache-Control: max-age=60, stale-while-revalidate=300`
+ * AND emits a stable ETag, so the vast majority of those
+ * revalidations are cheap 304s.
  *
  * Public endpoint - no token, no credentials. Safe to prefetch
  * even before the auth gate.
@@ -44,6 +73,7 @@ import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { queryClient } from '@/queryClient';
+import { WEBSITE_API_URL } from '@/shared/env';
 
 import { prefetchAppIcons } from './iconCache';
 import type {
@@ -53,12 +83,33 @@ import type {
   CategorizationMeta,
 } from './types';
 
-const WEBSITE_API_URL = 'https://pollen-robotics-reachy-mini.hf.space/api/js-apps';
+const CATALOG_ENDPOINT = `${WEBSITE_API_URL}/api/js-apps`;
 
-/** TanStack Query cache key for the catalog. Stable, no params. */
-const APPS_QUERY_KEY = ['js-apps-catalog'] as const;
+/**
+ * TanStack Query cache key for the catalog. Stable, no params.
+ * Exported so reactive call sites outside this module (e.g. the
+ * iframe overlay's self-healing path on a failed embed load) can
+ * invalidate / refetch / read the catalog without re-stating the
+ * literal and risking a typo drift.
+ */
+export const APPS_QUERY_KEY = ['js-apps-catalog'] as const;
 
-interface RawCatalogApp {
+/**
+ * Freshness window for the catalog query. Past this point a
+ * mount / focus / reconnect will trigger a revalidation; inside
+ * it those triggers are no-ops.
+ *
+ * Tuning rationale: 5 minutes mirrors the server-side cache TTL
+ * (`CACHE_TTL_MS` in `reachy-mini-website/server/index.js`) so a
+ * client that revalidates "just past stale" usually hits the
+ * server's still-warm cache and gets a free 304 on the conditional
+ * GET. Shorter and we'd serve more 304s but also pay TLS overhead
+ * for nothing; longer and SDK migrations would stay invisible too
+ * long after a focus event.
+ */
+const APPS_STALE_TIME_MS = 5 * 60 * 1000;
+
+export interface RawCatalogApp {
   id?: string;
   name?: string;
   description?: string;
@@ -132,8 +183,14 @@ interface RawCatalogPayload {
  * Catalog payload after normalization. We hold both the per-app
  * list and the top-level `categorization` meta so the UI can
  * surface a "classifying..." chip when the server is mid-batch.
+ *
+ * Exported because consumers that read the cache directly via
+ * `queryClient.getQueryData(APPS_QUERY_KEY)` (the iframe overlay's
+ * self-healing path) need the type at the call site - without it,
+ * the recovery code couldn't pluck the up-to-date `AppEntry` for
+ * a given id after a refetch.
  */
-interface CatalogPayload {
+export interface CatalogPayload {
   apps: AppEntry[];
   categorization: CategorizationMeta | null;
 }
@@ -179,7 +236,7 @@ function resolveAppId(raw: RawCatalogApp): string | null {
   return author ? `${author}/${bare}` : bare;
 }
 
-function normalizeApp(raw: RawCatalogApp): AppEntry | null {
+export function normalizeApp(raw: RawCatalogApp): AppEntry | null {
   const id = resolveAppId(raw);
   if (!id) return null;
   const author =
@@ -348,7 +405,7 @@ export function normalizeCatalog(payload: unknown): CatalogPayload {
 }
 
 async function fetchAppsCatalog(): Promise<CatalogPayload> {
-  const res = await fetch(WEBSITE_API_URL, { credentials: 'omit' });
+  const res = await fetch(CATALOG_ENDPOINT, { credentials: 'omit' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const payload = (await res.json()) as unknown;
   const catalog = normalizeCatalog(payload);
@@ -402,7 +459,12 @@ export function prefetchApps(): Promise<void> {
   return queryClient.prefetchQuery({
     queryKey: APPS_QUERY_KEY,
     queryFn: fetchAppsCatalog,
-    staleTime: Infinity,
+    // Same staleness window as `useApps()` below. The prefetch
+    // path MUST agree with the live query, otherwise a prefetch
+    // from the app root would mark the entry "fresh forever" and
+    // suppress the very revalidations `useApps()` is configured
+    // to perform.
+    staleTime: APPS_STALE_TIME_MS,
   });
 }
 
@@ -428,10 +490,16 @@ export function useApps(): UseAppsReturn {
   const query = useQuery({
     queryKey: APPS_QUERY_KEY,
     queryFn: fetchAppsCatalog,
-    // Treat the data as fresh for the whole JS session - the only
-    // refresh paths are (a) cold start (cache wiped naturally),
-    // (b) explicit `refresh()` from the UI button.
-    staleTime: Infinity,
+    // See the file-level "Caching strategy" comment for the
+    // rationale on these three values. Short version:
+    //   - 5 min staleness means inside that window no event
+    //     trigger costs a network round-trip.
+    //   - `always` on focus/reconnect so that past the freshness
+    //     window we re-pull the catalog ahead of the user's next
+    //     interaction, without polling.
+    staleTime: APPS_STALE_TIME_MS,
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
   });
 
   const apps = query.data?.apps ?? [];

@@ -35,7 +35,7 @@
  * `categoryTaxonomy.ts`); the slug list is never mirrored by hand.
  * See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -60,58 +60,61 @@ import type { AppEntry } from '@/features/apps/types';
 import { useApps } from '@/features/apps/useApps';
 import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
+import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
+import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
+import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import AppCompactTile from './AppCompactTile';
 import AppCreateYourOwnTile from './AppCreateYourOwnTile';
 import AppPinnedTile from './AppPinnedTile';
 import AppRail from './AppRail';
 import AppsCreateFooter from './AppsCreateFooter';
+import LazyMount from './LazyMount';
+import VirtualAppList from './VirtualAppList';
+import { COLUMN_SX } from './layout';
 
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
 }
 
 /**
- * Vertical gap between consecutive cards in the search-results
- * and category-focus lists. The tile is content-driven (no fixed
- * height) so the gap is the only thing controlling the rhythm
- * between rows.
+ * Number of tiles a browse rail renders as a *preview*. A horizontal
+ * rail only ever shows ~2-3 tiles at once, so mounting a category's
+ * full bucket (which can be dozens of apps once the catalog grows to
+ * 200-300) just to leave them parked off-screen is pure waste - each
+ * tile spins up its own TanStack like-observer + icon load. We render
+ * the top-N (already sorted by likes) and route the rest through the
+ * rail's existing "See all" drill-down, exactly the App Store
+ * pattern. The focus list keeps the FULL bucket, so nothing is lost.
  */
-const LIST_ROW_GAP_PX = 12;
+const RAIL_PREVIEW_CAP = 12;
 
 /**
- * Shared `sx` that re-constrains a row to the centred content
- * column. Used by every panel inside a full-bleed wrapper so
- * panel content (titles, search input, list rows) lines up on
- * one vertical axis even though the dividers themselves span
- * the whole viewport.
+ * Reserved height for a not-yet-mounted rail (`LazyMount` placeholder).
+ * Approximates header + one tile row + the panel's top padding so the
+ * scroll length is right before the rail hydrates; mounting happens
+ * ahead of the fold so any small mismatch settles off-screen.
  */
-const COLUMN_SX = {
-  width: '100%',
-  maxWidth: LAYOUT.contentMaxWidth,
-  mx: 'auto',
-  px: 3,
-} as const;
+const RAIL_PLACEHOLDER_HEIGHT = 260;
 
 /**
  * Shared min-height for the pinned panel header row (label on the
- * left, `Edit` button on the right). The number is dictated by the
- * outlined `Button size="small"` we render on the right - its
- * actual rendered height is `fontSize × lineHeight + 2 × py +
- * 2 × border` ≈ 12 × 1.4 + 4 + 2 = ~23 px. We round to 28 to give
- * the chip a touch of vertical breathing room AND a clean rhythm
- * with the 8 px design grid.
+ * left, `Edit` button on the right). The `Edit` button now shares the
+ * rail action-chip style (`railActionButtonSx`: `TYPO.sm` × 1.4 +
+ * 2 × py(4px) + 2 × border ≈ 28 px). This min-height MUST stay >= that
+ * rendered button height: only then does the pinned header row settle
+ * at exactly `PINNED_HEADER_MIN_HEIGHT` (min-height wins over the
+ * button) and match the phantom row below. 32 clears the button with a
+ * touch of breathing room and lands on the 8 px design grid.
  *
  * The `IntroPanel` (empty state) reserves the SAME min-height for
  * its phantom header so the "no pins → first pin" transition keeps
  * the body's vertical rhythm pixel-stable. Without this, the
- * intro panel sits ~12 px shorter than the pinned panel and the
- * whole rail stack underneath jumps as soon as the user pins
- * their first app.
+ * intro panel sits shorter than the pinned panel and the whole rail
+ * stack underneath jumps as soon as the user pins their first app.
  */
-const PINNED_HEADER_MIN_HEIGHT = 28;
+const PINNED_HEADER_MIN_HEIGHT = 32;
 
 /**
  * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
@@ -128,13 +131,25 @@ const PANEL_SX = {
 } as const;
 
 const RAIL_PANEL_SX = {
-  pt: 3,
+  pt: 4,
+  pb: 0,
+} as const;
+
+// First rail sits right under the search panel's bottom divider, so it
+// needs far less top margin than the inter-rail gap above.
+const RAIL_PANEL_FIRST_SX = {
+  pt: 2.5,
   pb: 0,
 } as const;
 
 export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const { state, refresh } = useApps();
   const hiddenAuthors = useHiddenAuthors();
+
+  // The scrollable body. Threaded into `VirtualAppList` so the
+  // windowed search / focus lists virtualise against the same
+  // scroll element the rest of the tab scrolls in.
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Strip apps whose author the user has hidden BEFORE any
   // downstream pass (search, categorisation, pinned reconciliation,
@@ -152,6 +167,24 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const isLoading = state.kind === 'loading';
   const hasError = state.kind === 'error';
 
+  // First-paint gate. The catalog is usually prefetched at the App
+  // root (`usePrefetchApps`), so by the time this tab mounts the
+  // data is already cached and the network `loading` state never
+  // shows - yet mounting the full browse tree (pinned grid +
+  // intro carousel + every category rail with its tiles/icons) in
+  // one synchronous pass still hitches the UI for a few hundred ms
+  // on first open. We defer that heavy tree by one animation frame
+  // so the spinner below paints immediately; the content then
+  // mounts on the next frame, turning a frozen blank tab into a
+  // clean "spinner → content" reveal. Runs once per mount, and the
+  // tab stays mounted across tab switches (hidden via CSS), so this
+  // cost is paid only the first time the user opens Apps.
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setContentReady(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // Search query is owned here. Deferred via React 18's
   // `useDeferredValue` so the input stays buttery while the
   // filtering pass on a few dozen apps catches up. At our scale
@@ -165,6 +198,12 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
 
   const pinnedApps = usePinnedApps();
+
+  // "Your apps" rail data: the user's own Reachy JS apps (private
+  // repos included), fetched straight from the HF Hub. Independent
+  // of the public catalog above, so it stays empty for signed-out
+  // users and never blocks the browse layout from rendering.
+  const myApps = useMyApps();
 
   // Resolve the live taxonomy from the catalog payload. The server
   // ships the slug list under `categorization.taxonomy`, so the
@@ -226,25 +265,28 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
 
   const showFlatList = focusedBucket !== null || filtered.isSearching;
 
-  // Initial empty / loading / error states. Rendered inside the
-  // scroll container so they share the panel rhythm without
-  // needing a dedicated chrome above.
+  // Shared loading screen: a centered spinner that fills the tab
+  // height. Shown while the heavy browse tree is still gated behind
+  // the first-paint frame (`!contentReady`) AND while the catalog
+  // fetch is genuinely in flight with nothing cached yet.
+  const loadingScreen = (
+    <FullHeightCenter>
+      <Stack spacing={2} sx={{ alignItems: 'center' }}>
+        <CircularProgress size={32} sx={{ color: 'grey.300' }} />
+        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
+          Loading apps…
+        </Typography>
+      </Stack>
+    </FullHeightCenter>
+  );
+
   const initialPlaceholder = (() => {
-    if (isLoading && apps.length === 0) {
-      return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
-          <CenteredHint>
-            <CircularProgress size={20} />
-            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
-              Asking the Hub for available apps…
-            </Typography>
-          </CenteredHint>
-        </Box>
-      );
+    if (!contentReady || (isLoading && apps.length === 0)) {
+      return loadingScreen;
     }
     if (hasError && apps.length === 0) {
       return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
+        <FullHeightCenter>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               Couldn't reach the Hub
@@ -261,12 +303,12 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               Retry
             </Button>
           </CenteredHint>
-        </Box>
+        </FullHeightCenter>
       );
     }
     if (apps.length === 0) {
       return (
-        <Box sx={{ ...COLUMN_SX, pt: 4, pb: 4 }}>
+        <FullHeightCenter>
           <CenteredHint>
             <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
               No apps yet
@@ -275,7 +317,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               The Reachy Mini catalog is empty - check back soon.
             </Typography>
           </CenteredHint>
-        </Box>
+        </FullHeightCenter>
       );
     }
     return null;
@@ -300,6 +342,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
       }}
     >
       <Box
+        ref={scrollRef}
         sx={{
           flex: 1,
           minHeight: 0,
@@ -421,21 +464,26 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                   </Box>
                 </Box>
 
-                {/* Browse rails. Hidden during search mode (the
-                    search results take over the body). The bucket
-                    size is rendered next to the label so the user
-                    knows how many apps live in each rail at a
-                    glance. Sparse buckets (< MIN_RAIL_SIZE) were
-                    already filtered out by `useFilteredApps`. */}
-                {!filtered.isSearching &&
-                  filtered.rails.map(bucket => (
-                    <Box key={bucket.descriptor.id} sx={RAIL_PANEL_SX}>
+                {/* "Your apps" rail: the user's own Reachy apps from
+                    their HF account (private included). Rendered as
+                    the FIRST swiper, just above the category rails.
+                    Hidden in search mode (like the category rails)
+                    and omitted entirely when the user has no such
+                    apps / is signed out, so it never adds empty
+                    chrome. No dedup with the catalog rails by
+                    design. */}
+                {!filtered.isSearching && myApps.apps.length > 0 && (
+                  <LazyMount minHeight={RAIL_PLACEHOLDER_HEIGHT}>
+                    <Box sx={RAIL_PANEL_FIRST_SX}>
                       <AppRail
-                        label={bucket.descriptor.label}
-                        count={bucket.apps.length}
-                        onSeeAll={() => setFocusedCategoryId(bucket.descriptor.id)}
+                        label="Your apps"
+                        subLabel={
+                          myApps.apps[0]?.author
+                            ? `@${myApps.apps[0].author} - ${myApps.apps.length} app${myApps.apps.length === 1 ? '' : 's'}`
+                            : `${myApps.apps.length} app${myApps.apps.length === 1 ? '' : 's'}`
+                        }
                       >
-                        {bucket.apps.map(app => (
+                        {myApps.apps.map(app => (
                           <AppCompactTile
                             key={app.id}
                             app={app}
@@ -444,15 +492,51 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                             onTogglePin={handleTogglePin}
                           />
                         ))}
-                        {/* CTA tile pinned to the right of every
-                            rail: same width branch as the app
-                            tiles so the "1 + 30 % peek" framing
-                            stays consistent, dashed primary
-                            border to signal it's an affordance
-                            rather than another app. */}
-                        <AppCreateYourOwnTile />
                       </AppRail>
                     </Box>
+                  </LazyMount>
+                )}
+
+                {/* Browse rails. Hidden during search mode (the
+                    search results take over the body). The bucket
+                    size is rendered next to the label so the user
+                    knows how many apps live in each rail at a
+                    glance. Sparse buckets (< MIN_RAIL_SIZE) were
+                    already filtered out by `useFilteredApps`. */}
+                {!filtered.isSearching &&
+                  filtered.rails.map((bucket, idx) => (
+                    <LazyMount key={bucket.descriptor.id} minHeight={RAIL_PLACEHOLDER_HEIGHT}>
+                      <Box
+                        sx={
+                          idx === 0 && myApps.apps.length === 0
+                            ? RAIL_PANEL_FIRST_SX
+                            : RAIL_PANEL_SX
+                        }
+                      >
+                        <AppRail
+                          label={bucket.descriptor.label}
+                          count={bucket.apps.length}
+                          onSeeAll={() => setFocusedCategoryId(bucket.descriptor.id)}
+                        >
+                          {bucket.apps.slice(0, RAIL_PREVIEW_CAP).map(app => (
+                            <AppCompactTile
+                              key={app.id}
+                              app={app}
+                              isPinned={pinnedApps.set.has(app.id)}
+                              onOpen={onOpen}
+                              onTogglePin={handleTogglePin}
+                            />
+                          ))}
+                          {/* CTA tile pinned to the right of every
+                              rail: same width branch as the app
+                              tiles so the "1 + 30 % peek" framing
+                              stays consistent, dashed primary
+                              border to signal it's an affordance
+                              rather than another app. */}
+                          <AppCreateYourOwnTile />
+                        </AppRail>
+                      </Box>
+                    </LazyMount>
                   ))}
 
                 {/* End-of-list "Want to create your own?" footer.
@@ -499,31 +583,19 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
             {/* Flat list of `AppCompactTile`s in `fullWidth` mode.
                 Mounted only in search and category-focus modes
                 (browse mode has no trailing list - sparse-bucket
-                apps surface via search). The tile is
-                content-driven, so the gap between rows is the
-                only thing controlling the rhythm. We don't
-                virtualise: the catalog is small enough that
-                rendering all matches outright is cheaper than
-                the bookkeeping a virtualizer would require for
-                content-variable rows. */}
+                apps surface via search). These lists can run to the
+                full catalog (200-300 rows), so they are windowed via
+                `VirtualAppList`: only the visible rows (+ overscan)
+                are ever mounted, virtualised against the tab's shared
+                scroll body. */}
             {showFlatList && (
-              <Stack
-                spacing={`${LIST_ROW_GAP_PX}px`}
-                sx={{
-                  ...COLUMN_SX,
-                }}
-              >
-                {flatList.map(app => (
-                  <AppCompactTile
-                    key={app.id}
-                    app={app}
-                    isPinned={pinnedApps.set.has(app.id)}
-                    onOpen={onOpen}
-                    onTogglePin={handleTogglePin}
-                    fullWidth
-                  />
-                ))}
-              </Stack>
+              <VirtualAppList
+                apps={flatList}
+                scrollRef={scrollRef}
+                pinnedSet={pinnedApps.set}
+                onOpen={onOpen}
+                onTogglePin={handleTogglePin}
+              />
             )}
           </>
         )}
@@ -810,21 +882,11 @@ function PinnedGrid({
           onClick={() => setEditMode(prev => !prev)}
           aria-pressed={editMode}
           aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
-          sx={{
-            flexShrink: 0,
-            fontSize: TYPO.xs,
-            fontWeight: FONT_WEIGHT.semibold,
-            // Sentence-case label - keep it as a verb the user
-            // recognises, not a SCREAMING button.
-            textTransform: 'none',
-            // Tight padding so the chip-style button fits the
-            // panel header rhythm without dwarfing the
-            // "PINNED APPS" label on its left.
-            minWidth: 0,
-            lineHeight: 1.4,
-            px: 1.25,
-            py: 0.25,
-          }}
+          // Same size + border language as the rail "See all" / "New"
+          // chips. Bigger than the old tight chip, so the shared
+          // PINNED_HEADER_MIN_HEIGHT is sized to clear it - keeping the
+          // no-pin (phantom) and pinned header rows the SAME height.
+          sx={railActionButtonSx}
         >
           {editMode ? 'Done' : 'Edit'}
         </Button>
@@ -915,6 +977,31 @@ function SearchInput({
         },
       }}
     />
+  );
+}
+
+/**
+ * Full-height centering wrapper for the tab's initial states
+ * (loading spinner, error, empty). Fills the scroll body's
+ * height (`minHeight: 100%` resolves against the flex:1 scroll
+ * container) and centers its child both axes, so the spinner
+ * reads as a proper "loading the whole view" screen rather than
+ * a small hint pinned to the top.
+ */
+function FullHeightCenter({ children }: { children: React.ReactNode }) {
+  return (
+    <Box
+      sx={{
+        minHeight: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        ...COLUMN_SX,
+        py: 6,
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 

@@ -5,7 +5,7 @@
  *
  *   - `reachyMini.personalities.activeId` (string)
  *       Currently active personality id. Read on every conversation
- *       (re)connect to compose the OpenAI session.
+ *       (re)connect to compose the realtime session.
  *
  *   - `reachyMini.personalities.custom` (JSON array)
  *       User-authored personalities. Each entry is a `Personality`
@@ -16,8 +16,14 @@
  * requirement, so the app stays usable even when the host browser
  * refuses to store anything.
  */
-import { DEFAULT_AVATAR_URL, DEFAULT_GLOW, DEFAULT_PERSONALITY_ID } from './builtin';
-import type { Personality } from './types';
+import {
+  DEFAULT_AVATAR_URL,
+  DEFAULT_GLOW,
+  DEFAULT_PERSONALITY_ID,
+  hfVoiceToOpenai,
+  snapVoiceForBackend,
+} from './builtin';
+import type { PersonaVoices, Personality } from './types';
 
 const ACTIVE_KEY = 'reachyMini.personalities.activeId';
 const CUSTOM_KEY = 'reachyMini.personalities.custom';
@@ -141,8 +147,29 @@ function normaliseCustom(
     name: raw.name,
     tagline: typeof raw.tagline === 'string' ? raw.tagline : '',
     instructions: raw.instructions,
-    voice: typeof raw.voice === 'string' ? raw.voice : '',
+    voices: normaliseVoices(raw as Record<string, unknown>),
     glow: typeof raw.glow === 'string' ? raw.glow : DEFAULT_GLOW,
     avatar: typeof raw.avatar === 'string' ? raw.avatar : DEFAULT_AVATAR_URL,
   };
+}
+
+/**
+ * Resolve a persona's per-backend voices from a stored record, snapping
+ * each id to its backend catalog. Migrates legacy entries that pre-date
+ * the per-backend model: those stored a single `voice` (an HF speaker),
+ * which becomes the HF voice while OpenAI is derived from it.
+ */
+function normaliseVoices(raw: Record<string, unknown>): PersonaVoices {
+  const stored = raw.voices;
+  if (stored && typeof stored === 'object') {
+    const v = stored as Record<string, unknown>;
+    return {
+      huggingface: snapVoiceForBackend('huggingface', v.huggingface),
+      openai: snapVoiceForBackend('openai', v.openai),
+    };
+  }
+  // Legacy single-voice record (HF speaker id): keep it as the HF voice
+  // and derive a matching OpenAI voice.
+  const hf = snapVoiceForBackend('huggingface', raw.voice);
+  return { huggingface: hf, openai: hfVoiceToOpenai(hf) };
 }

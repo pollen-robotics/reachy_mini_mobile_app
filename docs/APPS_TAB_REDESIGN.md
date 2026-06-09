@@ -39,13 +39,13 @@ Endpoint: `GET https://pollen-robotics-reachy-mini.hf.space/api/apps`,
 filtered client-side on the `reachy_mini_js_app` tag (see
 `features/apps/useApps.ts`).
 
-> **Endpoint migration in flight.** The website is adding a dedicated
-> `GET /api/js-apps` route that pre-filters JS apps server-side and
-> attaches a `categories` field per entry (see Section 5 for the
-> contract). The mobile app moves to `/api/js-apps` in the same PR
-> that ships this redesign; the client-side `reachy_mini_js_app`
-> filter goes away. Counts below were captured against the legacy
-> filtered endpoint.
+> **Endpoint migration: shipped (2026-05).** The mobile app now
+> consumes `GET /api/js-apps`, which pre-filters JS apps server-side
+> and attaches an LLM-classified `categories` field per entry (see
+> Section 5 for the contract). The old client-side
+> `reachy_mini_js_app` filter is gone (see `features/apps/useApps.ts`).
+> The legacy `/api/apps` references in §1.1 and the migration table
+> below are kept as historical context for the pre-migration baseline.
 
 | Metric | Value |
 |---|---|

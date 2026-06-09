@@ -62,6 +62,8 @@ import {
   BottomNavigation,
   BottomNavigationAction,
   Box,
+  CircularProgress,
+  Fade,
   IconButton,
   Stack,
   Typography,
@@ -91,6 +93,7 @@ import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 // Full-frame camera + manual head steering live in the dedicated
 // telepresence app.
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
@@ -181,7 +184,58 @@ function ConnectedSession({
     audioLevelsTargetRef: orbRef,
   });
 
+  // Remember which personality this robot is wearing, keyed by its
+  // stable hardware id, so the discovery list ("Your Reachies") can
+  // show each robot with the face it was last paired with rather than
+  // the generic Reachy silhouette. Records the current persona on mount
+  // and on every mid-session switch. No-op when the daemon doesn't
+  // expose a hardware id (older daemons / no Reachy attached).
+  const activePersona = useActivePersonality();
+  // Prefer the stable hardware id; fall back to the routable peer id
+  // when the daemon doesn't expose one (older daemons / no Reachy
+  // attached) so the memory still works within a session round-trip.
+  const robotMemoryKey = robotHardwareId ?? robotId;
+  useEffect(() => {
+    rememberRobotPersona(robotMemoryKey, activePersona.id);
+  }, [robotMemoryKey, activePersona.id]);
+
   const [tab, setTab] = useState<Tab>('conv');
+  // The conv tab is kept mounted (just `display: none`d) so its orb
+  // audio refs survive a tab switch, which makes switching TO it
+  // instant. The Apps tab used to be torn down and remounted on every
+  // visit - its heavy first render (catalog fetch + carousels + rails)
+  // blocked the click, so switching to Apps felt laggy while conv did
+  // not. Mount it lazily on first visit, then KEEP it alive (CSS
+  // toggle like conv) so every later switch is instant too.
+  const [appsMounted, setAppsMounted] = useState(false);
+  useEffect(() => {
+    if (tab === 'apps') setAppsMounted(true);
+  }, [tab]);
+
+  // Tab-switch spinner. Every conv <-> apps switch shows a centered
+  // spinner over the content column for a MINIMUM of 250 ms so the
+  // transition reads as a deliberate beat rather than an instant
+  // cut. It naturally lasts longer when needed: the target tab's own
+  // loading state (e.g. `AppsTabView`'s first-paint / fetch spinner)
+  // takes over seamlessly once this minimum cover lifts, since both
+  // render the same centered spinner on the same `background.default`
+  // surface. Driven through `handleTabChange` (not raw `setTab`) so
+  // the cover only fires on a real switch, never on a no-op re-tap.
+  const [tabSpinner, setTabSpinner] = useState(false);
+  const tabSpinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    },
+    []
+  );
+  const handleTabChange = (value: Tab): void => {
+    if (leaving || value === tab) return;
+    if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    setTabSpinner(true);
+    setTab(value);
+    tabSpinnerTimerRef.current = setTimeout(() => setTabSpinner(false), 250);
+  };
   /**
    * App selected from the catalog; non-null while the iframe overlay
    * is being prepared (`releasing`), shown (`ready`), or closing
@@ -271,7 +325,7 @@ function ConnectedSession({
 
   // Tab-switch lifecycle for the conversation parts.
   //
-  // Leaving the conversation tab stops the OpenAI Realtime pipeline,
+  // Leaving the conversation tab stops the HF realtime pipeline,
   // motion controllers and audio analysers. The robot stays awake
   // (gravity-comp on the head/antennas, motors enabled, WebRTC up,
   // SSE alive) so re-entering the tab is instant - the user just
@@ -429,18 +483,26 @@ function ConnectedSession({
             flexShrink: 0,
             mx: -3,
             px: 3,
-            pb: 2,
-            pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 14px)',
-            minHeight: 76,
+            pb: 1.5,
+            pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 10px)',
+            minHeight: 68,
             bgcolor: 'background.default',
             borderBottom: t => `1px solid ${t.palette.divider}`,
+            // Sit above the personality band below (which lifts itself to
+            // zIndex 1 so its avatar disc can spill over the body). The
+            // avatar artwork pokes up past the band's top edge; this opaque
+            // bar + its divider must stay on top so those antennas tuck
+            // behind it instead of breaking the topbar's bottom border.
+            position: 'relative',
+            zIndex: 2,
           }}
         >
           <IdentityChipBar
             robotName={robotName}
-            hardwareId={robotHardwareId}
-            fallbackId={robotId}
             transport={robotTransport}
+            linkKind={session.webrtcTransport?.kind ?? null}
+            linkRttMs={session.webrtcTransport?.rttMs ?? null}
+            sessionPhase={session.phase}
           />
           {/* Right-hand action cluster. `spacing={0.25}` keeps the two
               buttons visually grouped (they're both "session-level
@@ -502,7 +564,9 @@ function ConnectedSession({
               color="primary"
               disabled={leaving}
               edge="end"
-              sx={{ flexShrink: 0 }}
+              // Half the IconButton's intrinsic right padding (8 -> 4px)
+              // so the glyph sits closer to the screen edge.
+              sx={{ flexShrink: 0, pr: 0 }}
             >
               <PowerSettingsNewIcon sx={{ fontSize: 24 }} />
             </IconButton>
@@ -560,17 +624,21 @@ function ConnectedSession({
               }}
             >
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <ConversationPanel session={session} orbRef={orbRef} />
+                <ConversationPanel
+                  session={session}
+                  orbRef={orbRef}
+                  active={tab === 'conv'}
+                />
               </Box>
             </Box>
           )}
 
-          {tab === 'apps' && !leaving && (
+          {appsMounted && !leaving && (
             <Box
               sx={{
                 flex: 1,
                 minHeight: 0,
-                display: 'flex',
+                display: tab === 'apps' ? 'flex' : 'none',
                 flexDirection: 'column',
               }}
             >
@@ -587,14 +655,47 @@ function ConnectedSession({
               <ConnectingView state="connecting" />
             </Overlay>
           )}
+
+          {/* Tab-switch cover: a centered spinner shown for the
+              minimum-duration beat after a conv <-> apps switch (see
+              `handleTabChange`). Sits above both tab columns in the
+              content area (below the header + bottom nav) so the new
+              tab hydrates underneath it without flashing a half-built
+              frame. Fades in/out for a smooth transition, and uses a
+              high local `zIndex` (10) so it covers the Apps tab's
+              sticky search bar (`zIndex: 2`), which would otherwise
+              poke through the cover. */}
+          <Fade in={tabSpinner} timeout={{ enter: 0, exit: 350 }} unmountOnExit>
+            <Box
+              sx={theme => ({
+                position: 'absolute',
+                // Full-bleed: the content column is `maxWidth`-capped
+                // and centered, but the Apps tab escapes to `100vw`,
+                // so an `inset: 0` cover would leave the tab content
+                // peeking past its left/right edges. Span the whole
+                // viewport width instead so the cover is flush.
+                top: 0,
+                bottom: 0,
+                left: '50%',
+                width: '100vw',
+                transform: 'translateX(-50%)',
+                zIndex: 10,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                bgcolor: theme.palette.background.default,
+              })}
+            >
+              <CircularProgress size={32} sx={{ color: 'grey.300' }} />
+            </Box>
+          </Fade>
         </Box>
 
         <BottomNavigation
           value={tab}
           showLabels
           onChange={(_, value: Tab) => {
-            if (leaving) return;
-            setTab(value);
+            handleTabChange(value);
           }}
           sx={theme => ({
             flexShrink: 0,
@@ -758,12 +859,13 @@ function ConnectedSession({
             The overlay still covers the body + the bottom nav, so
             tab switching is suppressed while info is up (no
             ambiguous "I'm reading logs of which tab?" state).
-              - `top: max(76px, safe-area + 70px)` is the exact
-                total height of the session topbar:
-                  desktop  : max(76, 0+70)  = 76 ✓
-                  iPhone X : max(76, 47+70) = 117 ✓
+              - `top: max(68px, safe-area + 62px)` is the exact
+                total height of the session topbar (pt 10 + ~40
+                content + pb 12 = 62 above the inset):
+                  desktop  : max(68, 0+62)  = 68 ✓
+                  iPhone X : max(68, 47+62) = 109 ✓
                 The `max()` accounts for the topbar's `minHeight:
-                76` floor on platforms without a notch.
+                68` floor on platforms without a notch.
               - zIndex 1200 stays above body content / bottom nav
                 but BELOW the AppIframeOverlay / FullScreenTransition
                 layer (1300) so a connecting / leaving / iframe-open
@@ -772,7 +874,7 @@ function ConnectedSession({
           <Box
             sx={{
               position: 'fixed',
-              top: 'max(76px, calc(env(safe-area-inset-top, 0px) + 70px))',
+              top: 'max(68px, calc(env(safe-area-inset-top, 0px) + 62px))',
               left: 0,
               right: 0,
               bottom: 0,
@@ -781,8 +883,9 @@ function ConnectedSession({
           >
             <RobotInfoPanel
               onClose={() => setInfoOpen(false)}
+              hardwareId={robotHardwareId}
+              fallbackId={robotId}
               username={username}
-              sessionPhase={session.phase}
               session={session}
               isLive={session.hasReachedReady}
             />

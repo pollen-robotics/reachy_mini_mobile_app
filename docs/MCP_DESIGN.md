@@ -1,9 +1,10 @@
 # MCP server for Reachy Mini, design proposal
 
 > Status: design draft, May 2026.
-> Companion docs: [`VISION.md`](./VISION.md), [`ROADMAP.md`](./ROADMAP.md),
-> [`CONNECTION_FLOW.md`](./CONNECTION_FLOW.md), and the parent
-> `reachy-mobile-2026-analysis.md` at the project-folder root.
+> Companion docs: [`APPS_TAB_REDESIGN.md`](./APPS_TAB_REDESIGN.md) and
+> the App Store readiness docs
+> ([`APP_STORE_COMPLIANCE.md`](./APP_STORE_COMPLIANCE.md),
+> [`APP_STORE_AUDIT_2026-05.md`](./APP_STORE_AUDIT_2026-05.md)).
 
 ## Why this doc exists
 

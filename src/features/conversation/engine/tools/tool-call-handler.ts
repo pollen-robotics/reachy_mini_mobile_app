@@ -1,15 +1,15 @@
 /**
  * Tool-call handler.
  *
- * Owns the side of the engine that reacts to OpenAI Realtime tool
+ * Owns the side of the engine that reacts to realtime tool
  * calls (`move_head`, `play_move`, `remember`, `forget`, …):
  *
  *   - Surfaces a friendly toast label via the host's
  *     `onToolToast` callback.
  *   - Forwards the action to the right downstream module (head
  *     pose, MovePlayer, memory store).
- *   - Reports the outcome back to OpenAI through
- *     `openai.sendToolResponse()` so the model can chain.
+ *   - Reports the outcome back through `sendToolResponse()` so the
+ *     model can chain.
  *
  * The handler also owns:
  *   - the lazily-created `MovePlayer` (one per session),
@@ -29,6 +29,7 @@ import { MovePlayer, MOVE_IDS, type MoveId } from "../../motion/move-player";
 import { HEAD_POSES, type HeadPoseName } from "../tools";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type { ConversationToolToastEvent } from "../types";
+import type { LookResult } from "../../vision/types";
 
 export interface ToolCallEvent {
   callId: string;
@@ -41,11 +42,11 @@ export interface ToolCallHandlerDeps {
   getRobot: () => ReachyMiniInstance | null;
   /**
    * Send the tool result back through whatever bridge is currently
-   * holding the OpenAI session. Returns `false` when there's no
+   * holding the realtime session. Returns `false` when there's no
    * live client (e.g. the engine raced a teardown), in which case
    * the handler swallows the result silently.
    *
-   * Decoupled from `OpenaiRealtimeClient` directly so the handler
+   * Decoupled from the realtime client directly so the handler
    * doesn't have to know about the bridge's internals.
    */
   sendToolResponse: (
@@ -62,6 +63,11 @@ export interface ToolCallHandlerDeps {
   /** Forwarded host callback for the orb toast. The handler
    *  formats the label; the host owns the rendering / dismissal. */
   onToolToast?: (toast: ConversationToolToastEvent) => void;
+  /** On-demand camera look, backing the `look` tool. Resolves to a
+   *  scene description or a failure message; never throws. Optional:
+   *  `undefined` when vision is off (the tool isn't registered then,
+   *  but the handler guards anyway). */
+  look?: () => Promise<LookResult>;
 }
 
 export interface ToolCallHandler {
@@ -79,6 +85,9 @@ export interface ToolCallHandler {
 }
 
 const TOOL_TOAST_DURATION_MS = 2800;
+// Errors linger a touch longer than the normal "running" pill so the
+// user actually catches that something went wrong.
+const TOOL_TOAST_ERROR_DURATION_MS = 4200;
 const HEAD_POSE_HOLD_MS = 1200;
 
 export function createToolCallHandler(
@@ -87,10 +96,17 @@ export function createToolCallHandler(
   let movePlayer: MovePlayer | null = null;
   let toolPoseRestoreTimer: number | null = null;
 
-  const showToolToast = (text: string, durationMs = TOOL_TOAST_DURATION_MS): void => {
+  const showToolToast = (
+    text: string,
+    opts: { durationMs?: number; variant?: "info" | "error" } = {},
+  ): void => {
     if (!deps.onToolToast) return;
     try {
-      deps.onToolToast({ label: text, durationMs });
+      deps.onToolToast({
+        label: text,
+        durationMs: opts.durationMs ?? TOOL_TOAST_DURATION_MS,
+        variant: opts.variant ?? "info",
+      });
     } catch (err) {
       console.warn("[tool-call-handler] onToolToast threw:", err);
     }
@@ -183,6 +199,20 @@ export function createToolCallHandler(
         }
         break;
       }
+      case "look": {
+        if (!deps.look) {
+          result = {
+            ok: false,
+            message: "vision is not available in this session",
+          };
+          break;
+        }
+        const look = await deps.look();
+        result = look.ok
+          ? { ok: true, message: look.description ?? look.message }
+          : { ok: false, message: look.message };
+        break;
+      }
       case "remember": {
         const fact = String(args.fact ?? "");
         const stored = memoryStore.add(fact);
@@ -235,6 +265,22 @@ export function createToolCallHandler(
         result = { ok: false, message: `unknown tool '${name}'` };
     }
 
+    // Surface failures in the UI: the pending "running" pill would
+    // otherwise just fade out and the user would never learn the
+    // action failed (e.g. the VLM behind `look` errored or returned
+    // an empty description). The model still gets the full
+    // `result.message` via `sendToolResponse` below for its own
+    // recovery / explanation to the user.
+    if (!result.ok) {
+      console.warn(
+        `[tool-call-handler] tool '${name}' failed: ${result.message}`,
+      );
+      showToolToast(describeToolError(name), {
+        durationMs: TOOL_TOAST_ERROR_DURATION_MS,
+        variant: "error",
+      });
+    }
+
     deps.sendToolResponse(callId, result);
   };
 
@@ -279,6 +325,8 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
       const move = String(args.name ?? "");
       return move ? `Playing ${move}` : "Playing move";
     }
+    case "look":
+      return "Taking a look";
     case "remember": {
       // Truncated preview so the toast pill stays compact even
       // when the model writes a long fact.
@@ -295,5 +343,27 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
     }
     default:
       return `Tool: ${name}`;
+  }
+}
+
+/**
+ * Short, user-facing error label for the failure toast. Intentionally
+ * concise (the pill stays compact); the detailed reason is logged and
+ * sent to the model via `sendToolResponse`, not crammed into the pill.
+ */
+function describeToolError(name: string): string {
+  switch (name) {
+    case "look":
+      return "Couldn't take a look";
+    case "play_move":
+      return "Couldn't play that move";
+    case "move_head":
+      return "Couldn't move my head";
+    case "remember":
+      return "Couldn't save that";
+    case "forget":
+      return "Couldn't forget that";
+    default:
+      return "Something went wrong";
   }
 }

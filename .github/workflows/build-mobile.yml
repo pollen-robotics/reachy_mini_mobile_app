@@ -4,6 +4,21 @@ name: Build mobile
 #   - push to a `v*` tag         → builds iOS + Android, uploads to the matching release
 #   - manual dispatch            → builds iOS + Android as artifacts (no release attach)
 #
+# Versioning (single source of truth = the git tag)
+# ─────────────────────────────────────────────────
+# A release NEVER requires bumping tauri.conf.json / package.json.
+# On a `vX.Y.Z` tag push the signed jobs derive the marketing version
+# (X.Y.Z) from the tag and inject it at build time via `--config version`:
+#   - iOS    : CFBundleShortVersionString := X.Y.Z; CFBundleVersion
+#              (build number) := github.run_number.
+#   - Android: versionName := X.Y.Z; versionCode := Tauri-derived from
+#              the version (major*1_000_000 + minor*1_000 + patch),
+#              monotonic as long as the marketing version increases.
+# The in-app version (__APP_VERSION__ on the splash) is baked by Vite
+# from the APP_VERSION env, also exported from the tag, so it matches.
+# The version in tauri.conf.json / package.json is only the local-dev /
+# non-tag default; it is overridden on every tagged release.
+#
 # What this workflow builds today
 # ───────────────────────────────
 # iOS    : *simulator* build (`aarch64-apple-ios-sim`). No code signing required,
@@ -63,11 +78,13 @@ on:
         # signs + uploads to Play Internal) even though we're on a
         # branch and not a tag. Useful for validating the
         # release/signing/Play-upload pipeline without burning a tag.
-        # versionCode is still derived from `github.run_number` so
-        # each manual run gets a fresh code Play will accept; the
-        # versionName comes from `tauri.conf.json` (testers see the
-        # same string as the most recent tag, just with a higher
-        # build number).
+        # On a non-tag run, versionName / versionCode come from
+        # tauri.conf.json (no tag to derive from), so the Play upload
+        # may be rejected for a duplicate versionCode unless the config
+        # version was bumped first — this hatch is mainly for validating
+        # the build + signing, not for repeat Play uploads. On a real
+        # tag push the version comes from the tag (see the build step's
+        # `--config version`).
         description: 'Run signed Android release (Play Internal upload)'
         type: boolean
         default: false
@@ -272,6 +289,20 @@ jobs:
         # Disabling signing for this job (only) avoids the check
         # entirely. The signed device build runs in `ios-release` with
         # its own keychain + provisioning profile setup.
+        #
+        # We also force-link AuthenticationServices.framework here.
+        # `tauri-plugin-auth-session` (HF OAuth via
+        # ASWebAuthenticationSession) makes the Rust staticlib
+        # (`libapp.a`) reference `_ASWebAuthenticationSessionErrorDomain`.
+        # On the *device* SDK the framework gets autolinked, but the
+        # *simulator* link drops it, so the unsigned sim build fails at
+        # the link step with:
+        #   Undefined symbols for architecture arm64:
+        #     "_ASWebAuthenticationSessionErrorDomain"
+        #   ld: symbol(s) not found for architecture arm64
+        # The regenerated project has no OTHER_LDFLAGS at all, so we
+        # inject one. `$(inherited)` keeps any default flags Xcode would
+        # otherwise apply.
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
@@ -291,6 +322,7 @@ jobs:
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
               '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
               '\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "";\n'
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework AuthenticationServices";\n'
           )
           new_content, n = re.subn(
               r'(buildSettings = \{\n)',
@@ -461,6 +493,72 @@ jobs:
               fi
             done
           fi
+
+      - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
+        # Two patches, applied together:
+        #
+        # 1. Add RECORD_AUDIO, MODIFY_AUDIO_SETTINGS, CAMERA so the
+        #    WebView can grant those to iframe-hosted HF Spaces.
+        # 2. Strip ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION via
+        #    `tools:node="remove"`. tauri-plugin-blec transitively
+        #    declares both for pre-Android-12 BLE scanning, but no
+        #    shipping Space surfaces geolocation and an unused
+        #    "Location" permission on the Play listing is an App
+        #    Review / Play Console red flag. Trade-off: BLE WiFi
+        #    provisioning won't work on Android 8-11. Android 12+ is
+        #    unaffected because blec also declares BLUETOOTH_SCAN
+        #    with `neverForLocation`.
+        #
+        # Idempotent — re-running is a no-op once RECORD_AUDIO is in
+        # the manifest.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+          # Lock the app to portrait (Android rotation block; mirrors the
+          # iOS UISupportedInterfaceOrientations=Portrait in Info.plist).
+          # The whole layout assumes a tall ~420px column; landscape breaks
+          # the orb + safe-area math. Added to the MainActivity <activity>.
+          if "screenOrientation" not in s:
+              s2 = re.sub(
+                  r'(android:name="[^"]*MainActivity")',
+                  r'\1\n            android:screenOrientation="portrait"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::warning::MainActivity activity not matched for screenOrientation.", file=sys.stderr)
+              else:
+                  print("Locked MainActivity to portrait.")
+              s = s2
+          if "RECORD_AUDIO" not in s:
+              perms = (
+                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+                  '    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n'
+                  '    <uses-permission android:name="android.permission.CAMERA" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />\n\n'
+                  '    <!-- AndroidTV support -->'
+              )
+              s2 = s.replace('    <!-- AndroidTV support -->', perms, 1)
+              if s2 == s:
+                  print("::error::<!-- AndroidTV support --> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Injected app permissions + location-strip overrides.")
+          else:
+              print("Permissions already present, skipping.")
+          p.write_text(s)
+          PY
 
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
         # `tauri-plugin-auth-session` declares `AuthSessionActivity`
@@ -899,7 +997,25 @@ jobs:
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -uxo pipefail
-          BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" '{bundle:{iOS:{bundleVersion:$bv}}}')
+          # Marketing version (CFBundleShortVersionString) is derived
+          # from the git tag, so a release never requires bumping
+          # tauri.conf.json / package.json: push `vX.Y.Z` and the build
+          # ships X.Y.Z. The build number (CFBundleVersion) stays pinned
+          # to github.run_number so each upload is unique. On a non-tag
+          # run (workflow_dispatch) we keep the version from
+          # tauri.conf.json and only override the build number.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+            BUNDLE_VERSION_CONFIG=$(jq -nc --arg v "$MARKETING_VERSION" --arg bv "${{ github.run_number }}" \
+              '{version:$v, bundle:{iOS:{bundleVersion:$bv}}}')
+            # In-app version (__APP_VERSION__ on the splash) is baked by
+            # Vite from APP_VERSION; export it so it matches the native
+            # CFBundleShortVersionString set just above.
+            export APP_VERSION="$MARKETING_VERSION"
+          else
+            BUNDLE_VERSION_CONFIG=$(jq -nc --arg bv "${{ github.run_number }}" \
+              '{bundle:{iOS:{bundleVersion:$bv}}}')
+          fi
           echo "Injecting Tauri config override: $BUNDLE_VERSION_CONFIG"
           yarn tauri ios build --target aarch64 \
             --export-method app-store-connect \
@@ -1212,8 +1328,8 @@ jobs:
             done
           fi
 
-      - name: Patch Android Gradle config (minSdk, applicationId, versionCode, signing)
-        # The debug job only patches minSdk. Release adds three more:
+      - name: Patch Android Gradle config (minSdk, applicationId, signing)
+        # The debug job only patches minSdk. Release adds two more:
         #
         # - applicationId: Tauri derives it from `tauri.conf.json`'s
         #   identifier (com.pollen-robotics.reachy-mini) by replacing
@@ -1225,10 +1341,9 @@ jobs:
         #   stay as-generated, since Android allows applicationId to
         #   differ from the source package.
         #
-        # - versionCode: Play rejects re-uploads with a versionCode
-        #   that's already been used. We pin it to GITHUB_RUN_NUMBER
-        #   (monotonically increasing across the entire repo) so each
-        #   tag push gets a fresh code without manual coordination.
+        # versionName / versionCode are NOT patched here (Tauri re-syncs
+        # them from config on every build); they come from the git tag
+        # via `--config version` on the build step below.
         #
         # - signingConfigs.release + buildTypes.release.signingConfig:
         #   wires our keystore (decoded above) into the release build.
@@ -1256,18 +1371,14 @@ jobs:
               print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
           s = s2
 
-          # 2. versionCode := GITHUB_RUN_NUMBER (monotonic, never collides).
-          run_no = int(os.environ["GITHUB_RUN_NUMBER"])
-          s3 = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {run_no}', s, count=1)
-          if s3 == s:
-              # Some Tauri versions don't emit versionCode at all; inject one.
-              s3 = re.sub(
-                  r'(defaultConfig\s*\{)',
-                  rf'\1\n        versionCode = {run_no}',
-                  s,
-                  count=1,
-              )
-          s = s3
+          # NB: versionName / versionCode are intentionally NOT patched
+          # here. Tauri re-syncs both from the (effective) config on
+          # every `tauri android build`, overwriting any gradle edit, so
+          # patching them here is a no-op. They are instead driven from
+          # the git tag via `--config version` on the build step below:
+          # versionName := X.Y.Z and versionCode := derived by Tauri
+          # (major*1_000_000 + minor*1_000 + patch), which is monotonic
+          # as long as the marketing version increases.
 
           # 3. signingConfigs block — read from env at build time.
           signing_block = (
@@ -1312,6 +1423,59 @@ jobs:
           p.write_text(s)
           print("--- patched build.gradle.kts ---")
           print(s)
+          PY
+
+      - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
+        # Mirror of the debug job's "Patch AndroidManifest
+        # (app permissions + strip GPS injected by blec)" step. See
+        # that step for the full rationale. Idempotent.
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          if "xmlns:tools" not in s:
+              s2 = re.sub(
+                  r'(<manifest\s+xmlns:android="[^"]+")',
+                  r'\1\n          xmlns:tools="http://schemas.android.com/tools"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::error::<manifest> root not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+          # Lock the app to portrait (Android rotation block; mirrors the
+          # iOS UISupportedInterfaceOrientations=Portrait in Info.plist).
+          # The whole layout assumes a tall ~420px column; landscape breaks
+          # the orb + safe-area math. Added to the MainActivity <activity>.
+          if "screenOrientation" not in s:
+              s2 = re.sub(
+                  r'(android:name="[^"]*MainActivity")',
+                  r'\1\n            android:screenOrientation="portrait"',
+                  s, count=1,
+              )
+              if s2 == s:
+                  print("::warning::MainActivity activity not matched for screenOrientation.", file=sys.stderr)
+              else:
+                  print("Locked MainActivity to portrait.")
+              s = s2
+          if "RECORD_AUDIO" not in s:
+              perms = (
+                  '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+                  '    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n'
+                  '    <uses-permission android:name="android.permission.CAMERA" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />\n'
+                  '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />\n\n'
+                  '    <!-- AndroidTV support -->'
+              )
+              s2 = s.replace('    <!-- AndroidTV support -->', perms, 1)
+              if s2 == s:
+                  print("::error::<!-- AndroidTV support --> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Injected app permissions + location-strip overrides.")
+          else:
+              print("Permissions already present, skipping.")
+          p.write_text(s)
           PY
 
       - name: Patch AndroidManifest (reachymini:// intent-filter for AuthSessionActivity)
@@ -1379,7 +1543,24 @@ jobs:
         # `--apk --aab` produces both: APK for sideload-on-device QA
         # (downloaded from the workflow run page if needed); AAB for
         # the Play upload below.
-        run: yarn tauri android build --apk --aab
+        #
+        # On a tag, the marketing version comes from the tag:
+        #   - `--config version` makes Tauri set versionName := X.Y.Z and
+        #     derive a fresh versionCode (no gradle patching, which Tauri
+        #     would overwrite anyway).
+        #   - APP_VERSION makes Vite bake the same string into the in-app
+        #     version (__APP_VERSION__ on the splash).
+        # Non-tag runs fall back to tauri.conf.json / package.json.
+        run: |
+          set -euxo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+            export APP_VERSION="$MARKETING_VERSION"
+            CONFIG=$(jq -nc --arg v "$MARKETING_VERSION" '{version:$v}')
+            yarn tauri android build --apk --aab --config "$CONFIG"
+          else
+            yarn tauri android build --apk --aab
+          fi
 
       - name: Locate signed outputs
         id: pack

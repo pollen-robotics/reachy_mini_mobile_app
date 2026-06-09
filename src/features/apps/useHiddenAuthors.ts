@@ -8,15 +8,11 @@
  * `localStorage` and applied client-side: the apps list filters
  * them out before any virtualisation / search / categorisation
  * runs, so the user simply doesn't see them anywhere in the
- * Apps tab. The revoke list lives in the `HelpAndSupportSheet`
+ * Apps tab. The revoke list lives in the `HelpAndSupportOverlay`
  * so the user can un-hide an author after a misclick.
  *
  * Design notes
  * ────────────
- * - Mirrors `usePinnedApps` exactly: `localStorage` + a small
- *   imperative API + cross-tab sync via the `storage` event.
- *   Same pattern means same audit story, same testability, no
- *   new dependencies.
  * - Key by `author` (not `app.id`): hiding the author is the
  *   stronger affordance and the one Apple cares about
  *   ("block abusive USERS"). If we ever need to hide a single
@@ -26,13 +22,31 @@
  *   (separate work) is the platform-level kill-switch; this
  *   hook is the user-level escape hatch.
  *
+ * Shared store
+ * ────────────
+ * The state is hoisted to module-level (not `useState` per hook
+ * instance) so every consumer reads/writes the same source of
+ * truth. This is what guarantees that when `AppActionsMenu` calls
+ * `hide(author)`, the `AppsTabView`'s filter and the
+ * `HelpAndSupportOverlay`'s revoke list both re-render
+ * immediately. The previous per-instance `useState`
+ * implementation only synced via the `storage` event, which
+ * Chrome/Safari deliberately do NOT fire in the same tab that
+ * triggered the write - hence the visible delay before a hidden
+ * author actually disappeared from the catalog.
+ *
+ * `useSyncExternalStore` is React's blessed pattern for this and
+ * also gives us concurrent-rendering safety for free (no tearing
+ * if React paints two sub-trees that both read from the store
+ * during the same commit).
+ *
  * Privacy
  * ───────
  * The list is a plain string array of HF usernames. It does
  * not leave the device. It's not synced across phones; if the
  * user reinstalls the app, the hidden list resets.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
 /** localStorage key. Same `reachy.` namespace as the pin store. */
 const STORAGE_KEY = 'reachy.apps.hiddenAuthors';
@@ -53,8 +67,9 @@ interface UseHiddenAuthorsReturn {
 }
 
 function readStorage(): string[] {
+  if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -65,8 +80,9 @@ function readStorage(): string[] {
 }
 
 function writeStorage(ids: string[]): void {
+  if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
   } catch {
     // localStorage may be unavailable (private mode on iOS,
     // quota exceeded). Silently fail; the in-memory state still
@@ -74,48 +90,80 @@ function writeStorage(ids: string[]): void {
   }
 }
 
+// ───────────────────────────────────────────────────────────
+// Module-level shared store
+// ───────────────────────────────────────────────────────────
+//
+// `snapshot` is the single source of truth read by every
+// `useHiddenAuthors()` consumer. It's a frozen array so React
+// can identity-compare it cheaply between renders; we replace it
+// (never mutate) on every write so subscribers see a new
+// reference and re-render.
+
+let snapshot: ReadonlyArray<string> = Object.freeze(readStorage());
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): ReadonlyArray<string> {
+  return snapshot;
+}
+
+function setSnapshot(next: ReadonlyArray<string>): void {
+  if (next === snapshot) return;
+  snapshot = Object.freeze([...next]);
+  writeStorage([...snapshot]);
+  notify();
+}
+
+// Cross-tab / cross-WebView sync. The `storage` event only fires
+// on tabs *other* than the one that wrote the value, so it's the
+// right channel for syncing across split-screen WebViews on iPad
+// or two browser tabs - same-tab consumers are already covered
+// by the shared module state above.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== STORAGE_KEY) return;
+    snapshot = Object.freeze(readStorage());
+    notify();
+  });
+}
+
+// ───────────────────────────────────────────────────────────
+// Hook
+// ───────────────────────────────────────────────────────────
+
 export function useHiddenAuthors(): UseHiddenAuthorsReturn {
-  const [ids, setIds] = useState<string[]>(() => readStorage());
-
-  // Cross-tab / cross-WebView sync: re-read on `storage` events.
-  // The store is mutated from two surfaces (the kebab menu on
-  // tiles + the revoke list inside Help & Support), and both can
-  // be visible "simultaneously" on iPad / split-screen Android.
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY) return;
-      setIds(readStorage());
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
+  const frozenIds = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // Materialise a mutable copy at the hook boundary so consumers
+  // don't accidentally try to push to a frozen array. The
+  // identity changes only when the frozen snapshot changes, so
+  // `useMemo` keeps it stable across unrelated re-renders.
+  const ids = useMemo(() => [...frozenIds], [frozenIds]);
   const set = useMemo(() => new Set(ids), [ids]);
 
   const hide = useCallback((author: string): void => {
-    setIds((prev) => {
-      if (prev.includes(author)) return prev;
-      const next = [...prev, author];
-      writeStorage(next);
-      return next;
-    });
+    if (snapshot.includes(author)) return;
+    setSnapshot([...snapshot, author]);
   }, []);
 
   const unhide = useCallback((author: string): void => {
-    setIds((prev) => {
-      if (!prev.includes(author)) return prev;
-      const next = prev.filter((x) => x !== author);
-      writeStorage(next);
-      return next;
-    });
+    if (!snapshot.includes(author)) return;
+    setSnapshot(snapshot.filter((x) => x !== author));
   }, []);
 
   const clear = useCallback((): void => {
-    setIds((prev) => {
-      if (prev.length === 0) return prev;
-      writeStorage([]);
-      return [];
-    });
+    if (snapshot.length === 0) return;
+    setSnapshot([]);
   }, []);
 
   const isHidden = useCallback(

@@ -29,6 +29,7 @@ import type { ReactNode } from 'react';
 import { Box, Button, Stack, Typography } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
+import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface AppRailProps {
@@ -41,6 +42,13 @@ interface AppRailProps {
    * "Pinned" rail, where the user already manages the list).
    */
   count?: number;
+  /**
+   * Optional sub-line rendered under the heading, REPLACING the
+   * default `{count} apps` line (e.g. `@username - 3 apps` for the
+   * "Your apps" rail). Same quiet secondary-color treatment as the
+   * count line. When provided, `count` is ignored.
+   */
+  subLabel?: ReactNode;
   /** Optional handler for the trailing "See ›" tap. */
   onSeeAll?: () => void;
   /**
@@ -62,6 +70,7 @@ interface AppRailProps {
 export default function AppRail({
   label,
   count,
+  subLabel,
   onSeeAll,
   children,
   paddingX = 3,
@@ -100,17 +109,33 @@ export default function AppRail({
           >
             {label}
           </Typography>
-          {typeof count === 'number' && (
+          {subLabel != null ? (
             <Typography
               sx={{
                 fontSize: TYPO.xs,
                 color: 'text.secondary',
                 lineHeight: 1.2,
                 mt: 0.25,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              {count} app{count === 1 ? '' : 's'}
+              {subLabel}
             </Typography>
+          ) : (
+            typeof count === 'number' && (
+              <Typography
+                sx={{
+                  fontSize: TYPO.xs,
+                  color: 'text.secondary',
+                  lineHeight: 1.2,
+                  mt: 0.25,
+                }}
+              >
+                {count} app{count === 1 ? '' : 's'}
+              </Typography>
+            )
           )}
         </Stack>
         {onSeeAll && (
@@ -120,25 +145,7 @@ export default function AppRail({
             color="primary"
             size="small"
             endIcon={<ChevronRightIcon sx={{ fontSize: TYPO.lg }} />}
-            sx={{
-              flexShrink: 0,
-              fontSize: TYPO.xs,
-              fontWeight: FONT_WEIGHT.semibold,
-              // Sentence-case label - the verb "See all" reads
-              // better as itself than as SCREAMING.
-              textTransform: 'none',
-              // Tight padding so the chip-style outline doesn't
-              // overpower the rail label on its left.
-              minWidth: 0,
-              lineHeight: 1.4,
-              px: 1.25,
-              py: 0.25,
-              // Pull the chevron in closer to the label - MUI's
-              // default `endIcon` margin is 8 px which floats
-              // the chevron away from "See all" and breaks the
-              // single-glance reading.
-              '& .MuiButton-endIcon': { ml: 0.25 },
-            }}
+            sx={railActionButtonSx}
           >
             See all
           </Button>

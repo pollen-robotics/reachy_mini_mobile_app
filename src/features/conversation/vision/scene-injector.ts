@@ -1,20 +1,19 @@
 /**
  * Scene description → Realtime context injector.
  *
- * Builds a `conversation.item.create` event with the description
- * wrapped in a `<scene_observation>` block and ships it over the
- * `RealtimePort`. No `response.create` follow-up: we are adding
- * background context, NOT asking the model to speak. The model only
- * reacts when the user actually says something.
+ * Mirrors a `look` result back into the conversation as a
+ * `conversation.item.create` event, wrapping the description in a
+ * `<scene_observation>` block, so later turns can reference "what you
+ * saw" even after the tool output ages out of context. No
+ * `response.create` follow-up: this is context, NOT a prompt to speak
+ * (the model already spoke from the tool result on the original look).
  *
  * Role is `"user"` because the Realtime API doesn't accept arbitrary
- * `system` items mid-conversation. The `<scene_observation>` tag +
- * the system-prompt appendix in `prompt-fragment.ts` are what teach
- * the model to treat the message as passive context instead of a
- * direct user utterance.
+ * `system` items mid-conversation. The `<scene_observation>` tag marks
+ * it as a camera memory rather than a fresh user utterance.
  */
 
-import type { RealtimePort } from "../engine/bridge/openai-bridge";
+import type { RealtimePort } from "../engine/realtime/types";
 import type { SceneTrigger } from "./types";
 
 export interface SceneInjector {

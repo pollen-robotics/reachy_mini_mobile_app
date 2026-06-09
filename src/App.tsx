@@ -11,8 +11,10 @@ import RobotSessionScreen, {
 } from '@/ui/screens/RobotSessionScreen';
 import SetupWizardScreen from '@/ui/screens/SetupWizardScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
-import { useRemoteHfToken } from '@/features/auth/useRemoteHfToken';
+import { useRemoteHfToken, isHfTokenExpired } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
+import { usePrefetchMyApps } from '@/features/apps/useMyApps';
+import { usePrefetchSpaceLikes } from '@/features/apps/useSpaceLikes';
 import { useTosConsent } from '@/features/consent/useTosConsent';
 
 type Screen = 'scan' | 'session' | 'setup';
@@ -71,6 +73,18 @@ export default function App() {
   // JS session and is naturally refreshed on cold start.
   usePrefetchApps();
 
+  // Same warm-up for the "Your apps" rail (the user's own Reachy
+  // Spaces on HF, private included). Unifies the boot-time network
+  // calls with the catalog above: both lists are fetched once at
+  // start and shared via TanStack Query. No-ops while signed out.
+  usePrefetchMyApps();
+
+  // And the user's liked-Spaces set, so the hearts on the Apps tab
+  // are already filled in on first paint instead of hydrating only
+  // when the apps panel mounts. Same boot-time pattern as the two
+  // prefetches above; no-ops while signed out.
+  usePrefetchSpaceLikes();
+
   const backToScan = (): void => {
     setTarget(null);
     setScreen('scan');
@@ -99,8 +113,15 @@ export default function App() {
     return <EulaConsentModal onAccept={consent.accept} />;
   }
 
-  // Auth gate: no token → sign-in is the whole UI.
-  if (!token) {
+  // Auth gate: no token — OR an expired OAuth token — → sign-in is
+  // the whole UI. Without the expiry check a stale-but-present token
+  // is truthy, so the app silently replays a dead token forever (the
+  // far-future SDK stamp hides expiry), 401-ing every direct HF call
+  // with no in-app way to recover. Treating an expired token as
+  // "needs sign-in" surfaces the OAuth flow so the user re-auths.
+  // Gate-only: the SDK's `hf_token_expires` stays far-future, so the
+  // central-tolerant connect path is unchanged.
+  if (!token || isHfTokenExpired(token)) {
     return (
       <Box
         sx={{

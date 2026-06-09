@@ -2,8 +2,10 @@
  * Personality domain types.
  *
  * A personality is the "skin" applied to the conversation:
- *   - `instructions`: system prompt fed to the OpenAI Realtime model
- *   - `voice`        : OpenAI voice id used to synthesise responses
+ *   - `instructions`: system prompt fed to the realtime backend
+ *   - `voices`       : one synth voice per realtime backend (HF +
+ *                      OpenAI), resolved by the engine against the
+ *                      active backend
  *   - `glow`         : accent colour driving the orb's warm-up states
  *                      (idle / connecting / ready). Mid-conversation
  *                      states (listening / processing / ai-speaking)
@@ -22,6 +24,22 @@
 
 export type PersonalityKind = 'builtin' | 'custom';
 
+/**
+ * Per-backend synth voice assignment. Each realtime backend exposes a
+ * disjoint voice catalog (HF Qwen3-TTS speakers vs OpenAI realtime
+ * voices), so a persona pins one id for each. The engine reads the
+ * entry matching the active backend at connection time. There is no
+ * manual voice picker: built-ins ship a curated pair, and custom
+ * personas get one authored from their vibe (the OpenAI entry is
+ * derived from the HF pick via a fixed mapping).
+ */
+export interface PersonaVoices {
+  /** Hugging Face Qwen3-TTS speaker id (e.g. `Aiden`). */
+  huggingface: string;
+  /** OpenAI realtime voice id (e.g. `cedar`). */
+  openai: string;
+}
+
 export interface Personality {
   /** Stable identifier. Built-in: `builtin:<slug>`. Custom: `custom:<slug>`. */
   id: string;
@@ -34,12 +52,12 @@ export interface Personality {
   /** One-liner shown as a teaser under the avatar in the strip and
    *  in the create modal preview. */
   tagline: string;
-  /** Full system prompt sent to the OpenAI Realtime model. */
+  /** Full system prompt sent to the realtime backend. */
   instructions: string;
-  /** OpenAI Realtime voice id (cedar / alloy / ash / ballad / coral /
-   *  echo / sage / shimmer / verse / marin). Empty string falls back
-   *  to the engine's `DEFAULT_VOICE`. */
-  voice: string;
+  /** One synth voice per realtime backend. The engine picks the entry
+   *  matching the active backend; an empty/unknown id falls back to
+   *  that backend's default voice. */
+  voices: PersonaVoices;
   /** Hex colour used for the orb glow during warm-up states. */
   glow: string;
   /** Vite-imported avatar URL. */
@@ -48,13 +66,22 @@ export interface Personality {
 
 /**
  * Shape of the data the user supplies when creating a custom
- * personality. Voice / glow are optional - we fall back to the
- * default values when the user doesn't pick them.
+ * personality. Voices / glow are optional - we fall back to the
+ * default values when they're absent. The voice picker is gone: the
+ * generator supplies the HF voice (the OpenAI entry is derived), and a
+ * plain edit omits `voices` to keep the persona's existing pair.
  */
 export interface CustomPersonalityInput {
   name: string;
   tagline?: string;
   instructions: string;
-  voice?: string;
+  voices?: Partial<PersonaVoices>;
   glow?: string;
+  /**
+   * Avatar image src. Usually a generated-sticker data URI
+   * (`data:image/svg+xml;...` or `data:image/png;base64,...`). When
+   * omitted on create we fall back to `DEFAULT_AVATAR_URL`; when
+   * omitted on update we keep the persona's current avatar.
+   */
+  avatar?: string;
 }

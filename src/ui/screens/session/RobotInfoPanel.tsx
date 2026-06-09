@@ -47,8 +47,8 @@
  * ────────────────────────────────────
  * This component is a self-sized flex column (`height: 100%`); the
  * HOST is responsible for placing it via a `position: fixed`
- * wrapper that sits BELOW the session topbar (`top: max(76px,
- * env(safe-area-inset-top) + 70px)`) and covers everything down
+ * wrapper that sits BELOW the session topbar (`top: max(68px,
+ * env(safe-area-inset-top) + 62px)`) and covers everything down
  * to the bottom of the viewport (body + bottom nav). The expected
  * pattern in `RobotSessionScreen` is:
  *
@@ -88,7 +88,7 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
 import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
-import type { RobotSessionHandle, SessionPhase } from '@/features/robot-session/useRobotSession';
+import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
 import Section from '@/ui/design/Section';
@@ -108,43 +108,19 @@ const KIND_META = {
   relay: { label: 'Relay', color: STATUS.warning },
 } as const;
 
-/**
- * Per-phase label + dot colour for the `Session` row in the
- * Account section. Same dot palette as `KIND_META` so the panel
- * has one consistent "signal colour" language:
- *   - green  = happy path (`live`)
- *   - info   = in-flight transition (everything that's neither
- *              terminal nor failed)
- *   - warning = teardown about to land
- *   - error  = `error`
- * The friendly labels avoid surfacing the raw engine vocabulary
- * (`bringing-up` / `reacquiring` / `tearing-down`) which reads
- * like internal jargon to a non-developer user.
- */
-const PHASE_META: Record<SessionPhase, { label: string; color: string }> = {
-  idle: { label: 'Idle', color: STATUS.info },
-  'bringing-up': { label: 'Connecting', color: STATUS.info },
-  live: { label: 'Live', color: STATUS.success },
-  releasing: { label: 'Releasing', color: STATUS.info },
-  released: { label: 'Released', color: STATUS.info },
-  reacquiring: { label: 'Reconnecting', color: STATUS.info },
-  'tearing-down': { label: 'Shutting down', color: STATUS.warning },
-  error: { label: 'Error', color: STATUS.error },
-};
-
 const DOT_SIZE_PX = 8;
 
 /**
  * Floor for the LOGS panel inside the view. Tuned generous so the
  * live tail dominates the bottom half of the panel even before
  * scrolling - users open the info view mostly to read logs, the
- * metadata above is at-a-glance reference. 280 px ~= 8-9 rows of
- * `LogLineRow`, enough to read a small burst without expanding
- * to the dedicated full-screen logs view (the `OpenInFullIcon`
- * action on the panel header). The body scrolls if the metadata
- * + logs floor overflow on small viewports.
+ * metadata above is at-a-glance reference. 244 px ~= 7 rows of
+ * `LogLineRow` (~23 px each), enough to read a small burst without
+ * expanding to the dedicated full-screen logs view (the
+ * `OpenInFullIcon` action on the panel header). The body scrolls if
+ * the metadata + logs floor overflow on small viewports.
  */
-const LOGS_MIN_HEIGHT_PX = 280;
+const LOGS_MIN_HEIGHT_PX = 244;
 
 interface RobotInfoPanelProps {
   /**
@@ -160,18 +136,26 @@ interface RobotInfoPanelProps {
    */
   onClose: () => void;
   /**
+   * Full hardware id of the robot (immutable per machine). Surfaced
+   * verbatim - not the 5-char short form the topbar used to show -
+   * in the Robot section so the user can read / copy the complete
+   * fingerprint for a bug report.
+   */
+  hardwareId: string | null;
+  /**
+   * Peer id fallback for the hardware id, used when the daemon
+   * hasn't shipped the dedicated hardware-id field yet. Mirrors the
+   * `fallbackId` plumbing the topbar's `<IdentityChipBar>` used to
+   * carry.
+   */
+  fallbackId?: string | null;
+  /**
    * Hugging Face handle of the signed-in user. `null` shouldn't
    * happen on this screen in practice (the user is by definition
    * signed in to reach `RobotSessionScreen`) but we still handle
    * it defensively.
    */
   username: string | null;
-  /**
-   * Current session phase reported by `useRobotSession`. Surfaced
-   * in the Account section so the user sees concrete state when
-   * the orb behaves unexpectedly (e.g. stuck in `bringing-up`).
-   */
-  sessionPhase: SessionPhase;
   /**
    * Slice of the session handle the panel consumes. Typed via
    * `Pick` so the dependency surface is explicit at the call site
@@ -188,13 +172,15 @@ interface RobotInfoPanelProps {
 
 export default function RobotInfoPanel({
   onClose: _onClose,
+  hardwareId,
+  fallbackId,
   username,
-  sessionPhase,
   session,
   isLive,
 }: RobotInfoPanelProps) {
   const { daemonVersion } = useDaemonState();
   const versionLabel = daemonVersion ? `v${daemonVersion}` : '—';
+  const fullHardwareId = hardwareId ?? fallbackId ?? null;
 
   // Daemon log buffer. Lives in the panel host so the copy button
   // can sit in the panel's actions slot without subscribing twice
@@ -235,6 +221,7 @@ export default function RobotInfoPanel({
   const webrtcMeta = webrtc ? KIND_META[webrtc.kind] : null;
   const remoteIp = formatRemoteIp(webrtc);
   const bitrate = formatBitrate(webrtc?.bps ?? null);
+  const latency = formatLatency(webrtc?.rttMs ?? null);
 
   return (
     <Stack
@@ -379,6 +366,19 @@ export default function RobotInfoPanel({
             overflowY: 'auto',
           }}
         >
+          {/* Robot section. Carries the full, copyable hardware id -
+            the immutable per-machine fingerprint. The topbar's
+            identity bar now shows only the robot name + transport
+            icon, so the complete identifier lives here where there's
+            room to read and copy it into a bug report. */}
+          <Section label="Robot">
+            <MetadataRow
+              label="Identifier"
+              value={fullHardwareId ?? '—'}
+              mono={Boolean(fullHardwareId)}
+              copyable={Boolean(fullHardwareId)}
+            />
+          </Section>
           <Section label="Connection">
             {/* Physical `Transport` (Wi-Fi / USB) used to live here
               as its own row, but it's already surfaced by the
@@ -462,6 +462,19 @@ export default function RobotInfoPanel({
                 </Typography>
               </Box>
             </Stack>
+            {latency && (
+              <MetadataRow
+                label="Latency"
+                info={
+                  'Round-trip time on the live link, measured on the ' +
+                  'WebRTC candidate pair. This is what drives the ' +
+                  'signal bars in the topbar - lower is better (a LAN ' +
+                  'link is a few ms, an internet hop tens of ms).'
+                }
+                value={latency}
+                mono
+              />
+            )}
             {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
           </Section>
           {/* Software section. Both version numbers (daemon firmware
@@ -496,40 +509,16 @@ export default function RobotInfoPanel({
               <VersionCell label="App" value={`v${__APP_VERSION__}`} />
             </Stack>
           </Section>
-          {/* Account section. Two everyday-grade signals that don't
-            belong elsewhere:
-              - HF username: reassurance about which account is
-                signed in (and what the support team will see
-                attached to a bug report).
-              - Session phase: when the orb behaves unexpectedly
-                ("why isn't it responding?"), the phase gives a
-                concrete answer (still `bringing-up`, briefly
-                `reacquiring` after an iframe close, …). Rendered
-                with a `<StatusDotLabel>` colour-coded the same
-                way as the WebRTC row above so a glance at the
-                panel surfaces the two main "is the link healthy"
-                signals at the same vertical level. */}
+          {/* Account section. Reassurance about which HF account is
+            signed in (and what the support team will see attached to
+            a bug report). The session-phase row that used to sit here
+            was dropped: it's debug-grade jargon, and the WebRTC kind +
+            latency above already answer "is the link healthy". */}
           <Section label="Account">
             <MetadataRow
               label="Signed in"
               value={username ? `@${username}` : '—'}
               mono={Boolean(username)}
-            />
-            <MetadataRow
-              label="Session"
-              info={
-                'Lifecycle state of the link to the robot ' +
-                '(connection, conversation, hand-off to an app, ' +
-                'teardown). Mostly Live; the other values show up ' +
-                'briefly when the link is being brought up or ' +
-                'reacquired.'
-              }
-              value={
-                <StatusDotLabel
-                  color={PHASE_META[sessionPhase].color}
-                  label={PHASE_META[sessionPhase].label}
-                />
-              }
             />
           </Section>
           {/* LOGS panel. Eats the leftover vertical space via
@@ -846,4 +835,16 @@ function formatBitrate(bps: number | null): string {
   }
   const kbps = bps / 1_000;
   return `${kbps.toFixed(kbps >= 100 ? 0 : 1)} kbps`;
+}
+
+/**
+ * Format the candidate-pair RTT as a `… ms` string. One decimal under
+ * 10 ms (sub-LAN territory where the extra precision is meaningful),
+ * rounded to an integer above. Returns `''` for "nothing to show" so
+ * the caller drops the row entirely (e.g. iOS WKWebView, which doesn't
+ * expose RTT, or before a pair is nominated).
+ */
+function formatLatency(rttMs: number | null): string {
+  if (rttMs === null || !Number.isFinite(rttMs) || rttMs < 0) return '';
+  return `${rttMs < 10 ? rttMs.toFixed(1) : Math.round(rttMs)} ms`;
 }

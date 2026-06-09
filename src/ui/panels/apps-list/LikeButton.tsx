@@ -240,13 +240,15 @@ function LikeButtonImpl({
       aria-label={ariaLabel}
       aria-pressed={canToggle ? isLiked : undefined}
       sx={{
+        position: 'relative',
         display: 'inline-flex',
         alignItems: 'center',
         gap: 0.25,
         flexShrink: 0,
-        // Tap target: grow the hit area a bit beyond the visual
-        // footprint so a fat finger lands reliably on the heart
-        // even on a phone.
+        // Inner padding sets the *visual* hover/press footprint
+        // (the rounded background swatch on hover). The actual
+        // tap target is much larger - see the `::after`
+        // pseudo-element below.
         px: 0.5,
         py: 0.25,
         mx: -0.5,
@@ -258,6 +260,22 @@ function LikeButtonImpl({
         '&.Mui-disabled': {
           color: 'text.secondary',
           opacity: 1,
+        },
+        // Invisible hit-target overlay. Pushes the clickable area
+        // ~12 px past the visible heart on every side so a thumb
+        // doesn't need pixel-perfect aim on mobile - matches the
+        // ~44×44 pt minimum tap target Apple HIG and Material
+        // guidelines recommend. Stays transparent and doesn't
+        // capture pointer-events on its own (the ButtonBase
+        // itself receives the click thanks to event bubbling
+        // through the parent element).
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          inset: '-12px',
+          // Keep the overlay above any sibling content but below
+          // the burst portal so it never traps animations.
+          zIndex: 1,
         },
       }}
     >
@@ -272,15 +290,15 @@ function LikeButtonImpl({
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: TYPO.sm,
-          height: TYPO.sm,
+          width: TYPO.lg,
+          height: TYPO.lg,
           pointerEvents: 'none',
         }}
       >
         <HeartIcon
           key={`heart-${animKey}-${isLiked ? 'on' : 'off'}`}
           sx={{
-            fontSize: TYPO.sm,
+            fontSize: TYPO.lg,
             // Two distinct keyframes:
             // - `like-pop`: full anticipation + overshoot on the
             //   like-up transition, paired with the portal burst.
@@ -313,8 +331,8 @@ function LikeButtonImpl({
         key={`count-${animKey}`}
         component="span"
         sx={{
-          fontSize: TYPO.xs,
-          fontWeight: FONT_WEIGHT.medium,
+          fontSize: TYPO.md,
+          fontWeight: FONT_WEIGHT.semibold,
           color: 'inherit',
           lineHeight: 1,
           display: 'inline-block',

@@ -25,7 +25,7 @@ export type AppState =
    * SDK + WebRTC + DataChannel are up, the wake-up trajectory has
    * been kicked off, motors are enabled - the robot is physically
    * "online" - but the conversation pipeline has NOT yet been
-   * started (no OpenAI Realtime client, no tool routing, no audio
+   * started (no HF realtime client, no tool routing, no audio
    * pumps). Reached when the host opted out of `autoStartConversation`,
    * which is the mobile-app default: tap the orb explicitly to flip
    * to `starting` and bring the AI side up.
@@ -40,6 +40,16 @@ export type AppState =
   | "user-speaking"
   | "processing"
   | "ai-speaking"
+  /**
+   * Transient wind-down state entered the instant the user taps the
+   * stop button, BEFORE the (deliberately gentle) pipeline teardown
+   * runs - the 700 ms glide-to-neutral plus the OpenAI bridge close.
+   * Without it the orb would keep showing the live conversation
+   * state for the whole shutdown and the tap would feel laggy; here
+   * the orb flips to its spinner immediately. `stopConversation()`
+   * leaves this state for `ready` once the teardown settles.
+   */
+  | "stopping"
   /**
    * Session was deliberately released for a handoff (e.g. an embedded
    * iframe app needs the robot's WebRTC peer slot). HF auth + SSE are
@@ -106,6 +116,15 @@ export interface ConversationTransportInfo {
   kind: ConversationTransportKind;
   bps: number | null;
   remoteIp: string | null;
+  /**
+   * Rolling-min round-trip time on the selected candidate pair, in
+   * milliseconds, or `null` when the platform doesn't expose it (iOS
+   * WKWebView). Mirrors `TransportInfo.rttMs` from the
+   * `TransportMonitor`. This is the link-QUALITY signal the topbar's
+   * signal bars are driven by (latency, not bitrate); `kind` is shown
+   * separately as a topology tag.
+   */
+  rttMs: number | null;
 }
 
 /**
@@ -127,6 +146,14 @@ export interface ConversationToolToastEvent {
   label: string;
   /** Hint for how long the host should keep the pill visible. */
   durationMs: number;
+  /**
+   * Visual intent of the toast. `"info"` (default) is the normal
+   * "tool is running" pill; `"error"` is emitted when a tool call
+   * fails (e.g. the VLM behind `look` errored or returned nothing) so
+   * the host can render it as a visible failure instead of a silent
+   * disappearance.
+   */
+  variant?: "info" | "error";
 }
 
 /**
@@ -166,7 +193,7 @@ export interface ConversationEngineHandle {
    *  Safe to call multiple times. */
   unmount: () => Promise<void>;
   /**
-   * Activate the conversation parts (antennas oscillator, OpenAI Realtime
+   * Activate the conversation parts (antennas oscillator, HF realtime
    * connection, head wobbler, transport monitor). No-op if the conversation
    * is already active or if the engine hasn't reached the post-session
    * "session-up but idle" state yet (in which case the request is queued
@@ -186,12 +213,12 @@ export interface ConversationEngineHandle {
    */
   stopConversation: () => Promise<void>;
   /**
-   * Restart the conversation parts in place: stop the current OpenAI
-   * Realtime client + motion controllers, then bring them back up
+   * Restart the conversation parts in place: stop the current HF
+   * realtime client + motion controllers, then bring them back up
    * with the latest settings. No-op when no conversation is running.
    *
    * The engine reads the active personality lazily (via
-   * `composeInstructions` + the `voice` getter in `createOpenaiBridge`),
+   * `composeInstructions` + the `voice` getter in `createHuggingFaceBridge`),
    * so a personality switch picks up the new instructions + voice
    * automatically on the next reconnect. The host calls this method
    * after mutating the personality store mid-session so the running
@@ -425,19 +452,19 @@ export interface ConversationEngineOptions {
   /**
    * When `true` (default), the engine auto-starts the full conversation
    * pipeline as soon as a robot is selected: open WebRTC session, start
-   * the antennas oscillator, connect to OpenAI Realtime, wire the head
+   * the antennas oscillator, connect to HF realtime, wire the head
    * wobbler. This matches the public Space's "tap once → talking"
    * behaviour.
    *
    * When `false`, the engine still goes all the way through
    * `robot.startSession()` (so the WebRTC DataChannel that doubles as
    * the daemon proxy transport is up), but stops there. The conversation
-   * parts (antennas, OpenAI, wobbler) only fire when the host calls
+   * parts (antennas, backend, wobbler) only fire when the host calls
    * `handle.startConversation()`.
    *
    * Used by the mobile app to keep the daemon tunnel alive during the
    * wake-up animation (the daemon proxy needs the DC) without animating
-   * the antennas or burning OpenAI quota until the user explicitly hits
+   * the antennas or using backend time until the user explicitly hits
    * "Start conversation".
    */
   autoStartConversation?: boolean;

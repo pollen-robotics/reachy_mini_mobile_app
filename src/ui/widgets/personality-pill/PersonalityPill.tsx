@@ -29,19 +29,26 @@
  * grid. The grid mutates the personality store on tap; the
  * conversation panel above watches the active id and triggers
  * `restartConversation()` if a session is live, so the running
- * OpenAI client picks up the new instructions + voice on the next
+ * realtime client picks up the new instructions + voice on the next
  * reconnect.
  */
-import {
-  Box,
-  ButtonBase,
-  Stack,
-  Typography,
-  useTheme,
-} from '@mui/material';
+import { Box, ButtonBase, Stack, Typography, useTheme } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 
-import { useActivePersonality } from '@/features/personalities';
+import {
+  type Personality,
+  useActivePersonality,
+  useAvatarPendingSince,
+  useIsAvatarPending,
+  usePersonaDraft,
+} from '@/features/personalities';
+import CookingMonogram from '@/ui/design/CookingMonogram';
+import ShimmerText from '@/ui/design/ShimmerText';
+import PieTimer from '@/ui/design/PieTimer';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface PersonalityPillProps {
@@ -52,12 +59,46 @@ interface PersonalityPillProps {
    *  expected to flip its `open` state in response. */
   onToggle: () => void;
   /**
+   * Close the open authoring form. Wired to the band's trailing "✕",
+   * which is the only way out of the create/edit form. The "create"
+   * ENTRY point no longer lives here - it's a dedicated CTA card at the
+   * top of the store - so this control is shown only while a form is
+   * open (see `creating` / `editingPersona`). Kept named `onCreate` for
+   * call-site stability; in practice the host wires it to a "toggle
+   * form" handler that closes whatever form is open.
+   */
+  onCreate: () => void;
+  /**
+   * Open the editor for the ACTIVE persona. Surfaced as a small pencil
+   * in the band (the "select") and only when the active persona is a
+   * custom one (built-ins aren't editable). The host wires this to its
+   * "open edit form" handler.
+   */
+  onEditActive?: (persona: Personality) => void;
+  /**
+   * Whether the create-a-personality form is currently open. Flips the
+   * band into "authoring" mode: the active-persona avatar becomes a
+   * neutral "?" placeholder (no persona is selected yet, one is being
+   * authored) and the trailing "+" morphs into a "✕" that closes the
+   * form. The band itself stays visible the whole time so the user
+   * keeps a stable anchor + an obvious way out of the form.
+   */
+  creating?: boolean;
+  /**
+   * When set, the band is in "editing" mode for this custom persona:
+   * the avatar + name reflect the persona under edit, the eyebrow
+   * reads "Editing", and (like create) the trailing "+" becomes a "✕"
+   * that closes the editor. Mutually exclusive with `creating` in
+   * practice (the host only opens one form at a time).
+   */
+  editingPersona?: Personality | null;
+  /**
    * Disable the picker entirely. Used by the host while a live
    * conversation is running so the user can't switch personas
-   * mid-call (which would force a stop+start of the OpenAI client
+   * mid-call (which would force a stop+start of the realtime client
    * and audibly cut Reachy off mid-sentence). The band stays
    * mounted and keeps showing the active persona, but loses its
-   * hover / press affordances + the chevron.
+   * hover / press affordances + the chevron + the "+".
    */
   disabled?: boolean;
 }
@@ -65,68 +106,79 @@ interface PersonalityPillProps {
 export function PersonalityPill({
   open,
   onToggle,
+  onCreate,
+  onEditActive,
+  creating = false,
+  editingPersona = null,
   disabled = false,
 }: PersonalityPillProps) {
   const theme = useTheme();
   const active = useActivePersonality();
+  // "A form is open" - covers both authoring a new persona and editing
+  // an existing one. Drives the inert toggle, the hidden chevron, and
+  // the trailing "✕".
+  const authoring = creating || editingPersona !== null;
+  // Persona shown in the band: the one under edit when editing, else
+  // the active one. (Create mode shows a "?" placeholder instead.)
+  const shown = editingPersona ?? active;
+
+  // Live authoring draft published by the open form. While a form is
+  // open the band mirrors it: the title tracks the typed name and the
+  // disc shows the avatar (+ its regenerate control) - because the
+  // avatar lives ONLY here on the band, never inside the form body.
+  const draft = usePersonaDraft();
+  const draftActive = authoring && draft !== null;
+  const draftAvatar = draftActive ? draft.avatar : null;
+  // Title mirrors the live name while authoring (falling back to the
+  // static label until the user types one); otherwise the shown persona.
+  const title = draftActive
+    ? draft.name.trim() || (creating ? 'Create your agent' : shown.name)
+    : creating
+      ? 'Create your agent'
+      : shown.name;
+  // Regenerate control (edit only): the band hosts the avatar's
+  // regenerate button now, anchored on the disc, since the avatar never
+  // appears in the form body.
+  const regenerate = draftActive ? draft.regenerate : null;
+
+  // Is the shown persona's avatar baking? We OR two sources so the
+  // illustration is aware of an in-flight generation REGARDLESS of UI
+  // state:
+  //   - the registry (`useIsAvatarPending`): the persona's background
+  //     bake, which persists across opening/closing the editor or
+  //     switching views (a regenerate kicked off then "left" still shows
+  //     here until the new image lands), and
+  //   - the live draft's cooking flag: the editor's own in-progress bake
+  //     before it has been adopted into the registry.
+  // Either being true keeps the cooking ring on. Create mode has no
+  // persona id yet, so the registry watches nothing (draft owns it).
+  const registryCooking = useIsAvatarPending(creating ? '' : shown.id);
+  const avatarCooking = (draftActive ? draft.cooking : false) || registryCooking;
+  // Real bake start time (from the store) so the progress pie reflects actual
+  // elapsed time and survives band remounts instead of restarting.
+  const cookingSince = useAvatarPendingSince(creating ? '' : shown.id);
 
   return (
-    <ButtonBase
-      onClick={onToggle}
-      disabled={disabled}
-      focusRipple
-      // `aria-controls` would be ideal here but we don't have a
-      // stable id for the grid (it's rendered conditionally in the
-      // host); aria-expanded alone is still meaningful and read by
-      // screen readers as "this control toggles a related region".
-      aria-expanded={open}
-      aria-label={
-        disabled
-          ? `Personality: ${active.name}. Locked while talking - end the conversation to change.`
-          : open
-            ? 'Close personality picker'
-            : `Personality: ${active.name}. Tap to open the picker.`
-      }
+    // Row wrapper. The band itself is NOT a button: only the chevron (the
+    // toggle) and the trailing pen/✕ are tappable. The identity area is a
+    // passive "speaker label", so the avatar + name no longer compete for
+    // taps with the small controls.
+    <Box sx={{ display: 'flex', width: '100%', alignItems: 'stretch' }}>
+    <Box
       sx={{
         display: 'flex',
-        width: '100%',
+        flex: 1,
+        minWidth: 0,
         alignItems: 'center',
         gap: 2,
         px: 3,
-        py: 1.75,
+        py: 0.75,
         color: 'text.primary',
         textAlign: 'left',
-        // Hover / pressed feedback - subtle so the band stays
-        // calm. The orb below is the primary CTA, this is just
-        // a "speaker label" you can tap. Both feedbacks are
-        // suppressed when disabled so the band doesn't tease an
-        // affordance it can't honour.
-        transition: 'background-color 0.15s ease, opacity 0.18s ease',
-        opacity: disabled ? 0.55 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        '&:hover': disabled
-          ? {}
-          : {
-              bgcolor: theme.palette.mode === 'dark'
-                ? 'rgba(255, 255, 255, 0.04)'
-                : 'rgba(0, 0, 0, 0.025)',
-            },
-        '&:active': disabled
-          ? {}
-          : {
-              bgcolor: theme.palette.mode === 'dark'
-                ? 'rgba(255, 255, 255, 0.07)'
-                : 'rgba(0, 0, 0, 0.05)',
-            },
-        // MUI's `<ButtonBase disabled>` adds `pointer-events: none`
-        // which would also block the `not-allowed` cursor we set
-        // above. Re-enable just the cursor so the user gets visual
-        // feedback that the band is intentionally inert (vs. dead
-        // / broken).
-        '&.Mui-disabled': {
-          pointerEvents: 'auto',
-          color: 'text.primary',
-        },
+        // The band keeps full opacity while a live call locks the picker -
+        // only the controls (chevron + edit pencil) grey out, so the active
+        // persona stays perfectly legible mid-conversation.
+        opacity: 1,
       }}
     >
       {/* Avatar disc + oversize SVG (RobotAvatar pattern). The
@@ -141,35 +193,172 @@ export function PersonalityPill({
           source SVGs is empty whitespace). */}
       <Box
         sx={{
-          width: 68,
-          height: 68,
+          width: 100,
+          height: 100,
           flexShrink: 0,
           position: 'relative',
-          borderRadius: '50%',
-          bgcolor: theme.palette.mode === 'dark'
-            ? 'rgba(255, 255, 255, 0.04)'
-            : 'rgba(0, 0, 0, 0.025)',
-          boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.06)',
+          // Anchor the (bigger) disc to the band's bottom and pull it
+          // down with a negative bottom margin so it slightly breaks past
+          // the band's divider line. The matching small negative top
+          // margin keeps the band's overall height close to the original
+          // 68px disc - only the disc grows + spills, not the whole band.
+          alignSelf: 'flex-end',
+          mt: '10px',
+          mb: '-30px',
+          zIndex: 1,
+          // Transparent layout shell; the visible disc is painted by the Face
+          // layer below (white circle + band-coloured ring) with the avatar
+          // artwork stacked on top.
+          isolation: 'isolate',
           overflow: 'visible',
+          display: 'grid',
+          placeItems: 'center',
         }}
       >
+        {/* Layer 1 - Border ring: a band-coloured gap (6px) capped by a thin
+            divider-coloured hairline, drawn as box-shadow around the disc. The
+            Mask above hides its top arc, so the hairline only shows on the
+            part poking below the band - matching the band's own 1px border. */}
         <Box
-          component="img"
-          src={active.avatar}
-          alt=""
-          aria-hidden
-          draggable={false}
           sx={{
             position: 'absolute',
-            width: '140%',
-            height: 'auto',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -57%)',
-            pointerEvents: 'none',
-            userSelect: 'none',
+            inset: 0,
+            zIndex: 1,
+            borderRadius: '50%',
+            boxShadow: [
+              `0 0 0 9px ${theme.palette.background.default}`,
+              `0 0 0 10px ${theme.palette.divider}`,
+            ].join(', '),
           }}
         />
+        {/* Layer 2 - Mask: a band-background rectangle covering the disc down
+            to the band's divider line (~24px above the disc bottom given the
+            current mt/mb). It hides the border ring's upper arc; sitting BELOW
+            the white face it never tints the circle itself. */}
+        <Box
+          sx={{
+            position: 'absolute',
+            left: -16,
+            right: -16,
+            top: -44,
+            bottom: 24,
+            zIndex: 2,
+            backgroundColor: theme.palette.background.default,
+          }}
+        />
+        {/* Layer 3 - Face: the white disc. Opaque white so it stays crisp over
+            both the band and the body, with a faint inner edge for definition. */}
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 3,
+            borderRadius: '50%',
+            backgroundColor: theme.palette.background.paper,
+            boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.06)',
+          }}
+        />
+        {/* Layer 4 - the avatar artwork (image or cooking monogram), above the
+            Face so the whole thing reads as a single disc. */}
+        <Box
+          sx={{ position: 'absolute', inset: 0, zIndex: 4, display: 'grid', placeItems: 'center' }}
+        >
+        {avatarCooking ? (
+          // While a fresh sticker bakes, show a deterministic monogram (the
+          // persona's initial) under a soft shimmer - the persona is already
+          // usable, so this reads as "present, portrait on its way" rather
+          // than "loading, wait". The real image fades in once it lands.
+          <CookingMonogram name={(draftActive ? draft.name : shown.name) || ''} size={100} />
+        ) : creating && !draftAvatar ? (
+          // Authoring a NEW persona, no avatar baking yet: show the monogram
+          // placeholder. The shimmer only kicks in once the user has typed a
+          // name - while it's still the neutral "?" the disc stays static, so
+          // nothing animates before there's actually a persona taking shape.
+          <CookingMonogram
+            name={draftActive ? draft.name : ''}
+            size={100}
+            shimmer={(draftActive ? draft.name : '').trim().length > 0}
+          />
+        ) : (
+          <Box
+            component="img"
+            src={draftAvatar ?? shown.avatar}
+            alt=""
+            aria-hidden
+            draggable={false}
+            sx={{
+              position: 'absolute',
+              height: 'auto',
+              left: '50%',
+              top: '50%',
+              pointerEvents: 'none',
+              userSelect: 'none',
+              width: '140%',
+              transform: 'translate(-50%, -57%)',
+              opacity: 1,
+              transition: 'opacity 0.2s ease',
+            }}
+          />
+        )}
+        </Box>
+        {/* Regenerate badge (edit only): the avatar's regenerate control
+            lives here on the band, anchored to the disc, since the avatar
+            never appears in the form body. A nested role="button" span
+            (the disc sits inside the inert toggle ButtonBase, which keeps
+            pointer-events for its children) re-bakes a fresh sticker.
+            While a regeneration is in flight (cooking - which now starts
+            the instant the button is hit, covering the theme-craft
+            latency) the badge fades + scales OUT and reappears only once
+            the fresh image lands: clear "it's working" feedback and no way
+            to double-fire mid-bake. */}
+        {regenerate && (
+          <Box
+            component="span"
+            role="button"
+            tabIndex={avatarCooking ? -1 : 0}
+            aria-hidden={avatarCooking || undefined}
+            aria-label="Regenerate avatar"
+            onClick={e => {
+              e.stopPropagation();
+              if (!avatarCooking) regenerate();
+            }}
+            onKeyDown={e => {
+              if ((e.key === 'Enter' || e.key === ' ') && !avatarCooking) {
+                e.preventDefault();
+                e.stopPropagation();
+                regenerate();
+              }
+            }}
+            sx={{
+              position: 'absolute',
+              right: -3,
+              bottom: -3,
+              zIndex: 5,
+              width: 34,
+              height: 34,
+              marginRight:"-7.5px",
+              borderRadius: '50%',
+              display: 'grid',
+              placeItems: 'center',
+              // Outlined look: paper-filled disc with a primary ring, so it
+              // reads as a light "edit" affordance rather than a heavy solid
+              // dot fighting the avatar for attention.
+              bgcolor: 'background.paper',
+              color: 'primary.main',
+              border: t => `1px solid ${alpha(t.palette.primary.main, 0.55)}`,
+              // Hidden (faded + shrunk away, non-interactive) for the whole
+              // regeneration; springs back when the new avatar is ready.
+              opacity: avatarCooking ? 0 : 1,
+              transform: avatarCooking ? 'scale(0.4)' : 'scale(1)',
+              pointerEvents: avatarCooking ? 'none' : 'auto',
+              cursor: 'pointer',
+              transition: 'transform 0.2s ease, opacity 0.2s ease',
+              '&:active': { transform: 'scale(0.9)' },
+            }}
+          >
+            <AutoFixHighRoundedIcon sx={{ fontSize: 18 }} />
+          </Box>
+        )}
       </Box>
       <Stack
         sx={{
@@ -178,6 +367,10 @@ export function PersonalityPill({
           alignItems: 'flex-start',
           justifyContent: 'center',
           gap: 0.25,
+          // Nudge the label/name slightly down so it sits lower in the
+          // band, optically aligned with the disc that now spills past the
+          // bottom. Transform (not margin) so it doesn't affect band height.
+          transform: 'translateY(6px)',
         }}
       >
         {/* Eyebrow label: lifts the band's purpose out of ambiguity.
@@ -199,18 +392,25 @@ export function PersonalityPill({
             // so it should whisper, not announce.
             fontSize: TYPO.micro,
             fontWeight: FONT_WEIGHT.medium,
+            // The eyebrow stays STABLE through a bake (Personality /
+            // Editing / New): swapping it to "Generating image…" made the
+            // band's identity flicker and read less clearly. The cooking
+            // cue now lives on its own discreet line under the name.
             color: 'text.secondary',
             opacity: 0.7,
             textTransform: 'uppercase',
             letterSpacing: '0.8px',
             lineHeight: 1.1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 0.5,
             // Tiny -2px nudge so the eyebrow + name pair reads as
             // a single composed unit rather than two stacked
             // paragraphs separated by air.
             mb: '-2px',
           }}
         >
-          Personality
+          {creating ? 'New' : editingPersona ? 'Editing' : 'Personality'}
         </Typography>
         <Typography
           sx={{
@@ -223,8 +423,22 @@ export function PersonalityPill({
             width: '100%',
           }}
         >
-          {active.name}
+          {title}
         </Typography>
+        {/* Discreet cooking cue: lives UNDER the name (where the tagline
+            used to) instead of hijacking the eyebrow, so the band's
+            identity (Personality / <name>) never changes mid-bake - just
+            a quiet "Generating image…" with a softly pulsing wand. */}
+        {avatarCooking && (
+          // "Working" cue: a tiny pie that fills over the ~80s bake, left of a
+          // shimmer text (phase-locked to / counter-phase with the disc).
+          <Stack direction="row" spacing={0.625} sx={{ alignItems: 'center' }}>
+            <PieTimer size={11} startedAt={cookingSince ?? undefined} />
+            <ShimmerText sx={{ fontSize: TYPO.xs, fontWeight: FONT_WEIGHT.medium, lineHeight: 1.2 }}>
+              Generating image…
+            </ShimmerText>
+          </Stack>
+        )}
         {/* The persona's tagline used to live here too; it was
             redundant with the dropdown grid (each card already
             shows it under the avatar) and made the sub-header band
@@ -232,37 +446,141 @@ export function PersonalityPill({
             enough identity for the band; the picker grid is the
             place to read the full pitch. */}
       </Stack>
-      {/* Chevron sits inside a soft round chip - reads as a focal
-          "tap-to-open" affordance instead of a free-floating
-          glyph. The chip subtly tints toward the primary on
-          hover so the band's interactivity is unambiguous.
-          When disabled we keep the chip MOUNTED and just fade it
-          to opacity 0 (instead of `display: none`). Otherwise the
-          flex row's reserved width changes between enabled and
-          disabled states, which forces the persona name + tagline
-          ellipsis to recompute at a different cut point - visible
-          as a layout flicker the moment the conversation starts. */}
-      {/* Bare chevron in primary colour - no chip wrapper. The
-          fixed-width Box is kept so the disabled state can fade
-          to opacity 0 WITHOUT collapsing its slot (which would
-          force the persona name's ellipsis to recompute and
-          flicker the layout the moment a conversation starts). */}
+      {/* Trailing control slot: a FIXED-width slot, always mounted, that
+          swaps its content IN PLACE so nothing to its right (the chevron)
+          ever drifts:
+            - while a form is open  -> a "✕" that closes it (create OR edit),
+            - browsing a CUSTOM persona -> the edit pencil (built-ins aren't
+              editable), so editing the active persona lives right here since
+              the band IS the "select",
+            - otherwise empty (slot kept to hold the layout still).
+          Both controls are nested role="button"/ButtonBase inside the band:
+          the band renders as a <div> (component="div"), so this is valid and
+          they keep pointer events even while the band toggle is disabled. */}
+      {/* Trailing action cluster: the pen/✕ and the chevron grouped TIGHT
+          (gap 0.25) exactly like the topbar's info/power IconButton pair, so
+          they read as one cluster. Wrapping them in their own flex box means
+          the band's `gap: 2` only separates this cluster from the identity
+          text - it no longer pushes the chevron far from the pen. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, gap: 0.25, transform: 'translateY(6px)' }}>
       <Box
-        aria-hidden
         sx={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          position: 'relative',
           flexShrink: 0,
-          width: 32,
-          color: 'primary.main',
-          transition: 'transform 0.18s ease, opacity 0.18s ease',
-          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-          opacity: disabled ? 0 : 1,
+          width: 40,
+          height: 40,
         }}
       >
-        <KeyboardArrowDownIcon sx={{ fontSize: 24 }} />
+        {authoring ? (
+          <ButtonBase
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation();
+              onCreate();
+            }}
+            focusRipple
+            aria-label="Close the form"
+            sx={{
+              width: '100%',
+              height: '100%',
+              borderRadius: '50%',
+              color: 'primary.main',
+              transition: 'transform 0.12s ease, background-color 0.15s ease',
+              '&:hover': {
+                bgcolor: theme => alpha(theme.palette.primary.main, 0.1),
+              },
+              '&:active': { transform: 'scale(0.92)' },
+            }}
+          >
+            <CloseRoundedIcon sx={{ fontSize: 24 }} />
+          </ButtonBase>
+        ) : onEditActive && active.kind === 'custom' ? (
+          <ButtonBase
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation();
+              onEditActive(active);
+            }}
+            disabled={disabled}
+            focusRipple
+            aria-label={`Edit ${active.name}`}
+            sx={{
+              width: '100%',
+              height: '100%',
+              borderRadius: '50%',
+              // Greyed + inert while a live call locks the picker, like the
+              // chevron; primary + tappable otherwise.
+              color: disabled ? 'action.disabled' : 'primary.main',
+              transition: 'transform 0.12s ease, background-color 0.15s ease, color 0.18s ease',
+              '&:hover': {
+                bgcolor: theme => alpha(theme.palette.primary.main, 0.1),
+              },
+              '&:active': { transform: 'scale(0.9)' },
+              '&.Mui-disabled': { color: 'action.disabled' },
+            }}
+          >
+            <EditOutlinedIcon sx={{ fontSize: 24 }} />
+          </ButtonBase>
+        ) : null}
       </Box>
-    </ButtonBase>
+      {/* Bare chevron in primary colour - no chip wrapper. Kept VISIBLE
+          while a form is open too (only the trailing control to its left
+          swaps pencil <-> ✕), so the chevron acts as a fixed anchor and
+          never drifts. The fixed-width Box also lets the disabled (live
+          call) state fade to opacity 0 WITHOUT collapsing its slot, which
+          would otherwise force the persona name's ellipsis to recompute
+          and flicker the layout the moment a conversation starts. */}
+      <ButtonBase
+        // THE toggle: the chevron is now the only tappable part of the
+        // identity row (the band around it is passive). Reacts exactly like
+        // the edit/close buttons - primary hover wash, press-scale, ripple.
+        onClick={onToggle}
+        disabled={disabled || authoring}
+        focusRipple
+        // `aria-controls` would be ideal but the grid is rendered
+        // conditionally in the host with no stable id; `aria-expanded` alone
+        // still reads as "this control toggles a related region".
+        aria-expanded={open}
+        aria-label={
+          disabled
+            ? `Personality: ${active.name}. Locked while talking - end the conversation to change.`
+            : open
+              ? 'Close personality picker'
+              : `Personality: ${active.name}. Tap to open the picker.`
+        }
+        sx={{
+          flexShrink: 0,
+          width: 40,
+          height: 40,
+          borderRadius: '50%',
+          // Half the slot's intrinsic right gap (8 -> 4px) so the chevron
+          // sits closer to the band edge. Negative margin (not padding) so
+          // the circular hover/ripple stays centred on the glyph.
+          mr: -1,
+          // Greyed (not primary) while a form is open OR a live call locks
+          // the picker: the toggle is intentionally inert in both cases, so a
+          // primary-tinted chevron would falsely read as tappable. It stays
+          // VISIBLE (greyed) rather than hidden so it remains a stable anchor.
+          color: disabled || authoring ? 'action.disabled' : 'primary.main',
+          transition:
+            'background-color 0.15s ease, color 0.18s ease, transform 0.12s ease',
+          opacity: 1,
+          '&:hover': { bgcolor: theme => alpha(theme.palette.primary.main, 0.1) },
+          '&:active': { transform: 'scale(0.9)' },
+          '&.Mui-disabled': { color: 'action.disabled' },
+          '& .MuiTouchRipple-root': { color: 'primary.main' },
+        }}
+      >
+        <KeyboardArrowDownIcon
+          sx={{
+            fontSize: 24,
+            transition: 'transform 0.18s ease',
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+        />
+      </ButtonBase>
+      </Box>
+    </Box>
+    </Box>
   );
 }
