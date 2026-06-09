@@ -40,6 +40,11 @@ import { gcm } from '@noble/ciphers/aes';
 // ─── GATT contract (must match the daemon) ──────────────────────────────────
 export const CMD_CHAR = '12345678-1234-5678-1234-56789abcdef1';
 export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
+// Read-only status characteristics exposed by the daemon's GATT app. Reading
+// these (post-connect) is how we learn the robot's identity + Wi-Fi state,
+// since the v2 advert carries no identity (all robots advertise "ReachyMini").
+export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
+export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
 const REACHY_NAME_RE = /reachy/i;
 
 // HKDF domain-separation label — identical literal on the daemon.
@@ -101,13 +106,15 @@ export interface BleDevice {
   raw: unknown; // the untouched plugin object, for diagnostics
 }
 
-function normalizeDevice(d: any): BleDevice {
+function normalizeDevice(d: Record<string, unknown>): BleDevice {
   // Different plugin versions use address|id|uuid and name|localName.
-  const address = d.address ?? d.id ?? d.uuid ?? '';
-  const name = d.name ?? d.localName ?? null;
-  const services: string[] = (d.services ?? d.serviceUuids ?? d.advertisedServices ?? [])
-    .map((s: any) => String(s).toLowerCase());
-  return { address, name, services, rssi: d.rssi, raw: d };
+  const address = String(d.address ?? d.id ?? d.uuid ?? '');
+  const nameRaw = d.name ?? d.localName;
+  const name = typeof nameRaw === 'string' ? nameRaw : null;
+  const rawServices = (d.services ?? d.serviceUuids ?? d.advertisedServices ?? []) as unknown[];
+  const services: string[] = rawServices.map((s) => String(s).toLowerCase());
+  const rssi = typeof d.rssi === 'number' ? d.rssi : undefined;
+  return { address, name, services, rssi, raw: d };
 }
 
 /** True if a device looks like a Reachy Mini (by name OR advertised service). */
@@ -144,17 +151,17 @@ export async function scanDevices(
   let ticks = 0;
   // The channel may deliver an array of devices, a single device, or a
   // `{ result: device }` wrapper depending on platform/version — accept all.
-  const handler = (msg: any) => {
+  const handler = (msg: unknown) => {
     ticks++;
-    const list: any[] = Array.isArray(msg)
+    const list: unknown[] = Array.isArray(msg)
       ? msg
-      : msg && msg.result
-        ? [msg.result]
+      : msg && typeof msg === 'object' && 'result' in msg
+        ? [(msg as { result: unknown }).result]
         : msg
           ? [msg]
           : [];
     for (const raw of list) {
-      const d = normalizeDevice(raw);
+      const d = normalizeDevice(raw as Record<string, unknown>);
       if (d.address) byAddr.set(d.address, d);
     }
     log(`  tick ${ticks}: ${byAddr.size} device(s) total`);
@@ -193,22 +200,33 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 let _connWatchStarted = false;
+// The latest connection-state handler. The plugin's getConnectionUpdates is
+// registered ONCE (calling it again would double-register), but callers — the
+// setup wizard in particular — hand us a fresh callback bound to the current
+// React mount every time they mount. We dispatch to whatever's latest here, so
+// a 2nd+ wizard entry still gets live BLE-drop detection instead of a dead,
+// stale closure from the first mount.
+let _connHandler: ((connected: boolean) => void) | null = null;
 
 /**
- * Register the plugin's real connection-state signal ONCE. Drives the UI
+ * Register the plugin's real connection-state signal. Drives the UI
  * `connected` flag from the truth — the plugin's own `connect()` swallows
  * errors and resolves regardless, so it can't be trusted to report success.
+ *
+ * The underlying plugin subscription is installed once; subsequent calls just
+ * swap in the newest handler (see `_connHandler`).
  */
 export async function watchConnection(
   onState: (connected: boolean) => void,
   log: (s: string) => void = () => {},
 ): Promise<void> {
+  _connHandler = onState;
   if (_connWatchStarted) return;
   _connWatchStarted = true;
   await getConnectionUpdates((connected: boolean) => {
     log(`connection state → ${connected}`);
     if (!connected) _subscribed = false;
-    onState(connected);
+    _connHandler?.(connected);
   });
 }
 
@@ -269,6 +287,16 @@ export async function sendCommand(cmd: string, timeoutMs = 20000): Promise<strin
     return _awaitNotification(timeoutMs);
   }
   return sync;
+}
+
+/**
+ * Read a read-only status characteristic (e.g. HARDWARE_ID, NETWORK_STATUS).
+ * Time-bounded so a quiet GATT stack can't wedge the wizard. Returns the
+ * trimmed UTF-8 value, or throws on timeout / read error.
+ */
+export async function readCharacteristic(uuid: string, timeoutMs = 6000): Promise<string> {
+  const raw = await withTimeout(readString(uuid), timeoutMs, `read ${uuid}`);
+  return raw.trim();
 }
 
 // ─── Crypto: seal the WiFi password (mirror of the daemon) ───────────────────
