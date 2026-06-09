@@ -89,3 +89,15 @@ local-ip-address = "0.6"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Local patch for a btleplug CoreBluetooth panic that crashes the BLE event
+# loop on connect ("Got descriptors for a characteristic we don't know about").
+# btleplug hard-`.expect()`s when CoreBluetooth reports descriptors for a
+# characteristic missing from its per-service map (a discovery-event ordering /
+# dedup bug). This affects every non-Android target — macOS desktop AND iOS,
+# since tauri-plugin-blec only uses a native backend on Android. The vendored
+# copy (mirrored from reachy-mini-desktop-app) softens the panic to a graceful
+# skip; this app never uses GATT descriptors, so dropping them is harmless.
+# See: https://github.com/deviceplug/btleplug/issues/397
+[patch.crates-io]
+btleplug = { path = "btleplug-patch" }
