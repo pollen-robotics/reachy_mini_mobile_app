@@ -200,22 +200,33 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 let _connWatchStarted = false;
+// The latest connection-state handler. The plugin's getConnectionUpdates is
+// registered ONCE (calling it again would double-register), but callers — the
+// setup wizard in particular — hand us a fresh callback bound to the current
+// React mount every time they mount. We dispatch to whatever's latest here, so
+// a 2nd+ wizard entry still gets live BLE-drop detection instead of a dead,
+// stale closure from the first mount.
+let _connHandler: ((connected: boolean) => void) | null = null;
 
 /**
- * Register the plugin's real connection-state signal ONCE. Drives the UI
+ * Register the plugin's real connection-state signal. Drives the UI
  * `connected` flag from the truth — the plugin's own `connect()` swallows
  * errors and resolves regardless, so it can't be trusted to report success.
+ *
+ * The underlying plugin subscription is installed once; subsequent calls just
+ * swap in the newest handler (see `_connHandler`).
  */
 export async function watchConnection(
   onState: (connected: boolean) => void,
   log: (s: string) => void = () => {},
 ): Promise<void> {
+  _connHandler = onState;
   if (_connWatchStarted) return;
   _connWatchStarted = true;
   await getConnectionUpdates((connected: boolean) => {
     log(`connection state → ${connected}`);
     if (!connected) _subscribed = false;
-    onState(connected);
+    _connHandler?.(connected);
   });
 }
 
