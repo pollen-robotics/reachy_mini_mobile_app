@@ -25,6 +25,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Reachy Mini uses Bluetooth to set up a new robot on your Wi-Fi. Your Wi-Fi password is encrypted on this phone before it is sent and never leaves it in clear.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
 	<key>NSLocalNetworkUsageDescription</key>
