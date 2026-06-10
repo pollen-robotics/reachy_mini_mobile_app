@@ -97,6 +97,25 @@ interface IdentityChipBarProps {
   /** Current session lifecycle phase. Drives the transient
    *  Connecting / Reconnecting state of the link-type tag. */
   sessionPhase: SessionPhase;
+  /** Whether to show the live latency pill (RTT bars + `… ms`).
+   *  Defaults to `true`. Set to `false` in contexts where the live
+   *  link is not actively measured - e.g. while an app embed has
+   *  taken over the WebRTC slot (session released for handoff) - so
+   *  we don't paint a stale RTT that looks live but is frozen on its
+   *  last pre-handoff value. The stable transport tag (Lite /
+   *  Wireless) still shows since it's identity, not a health read. */
+  showLatency?: boolean;
+  /**
+   * Visual weight of the robot name.
+   *  - `'primary'` (default): bold, `text.primary`, `TYPO.md` - the
+   *    name is the headline of the bar (session topbar).
+   *  - `'secondary'`: medium, `text.secondary`, `TYPO.sm` - the name
+   *    is a sub-line under a bigger headline (e.g. the app overlay
+   *    topbar where the APP name is the title and the robot is the
+   *    context line below it). The pills keep their size so the
+   *    Lite/Wireless + latency facts stay legible.
+   */
+  variant?: 'primary' | 'secondary';
 }
 
 /** Mini spinner for in-flight (Connecting / Reconnecting) tags - reads
@@ -111,20 +130,23 @@ export default function IdentityChipBar({
   linkKind,
   linkRttMs,
   sessionPhase,
+  showLatency = true,
+  variant = 'primary',
 }: IdentityChipBarProps) {
   const typeTag = resolveTypeTag(sessionPhase);
   // Latency is now a permanent indicator: always shown, even at `0 ms`
   // (unknown / LAN-instant). Reads as a stable "link health" glance.
   const latencyText = formatLatencyTag(linkRttMs);
+  const secondary = variant === 'secondary';
 
   return (
     <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0, flex: 1 }}>
       <Typography
         sx={{
           minWidth: 0,
-          fontSize: TYPO.md,
-          fontWeight: FONT_WEIGHT.bold,
-          color: 'text.primary',
+          fontSize: secondary ? TYPO.sm : TYPO.md,
+          fontWeight: secondary ? FONT_WEIGHT.medium : FONT_WEIGHT.bold,
+          color: secondary ? 'text.secondary' : 'text.primary',
           letterSpacing: '-0.1px',
           lineHeight: 1.2,
           // Name truncates with an ellipsis when the row is too
@@ -150,13 +172,15 @@ export default function IdentityChipBar({
           button. */}
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
         <VariantTag transport={transport} />
-        <MetaPill>
-          <LinkQualityBars
-            level={linkQualityLevel(linkRttMs, linkKind ?? 'checking')}
-            title={`Link quality (${latencyText})`}
-          />
-          <TagLabel>{latencyText}</TagLabel>
-        </MetaPill>
+        {showLatency && (
+          <MetaPill>
+            <LinkQualityBars
+              level={linkQualityLevel(linkRttMs, linkKind ?? 'checking')}
+              title={`Link quality (${latencyText})`}
+            />
+            <TagLabel>{latencyText}</TagLabel>
+          </MetaPill>
+        )}
         {typeTag && typeTag.pulse && typeTag.tone && (
           // In-flight (Connecting / Reconnecting): just a mini spinner, no
           // label - the toned spinner already reads as "working on it".
