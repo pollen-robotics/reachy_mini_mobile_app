@@ -26,11 +26,6 @@
 
 import { memoryStore } from "../memory";
 import { MovePlayer, MOVE_IDS, type MoveId } from "../../motion/move-player";
-import {
-  resolveEmotionStem,
-  resolveEmotionCandidates,
-  randomCuratedEmotionStem,
-} from "../../motion/emotion-moves";
 import { HEAD_POSES, type HeadPoseName } from "../tools";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type { ConversationToolToastEvent } from "../types";
@@ -154,38 +149,6 @@ export function createToolCallHandler(
     }
   };
 
-  const playEmotion = async (stem: string): Promise<void> => {
-    const robot = deps.getRobot();
-    if (!robot) return;
-    movePlayer ??= new MovePlayer(robot);
-
-    deps.onMoveStart();
-    try {
-      await movePlayer.playEmotion(stem);
-    } finally {
-      deps.onMoveEnd();
-      robot.setAntennasDeg(0, 0);
-    }
-  };
-
-  /**
-   * Warm the move cache for an intent's sibling candidates in the
-   * background. Since `play_emotion` picks a random stem per intent,
-   * prefetching the others means the next time the same intent fires a
-   * different (already-cached) variation plays with no network hitch.
-   * Fire-and-forget: failures are swallowed (the on-demand fetch in
-   * `playEmotion` will surface a real error if a stem is truly missing).
-   */
-  const prewarmEmotions = (stems: readonly string[]): void => {
-    const robot = deps.getRobot();
-    if (!robot || stems.length === 0) return;
-    movePlayer ??= new MovePlayer(robot);
-    const player = movePlayer;
-    for (const stem of stems) {
-      void player.loadEmotion(stem).catch(() => {});
-    }
-  };
-
   const handleToolCall = async (event: ToolCallEvent): Promise<void> => {
     const robot = deps.getRobot();
     if (!robot) return;
@@ -232,30 +195,6 @@ export function createToolCallHandler(
           result = {
             ok: false,
             message: `unknown move '${moveName}'. Valid: ${MOVE_IDS.join(", ")}`,
-          };
-        }
-        break;
-      }
-      case "play_emotion": {
-        const requested = String(args.emotion ?? "");
-        // Resolve the abstract intent to a curated recorded-move stem,
-        // falling back to a random curated emotion when nothing fits
-        // (e.g. `random`, or an unmapped value).
-        const candidates = resolveEmotionCandidates(requested);
-        const stem =
-          resolveEmotionStem(requested) ?? randomCuratedEmotionStem();
-        // Warm the other variations of this intent so future calls vary
-        // instantly (the chosen stem is loaded by `playEmotion` anyway).
-        if (candidates.length > 1) prewarmEmotions(candidates);
-        try {
-          await playEmotion(stem);
-          result = { ok: true, message: `played emotion '${stem}'` };
-        } catch (err) {
-          result = {
-            ok: false,
-            message:
-              `failed to play emotion '${stem}': ` +
-              (err instanceof Error ? err.message : String(err)),
           };
         }
         break;
@@ -386,10 +325,6 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
       const move = String(args.name ?? "");
       return move ? `Playing ${move}` : "Playing move";
     }
-    case "play_emotion": {
-      const emotion = String(args.emotion ?? "").trim();
-      return emotion ? `Feeling ${emotion}` : "Showing emotion";
-    }
     case "look":
       return "Taking a look";
     case "remember": {
@@ -422,8 +357,6 @@ function describeToolError(name: string): string {
       return "Couldn't take a look";
     case "play_move":
       return "Couldn't play that move";
-    case "play_emotion":
-      return "Couldn't show that emotion";
     case "move_head":
       return "Couldn't move my head";
     case "remember":
