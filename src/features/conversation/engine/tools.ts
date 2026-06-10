@@ -13,6 +13,7 @@
  */
 
 import { MOVE_CATALOG, MOVE_IDS } from '../motion/move-player';
+import { EMOTION_INTENTS } from '../motion/emotion-moves';
 import type { RealtimeTool } from './huggingface-realtime';
 
 /**
@@ -54,12 +55,12 @@ export const ROBOT_TOOLS: RealtimeTool[] = [
   {
     name: 'play_move',
     description:
-      'Trigger a short pre-recorded body-language move (1-4s) from the ' +
-      'Reachy dances + emotions library. Catalog (each line is `id | kind | ' +
-      'when to pick it`):\n' +
-      MOVE_CATALOG.map(
-        (m) => `  - ${m.id} | ${m.kind} | ${m.description}`,
-      ).join('\n'),
+      'Trigger a short pre-recorded DANCE (1-2s) - rhythmic, playful body ' +
+      'language to punctuate a theatrical moment (greeting, joke, groove, ' +
+      'teasing). To REACT emotionally to what the user just said, use ' +
+      '`play_emotion` instead. Catalog (each line is `id | when to pick ' +
+      'it`):\n' +
+      MOVE_CATALOG.map((m) => `  - ${m.id} | ${m.description}`).join('\n'),
     parameters: {
       type: 'object',
       properties: {
@@ -72,6 +73,30 @@ export const ROBOT_TOOLS: RealtimeTool[] = [
         },
       },
       required: ['name'],
+    },
+  },
+  {
+    name: 'play_emotion',
+    description:
+      'Express a robot emotion that matches an emotional intent - reactive ' +
+      'body language (1-4s) for how you feel about what was just said ' +
+      '(surprise, praise, sympathy, confusion...). Pick the closest enum ' +
+      'value. Use nuanced labels like no_sad, no_excited, no_firm, or ' +
+      'yes_understanding when a plain yes/no would lose meaning. Use ' +
+      'random if no clear intent fits. For purely playful/rhythmic moves ' +
+      'use `play_move` instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        emotion: {
+          type: 'string',
+          enum: [...EMOTION_INTENTS],
+          description:
+            'Compact emotional intent to express. Choose one of the enum ' +
+            'values.',
+        },
+      },
+      required: ['emotion'],
     },
   },
   {

@@ -21,11 +21,13 @@ export const DEFAULT_INSTRUCTIONS =
   '  - `move_head`: point the head in a named direction (up, down, left, ' +
   'right, tilt_left, tilt_right, center). Instant, use for subtle gestures ' +
   'that accompany a sentence.\n' +
-  '  - `play_move`: trigger a short pre-recorded choreography (1-4s). The ' +
-  'catalog mixes `dance` entries (rhythmic, playful) and `emotion` entries ' +
-  '(reactive body language). Pick a dance when the moment calls for ' +
-  'theatricality (hi, joke, groove) and an emotion when reacting to ' +
-  'something the user just said (surprise, curiosity, praise, bad news).\n' +
+  '  - `play_move`: trigger a short pre-recorded DANCE (1-2s) - rhythmic, ' +
+  'playful body language for theatrical moments (hi, joke, groove, ' +
+  'teasing).\n' +
+  '  - `play_emotion`: express a reactive EMOTION (1-4s) matching how you ' +
+  'feel about what the user just said (surprise, curiosity, praise, bad ' +
+  'news). You pick an emotional intent; the body language is chosen for ' +
+  'you.\n' +
   '  - `remember`: save ONE short fact about the user that will help in ' +
   'future conversations (their name, preferences, recurring projects, ' +
   'people they care about, plans). Only save things that are stable and ' +

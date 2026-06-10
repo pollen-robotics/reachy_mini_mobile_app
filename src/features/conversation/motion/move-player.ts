@@ -43,24 +43,37 @@ import { createUnthrottledInterval } from "./unthrottled-interval";
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
 const STREAM_HZ = 100;
 
+/**
+ * Dataset the `play_emotion` resolver pulls recorded emotion moves
+ * from. Emotion stems (see `emotion-moves.ts`) are file names inside
+ * this dataset; the player fetches `<stem>.json` on demand.
+ */
+export const EMOTIONS_DATASET = "pollen-robotics/reachy-mini-emotions-library";
+
 // ─── Curated catalog ────────────────────────────────────────────────────
 
 /**
- * A single entry the LLM can pick from. `id` is the opaque identifier used
- * in tool calls; we map it to a dataset + file stem at playback time.
+ * A single dance the LLM can pick from. `id` is the opaque identifier
+ * used in tool calls; we map it to a dataset + file stem at playback
+ * time.
+ *
+ * Note: this catalog is now dances-only. Reactive emotions went to the
+ * intent-based `play_emotion` tool (see `emotion-moves.ts`), which
+ * resolves an abstract intent to a recorded stem the player streams via
+ * `MovePlayer.playEmotion`.
  */
 export interface MoveCatalogEntry {
   readonly id: string;
-  readonly kind: "dance" | "emotion";
+  readonly kind: "dance";
   readonly dataset: string;
   readonly file: string;
   readonly description: string;
 }
 
 /**
- * Curated selection exposed to the model: a handful of dances for
- * rhythmic/punctuating moments, and a handful of emotions for reactive
- * body language. Ordered roughly by how often we expect them to be useful.
+ * Curated selection of dances exposed to the model: rhythmic, playful
+ * choreographies for punctuating moments. Ordered roughly by how often
+ * we expect them to be useful.
  */
 export const MOVE_CATALOG: readonly MoveCatalogEntry[] = [
   // Dances - rhythmic, expressive, ~1-2s
@@ -106,64 +119,6 @@ export const MOVE_CATALOG: readonly MoveCatalogEntry[] = [
     file: "chicken_peck",
     description: "Sharp forward pecks - lively and percussive.",
   },
-
-  // Emotions - reactive, affective, 1-4s
-  {
-    id: "cheerful",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "cheerful1",
-    description: "Bright, upbeat body language - praise, small wins.",
-  },
-  {
-    id: "surprised",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "surprised1",
-    description: "Startled, a tiny recoil - when something unexpected happens.",
-  },
-  {
-    id: "curious",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "curious1",
-    description: "Inquisitive gaze shift - investigating, asking.",
-  },
-  {
-    id: "amazed",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "amazed1",
-    description: "In awe, long upward look - genuine wonder.",
-  },
-  {
-    id: "confused",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "confused1",
-    description: "Hesitant head tilt - when something doesn't compute.",
-  },
-  {
-    id: "proud",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "proud1",
-    description: "Chin up, chest out - taking credit, feeling good.",
-  },
-  {
-    id: "shy",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "shy1",
-    description: "Small look-away - embarrassed, modest.",
-  },
-  {
-    id: "sad",
-    kind: "emotion",
-    dataset: "pollen-robotics/reachy-mini-emotions-library",
-    file: "sad1",
-    description: "Subtle downward look - sympathy, bad news.",
-  },
 ];
 
 export type MoveId = (typeof MOVE_CATALOG)[number]["id"];
@@ -189,7 +144,8 @@ interface MoveFile {
 }
 
 interface LoadedMove {
-  readonly id: MoveId;
+  /** Cache key: a catalog `MoveId` for dances, `emotion:<stem>` for emotions. */
+  readonly id: string;
   readonly description: string;
   readonly duration: number;
   readonly times: readonly number[];
@@ -345,61 +301,94 @@ export class MovePlayer {
   }
 
   /**
-   * Fetch (or hit cache) the trajectory JSON and return the parsed move.
-   * Safe to call ahead of time to prewarm a move that's likely to play.
+   * Fetch (or hit cache) a catalog dance trajectory and return the
+   * parsed move. Safe to call ahead of time to prewarm a likely move.
    */
   async load(id: MoveId): Promise<LoadedMove> {
-    const cached = this.cache.get(id);
-    if (cached) return cached;
-
     const entry = findMove(id);
     if (!entry) throw new Error(`Unknown move id '${id}'`);
+    return this.loadSource(id, entry.dataset, entry.file, entry.description);
+  }
 
-    const url = `${HF_DATASET_BASE}/${entry.dataset}/resolve/main/${encodeURIComponent(entry.file)}.json`;
+  /**
+   * Fetch (or hit cache) a recorded *emotion* move by its dataset stem
+   * (resolved from an intent via `emotion-moves.ts`).
+   */
+  async loadEmotion(stem: string): Promise<LoadedMove> {
+    return this.loadSource(`emotion:${stem}`, EMOTIONS_DATASET, stem, stem);
+  }
+
+  /** Shared fetch + parse + cache for any dataset/file source. */
+  private async loadSource(
+    cacheKey: string,
+    dataset: string,
+    file: string,
+    fallbackDescription: string,
+  ): Promise<LoadedMove> {
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
+
+    const url = `${HF_DATASET_BASE}/${dataset}/resolve/main/${encodeURIComponent(file)}.json`;
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(
-        `Failed to fetch move '${id}' from ${entry.dataset}: ${response.status} ${response.statusText}`,
+        `Failed to fetch move '${cacheKey}' from ${dataset}: ${response.status} ${response.statusText}`,
       );
     }
     const raw = (await response.json()) as MoveFile;
     if (!Array.isArray(raw.time) || !Array.isArray(raw.set_target_data)) {
-      throw new Error(`Malformed move file '${id}'`);
+      throw new Error(`Malformed move file '${cacheKey}'`);
     }
     if (raw.time.length !== raw.set_target_data.length) {
-      throw new Error(`Move '${id}' has mismatched time/frame lengths`);
+      throw new Error(`Move '${cacheKey}' has mismatched time/frame lengths`);
     }
 
     const move: LoadedMove = {
-      id,
-      description: raw.description ?? entry.description,
+      id: cacheKey,
+      description: raw.description ?? fallbackDescription,
       times: raw.time.slice(),
       frames: raw.set_target_data,
       duration: raw.time[raw.time.length - 1] ?? 0,
     };
-    this.cache.set(id, move);
+    this.cache.set(cacheKey, move);
     return move;
   }
 
   /**
-   * Play a move. If another move is already streaming it is cancelled
-   * first. Resolves when the move finishes (or is cancelled via `stop()`).
+   * Play a catalog dance. If another move is already streaming it is
+   * cancelled first. Resolves when the move finishes (or is cancelled
+   * via `stop()`).
    */
   async play(id: MoveId): Promise<void> {
-    const move = await this.load(id);
-    this.stop();
+    this.start(await this.load(id));
+    return this.awaitFinish();
+  }
 
+  /** Play a recorded emotion move by its dataset stem. */
+  async playEmotion(stem: string): Promise<void> {
+    this.start(await this.loadEmotion(stem));
+    return this.awaitFinish();
+  }
+
+  /** Begin streaming a loaded move, cancelling any in-flight one. */
+  private start(move: LoadedMove): void {
+    this.stop();
+    this.current = { move, t0: performance.now() / 1000 };
+    // Worker-backed interval so the 100Hz pose stream keeps pushing
+    // frames to the robot even when the window loses focus (plain
+    // setInterval gets clamped to ~1Hz on unfocused tabs, which makes
+    // canned moves play back in slow-motion).
+    this.timer = createUnthrottledInterval(() => this.tick(), 1000 / STREAM_HZ);
+  }
+
+  /** Resolve once the current move finishes or is stopped. */
+  private awaitFinish(): Promise<void> {
     return new Promise<void>((resolve) => {
+      if (!this.current) {
+        resolve();
+        return;
+      }
       this.onFinish = resolve;
-      this.current = { move, t0: performance.now() / 1000 };
-      // Worker-backed interval so the 100Hz pose stream keeps pushing
-      // frames to the robot even when the window loses focus (plain
-      // setInterval gets clamped to ~1Hz on unfocused tabs, which makes
-      // canned moves play back in slow-motion).
-      this.timer = createUnthrottledInterval(
-        () => this.tick(),
-        1000 / STREAM_HZ,
-      );
     });
   }
 
