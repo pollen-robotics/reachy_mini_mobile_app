@@ -69,7 +69,7 @@ export function writeMemoryEnabled(value: boolean): void {
 }
 
 /** Read the selected realtime backend. Unknown / missing values fall
- *  back to the shipped default (`huggingface`). */
+ *  back to the shipped default (`openai`). */
 export function readRealtimeBackend(): RealtimeBackendKind {
   const storage = safeStorage();
   if (!storage) return DEFAULT_BACKEND;

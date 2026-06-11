@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.8.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<string>0.8.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -29,8 +29,6 @@
 	<string>Apps launched inside Reachy Mini may request your camera to provide camera-aware features (for example, a vision demo or AR scene).</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Reachy Mini needs local network access to talk to the robot daemon on port 8000.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Apps launched inside Reachy Mini may request your location to provide location-aware features (for example, a guided tour).</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Reachy Mini needs microphone access to let you talk to the robot through voice conversations.</string>
 	<key>UIBackgroundModes</key>

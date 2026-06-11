@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.8.0",
   "type": "module",
-  "description": "Minimal cross-platform (iOS/Android, desktop-ready) Tauri app that auto-discovers Reachy Minis on the local network (mDNS) and opens the conversation UI",
+  "description": "Cross-platform (iOS/Android, desktop-ready) Tauri app that lists the Reachy Minis registered on the Hugging Face central signaling Space and opens the conversation UI",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

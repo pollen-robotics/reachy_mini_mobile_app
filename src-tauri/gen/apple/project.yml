@@ -1,6 +1,6 @@
 name: reachy_mini_mobile_app
 options:
-  bundleIdPrefix: com.reachymini.app
+  bundleIdPrefix: com.pollen-robotics
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: Reachy Mini
-      PRODUCT_BUNDLE_IDENTIFIER: com.reachymini.app
+      PRODUCT_BUNDLE_IDENTIFIER: com.pollen-robotics.reachy-mini
 targetTemplates:
   app:
     type: application
@@ -51,8 +51,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: 0.8.0
+        CFBundleVersion: "0.8.0"
     entitlements:
       path: reachy_mini_mobile_app_iOS/reachy_mini_mobile_app_iOS.entitlements
     scheme:
