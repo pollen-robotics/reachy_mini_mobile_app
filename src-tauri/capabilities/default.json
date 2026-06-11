@@ -18,7 +18,8 @@
       "allow": [
         { "url": "https://huggingface.co/*" },
         { "url": "https://*.hf.space/*" },
-        { "url": "https://*.huggingface.co/*" }
+        { "url": "https://*.huggingface.co/*" },
+        { "url": "http://reachy-mini.local:8000/*" }
       ]
     },
     {

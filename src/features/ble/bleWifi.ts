@@ -71,13 +71,30 @@ let _notifResolve: ((s: string) => void) | null = null;
 const _notifBacklog: string[] = [];
 let _subscribed = false;
 
+// BLE wire logging, to the webview devtools console (visible under
+// `yarn tauri:dev`). The native plugin logs WRITES it issues but NOT the data
+// we read back / receive as notifications — this fills that gap on the JS side.
+const _log = (s: string): void => console.debug(`[ble] ${s}`);
+
+/** Redact secrets (the PIN) and trim verbose blobs for logging. */
+function _redactCmd(cmd: string): string {
+  if (cmd.startsWith('PIN_')) return 'PIN_*****';
+  if (cmd.startsWith('WIFI_CONNECT_ENC ')) return 'WIFI_CONNECT_ENC {…sealed…}';
+  return cmd;
+}
+
 function _onNotification(text: string): void {
   const t = text.trim();
   if (_notifResolve) {
+    _log(`RX notif (awaited) ← ${JSON.stringify(t)} (${t.length}B)`);
     const r = _notifResolve;
     _notifResolve = null;
     r(t);
   } else {
+    // No one is awaiting yet — this happens when a FAST command's result lands
+    // before our sync read grabs it. Keep it, but each sendCommand clears the
+    // backlog first so a stale entry can't be mis-served to the next command.
+    _log(`RX notif (backlogged) ← ${JSON.stringify(t)} (${t.length}B)`);
     _notifBacklog.push(t);
   }
 }
@@ -281,10 +298,30 @@ export async function disconnect(): Promise<void> {
  * payload. `PING`/`PIN_…` reply synchronously and return immediately.
  */
 export async function sendCommand(cmd: string, timeoutMs = 20000): Promise<string> {
-  await sendString(CMD_CHAR, cmd);
-  const sync = (await readString(RESP_CHAR)).trim();
+  // Start each command from a clean slate. A FAST async command (WIFI_KEYEX,
+  // WIFI_STATUS) can have its result notification fire BEFORE our sync read
+  // grabs it: the read then returns the real payload (so the command itself
+  // succeeds), but the notification orphans in the backlog. Left there, the
+  // NEXT command's `_awaitNotification` would shift out that stale entry
+  // instead of waiting for its own result — which is exactly how WIFI_SCAN was
+  // silently getting served the prior WIFI_KEYEX object and returning []. Any
+  // notification still queued when a new command begins is stale by definition.
+  if (_notifBacklog.length) {
+    _log(`drop ${_notifBacklog.length} stale notif(s): ${JSON.stringify(_notifBacklog)}`);
+    _notifBacklog.length = 0;
+  }
+  const cmdBytes = new TextEncoder().encode(cmd).length;
+  _log(`TX → ${_redactCmd(cmd)} (${cmdBytes}B)`);
+  // Bound the write AND the synchronous read. Only the notification await below
+  // was timed out before, so a wedged write/read here hung the caller forever
+  // (e.g. the wizard stuck on "Linking"). 8s is generous for a local op.
+  await withTimeout(sendString(CMD_CHAR, cmd), 8000, `write ${_redactCmd(cmd)}`);
+  const sync = (await withTimeout(readString(RESP_CHAR), 8000, 'read RESPONSE')).trim();
+  _log(`RX sync ← ${JSON.stringify(sync)} (${sync.length}B)`);
   if (sync === WORKING_ACK) {
-    return _awaitNotification(timeoutMs);
+    const payload = await _awaitNotification(timeoutMs);
+    _log(`RX result ← ${JSON.stringify(payload)} (${payload.length}B)`);
+    return payload;
   }
   return sync;
 }
@@ -296,7 +333,9 @@ export async function sendCommand(cmd: string, timeoutMs = 20000): Promise<strin
  */
 export async function readCharacteristic(uuid: string, timeoutMs = 6000): Promise<string> {
   const raw = await withTimeout(readString(uuid), timeoutMs, `read ${uuid}`);
-  return raw.trim();
+  const v = raw.trim();
+  _log(`RX read ${uuid.slice(-4)} ← ${JSON.stringify(v)} (${v.length}B)`);
+  return v;
 }
 
 // ─── Crypto: seal the WiFi password (mirror of the daemon) ───────────────────

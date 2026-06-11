@@ -23,6 +23,7 @@ export type SetupPhase =
   | 'wifi-pick' // choose an SSID
   | 'wifi-password' // enter the Wi-Fi password
   | 'wifi-connecting' // sealed connect + poll WIFI_STATUS
+  | 'linking-account' // robot-side HF OAuth (open browser) so it can register
   | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central
   | 'done' // success - robot reachable
   | 'error'; // recoverable failure (see SetupError.recoverPhase)
@@ -44,6 +45,7 @@ export function stageForPhase(phase: SetupPhase): { stage: SetupStage; index: nu
     case 'wifi-password':
       return { stage: 'network', index: 1 };
     case 'wifi-connecting':
+    case 'linking-account':
     case 'central-waiting':
       return { stage: 'connect', index: 2 };
     case 'done':

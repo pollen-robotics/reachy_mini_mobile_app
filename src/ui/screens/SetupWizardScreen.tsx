@@ -157,6 +157,8 @@ function StepView({
       return <PasswordView ssid={m.selectedSsid ?? ''} onSubmit={m.submitPassword} />;
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
+    case 'linking-account':
+      return <LinkAccountView onLink={m.linkAccount} />;
     case 'central-waiting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="registering" />;
     case 'done':
@@ -476,6 +478,23 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
       <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
       <Headline title={title} caption={caption} />
       <CircularProgress size={26} sx={{ color: 'primary.main' }} />
+    </Stack>
+  );
+}
+
+/* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
+
+function LinkAccountView({ onLink }: { onLink: () => void }) {
+  return (
+    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
+      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
+      <Headline
+        title="Link your Reachy"
+        caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
+      />
+      <Box sx={{ width: '100%', maxWidth: 320 }}>
+        <PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>
+      </Box>
     </Stack>
   );
 }

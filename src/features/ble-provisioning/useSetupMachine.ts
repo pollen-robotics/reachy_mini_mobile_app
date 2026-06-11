@@ -44,6 +44,7 @@ import {
   toSetupError,
   wifiStatus,
 } from './protocol';
+import { openExternalUrl } from '@/shared/tauri/openUrl';
 import type { RobotIdentity, SetupError, SetupPhase, SetupResult } from './types';
 
 const SCAN_MS = 15_000;
@@ -55,6 +56,12 @@ const WIFI_POLL_TIMEOUT_MS = 45_000;
 // the HF Space and register as a producer, which lags the local join.
 const CENTRAL_POLL_INTERVAL_MS = 4_000;
 const CENTRAL_POLL_TIMEOUT_MS = 75_000;
+// Robot-side OAuth entry point: opening this in the system browser makes the
+// robot's daemon redirect to Hugging Face, handle the callback, store its own
+// token, and start the central relay. Reached by mDNS hostname (matches the
+// daemon's registered OAuth redirect URI) — the phone must be on the robot's
+// Wi-Fi for this to resolve and for HF to redirect back.
+const ROBOT_OAUTH_BEGIN_URL = 'http://reachy-mini.local:8000/api/hf-auth/oauth/begin';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -83,6 +90,7 @@ export interface SetupMachine {
   rescanWifi: () => void;
   selectNetwork: (ssid: string) => void;
   submitPassword: (password: string) => void;
+  linkAccount: () => void;
   retry: () => void;
   reset: () => void;
 }
@@ -305,21 +313,45 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
             }
           }
 
-          // Joined Wi-Fi - now wait for it to appear on HF central.
-          setPhase('central-waiting');
-          const hwid = identityRef.current?.hardwareId ?? null;
-          const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
-          if (runId !== runIdRef.current || !mountedRef.current) return;
-          setResult({ hardwareId: hwid, robot: matched });
-          setPhase('done');
+          // Joined Wi-Fi. Stop here and let the user link the robot to their
+          // Hugging Face account via robot-side OAuth (see `linkAccount`): a
+          // token-less robot boots with the central relay disabled and never
+          // appears in the list. The user drives the next step with a tap.
+          setPhase('linking-account');
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
           fail((e as Error).message ?? String(e), 'wifi-password');
         }
       })();
     },
-    [selectedSsid, token, fail],
+    [selectedSsid, fail],
   );
+
+  // ── ACCOUNT LINK (robot-side OAuth) ──────────────────────────────────────────
+
+  // Open the robot's OAuth entry point in the system browser. The robot
+  // (reachy-mini.local) redirects to Hugging Face, handles the callback, stores
+  // its OWN durable token, and starts the central relay. We then just wait for
+  // it to appear on central — the same poll the wizard already uses.
+  const linkAccount = useCallback(() => {
+    const runId = (runIdRef.current += 1);
+    setError(null);
+    void (async () => {
+      try {
+        await openExternalUrl(ROBOT_OAUTH_BEGIN_URL);
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+        setPhase('central-waiting');
+        const hwid = identityRef.current?.hardwareId ?? null;
+        const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+        setResult({ hardwareId: hwid, robot: matched });
+        setPhase('done');
+      } catch (e) {
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+        fail((e as Error).message ?? String(e), 'linking-account');
+      }
+    })();
+  }, [token, fail]);
 
   // ── recovery / lifecycle ────────────────────────────────────────────────────
 
@@ -368,6 +400,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     rescanWifi,
     selectNetwork,
     submitPassword,
+    linkAccount,
     retry,
     reset,
   };
