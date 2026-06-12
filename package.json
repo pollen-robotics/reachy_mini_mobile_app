@@ -1,7 +1,7 @@
 {
   "name": "reachy_mini_mobile_app",
   "private": true,
-  "version": "0.9.6",
+  "version": "0.9.7",
   "type": "module",
   "description": "Cross-platform (iOS/Android, desktop-ready) Tauri app that lists the Reachy Minis registered on the Hugging Face central signaling Space and opens the conversation UI",
   "scripts": {
