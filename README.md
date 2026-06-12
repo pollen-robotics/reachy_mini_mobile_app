@@ -3,8 +3,9 @@
 Cross-platform Tauri 2 app (iOS / Android / desktop) for **Reachy Mini**.
 Sign in with Hugging Face, pick one of your robots, and:
 
-- **Talk to it** with a real-time voice conversation (Hugging Face
-  realtime backend, in-app orb panel - no more iframe).
+- **Talk to it** with a real-time voice conversation (OpenAI Realtime
+  by default, Hugging Face realtime backend as an opt-in; in-app orb
+  panel - no more iframe).
 - **Browse and launch apps** from the Hugging Face Hub catalog (each app
   runs in a sandboxed iframe with the robot handed off seamlessly).
 - **Drive the head manually** with a virtual joystick + monitor camera +
@@ -16,7 +17,7 @@ handled outside this app.
 
 ## Status
 
-`v0.6.x` - the app is shippable. Every `v*` tag push runs the full
+`v0.9.x` - the app is shippable. Every `v*` tag push runs the full
 `.github/workflows/build-mobile.yml` pipeline: unsigned simulator
 `.app` + unsigned debug `.apk` (attached to the GitHub release), plus
 the signed TestFlight upload (iOS) and the signed Play Internal upload
@@ -32,7 +33,7 @@ procedure.
 | Frontend | Vite 7 + React 19 + TypeScript + SWC | Fast dev loop, modern toolchain |
 | UI kit | MUI v9 + Emotion | Battle-tested on mobile WebViews |
 | Async state | TanStack Query v5 | Apps catalog + central robots fetching |
-| WebRTC + AI | Hugging Face realtime session backend + robot WebRTC | HF-token-gated session allocator; robot audio over the SDK peer connection |
+| WebRTC + AI | OpenAI Realtime (default) or Hugging Face realtime backend + robot WebRTC | OpenAI via server-minted ephemeral keys; HF via an HF-token-gated session allocator. Both pick the provider from the in-app Conversation settings; robot audio rides the SDK peer connection |
 | Robot signaling | Hugging Face central Space (`pollen-robotics-reachy-mini-central.hf.space`) | Producer-consumer relay over WebSocket |
 | Tests | Vitest | Pure logic + parsing tests |
 
@@ -53,10 +54,12 @@ The two key features:
   (`start`), wake/sleep trajectories (`wakeUp`, `sleepAndDisable`),
   iframe-handoff release/reacquire, video stream caching, transport +
   data-channel health monitoring.
-- **`features/conversation/`** owns the HF realtime voice conversation:
-  the engine drives a `RobotSession` plus the audio bridge, motion
-  controllers (head wobbler, antennas), tool-call dispatch, and the
-  long-term memory store.
+- **`features/conversation/`** owns the realtime voice conversation
+  (OpenAI Realtime by default, Hugging Face realtime as an opt-in -
+  swapped behind a provider-agnostic bridge): the engine drives a
+  `RobotSession` plus the audio bridge, motion controllers (head
+  wobbler, antennas), tool-call dispatch, and the long-term memory
+  store.
 
 The architecture is enforced by ESLint rules (`no-restricted-imports`)
 so layers can't accidentally cross-depend.
@@ -92,9 +95,13 @@ for your platform.
 
 The mobile bundle does not ship with a long-lived model-provider key.
 The app catalog (`/api/js-apps`) works out of the box against the
-production API Space (`pollen-robotics-reachy-mini-api.hf.space`).
-Voice conversation allocates an HF-token-gated realtime session through
-the production session proxy once the user is signed in to Hugging Face.
+production API Space (`pollen-robotics-reachy-mini-api.hf.space`). Voice
+conversation defaults to OpenAI Realtime, brokered through the API
+Space's `/api/openai/ephemeral` endpoint (it validates the user's HF
+token and mints a short-lived ephemeral key server-side). Switching to
+the Hugging Face realtime backend in the in-app settings instead
+allocates an HF-token-gated session through the production session
+proxy. Either way, no long-lived provider key is bundled.
 
 Copy `.env.example` to `.env.local` only if you need to override
 defaults (staging signaling or staging API host):
@@ -193,8 +200,10 @@ GitHub Actions builds iOS + Android tester bundles on every tag push.
 See `.github/workflows/build-mobile.yml` for the matrix and the
 secrets list (Apple TestFlight, Play Console service account, signing
 certs). The workflow does not need a model-provider API key repo secret:
-voice conversation goes through the HF realtime session allocator at
-runtime, so the bundle ships without any long-lived model credential.
+voice conversation is brokered at runtime (OpenAI via server-minted
+ephemeral keys, or the HF realtime session allocator when that backend
+is selected), so the bundle ships without any long-lived model
+credential.
 
 ### Cut a release
 
