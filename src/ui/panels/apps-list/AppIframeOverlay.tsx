@@ -137,6 +137,7 @@ import { APPS_QUERY_KEY, type CatalogPayload } from '@/features/apps/useApps';
 import { APP_HANDOFF_TIMINGS } from '@/features/robot-session/timings';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
 
@@ -158,6 +159,11 @@ interface AppIframeOverlayProps {
   hfUsername: string | null;
   robotPeerId: string;
   robotName: string;
+  /** Physical transport string from the robot's central listing
+   *  (`wifi` / `usb` / …). Forwarded to `<IdentityChipBar>` so the
+   *  topbar shows the same stable `Lite` / `Wireless` tag as the
+   *  session screen. */
+  transport: string;
   /**
    * Current session phase. Used to gate the iframe `src`: we only
    * navigate the iframe to the embed URL once the host's
@@ -206,6 +212,7 @@ export default function AppIframeOverlay({
   hfUsername,
   robotPeerId,
   robotName,
+  transport,
   sessionPhase,
   onClose,
 }: AppIframeOverlayProps) {
@@ -215,6 +222,11 @@ export default function AppIframeOverlay({
 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>('waiting-release');
   const [connectingStep, setConnectingStep] = useState<ConnectingStep>(null);
+  // Live RTT (ms) reported by the embed itself via `embed:app-state`.
+  // The host has released its WebRTC slot to the iframe, so this is
+  // the ONLY true measure of the app↔robot link latency. `null` until
+  // the embed reports one (older apps never do → pill stays hidden).
+  const [embedRttMs, setEmbedRttMs] = useState<number | null>(null);
 
   /**
    * Effective app entry used to build the iframe URL and label
@@ -539,6 +551,7 @@ export default function AppIframeOverlay({
             version?: unknown;
             phase?: unknown;
             connectingStep?: unknown;
+            rttMs?: unknown;
             fatal?: unknown;
           }
         | null
@@ -550,6 +563,12 @@ export default function AppIframeOverlay({
       if (data.type === 'embed:app-state') {
         const phase = data.phase;
         const step = data.connectingStep;
+        // Live link latency the embed measures on its own WebRTC pair
+        // (additive protocol field). Update whenever present so the
+        // topbar's latency pill tracks the real app↔robot RTT.
+        if (typeof data.rttMs === 'number' && Number.isFinite(data.rttMs)) {
+          setEmbedRttMs(data.rttMs);
+        }
         if (phase === 'connecting') {
           setLoadPhase(prev =>
             prev === 'waiting-release' || prev === 'error' ? prev : 'connecting'
@@ -599,6 +618,7 @@ export default function AppIframeOverlay({
   // `url` dep already gates iframe re-navigations.
   useEffect(() => {
     sawProtocolMsgRef.current = false;
+    setEmbedRttMs(null);
   }, [url]);
 
   // Clean up any pending burst timers on unmount or when the embed
@@ -743,43 +763,74 @@ export default function AppIframeOverlay({
        */}
       <Stack
         direction="row"
-        spacing={1.25}
+        spacing={1.5}
         sx={{
           alignItems: 'center',
           px: 2,
-          pt: `calc(${LAYOUT.safeAreaTop} + 8px)`,
-          pb: 1,
+          pt: `calc(${LAYOUT.safeAreaTop} + 10px)`,
+          pb: 1.5,
+          minHeight: 68,
           borderBottom: t => `1px solid ${t.palette.divider}`,
-          bgcolor: 'background.paper',
+          // Match the host session topbar (`RobotSessionScreen`):
+          // same `background.default` fill, height and safe-area
+          // padding so launching an app reads as the SAME chrome
+          // staying in place rather than a separate sheet popping
+          // over it.
+          bgcolor: 'background.default',
           flexShrink: 0,
         }}
       >
-        {/* App glyph on the very left so the user gets the same
-            visual identifier they tapped from the apps list - same
-            `<AppIcon>` accessor as the apps list tiles. Sized large
-            enough to register at a glance but inside the same
-            vertical footprint as the title so the bar doesn't grow
-            taller. Renders the author's `icon.svg`/`icon.png` when
-            available, falls back to the front-matter emoji. */}
-        <AppIcon app={effectiveApp} size={24} />
-        {/* App name flush left, primary close button flush right.
-            Mirrors native iOS/Android sheet conventions: identifier
-            anchors the user, exit affordance is in the thumb-reach
-            corner. The primary tint on the close button makes it the
-            single visible CTA in the bar so there's no ambiguity
-            about how to back out of the embed. */}
-        <Typography
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: TYPO.body,
-            fontWeight: FONT_WEIGHT.semibold,
-            color: 'text.primary',
-          }}
-          noWrap
-        >
-          {effectiveApp.name}
-        </Typography>
+        {/* App glyph on the very left, vertically spanning the two
+            stacked identity lines (robot name over app name) so the
+            illustration anchors the whole block - same `<AppIcon>`
+            accessor as the apps list tiles. Renders the author's
+            `icon.svg`/`icon.png` when available, falls back to the
+            front-matter emoji. */}
+        <AppIcon app={effectiveApp} size={28} imageSize={36} />
+        {/* Stacked identity: the running APP's name is the headline
+            (it's what the user is focused on), with the host robot's
+            name + transport/latency pills as a secondary context line
+            underneath (the same `<IdentityChipBar>` the session topbar
+            renders, in its compact `secondary` variant). This keeps the
+            user oriented on which robot they're driving without
+            competing with the app title. */}
+        <Stack sx={{ flex: 1, minWidth: 0, gap: 0.25 }}>
+          <Typography
+            sx={{
+              minWidth: 0,
+              fontSize: TYPO.lg,
+              fontWeight: FONT_WEIGHT.bold,
+              color: 'text.primary',
+              letterSpacing: '-0.1px',
+              lineHeight: 1.2,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            noWrap
+          >
+            {effectiveApp.name}
+          </Typography>
+          <IdentityChipBar
+            robotName={robotName}
+            transport={transport}
+            // Host's live WebRTC classification is gone (slot released
+            // to the iframe); the bars are driven by the embed-reported
+            // RTT below, so the kind fallback is irrelevant here.
+            linkKind={null}
+            // The host released its WebRTC slot to the iframe, so its
+            // own RTT is stale. We instead show the latency the EMBED
+            // measures on its live pair and reports via
+            // `embed:app-state` - a true app↔robot link read. Until
+            // the embed reports one (older apps never do), we hide the
+            // pill rather than paint a frozen host value. The stable
+            // Lite/Wireless transport tag always shows (identity).
+            linkRttMs={embedRttMs}
+            sessionPhase={sessionPhase}
+            showLatency={embedRttMs !== null}
+            variant="secondary"
+          />
+        </Stack>
         {/* Per-app actions kebab. Apple guideline 1.2 (UGC) wants
             a Report affordance on every surface where the user
             consumes UGC; this is the surface for active use, the

@@ -38,6 +38,12 @@ const RESPONSE_DONE_FALLBACK_MS = 5_000;
 // (network hiccup), so we never get stuck showing "thinking" forever.
 // Sized above the vision VLM timeout (8 s) plus follow-up headroom.
 const TOOL_CALL_PROCESSING_FALLBACK_MS = 15_000;
+// The realtime session allocator Space occasionally answers with a gateway
+// timeout (504) or other 5xx under load. A single short retry turns most of
+// those transient blips into a successful allocation instead of a
+// user-visible startup failure. A 4xx is a real rejection and never retried.
+const ALLOCATOR_MAX_ATTEMPTS = 2;
+const ALLOCATOR_RETRY_BACKOFF_MS = 400;
 
 export type RealtimeStatus =
   | "idle"
@@ -620,6 +626,40 @@ export function normalizeHfVoice(value: string | null | undefined): HfVoiceId {
   return match ?? HF_DEFAULT_VOICE;
 }
 
+/**
+ * POST the realtime session allocator, retrying transient 5xx (gateway
+ * timeouts under load) a couple of times with a short backoff. A 4xx is a
+ * real rejection and returned immediately - retrying it would only delay the
+ * inevitable failure.
+ */
+async function postHfRealtimeSession(
+  headers: Record<string, string>,
+): Promise<Response> {
+  let response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, {
+    method: "POST",
+    headers,
+  });
+  for (
+    let attempt = 1;
+    !response.ok && response.status >= 500 && attempt < ALLOCATOR_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    console.warn(
+      `[hf-realtime] session allocator ${response.status}, retrying (${attempt}/${
+        ALLOCATOR_MAX_ATTEMPTS - 1
+      })...`,
+    );
+    await new Promise((resolve) =>
+      setTimeout(resolve, ALLOCATOR_RETRY_BACKOFF_MS * attempt),
+    );
+    response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, {
+      method: "POST",
+      headers,
+    });
+  }
+  return response;
+}
+
 export async function resolveHfRealtimeWebSocketUrl(
   hfToken: string | null,
 ): Promise<string> {
@@ -635,10 +675,7 @@ export async function resolveHfRealtimeWebSocketUrl(
   const headers: Record<string, string> = {};
   if (hfToken) headers.Authorization = `Bearer ${hfToken}`;
 
-  const response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, {
-    method: "POST",
-    headers,
-  });
+  const response = await postHfRealtimeSession(headers);
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");

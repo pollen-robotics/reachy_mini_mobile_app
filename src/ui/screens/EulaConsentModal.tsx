@@ -21,7 +21,7 @@
  * Three short bullets, each anchored to a real feature of the app
  * so the modal reads as "what to expect" rather than legalese:
  *
- *   1. Voice conversations    -> mic + Hugging Face realtime backend
+ *   1. Voice conversations    -> mic + OpenAI realtime (HF optional)
  *   2. Third-party apps       -> HF Spaces in WebView + report flow
  *   3. Hugging Face sign-in   -> token storage on device
  *
@@ -79,7 +79,7 @@ const BULLETS: readonly DisclosureBullet[] = [
   {
     icon: GraphicEqOutlinedIcon,
     title: 'Voice conversations',
-    body: 'Your microphone audio is sent to the Hugging Face realtime backend to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
+    body: 'Your microphone audio is streamed to OpenAI\u2019s realtime service (the default provider; you can switch to Hugging Face in settings) to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
   },
   {
     icon: AppsOutlinedIcon,

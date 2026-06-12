@@ -124,9 +124,12 @@ import { installBackgroundResilience } from "@/features/robot-session/background
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import { createRealtimeBackend } from "./realtime";
-import type { RealtimeBackend } from "./realtime/types";
-import { attachVision, getVisionPromptAppendix, type VisionHandle } from "../vision";
+import {
+  createRealtimeBackendController,
+  type RealtimeBackendController,
+} from "./realtime/backend-controller";
+import type { RealtimeBackendDeps } from "./realtime/types";
+import { attachVision, getVisionPromptAppendix } from "../vision";
 import {
   getActiveLanguageId,
   getLanguagePromptAppendix,
@@ -367,17 +370,21 @@ const settings: Settings = loadSettings();
 // internally).
 let robot: ReachyMiniInstance | null = null;
 
-// Realtime backend lifecycle (client + audio sink + reconnect
-// counters + reconnecting flag) is owned end-to-end by the HF
-// bridge below. The engine just observes its events and drives the
+// Realtime backend lifecycle is owned by the `RealtimeBackendController`
+// (see `./realtime/backend-controller.ts`): it holds the live
+// provider-specific bridge (client + audio sink + reconnect counters +
+// reconnecting flag), the vision side-channel wired onto that bridge,
+// and swaps both when the user picks a different provider in the
+// settings. The engine just observes the bridge's events and drives the
 // FSM + motion controllers in reaction.
 //
-// Declared as `let | null` because `toolCallHandler` is created
-// EARLIER in the closure (it has no dependency on the bridge) yet
-// needs to forward `sendToolResponse` calls to it at runtime. The
-// late `=` assignment below resolves the cycle without forward
-// declarations or class wrappers.
-let realtimeBridge: RealtimeBackend | null = null;
+// Declared as `let | null` because `toolCallHandler` is created EARLIER
+// in the closure (it has no dependency on the bridge) yet needs to
+// forward `sendToolResponse` / `look` calls at runtime. The late `=`
+// assignment below resolves the cycle without forward declarations or
+// class wrappers; the handlers read `backend?.bridge()` / `backend?.vision()`
+// lazily so the null window before assignment degrades to a no-op.
+let backend: RealtimeBackendController | null = null;
 
 // Head-motion + antennas oscillator. The actual `HeadWobbler` and
 // `AntennasOscillator` instances live inside their respective
@@ -419,8 +426,8 @@ const videoCache = session.videoCache;
 session.setTransportListener(onTransportChange);
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
-// by the realtime bridge. The engine exposes `realtimeBridge.isReconnecting()`
-// as a read-only view for the few sites that need it.
+// by the realtime bridge. The engine reads it through
+// `backend.bridge().isReconnecting()` for the few sites that need it.
 
 // Screen keep-awake is no longer driven from the engine. The host
 // (`RobotSessionScreen` via `useKeepScreenOn`) owns that policy now
@@ -642,7 +649,7 @@ function applyMicMuted(next: boolean): void {
   // The bridge owns the robot-mic→backend routing, so the gate lives
   // there and survives transparent reconnects.
   try {
-    realtimeBridge?.setMicMuted(next);
+    backend?.bridge().setMicMuted(next);
   } catch (err) {
     console.warn("[conversation-engine] setMicMuted failed:", err);
   }
@@ -873,8 +880,19 @@ async function runConversationParts(): Promise<void> {
   // auto-start path it's already `starting`, so this is a no-op there.
   if (fsm.current() === "ready") setState("starting");
 
+  // Swap the realtime bridge if the user changed the provider in the
+  // conversation settings since it was last built. Runs before the
+  // backend handshake below so this conversation actually talks to the
+  // selected provider (the settings cog is stopped-only, so we always
+  // reach here before the user can talk on the new backend).
+  await backend?.ensureSelection();
+  if (unmounted.get()) {
+    conversationStarted.off();
+    return;
+  }
+
   // Grab the robot's incoming audio track (the robot's microphone).
-  const robotMicTrack = realtimeBridge?.getRobotMicTrack(robot) ?? null;
+  const robotMicTrack = backend?.bridge().getRobotMicTrack(robot) ?? null;
   if (!robotMicTrack) {
     conversationStarted.off();
     onFatalError(new Error("Could not find the robot's microphone track"));
@@ -882,6 +900,54 @@ async function runConversationParts(): Promise<void> {
   }
 
   audioMonitors.startMic(robotMicTrack);
+
+  // ─── TEMP MIC DIAGNOSTIC (remove once the no-input bug is solved) ──
+  // Answers one question: does the robot's *remote* audio track deliver
+  // RTP audio into this client? If `bytes`/`delta` grow while you speak
+  // near the robot, the daemon IS sending audio and the problem is the
+  // client reading it (WKWebView WebAudio on a remote track). If they
+  // stay flat, the daemon isn't transmitting mic audio on this peer.
+  // Read it in the app's devtools console, filter on "[MIC-DIAG]".
+  try {
+    const w = window as unknown as Record<string, unknown>;
+    const prevTimer = w.__micDiagTimer as ReturnType<typeof setInterval> | undefined;
+    if (prevTimer) clearInterval(prevTimer);
+    w.__robotPc = robot._pc;
+    w.__robotMicTrack = robotMicTrack;
+    console.info("[MIC-DIAG] robot mic track:", {
+      id: robotMicTrack.id,
+      enabled: robotMicTrack.enabled,
+      muted: robotMicTrack.muted,
+      readyState: robotMicTrack.readyState,
+    });
+    let lastBytes = 0;
+    w.__micDiagTimer = setInterval(() => {
+      const pc = robot?._pc;
+      if (!pc) return;
+      void pc.getStats().then((stats) => {
+        stats.forEach((report) => {
+          const r = report as unknown as Record<string, unknown>;
+          if (r.type === "inbound-rtp" && r.kind === "audio") {
+            const bytes = Number(r.bytesReceived ?? 0);
+            const delta = bytes - lastBytes;
+            lastBytes = bytes;
+            console.info(
+              "[MIC-DIAG] inbound audio",
+              "bytes=", bytes,
+              "delta=", delta,
+              "packets=", r.packetsReceived,
+              "audioLevel=", r.audioLevel,
+              "trackMuted=", robotMicTrack.muted,
+              "readyState=", robotMicTrack.readyState,
+            );
+          }
+        });
+      });
+    }, 1500);
+  } catch (err) {
+    console.warn("[MIC-DIAG] setup failed", err);
+  }
+
   // Bring the motion stack up (pose dispatcher + antennas
   // oscillator). The wobbler waits for its AI track via the
   // bridge's `onOutputTrack` callback, which forwards into
@@ -896,9 +962,9 @@ async function runConversationParts(): Promise<void> {
 
   // Reset the bridge's per-session retry budget so a stale failure
   // from a previous run can't poison this fresh handshake.
-  realtimeBridge?.resetReconnectCounter();
+  backend?.bridge().resetReconnectCounter();
   try {
-    await realtimeBridge?.connect(robotMicTrack);
+    await backend?.bridge().connect(robotMicTrack);
   } catch (err) {
     await recoverConversationStartFailure(err);
     return;
@@ -915,7 +981,7 @@ async function runConversationParts(): Promise<void> {
   // a previous session left on the bridge — a new session must never
   // inherit a stale mute. Transparent reconnects, by contrast, go
   // through `bridge.connect()` which re-applies the live mute state.
-  realtimeBridge?.setMicMuted(false);
+  backend?.bridge().setMicMuted(false);
 
   // Release the iOS phone-microphone claim now that the bridge has
   // replaced the SDK's outgoing audio sender with the assistant output
@@ -947,20 +1013,81 @@ async function runConversationParts(): Promise<void> {
 }
 
 async function recoverConversationStartFailure(err: unknown): Promise<void> {
-  console.warn("[conversation-engine] HF realtime startup failed:", err);
-  emitErrorMessage(formatRecoverableConversationStartError(err));
+  const detail = err instanceof Error ? err.message : String(err);
+  // Log the raw detail (allocator HTTP status / websocket close code+reason)
+  // so a prod failure is diagnosable from a single greppable line, even
+  // though the user only sees the friendly classification below.
+  console.warn("[conversation-engine] HF realtime startup failed:", detail);
+  emitErrorMessage(formatConversationError(detail));
   await tearDownConversationPipeline({ glide: true });
   if (!unmounted.get() && session.isEstablished()) {
     setState("ready");
   }
 }
 
-function formatRecoverableConversationStartError(err: unknown): string {
-  const detail = err instanceof Error ? err.message : String(err);
-  if (/\b(401|403)\b|auth|authorization|unauthorized|forbidden/i.test(detail)) {
-    return "Hugging Face authorization failed. Sign in again and retry.";
+/**
+ * Map a realtime failure (startup OR a mid-session fatal drop) to a
+ * user-facing message WITHOUT lying about the cause. Shared by
+ * `recoverConversationStartFailure` and `onFatalError` so the orb caption
+ * never shows a raw engine string. Both backends embed structured hints in
+ * their thrown messages:
+ *
+ *   HF realtime:
+ *     - allocator:  `HF realtime session allocator failed (<status>): ...`
+ *     - websocket:  `... realtime websocket closed (<code>)` / `... failed to open`
+ *   OpenAI realtime:
+ *     - no token:   `no HF token in sessionStorage; sign in to Hugging Face first`
+ *     - key mint:   `mint endpoint returned <status>: ...`
+ *     - handshake:  `OpenAI Realtime handshake failed (<status>): ...`
+ *
+ * Only a rejection of the user's HF token (no token, or 401/403 on the
+ * token-bearing allocator / mint requests) is a genuine "sign in again" case.
+ * Everything else - a busy/cold backend, a rate limit, a dropped transport, a
+ * revoked ephemeral key - is transient, where "sign in" would be a dead end.
+ */
+function formatConversationError(detail: string): string {
+  // OpenAI backend pre-flight: no HF token to mint a key with.
+  if (/no HF token|hf_token_missing/i.test(detail)) {
+    return "Sign in to Hugging Face to start the conversation.";
   }
-  return "Could not start the Hugging Face conversation. Retry in a moment.";
+
+  // HTTP status on a request that carried the user's HF token: the HF
+  // realtime allocator (`allocator failed (<status>)`) or the OpenAI
+  // ephemeral-key mint (`mint endpoint returned <status>`).
+  const allocatorStatus = detail.match(/allocator failed \((\d{3})\)/);
+  const mintStatus = detail.match(/mint endpoint returned (\d{3})/);
+  if (allocatorStatus || mintStatus) {
+    const status = Number(allocatorStatus?.[1] ?? mintStatus?.[1]);
+    // 401/403 rejects the user's HF token itself - the only genuine
+    // "sign in again" case (e.g. the mint's whoami refused the token).
+    if (status === 401 || status === 403) {
+      return "Hugging Face sign-in expired. Sign in again and retry.";
+    }
+    if (status === 429) {
+      return "Rate limit reached. Wait a moment and retry.";
+    }
+    // A 5xx on the mint means the server accepted the HF token but its
+    // upstream OpenAI mint failed (e.g. the master OpenAI key is rejected).
+    // That breaks the OpenAI backend for everyone - point the user at the
+    // working HF backend instead of a useless retry.
+    if (mintStatus) {
+      return "The OpenAI backend is unavailable right now. Switch to the Hugging Face backend.";
+    }
+    return "The Hugging Face realtime backend is busy. Retry in a moment.";
+  }
+
+  // Transport refused/dropped (cold backend, network, a revoked ephemeral key
+  // on the OpenAI SDP handshake, or a mid-session drop surfaced as fatal) -
+  // not a sign-in issue.
+  if (
+    /realtime websocket (closed|failed to open)|Realtime handshake failed|connection lost/i.test(
+      detail,
+    )
+  ) {
+    return "Lost the realtime connection. Retry in a moment.";
+  }
+
+  return "Could not start the conversation. Retry in a moment.";
 }
 
 /**
@@ -991,7 +1118,7 @@ const toolCallHandler = createToolCallHandler({
   // realistically happen anyway), plus the post-teardown window
   // after `unmount()`.
   sendToolResponse: (callId, result) =>
-    realtimeBridge?.sendToolResponse(callId, result) ?? false,
+    backend?.bridge().sendToolResponse(callId, result) ?? false,
   onMoveStart: () => {
     movePlaying.on();
   },
@@ -1006,7 +1133,7 @@ const toolCallHandler = createToolCallHandler({
   // through here. When vision is inert (no HF token) `vision` is null
   // and we return a graceful "unavailable" result rather than throw.
   look: () =>
-    vision?.look() ??
+    backend?.vision()?.look() ??
     Promise.resolve({
       ok: false,
       message: "vision is not available in this session",
@@ -1108,7 +1235,7 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // motion controllers and audio analysers. The bridge itself stays
 // blissfully unaware of any of that.
 
-realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
+const realtimeBackendDeps: RealtimeBackendDeps = {
   getRobot: () => robot,
   // Resolve the voice lazily (re-read on every `buildClient()` so a
   // personality OR backend switch picks up the right voice on the next
@@ -1249,50 +1376,47 @@ realtimeBridge = createRealtimeBackend(getRealtimeBackend(), {
   onFatalError: (err) => {
     void onFatalError(err);
   },
-});
+};
 
-// ─── Vision side-channel ───────────────────────────────────────────────
+// ─── Realtime backend controller ───────────────────────────────────────
 //
-// On-demand scene awareness (see `docs/VISION.md`). The camera is read
-// ONLY when the model calls the `look` tool (`vision.look()`), i.e.
-// when the user explicitly asks it to look at something. There is no
-// passive/periodic capture and no STT-keyword trigger - nothing is
-// captured otherwise. The `look` result is mirrored into the Realtime
-// context as a `<scene_observation>` block so later turns can still
-// reference what was seen.
+// Owns the live provider-specific bridge AND the vision side-channel
+// wired onto it. The bridge is read from the conversation settings at
+// construction and re-checked at every conversation (re)start (via
+// `backend.ensureSelection()` in `runConversationParts`) so a switch in
+// the stopped-only settings cog actually swaps the transport: the
+// bridge is provider-specific (HF realtime vs OpenAI realtime), and the
+// lazily-read voice / prompt / tools alone can't change it.
 //
-// The handle is null when no HF token is available - `attachVision`
-// returns `null` and every call site below stays a no-op via optional
-// chaining. There is no per-conversation lifecycle: `dispose()` is
-// called once in `unmount` (terminal release; after that `look()`
-// returns a graceful failure).
+// Vision side-channel (see `docs/VISION.md`)
+// ──────────────────────────────────────────
+// On-demand scene awareness: the camera is read ONLY when the model
+// calls the `look` tool (no passive/periodic capture). The result is
+// mirrored into the realtime context as a `<scene_observation>` block.
+// `attachVision` returns null when no HF token is available, and every
+// call site degrades to a no-op via optional chaining. Vision lives on
+// the bridge's `RealtimePort`, so it dies on a swap - the controller
+// re-attaches it atomically, hence the `attachVision` callback here.
 //
-// Backend
-// -------
-// The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits
-// Hugging Face's Inference Providers router
-// (`router.huggingface.co/v1/chat/completions`) with the USER'S OWN HF
-// token - the same token already in `sessionStorage.hf_token` for
-// the realtime backend allocator. This deliberately decouples vision
-// from the voice pipeline:
-//
-//   - No master model-provider key on the wire (would require a server-side
-//     proxy and we'd own the bill).
-//   - Per-user billing: each user's calls land on their own HF tier
-//     ($0.10/mo free, $2/mo on PRO, pay-as-you-go beyond), so a
-//     runaway user can't drain a shared budget.
-//   - Backend-swap-friendly: changing the conversation backend
-//     (replacing gpt-realtime-2 with something else later) doesn't
-//     touch vision; changing the VLM model is a one-line config
-//     edit in `vision/config.ts` (no app rebuild needed if the
-//     env override `VITE_VISION_HF_MODEL` is used).
-const vision: VisionHandle | null = realtimeBridge
-  ? attachVision({
-      realtime: realtimeBridge.getRealtimePort(),
+// The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits Hugging
+// Face's Inference Providers router with the USER'S OWN HF token (the
+// same token in `sessionStorage.hf_token` used by the realtime
+// allocator), deliberately decoupling vision from the voice pipeline:
+//   - no master model-provider key on the wire (no server-side proxy, no shared bill);
+//   - per-user billing (each user's calls land on their own HF tier);
+//   - backend-swap-friendly: switching the conversation provider doesn't
+//     touch vision; changing the VLM model is a one-line edit in
+//     `vision/config.ts`.
+backend = createRealtimeBackendController({
+  getSelectedKind: getRealtimeBackend,
+  bridgeDeps: realtimeBackendDeps,
+  attachVision: (bridge) =>
+    attachVision({
+      realtime: bridge.getRealtimePort(),
       getVideoStream: () => videoCache.get(),
       getHfToken: readHfTokenFromStorage,
-    })
-  : null;
+    }),
+});
 
 /**
  * Common tear-down of the conversation pipeline (D layer).
@@ -1363,9 +1487,9 @@ async function tearDownConversationPipeline({
   // after the glide + bridge close have settled.
   await motion.stop({
     glide,
-    concurrentTask: realtimeBridge?.close(),
+    concurrentTask: backend?.bridge().close(),
   });
-  realtimeBridge?.resetReconnectCounter();
+  backend?.bridge().resetReconnectCounter();
 
   audioMonitors.stopMic();
   audioMonitors.stopAi();
@@ -1450,14 +1574,12 @@ async function teardown(): Promise<void> {
 }
 
 async function onFatalError(err: unknown): Promise<void> {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error("[main] error:", err);
+  const detail = err instanceof Error ? err.message : String(err);
+  // Log the raw detail for diagnosis, but surface only the honest,
+  // classified copy to the orb caption - never the raw engine string.
+  console.error("[main] error:", detail);
   setState("error");
-  // The React caption shows a short "Tap to retry" copy; the full
-  // message goes through a dedicated callback so the host can show it
-  // as a tooltip / detail line under the orb without us reaching into
-  // the DOM.
-  emitErrorMessage(message);
+  emitErrorMessage(formatConversationError(detail));
   await teardown();
 }
 
@@ -1487,7 +1609,7 @@ async function boot(): Promise<void> {
     // Negotiate the audio tracks up front so the HF realtime
     // bridge has them ready when the user taps the orb to start
     // the conversation. Without this, the SDK doesn't open the
-    // mic-side transceiver and `realtimeBridge.getRobotMicTrack(robot)`
+    // mic-side transceiver and `backend.bridge().getRobotMicTrack(robot)`
     // returns undefined when `runConversationParts()` runs.
     enableMicrophone: true,
   });
@@ -1699,7 +1821,7 @@ const handle: ConversationEngineHandle = createConversationHandle({
   bootChain,
   disposeBackgroundResilience,
   disposeVision: () => {
-    vision?.dispose();
+    backend?.disposeVision();
   },
   isConversationStarted: conversationStarted.get,
   isConvoActiveRequested: convoActiveRequested.get,

@@ -376,16 +376,18 @@ want to win on.
 
 ## 6. Pre-submission action plan
 
-> **Implementation status (2026-05-29).** This section is the
-> *original* plan. For where each item actually stands today, see
+> **Implementation status (2026-06).** This section is the *original*
+> plan. For where each item actually stands today, see
 > [`APP_STORE_AUDIT_2026-05.md`](./APP_STORE_AUDIT_2026-05.md). In
 > short: the four UGC pillars (§ 6.1) shipped, the voice-backend
-> credential migration shipped, and the remaining hard blockers are the
-> server-side catalog kill switch (§ 6.2.2) and pre-publication
-> moderation (§ 6.2.1). Note that the report mechanism shipped
-> against **HF Trust & Safety** (a `<spaceUrl>?report=true` deeplink),
-> not a Pollen-operated `/api/apps/report` endpoint as § 6.1.1
-> originally proposed.
+> credential migration shipped, and the two server-side UGC blockers -
+> the catalog kill switch (§ 6.2.2) and pre-publication moderation
+> (§ 6.2.1) - have since shipped in the `reachy_mini_api` Space
+> (`server/index.js` + `server/moderate.js`). All engineering blockers
+> are cleared; what remains is App Store Connect paperwork. Note that
+> the report mechanism shipped against **HF Trust & Safety** (a
+> `<spaceUrl>?report=true` deeplink), not a Pollen-operated
+> `/api/apps/report` endpoint as § 6.1.1 originally proposed.
 
 Four chantiers, in priority order. None of them is a research
 problem; all of them are concrete code work.
@@ -504,9 +506,9 @@ Estimated effort: 0.5 day, mostly legal review.
 - Both must explicitly mention:
   - HF account information (token, username) used to authenticate
     against Hugging Face.
-  - Audio and video recorded for the conversation feature; not stored
-    on our servers; sent to the HF realtime backend per the conversation
-    feature.
+  - Audio recorded for the conversation feature; not stored on our
+    servers; streamed to OpenAI's realtime service by default (or the
+    Hugging Face realtime backend if the user opts in via settings).
   - Third-party apps loaded from the catalog operate independently
     and are subject to the privacy policy of their author.
 
@@ -519,13 +521,16 @@ Before tagging the first App Store / Play Store build:
 - [x] In-app sign-in via `ASWebAuthenticationSession` (2.6)
 - [ ] Android intent filter for `reachymini` scheme added once
       `gen/android/` is generated (2.6)
-- [ ] All four UGC pillars implemented (6.1.1 - 6.1.4)
-- [ ] Server-side kill switch live and tested (6.2.2)
-- [ ] Pre-publication moderation pipeline live (6.2.1)
-- [ ] Reports feed back into the kill switch (6.2.3)
-- [ ] `postMessage` contract documented (6.3)
-- [ ] Iframe `allow` list reviewed and minimal (6.3)
-- [ ] No forbidden marketing terms in source or store metadata (6.4)
+- [x] All four UGC pillars implemented (6.1.1 - 6.1.4)
+- [x] Server-side kill switch live and tested (6.2.2) - shipped 2026-06
+      in `reachy_mini_api` (`blocked-app-list.json` -> `mobile_visible`)
+- [x] Pre-publication moderation pipeline live (6.2.1) - shipped 2026-06
+      in `reachy_mini_api` (`server/moderate.js`)
+- [~] Reports feed back into the kill switch (6.2.3) - in-app reports go
+      to HF Trust & Safety; manual block-list is the enforcement path
+- [x] `postMessage` contract documented (6.3)
+- [x] Iframe `allow` list reviewed and minimal (6.3)
+- [x] No forbidden marketing terms in source or store metadata (6.4)
 - [ ] Privacy policy URL public and current (6.5)
 - [ ] Apple Privacy Nutrition label populated (6.5)
 - [ ] Google Play Data Safety form populated (6.5)

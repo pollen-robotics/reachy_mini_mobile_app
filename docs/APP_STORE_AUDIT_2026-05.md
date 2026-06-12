@@ -13,22 +13,27 @@ This document answers a different question from the compliance plan:
 > what would actually block a TestFlight + App Store submission if
 > we built the bundle this afternoon?**
 
-Short answer: the **shell is ~85% submission-ready**. The hard
-client-side UGC work is done, and the OpenAI key blocker has since
-been resolved (the bundle no longer ships a long-lived key). The
-blockers that remain are:
+Short answer: the **shell is submission-ready on the engineering side**.
+The hard client-side UGC work is done, the OpenAI key blocker is
+resolved (the bundle no longer ships a long-lived key), and the two
+server-side UGC blockers (kill switch + pre-publication moderation) have
+since shipped in the `reachy_mini_api` Space. What remains is paperwork:
 
 1. ~~**The OpenAI API key is baked into the bundle**~~ **RESOLVED
    (2026-05)**: the bundle no longer carries a long-lived OpenAI key.
    Voice conversation now mints a per-user, short-lived ephemeral key
-   via the website Space's `/api/openai/ephemeral` endpoint, gated by
-   the user's Hugging Face token. See § 2.1.
-2. **No server-side kill switch on the catalog** (1 hard Apple UGC
-   blocker).
-3. **No pre-publication moderation pipeline** (1 hard Apple UGC
-   blocker).
+   via the API Space's `/api/openai/ephemeral` endpoint, gated by the
+   user's Hugging Face token. See § 2.1.
+2. ~~**No server-side kill switch on the catalog**~~ **RESOLVED
+   (2026-06)**: `/api/js-apps` now enforces a hand-edited
+   `config/blocked-app-list.json` killswitch on the official dataset.
+   See § 2.2.
+3. ~~**No pre-publication moderation pipeline**~~ **RESOLVED
+   (2026-06)**: `/api/js-apps` runs a two-layer moderation pipeline
+   (regex hard-block + LLM classifier) and only serves visible apps.
+   See § 2.3.
 4. **App Store Connect paperwork** (privacy nutrition label, age
-   rating, App Review notes).
+   rating, App Review notes) - the only remaining gate.
 
 The rest is hygiene. Details below.
 
@@ -191,53 +196,56 @@ gone, the data flow still needs disclosure:
 Effort remaining: 0 (engineering); the disclosure is folded into the
 § 2.4 paperwork.
 
-### 2.2 No server-side catalog kill switch
+### 2.2 No server-side catalog kill switch - RESOLVED (2026-06)
 
-`GET https://pollen-robotics-reachy-mini.hf.space/api/js-apps` returns
-the catalog. The endpoint already pre-filters to JS apps server-side
-(the client no longer filters on the `reachy_mini_js_app` tag itself),
-but that filter is a *type* gate, not a *content* gate: it's still
-ultimately driven by author-applied tags, and there's no
-`mobile_visible: true` flag nor a `?surface=mobile` query param that
-would let Pollen hide a specific Space.
+> **Status: fixed.** Implemented in the `reachy_mini_api` Space
+> (`server/index.js`). Kept here for the App Review data-flow story.
 
-Concrete consequences:
+`GET /api/js-apps` now computes a `mobile_visible` flag per app and, by
+default, filters out everything where `mobile_visible === false` before
+the catalog reaches any client (`?includeHidden=true` is the admin/debug
+escape). The highest-precedence input to that flag is a hand-edited
+`config/blocked-app-list.json` on the official dataset
+(`pollen-robotics/reachy-mini-official-app-store`):
 
-- If a hostile or just inappropriate Space appears in the catalog,
-  we can't remove it without publishing an iOS update (1-2 weeks
-  review minimum).
-- App Review will explicitly ask "how do you take down a non-compliant
-  mini-app?" for any UGC catalog. There's no good answer today.
+- Anyone with write access to the dataset blocks a Space by adding its
+  ID to `blocked-app-list.json`. The in-memory `blockedSet` is refreshed
+  alongside the apps cache, so the takedown propagates within the cache
+  TTL - **no iOS update required**.
+- This is the platform-level kill switch the compliance doc § 6.2.2
+  asked for; the client-side `useHiddenAuthors` remains as a per-user
+  mitigation on top.
 
-The client-side `useHiddenAuthors` is a per-user mitigation; it is
-not the platform-level kill switch the compliance doc § 6.2.2
-asks for.
+So the App Review question "how do you take down a non-compliant
+mini-app?" now has a concrete answer: a one-line dataset edit.
 
-Effort: 1 day on the catalog backend (HF Space owner: ask
-whoever maintains `pollen-robotics-reachy-mini`).
+### 2.3 No pre-publication moderation - RESOLVED (2026-06)
 
-### 2.3 No pre-publication moderation
+> **Status: fixed.** Implemented in the `reachy_mini_api` Space
+> (`server/moderate.js` + `server/moderationCache.js`, wired into
+> `/api/js-apps`). Kept here for the App Review data-flow story.
 
-Today, the only gate between "Space exists" and "Space appears in
-mobile" is the author-applied tag (now resolved server-side by
-`/api/js-apps`, but still author-driven). With the "vibe coding"
-hypothesis (LLM-generated apps published quickly to HF Spaces), the
-catalog will grow faster than a human can pre-review.
+Every JS app surfaced by `/api/js-apps` now runs through a two-layer
+moderation pipeline before it can be visible:
 
-Minimum viable v1 (compliance doc § 6.2.1):
+1. **Regex prescreen** (synchronous, free): a small list of
+   unambiguous hard-block patterns (explicit sexual content, CSAM
+   signals, obvious scams/malware, gore). A hit is an immediate block.
+2. **LLM classifier** (HF Inference, ~1 s, cached): for everything the
+   regex misses, an 8B model returns a structured verdict against a
+   *closed* policy taxonomy (`sexual`, `hate`, `violence`, `illegal`,
+   `scam_malware`, `self_harm`, `none`) with `allow` / `block` /
+   `review` decisions.
 
-- Run an off-the-shelf text classifier on title + description +
-  README.
-- If clean -> flip `mobile_visible: true` automatically.
-- If suspicious -> human review queue.
+`computeVisibility()` combines this with the manual block-list (§ 2.2,
+highest precedence) and the official-app allowlist to set
+`mobile_visible`. The pipeline is **fail-open** (a transient LLM hiccup
+leaves an app pending/visible rather than emptying the catalog), with
+the regex layer and manual block-list as the hard backstops.
 
-Without this, the kill switch in 2.2 is purely reactive. Apple
-won't ask for the pre-publication pipeline by name, but the
-reviewer red-teaming the app with "let me publish a Space with X
-inappropriate content and see if it lands in the mobile catalog"
-is a real risk path.
-
-Effort: 3 days for v1, ongoing for model tuning.
+This closes the red-team path "publish a Space with inappropriate
+content and see if it lands in the mobile catalog": objectionable
+Spaces are blocked before they reach any client.
 
 ### 2.4 App Store Connect paperwork (gating the submission form)
 
@@ -354,14 +362,15 @@ needed today.
 ### 4.1 Hard blockers (cannot submit without these)
 
 - [x] **(2.1)** ~~Move the OpenAI API key off the bundle~~ **DONE**:
-      ephemeral keys from the website Space's `/api/openai/ephemeral`
+      ephemeral keys from the API Space's `/api/openai/ephemeral`
       endpoint. Build-time injection removed from `.env.example`,
       GitHub Actions, and `settings.ts`.
-- [ ] **(2.2)** Server-side kill switch on the catalog
-      (`mobile_visible: true` + `?surface=mobile` filter on
-      `/api/js-apps`).
-- [ ] **(2.3)** Pre-publication automated moderation on
-      title/description/README.
+- [x] **(2.2)** ~~Server-side kill switch on the catalog~~ **DONE**:
+      `mobile_visible` filter on `/api/js-apps` driven by a hand-edited
+      `config/blocked-app-list.json` on the official dataset.
+- [x] **(2.3)** ~~Pre-publication automated moderation~~ **DONE**:
+      two-layer regex + LLM pipeline on title/description/README in
+      `server/moderate.js`, enforced via `mobile_visible`.
 - [ ] **(2.4)** Privacy Nutrition Label populated in App Store Connect.
 - [ ] **(2.4)** Age rating questionnaire filled; expect 12+.
 - [ ] **(2.4)** App Review notes drafted (4.7 citation + precedents
@@ -411,16 +420,16 @@ Assuming sequential work, single owner per chantier:
 |---|---|---|
 | ~~OpenAI ephemeral keys backend~~ | done | shipped 2026-05 |
 | ~~OpenAI ephemeral keys mobile rewire~~ | done | shipped 2026-05 |
-| Catalog kill switch | 1 day | Coordination with `pollen-robotics-reachy-mini` owner |
-| Catalog moderation v1 | 3 days | Off-the-shelf classifier choice |
+| ~~Catalog kill switch~~ | done | shipped 2026-06 (`reachy_mini_api`) |
+| ~~Catalog moderation v1~~ | done | shipped 2026-06 (`reachy_mini_api`) |
 | Privacy Policy review + update | 0.5-1 day | Legal review |
 | App Store Connect paperwork | 0.5 day | Privacy Policy URL ready |
 | Bridge doc update + capability audit | 1 day | None |
 
-**Realistic critical path**: ~1 week calendar from "start" to
-"submission-ready bundle" now that the OpenAI key migration is done,
-with the catalog kill switch / moderation backend being the long
-pole.
+**Realistic critical path**: the engineering blockers are cleared
+(OpenAI key migration, catalog kill switch, and moderation all shipped).
+What's left is App Store Connect paperwork + the Privacy Policy review,
+so the remaining critical path is ~1-2 days of non-engineering work.
 
 ---
 

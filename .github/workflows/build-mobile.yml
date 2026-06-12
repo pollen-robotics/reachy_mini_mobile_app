@@ -198,13 +198,20 @@ jobs:
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
-          # Regenerate the iOS / Android icon set from src-tauri/icons/icon.png.
+          # Regenerate the iOS / Android icon set from the full-bleed master
+          # src/assets/reachy-app-icon.png. IMPORTANT: do NOT feed
+          # src-tauri/icons/icon.png here - that file is the macOS "squircle"
+          # variant (transparent margin + rounded corners). Feeding it to
+          # `tauri icon` produced transparent, pre-rounded iOS icons that the
+          # white-flatten below turned into a visible white border sitting
+          # inside iOS's own corner mask. iOS masks at runtime, so its source
+          # must be an opaque full-bleed square - which the master is.
           # `tauri ios init` creates the gen/apple project skeleton but does
           # NOT populate Assets.xcassets/AppIcon.appiconset with our brand
           # icon - it leaves the Tauri default placeholders, which is why
           # the first TestFlight build shipped with the wrong app icon.
           # Running `tauri icon` after init fixes it idempotently.
-          yarn tauri icon src-tauri/icons/icon.png || true
+          yarn tauri icon src/assets/reachy-app-icon.png || true
           # App Store Connect rejects iOS icons with an alpha channel
           # (error 90717: "Invalid large app icon ... can't be transparent
           # or contain an alpha channel"). Our source icon keeps alpha
@@ -460,9 +467,11 @@ jobs:
           # Same icon-regeneration trick as the iOS jobs: tauri android
           # init creates the project skeleton with placeholder Tauri
           # icons in mipmap-*. Running tauri icon after init re-fills
-          # them from src-tauri/icons/icon.png so the Android app ships
-          # with the Reachy brand icon. Idempotent.
-          yarn tauri icon src-tauri/icons/icon.png || true
+          # them from the full-bleed master src/assets/reachy-app-icon.png
+          # so the Android app ships with the Reachy brand icon. The padded
+          # adaptive-icon foregrounds are re-synced in the next step.
+          # Idempotent.
+          yarn tauri icon src/assets/reachy-app-icon.png || true
 
       - name: Sync padded Android adaptive-icon foregrounds into gen/
         # Source-of-truth foregrounds in `src-tauri/icons/android/` are
@@ -474,7 +483,7 @@ jobs:
         # `src-tauri/icons/android/` - we no longer pad in CI.
         # However `tauri android init` + `tauri icon` repopulate
         # `gen/android/app/src/main/res/mipmap-*/` with simple
-        # rescales of `icon.png` (no padding). This step copies the
+        # rescales of the master (no padding). This step copies the
         # already-padded source foregrounds over the regenerated
         # rescales so the shipped APK uses the safe-zone version.
         # Idempotent. Re-run `scripts/recompose-platform-icons.py`
@@ -849,13 +858,20 @@ jobs:
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
           yarn tauri ios init --skip-targets-install || yarn tauri ios init || true
-          # Regenerate the iOS / Android icon set from src-tauri/icons/icon.png.
+          # Regenerate the iOS / Android icon set from the full-bleed master
+          # src/assets/reachy-app-icon.png. IMPORTANT: do NOT feed
+          # src-tauri/icons/icon.png here - that file is the macOS "squircle"
+          # variant (transparent margin + rounded corners). Feeding it to
+          # `tauri icon` produced transparent, pre-rounded iOS icons that the
+          # white-flatten below turned into a visible white border sitting
+          # inside iOS's own corner mask. iOS masks at runtime, so its source
+          # must be an opaque full-bleed square - which the master is.
           # `tauri ios init` creates the gen/apple project skeleton but does
           # NOT populate Assets.xcassets/AppIcon.appiconset with our brand
           # icon - it leaves the Tauri default placeholders, which is why
           # the first TestFlight build shipped with the wrong app icon.
           # Running `tauri icon` after init fixes it idempotently.
-          yarn tauri icon src-tauri/icons/icon.png || true
+          yarn tauri icon src/assets/reachy-app-icon.png || true
           # See the matching step in the simulator job: App Store Connect
           # rejects iOS icons with an alpha channel (altool error 90717).
           # Flatten every variant onto white so the signed IPA passes
@@ -1305,7 +1321,7 @@ jobs:
           if [ ! -d "src-tauri/gen/android" ]; then
             yarn tauri android init
           fi
-          yarn tauri icon src-tauri/icons/icon.png || true
+          yarn tauri icon src/assets/reachy-app-icon.png || true
 
       - name: Sync padded Android adaptive-icon foregrounds into gen/
         # See the matching step in the debug job. The source

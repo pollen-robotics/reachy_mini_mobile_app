@@ -99,7 +99,7 @@ import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
-import IdentityChipBar from './session/IdentityChipBar';
+import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
@@ -899,6 +899,7 @@ function ConnectedSession({
             hfUsername={username}
             robotPeerId={robotId}
             robotName={robotName}
+            transport={robotTransport}
             sessionPhase={session.phase}
             onClose={() => setOpenedApp(null)}
           />
