@@ -10,6 +10,24 @@ dist-ssr
 src-tauri/target
 src-tauri/gen/schemas
 
+# ──────────────────────────────────────────────────────────────────────
+# Generated per-platform app icons - DO NOT commit these.
+#
+# The single source of truth for the app icon is:
+#   src/assets/reachy-app-icon.svg  (hand-authored vector)
+#   src/assets/reachy-app-icon.png  (1024x1024 master rendered from it)
+#
+# Every platform variant (iOS AppIcon set, Android adaptive mipmaps) is
+# regenerated from that master by `tauri icon` in
+# `.github/workflows/build-mobile.yml`. Committing the generated sets
+# only desynchronised the repo from the master and caused stale-icon
+# confusion (the repo showed one icon while a build shipped another).
+# The desktop bundle icons referenced by `tauri.conf.json` (icons/32x32,
+# 128x128, 128x128@2x, icon.icns, icon.ico) stay tracked on purpose.
+# ──────────────────────────────────────────────────────────────────────
+src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-*.png
+src-tauri/icons/android/
+
 # IDE
 .vscode/*
 !.vscode/extensions.json

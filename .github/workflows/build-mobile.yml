@@ -194,6 +194,10 @@ jobs:
         # from scratch in CI before building. The runner's `tauri ios init`
         # produces a project in whatever format the runner's Xcode supports.
         # Local devs can keep the committed gen/apple as-is for Xcode 26.
+        # NOTE: the AppIcon set (gen/apple/.../AppIcon-*.png) and the Android
+        # adaptive mipmaps (src-tauri/icons/android/) are git-ignored - the
+        # single source of truth is src/assets/reachy-app-icon.svg/.png and
+        # the `tauri icon` step below always regenerates them from it.
         run: |
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
