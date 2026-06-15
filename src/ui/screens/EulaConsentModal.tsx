@@ -79,7 +79,7 @@ const BULLETS: readonly DisclosureBullet[] = [
   {
     icon: GraphicEqOutlinedIcon,
     title: 'Voice conversations',
-    body: 'Your microphone audio is streamed to OpenAI\u2019s realtime service (the default provider; you can switch to Hugging Face in settings) to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
+    body: 'Your microphone audio is streamed to Hugging Face\u2019s realtime service (the default provider; you can switch to OpenAI in settings) to power Reachy Mini\u2019s replies. Audio is not stored on our servers.',
   },
   {
     icon: AppsOutlinedIcon,

@@ -3,8 +3,8 @@
 Cross-platform Tauri 2 app (iOS / Android / desktop) for **Reachy Mini**.
 Sign in with Hugging Face, pick one of your robots, and:
 
-- **Talk to it** with a real-time voice conversation (OpenAI Realtime
-  by default, Hugging Face realtime backend as an opt-in; in-app orb
+- **Talk to it** with a real-time voice conversation (Hugging Face
+  realtime backend by default, OpenAI Realtime as an opt-in; in-app orb
   panel - no more iframe).
 - **Browse and launch apps** from the Hugging Face Hub catalog (each app
   runs in a sandboxed iframe with the robot handed off seamlessly).
@@ -33,7 +33,7 @@ procedure.
 | Frontend | Vite 7 + React 19 + TypeScript + SWC | Fast dev loop, modern toolchain |
 | UI kit | MUI v9 + Emotion | Battle-tested on mobile WebViews |
 | Async state | TanStack Query v5 | Apps catalog + central robots fetching |
-| WebRTC + AI | OpenAI Realtime (default) or Hugging Face realtime backend + robot WebRTC | OpenAI via server-minted ephemeral keys; HF via an HF-token-gated session allocator. Both pick the provider from the in-app Conversation settings; robot audio rides the SDK peer connection |
+| WebRTC + AI | Hugging Face realtime backend (default) or OpenAI Realtime + robot WebRTC | HF via an HF-token-gated session allocator; OpenAI via server-minted ephemeral keys. Both pick the provider from the in-app Conversation settings; robot audio rides the SDK peer connection |
 | Robot signaling | Hugging Face central Space (`pollen-robotics-reachy-mini-central.hf.space`) | Producer-consumer relay over WebSocket |
 | Tests | Vitest | Pure logic + parsing tests |
 
@@ -55,7 +55,7 @@ The two key features:
   iframe-handoff release/reacquire, video stream caching, transport +
   data-channel health monitoring.
 - **`features/conversation/`** owns the realtime voice conversation
-  (OpenAI Realtime by default, Hugging Face realtime as an opt-in -
+  (Hugging Face realtime by default, OpenAI Realtime as an opt-in -
   swapped behind a provider-agnostic bridge): the engine drives a
   `RobotSession` plus the audio bridge, motion controllers (head
   wobbler, antennas), tool-call dispatch, and the long-term memory
@@ -96,12 +96,12 @@ for your platform.
 The mobile bundle does not ship with a long-lived model-provider key.
 The app catalog (`/api/js-apps`) works out of the box against the
 production API Space (`pollen-robotics-reachy-mini-api.hf.space`). Voice
-conversation defaults to OpenAI Realtime, brokered through the API
-Space's `/api/openai/ephemeral` endpoint (it validates the user's HF
-token and mints a short-lived ephemeral key server-side). Switching to
-the Hugging Face realtime backend in the in-app settings instead
+conversation defaults to the Hugging Face realtime backend, which
 allocates an HF-token-gated session through the production session
-proxy. Either way, no long-lived provider key is bundled.
+proxy. Switching to OpenAI Realtime in the in-app settings instead
+brokers through the API Space's `/api/openai/ephemeral` endpoint (it
+validates the user's HF token and mints a short-lived ephemeral key
+server-side). Either way, no long-lived provider key is bundled.
 
 Copy `.env.example` to `.env.local` only if you need to override
 defaults (staging signaling or staging API host):

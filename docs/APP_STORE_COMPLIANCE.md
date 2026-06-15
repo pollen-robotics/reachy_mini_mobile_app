@@ -507,8 +507,8 @@ Estimated effort: 0.5 day, mostly legal review.
   - HF account information (token, username) used to authenticate
     against Hugging Face.
   - Audio recorded for the conversation feature; not stored on our
-    servers; streamed to OpenAI's realtime service by default (or the
-    Hugging Face realtime backend if the user opts in via settings).
+    servers; streamed to the Hugging Face realtime backend by default
+    (or OpenAI's realtime service if the user opts in via settings).
   - Third-party apps loaded from the catalog operate independently
     and are subject to the privacy policy of their author.
 
