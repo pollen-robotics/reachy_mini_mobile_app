@@ -194,6 +194,10 @@ jobs:
         # from scratch in CI before building. The runner's `tauri ios init`
         # produces a project in whatever format the runner's Xcode supports.
         # Local devs can keep the committed gen/apple as-is for Xcode 26.
+        # NOTE: the AppIcon set (gen/apple/.../AppIcon-*.png) and the Android
+        # adaptive mipmaps (src-tauri/icons/android/) are git-ignored - the
+        # single source of truth is src/assets/reachy-app-icon.svg/.png and
+        # the `tauri icon` step below always regenerates them from it.
         run: |
           set -euxo pipefail
           rm -rf src-tauri/gen/apple
@@ -238,6 +242,23 @@ jobs:
                   bg.save(path, 'PNG')
                   print(f'flattened {path}')
           PY
+
+      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+        # Tauri 2's `tauri.conf.json > bundle.iOS` exposes no field for the
+        # device family, and `tauri ios init` regenerates a Universal
+        # project (TARGETED_DEVICE_FAMILY = "1,2", iPhone + iPad). That
+        # makes App Store Connect advertise iPad support the layout does
+        # not have - and ASC then demands iPad screenshots for the build.
+        # We rewrite the build setting to "1" (iPhone only) so the archived
+        # IPA's Info.plist carries `UIDeviceFamily = [1]` and ASC's device
+        # matrix hides iPad. Only the main app project is patched, not
+        # Pods.xcodeproj (CocoaPods frameworks stay Universal). Idempotent:
+        # a re-run on an already-patched project is a no-op.
+        run: |
+          set -euxo pipefail
+          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
+          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # `tauri ios init` regenerates a barebones Info.plist that
@@ -892,6 +913,19 @@ jobs:
                   bg.save(path, 'PNG')
                   print(f'flattened {path}')
           PY
+
+      - name: Restrict app to iPhone-only (TARGETED_DEVICE_FAMILY=1)
+        # Same rationale as the matching step in the simulator job: rewrite
+        # the Universal `TARGETED_DEVICE_FAMILY = "1,2"` that `tauri ios
+        # init` regenerates down to "1" so the archived IPA advertises
+        # iPhone only (`UIDeviceFamily = [1]`) and App Store Connect stops
+        # demanding iPad screenshots. Only the main app project, not Pods.
+        # Idempotent.
+        run: |
+          set -euxo pipefail
+          PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = "1";/g' "$PBXPROJ"
+          grep -c 'TARGETED_DEVICE_FAMILY = "1";' "$PBXPROJ"
 
       - name: Patch Info.plist for app permissions + Export Compliance
         # See the matching step in the simulator job for full reasoning.

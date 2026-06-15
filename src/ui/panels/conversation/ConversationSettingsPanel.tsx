@@ -49,8 +49,8 @@ const REALTIME_BACKENDS: ReadonlyArray<{
   id: RealtimeBackendKind;
   label: string;
 }> = [
-  { id: 'openai', label: 'OpenAI' },
   { id: 'huggingface', label: 'Hugging Face' },
+  { id: 'openai', label: 'OpenAI' },
 ];
 
 export function ConversationSettingsPanel() {

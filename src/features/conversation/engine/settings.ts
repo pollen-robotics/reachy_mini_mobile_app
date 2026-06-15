@@ -6,9 +6,9 @@
  * per-backend via `resolvePersonaVoice`), and the realtime provider is
  * the user's choice in the Conversation settings panel
  * (`ConversationSettingsPanel.tsx`). The shipped default provider is
- * OpenAI Realtime; the Hugging Face realtime backend (app-managed
- * session allocator or a direct local websocket, see `shared/env.ts`)
- * is opt-in via that picker. See `conversation-settings/storage.ts`
+ * the Hugging Face realtime backend (app-managed session allocator or
+ * a direct local websocket, see `shared/env.ts`); OpenAI Realtime is
+ * opt-in via that picker. See `conversation-settings/storage.ts`
  * (`DEFAULT_BACKEND`) for the persisted default.
  *
  * `DEFAULT_VOICE` is kept as an HF-shaped fallback for code paths that

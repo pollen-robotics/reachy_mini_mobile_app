@@ -384,7 +384,7 @@ form, or submission is blocked. Mapping:
 
 | Data type | Collected? | Shared? | Purpose | Note |
 |---|---|---|---|---|
-| Audio (microphone) | Yes | Yes (OpenAI realtime by default; HF realtime backend if opted in) | App functionality (voice conversation) | Not stored on Pollen servers; processed by the selected realtime backend |
+| Audio (microphone) | Yes | Yes (HF realtime backend by default; OpenAI realtime if opted in) | App functionality (voice conversation) | Not stored on Pollen servers; processed by the selected realtime backend |
 | ~~Location (precise)~~ | ~~Only if a Space uses it~~ | n/a | n/a | Removed 2026-06 — no shipping Space surfaces geolocation; the permission was an App Review / Play Console red flag. Restore the row if a Space starts using `navigator.geolocation`. |
 | Photos/video (camera) | Only if a Space uses it | Possibly (the Space) | App functionality | Same third-party caveat |
 | App activity / identifiers | Yes | Yes (Hugging Face) | Account / auth | HF token + username |

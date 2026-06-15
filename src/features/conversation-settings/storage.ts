@@ -20,9 +20,9 @@ const VISION_KEY = 'reachyMini.conversationSettings.visionEnabled';
 const MEMORY_KEY = 'reachyMini.conversationSettings.memoryEnabled';
 const BACKEND_KEY = 'reachyMini.conversationSettings.realtimeBackend';
 
-/** Default realtime provider. OpenAI is the shipped default; the
- *  Hugging Face path is opt-in via the settings toggle. */
-const DEFAULT_BACKEND: RealtimeBackendKind = 'openai';
+/** Default realtime provider. Hugging Face is the shipped default; the
+ *  OpenAI path is opt-in via the settings toggle. */
+const DEFAULT_BACKEND: RealtimeBackendKind = 'huggingface';
 
 function safeStorage(): Storage | null {
   if (typeof localStorage === 'undefined') return null;
@@ -69,7 +69,7 @@ export function writeMemoryEnabled(value: boolean): void {
 }
 
 /** Read the selected realtime backend. Unknown / missing values fall
- *  back to the shipped default (`openai`). */
+ *  back to the shipped default (`huggingface`). */
 export function readRealtimeBackend(): RealtimeBackendKind {
   const storage = safeStorage();
   if (!storage) return DEFAULT_BACKEND;
