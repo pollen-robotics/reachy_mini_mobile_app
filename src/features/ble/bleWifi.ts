@@ -143,6 +143,18 @@ export function looksLikeReachy(d: BleDevice): boolean {
 }
 
 /**
+ * Keep only Reachy Minis and order them strongest-signal-first.
+ *
+ * RSSI is negative dBm (closer to 0 = stronger / nearer), so we sort
+ * descending. Devices without an RSSI sink to the bottom rather than
+ * jumping to the top of the list.
+ */
+export function reachyBySignal(devices: BleDevice[]): BleDevice[] {
+  const rssiOf = (d: BleDevice): number => (typeof d.rssi === 'number' ? d.rssi : -Infinity);
+  return devices.filter(looksLikeReachy).sort((a, b) => rssiOf(b) - rssiOf(a));
+}
+
+/**
  * Scan and return ALL discovered devices (deduped by address). The UI lists
  * them so you can tap the robot directly — robust even when the advertised
  * name is null in the scan callback. `onUpdate` fires on each scan tick.

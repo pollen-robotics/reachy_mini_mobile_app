@@ -26,7 +26,7 @@ import {
   type BleDevice,
   connect as bleConnect,
   disconnect as bleDisconnect,
-  looksLikeReachy,
+  reachyBySignal,
   scanDevices,
   watchConnection,
 } from '@/features/ble/bleWifi';
@@ -161,14 +161,12 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       try {
         const found = await scanDevices(SCAN_MS, (live) => {
           if (runId === runIdRef.current && mountedRef.current) {
-            // Reachy candidates first (name regex or service-uuid match).
-            setDevices(
-              [...live].sort((a, b) => Number(looksLikeReachy(b)) - Number(looksLikeReachy(a))),
-            );
+            // Reachy Minis only, strongest signal first.
+            setDevices(reachyBySignal(live));
           }
         });
         if (runId !== runIdRef.current || !mountedRef.current) return;
-        setDevices([...found].sort((a, b) => Number(looksLikeReachy(b)) - Number(looksLikeReachy(a))));
+        setDevices(reachyBySignal(found));
       } catch (e) {
         if (runId !== runIdRef.current || !mountedRef.current) return;
         const msg = (e as Error).message ?? String(e);

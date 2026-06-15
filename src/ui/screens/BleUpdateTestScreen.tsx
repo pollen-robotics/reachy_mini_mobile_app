@@ -30,7 +30,7 @@ import {
   type BleDevice,
   connect as bleConnect,
   disconnect as bleDisconnect,
-  looksLikeReachy,
+  reachyBySignal,
   scanDevices,
   watchConnection,
 } from '@/features/ble/bleWifi';
@@ -83,8 +83,13 @@ export default function BleUpdateTestScreen({ onBack }: { onBack: () => void }) 
     setDevices([]);
     log('Scanning…');
     try {
-      const all = await scanDevices(12000, (live) => setDevices(live), log);
-      const reachies = all.filter(looksLikeReachy);
+      const all = await scanDevices(
+        12000,
+        (live) => setDevices(reachyBySignal(live)),
+        log,
+      );
+      const reachies = reachyBySignal(all);
+      setDevices(reachies);
       log(`Scan done: ${all.length} device(s), ${reachies.length} Reachy-like`);
     } catch (e) {
       log(`✗ Scan failed: ${(e as Error).message}`);
@@ -209,16 +214,9 @@ export default function BleUpdateTestScreen({ onBack }: { onBack: () => void }) 
           </Button>
           <List dense sx={{ maxHeight: 200, overflow: 'auto' }}>
             {devices.map((d) => (
-              <ListItemButton
-                key={d.address}
-                disabled={busy}
-                onClick={() => handleConnect(d)}
-                sx={{ opacity: looksLikeReachy(d) ? 1 : 0.5 }}
-              >
+              <ListItemButton key={d.address} disabled={busy} onClick={() => handleConnect(d)}>
                 <Stack>
-                  <Typography variant="body2">
-                    {d.name ?? '(no name)'} {looksLikeReachy(d) ? '· Reachy' : ''}
-                  </Typography>
+                  <Typography variant="body2">{d.name ?? 'Reachy Mini'}</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {d.address} {d.rssi != null ? `· ${d.rssi}dBm` : ''}
                   </Typography>
