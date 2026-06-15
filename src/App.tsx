@@ -10,6 +10,7 @@ import RobotSessionScreen, {
   type ConnectionTarget,
 } from '@/ui/screens/RobotSessionScreen';
 import SetupWizardScreen from '@/ui/screens/SetupWizardScreen';
+import BleUpdateTestScreen from '@/ui/screens/BleUpdateTestScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
 import { useRemoteHfToken, isHfTokenExpired } from '@/features/auth/useRemoteHfToken';
 import { usePrefetchApps } from '@/features/apps/useApps';
@@ -17,7 +18,7 @@ import { usePrefetchMyApps } from '@/features/apps/useMyApps';
 import { usePrefetchSpaceLikes } from '@/features/apps/useSpaceLikes';
 import { useTosConsent } from '@/features/consent/useTosConsent';
 
-type Screen = 'scan' | 'session' | 'setup';
+type Screen = 'scan' | 'session' | 'setup' | 'ble-update-test';
 
 /**
  * Root component.
@@ -170,6 +171,9 @@ export default function App() {
         />
       );
     }
+    if (screen === 'ble-update-test') {
+      return <BleUpdateTestScreen onBack={backToScan} />;
+    }
     if (screen === 'setup') {
       return (
         <SetupWizardScreen
@@ -202,6 +206,7 @@ export default function App() {
           setScreen('session');
         }}
         onStartSetup={() => setScreen('setup')}
+        onStartUpdateTest={() => setScreen('ble-update-test')}
         onSignOutRemote={handleSignOut}
       />
     );

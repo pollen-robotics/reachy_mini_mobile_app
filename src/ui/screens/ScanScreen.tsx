@@ -110,6 +110,8 @@ interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
   /** Open the first-time setup wizard (BLE Wi-Fi provisioning). */
   onStartSetup: () => void;
+  /** Open the throwaway BLE daemon-update test screen (PR #1172). */
+  onStartUpdateTest: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -124,6 +126,7 @@ interface ScanScreenProps {
 export default function ScanScreen({
   onRemotePicked,
   onStartSetup,
+  onStartUpdateTest,
   onSignOutRemote,
   token,
   username,
@@ -275,6 +278,7 @@ export default function ScanScreen({
         onRefresh={() => void remote.refresh()}
         isRefreshing={isRefreshing}
         onStartSetup={onStartSetup}
+        onStartUpdateTest={onStartUpdateTest}
       />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
@@ -640,11 +644,14 @@ function StickyRefreshBar({
   onRefresh,
   isRefreshing,
   onStartSetup,
+  onStartUpdateTest,
 }: {
   onRefresh: () => void;
   isRefreshing: boolean;
   /** Opens the first-time setup wizard. */
   onStartSetup: () => void;
+  /** Opens the throwaway BLE daemon-update test screen. */
+  onStartUpdateTest: () => void;
 }) {
   // Bumped on every tap so the wind-up animation re-plays cleanly
   // even when the user spam-taps. React keys the icon on this
@@ -750,6 +757,22 @@ function StickyRefreshBar({
         }}
       >
         Set up a new Reachy
+      </Button>
+      {/* TEMPORARY: entry to the BLE daemon-update test screen
+          (pollen-robotics/reachy_mini#1172). Not part of the real
+          UX — remove before merging the clean integration. */}
+      <Button
+        onClick={onStartUpdateTest}
+        sx={{
+          textTransform: 'none',
+          fontSize: TYPO.sm,
+          fontWeight: FONT_WEIGHT.semibold,
+          color: 'text.disabled',
+          borderRadius: 999,
+          px: 2,
+        }}
+      >
+        🧪 BLE update test
       </Button>
     </Stack>
   );
