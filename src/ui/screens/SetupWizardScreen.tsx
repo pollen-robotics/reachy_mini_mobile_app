@@ -44,17 +44,10 @@ import WifiLockIcon from '@mui/icons-material/WifiLock';
 import connectionUrl from '@/assets/connection.svg';
 import type { BleDevice } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
-import { stageForPhase, type SetupResult } from '@/features/ble-provisioning/types';
+import { type SetupResult } from '@/features/ble-provisioning/types';
+import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
-import StepsProgressIndicator from '@/ui/design/StepsProgressIndicator';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
-
-const HEADER_STEPS = [
-  { id: 'pair', label: 'Pair' },
-  { id: 'network', label: 'Network' },
-  { id: 'connect', label: 'Connect' },
-  { id: 'ready', label: 'Ready' },
-] as const;
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
@@ -70,8 +63,6 @@ interface SetupWizardScreenProps {
 
 export default function SetupWizardScreen({ token, onCancel, onComplete }: SetupWizardScreenProps) {
   const m = useSetupMachine({ token });
-  const { index: stepIndex } = stageForPhase(m.phase);
-  const accent = m.phase === 'error';
 
   return (
     <Stack
@@ -93,16 +84,20 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
           px: 1,
         }}
       >
-        <IconButton aria-label="Cancel setup" onClick={onCancel} sx={{ color: 'text.secondary' }}>
-          <ArrowBackIosNewIcon sx={{ fontSize: 18 }} />
-        </IconButton>
-      </Stack>
-
-      {/* 4-step progress header. */}
-      <Stack sx={{ alignItems: 'center', px: 3, pb: 1 }}>
-        <Box sx={{ width: '100%', maxWidth: 360 }}>
-          <StepsProgressIndicator steps={[...HEADER_STEPS]} currentStep={stepIndex} accent={accent} />
-        </Box>
+        <Button
+          aria-label="Cancel setup"
+          onClick={onCancel}
+          startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
+          sx={{
+            color: 'text.secondary',
+            textTransform: 'none',
+            fontWeight: FONT_WEIGHT.semibold,
+            fontSize: TYPO.sm,
+            borderRadius: 999,
+          }}
+        >
+          Back
+        </Button>
       </Stack>
 
       {/* Scrollable content column. */}
@@ -193,7 +188,25 @@ function PrimaryButton(props: React.ComponentProps<typeof Button>) {
         textTransform: 'none',
         fontSize: TYPO.md,
         fontWeight: FONT_WEIGHT.semibold,
-        borderRadius: RADIUS.pill,
+        borderRadius: `${RADIUS.md}px`,
+        py: 1.25,
+        ...props.sx,
+      }}
+    />
+  );
+}
+
+function SecondaryButton(props: React.ComponentProps<typeof Button>) {
+  return (
+    <Button
+      variant="outlined"
+      fullWidth
+      {...props}
+      sx={{
+        textTransform: 'none',
+        fontSize: TYPO.md,
+        fontWeight: FONT_WEIGHT.semibold,
+        borderRadius: `${RADIUS.md}px`,
         py: 1.25,
         ...props.sx,
       }}
@@ -230,10 +243,10 @@ function PermissionView({ onContinue }: { onContinue: () => void }) {
       </IconHero>
       <Headline
         title="Connect over Bluetooth"
-        caption="To set up a new Reachy we use Bluetooth to send it your Wi-Fi details. Your Wi-Fi password is encrypted on this phone and never leaves it in clear."
+        caption="To set up a new Reachy we use Bluetooth to send it your Wi-Fi details. Your Wi-Fi password is encrypted on your phone before being sent, so it is never transmitted in clear - and it is never stored."
       />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <PrimaryButton onClick={onContinue}>Continue</PrimaryButton>
+        <SecondaryButton onClick={onContinue}>Continue</SecondaryButton>
       </Box>
     </Stack>
   );
@@ -265,8 +278,13 @@ function ScanView({
 
       {hasDevices ? (
         <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-          {devices.map(d => (
-            <DeviceRow key={d.address} device={d} onTap={() => onPick(d)} />
+          {devices.map((d, i) => (
+            <DeviceRow
+              key={d.address}
+              device={d}
+              isClosest={devices.length > 1 && i === 0 && typeof d.rssi === 'number'}
+              onTap={() => onPick(d)}
+            />
           ))}
         </List>
       ) : !scanning ? (
@@ -287,8 +305,30 @@ function ScanView({
   );
 }
 
-function DeviceRow({ device, onTap }: { device: BleDevice; onTap: () => void }) {
+/**
+ * Map a BLE advertisement RSSI (negative dBm, closer to 0 = stronger) to
+ * the 3-bar {@link LinkQuality} scale. The breakpoints mirror the usual
+ * "near / same room / far" buckets for BLE proximity. A missing RSSI
+ * (some Android stacks omit it) renders muted/empty bars.
+ */
+function rssiToLevel(rssi: number | undefined): LinkQuality {
+  if (typeof rssi !== 'number') return 0;
+  if (rssi >= -60) return 3;
+  if (rssi >= -72) return 2;
+  return 1;
+}
+
+function DeviceRow({
+  device,
+  isClosest = false,
+  onTap,
+}: {
+  device: BleDevice;
+  isClosest?: boolean;
+  onTap: () => void;
+}) {
   const label = device.name && device.name.trim().length > 0 ? device.name : 'Reachy';
+  const hasRssi = typeof device.rssi === 'number';
   return (
     <ListItemButton
       onClick={onTap}
@@ -296,7 +336,8 @@ function DeviceRow({ device, onTap }: { device: BleDevice; onTap: () => void }) 
         p: 1.5,
         borderRadius: '14px',
         bgcolor: 'background.paper',
-        border: theme => `1px solid ${theme.palette.divider}`,
+        border: theme =>
+          `1px solid ${isClosest ? alpha(theme.palette.primary.main, 0.5) : theme.palette.divider}`,
       }}
     >
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center', width: '100%' }}>
@@ -305,13 +346,32 @@ function DeviceRow({ device, onTap }: { device: BleDevice; onTap: () => void }) 
           <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }} noWrap>
             {label}
           </Typography>
-          <Typography
-            sx={{ fontSize: TYPO.xs, fontFamily: 'monospace', color: 'text.secondary' }}
-            noWrap
-          >
-            {device.address}
-          </Typography>
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+            <Typography
+              sx={{ fontSize: TYPO.xs, fontFamily: 'monospace', color: 'text.secondary', opacity: 0.6 }}
+              noWrap
+            >
+              #{device.address.slice(0, 8)}
+            </Typography>
+            {isClosest ? (
+              <Typography
+                sx={{ fontSize: TYPO.xs, fontWeight: FONT_WEIGHT.semibold, color: 'primary.main' }}
+                noWrap
+              >
+                · Closest
+              </Typography>
+            ) : null}
+          </Stack>
         </Stack>
+        {hasRssi ? (
+          <Box sx={{ flexShrink: 0 }}>
+            <LinkQualityBars
+              level={rssiToLevel(device.rssi)}
+              title={`Signal strength: ${device.rssi} dBm`}
+              scale={1.25}
+            />
+          </Box>
+        ) : null}
         <ChevronRightIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
       </Stack>
     </ListItemButton>

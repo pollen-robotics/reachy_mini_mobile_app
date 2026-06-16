@@ -103,15 +103,15 @@ import {
 import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { VariantTag } from '@/ui/design/MetaPill';
-import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
   /** Open the first-time setup wizard (BLE Wi-Fi provisioning). */
   onStartSetup: () => void;
-  /** Open the throwaway BLE daemon-update test screen (PR #1172). */
-  onStartUpdateTest: () => void;
+  /** Open the standalone "update over Bluetooth" maintenance tool. */
+  onOpenBleUpdate: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -126,7 +126,7 @@ interface ScanScreenProps {
 export default function ScanScreen({
   onRemotePicked,
   onStartSetup,
-  onStartUpdateTest,
+  onOpenBleUpdate,
   onSignOutRemote,
   token,
   username,
@@ -217,7 +217,12 @@ export default function ScanScreen({
             }}
           >
             <HeroBuste />
-            <RobotsHeader state={remote.state.kind} count={robots.length} hasRobots={hasRobots} />
+            <RobotsHeader
+              state={remote.state.kind}
+              count={robots.length}
+              hasRobots={hasRobots}
+              onStartSetup={onStartSetup}
+            />
           </Stack>
 
           {hasRobots ? (
@@ -266,6 +271,36 @@ export default function ScanScreen({
           ) : (
             <CenteredMessageState title="No Reachy online" />
           )}
+
+          {/* Large, centered first-time setup CTA. Shown only when no
+              robot is listed (and we're not mid-load): a brand-new
+              wireless Reachy can't appear in the list above yet (it's
+              not on Wi-Fi / central), so this is the primary way in.
+              Once robots exist, the entry moves to the compact `+` in
+              the header and this CTA disappears. */}
+          {!hasRobots && remote.state.kind !== 'loading' ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+              <Button
+                variant="outlined"
+                onClick={onStartSetup}
+                startIcon={<AddIcon sx={{ fontSize: 20 }} />}
+                sx={{
+                  textTransform: 'none',
+                  fontSize: TYPO.md,
+                  fontWeight: FONT_WEIGHT.semibold,
+                  borderRadius: 999,
+                  borderWidth: 1.5,
+                  py: 1.25,
+                  px: 3,
+                  width: '100%',
+                  maxWidth: 320,
+                  '&:hover': { borderWidth: 1.5 },
+                }}
+              >
+                Set up a new Reachy
+              </Button>
+            </Box>
+          ) : null}
         </Stack>
       </Stack>
       {/* Sticky bottom action bar. Sits outside the scrollable area
@@ -277,8 +312,6 @@ export default function ScanScreen({
       <StickyRefreshBar
         onRefresh={() => void remote.refresh()}
         isRefreshing={isRefreshing}
-        onStartSetup={onStartSetup}
-        onStartUpdateTest={onStartUpdateTest}
       />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
@@ -307,7 +340,13 @@ export default function ScanScreen({
             zIndex: 1200,
           }}
         >
-          <HelpAndSupportOverlay onClose={closeHelp} />
+          <HelpAndSupportOverlay
+            onClose={closeHelp}
+            onStartBleUpdate={() => {
+              closeHelp();
+              onOpenBleUpdate();
+            }}
+          />
         </Box>
       )}
     </Stack>
@@ -643,15 +682,9 @@ const refreshTapKeyframes = keyframes`
 function StickyRefreshBar({
   onRefresh,
   isRefreshing,
-  onStartSetup,
-  onStartUpdateTest,
 }: {
   onRefresh: () => void;
   isRefreshing: boolean;
-  /** Opens the first-time setup wizard. */
-  onStartSetup: () => void;
-  /** Opens the throwaway BLE daemon-update test screen. */
-  onStartUpdateTest: () => void;
 }) {
   // Bumped on every tap so the wind-up animation re-plays cleanly
   // even when the user spam-taps. React keys the icon on this
@@ -737,43 +770,6 @@ function StickyRefreshBar({
       >
         Refresh
       </Button>
-      {/* First-time setup entry. Lives in the persistent bottom action
-          zone (out of the scrollable list) so it's always reachable -
-          a brand-new wireless Reachy can't appear in the list above
-          (it's not on Wi-Fi / central yet), so this CTA is the only
-          way in. Outlined + lower visual weight than the robot cards
-          so it reads as a secondary action, not a primary destination. */}
-      <Button
-        onClick={onStartSetup}
-        startIcon={<AddIcon sx={{ fontSize: 20 }} />}
-        sx={{
-          mt: 0.5,
-          textTransform: 'none',
-          fontSize: TYPO.sm,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.secondary',
-          borderRadius: 999,
-          px: 2,
-        }}
-      >
-        Set up a new Reachy
-      </Button>
-      {/* TEMPORARY: entry to the BLE daemon-update test screen
-          (pollen-robotics/reachy_mini#1172). Not part of the real
-          UX — remove before merging the clean integration. */}
-      <Button
-        onClick={onStartUpdateTest}
-        sx={{
-          textTransform: 'none',
-          fontSize: TYPO.sm,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.disabled',
-          borderRadius: 999,
-          px: 2,
-        }}
-      >
-        🧪 BLE update test
-      </Button>
     </Stack>
   );
 }
@@ -784,10 +780,15 @@ function RobotsHeader({
   state,
   count,
   hasRobots,
+  onStartSetup,
 }: {
   state: ReturnType<typeof useRemoteRobots>['state']['kind'];
   count: number;
   hasRobots: boolean;
+  /** Opens the first-time setup wizard. Surfaced as a `+` icon to the
+   *  right of the title, only when at least one robot is listed (the
+   *  empty state shows a large centered CTA instead). */
+  onStartSetup: () => void;
 }) {
   const subtitle = (() => {
     if (!hasRobots && state === 'loading') return 'Looking for your Reachies…';
@@ -805,19 +806,55 @@ function RobotsHeader({
         width: '100%',
       }}
     >
-      <Typography
-        component="h1"
+      {/* Title row. Title + `+` setup affordance sit together as a
+          centered group, the button hugging the right side of the
+          heading (not pinned to the screen edge). Square with rounded
+          corners to match the app's other buttons. Only shown once
+          there's at least one robot - the empty state carries its own
+          large centered CTA instead. */}
+      <Box
         sx={{
-          m: 0,
-          textAlign: 'center',
-          fontSize: TYPO.display,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.primary',
-          letterSpacing: '-0.3px',
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
         }}
       >
-        Your Reachies
-      </Typography>
+        <Typography
+          component="h1"
+          sx={{
+            m: 0,
+            textAlign: 'center',
+            fontSize: TYPO.display,
+            fontWeight: FONT_WEIGHT.semibold,
+            color: 'text.primary',
+            letterSpacing: '-0.3px',
+          }}
+        >
+          Your Reachies
+        </Typography>
+        {hasRobots ? (
+          <IconButton
+            onClick={onStartSetup}
+            aria-label="Set up a new Reachy"
+            sx={{
+              flexShrink: 0,
+              width: 36,
+              height: 36,
+              borderRadius: `${RADIUS.md}px`,
+              color: 'primary.main',
+              border: theme => `1.5px solid ${theme.palette.primary.main}`,
+              '&:hover': {
+                borderColor: 'primary.main',
+                bgcolor: theme => alpha(theme.palette.primary.main, 0.08),
+              },
+            }}
+          >
+            <AddIcon />
+          </IconButton>
+        ) : null}
+      </Box>
       <Typography
         sx={{
           fontSize: TYPO.sm,

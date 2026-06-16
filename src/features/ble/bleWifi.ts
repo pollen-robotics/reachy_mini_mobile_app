@@ -154,6 +154,14 @@ export function reachyBySignal(devices: BleDevice[]): BleDevice[] {
   return devices.filter(looksLikeReachy).sort((a, b) => rssiOf(b) - rssiOf(a));
 }
 
+// The blec plugin owns a SINGLE global scanner. Two overlapping scans
+// therefore fight over it: a stale scan's trailing stopScan() would kill a
+// newer one, so a rescan triggered before the previous window elapsed (wizard
+// remount, retry(), a connection drop bouncing back to 'scanning') silently
+// fails to re-trigger. Each scanDevices() call claims a token; only the latest
+// token is allowed to stop the scanner.
+let _scanToken = 0;
+
 /**
  * Scan and return ALL discovered devices (deduped by address). The UI lists
  * them so you can tap the robot directly — robust even when the advertised
@@ -164,6 +172,8 @@ export async function scanDevices(
   onUpdate?: (devices: BleDevice[]) => void,
   log: (s: string) => void = () => {},
 ): Promise<BleDevice[]> {
+  const myToken = ++_scanToken;
+
   // The plugin's check_permissions ALSO triggers the Android runtime
   // permission request when not yet granted, returning false immediately
   // (the grant is async). First Scan shows the dialog; approve, Scan again.
@@ -174,6 +184,15 @@ export async function scanDevices(
       'Bluetooth permission not granted yet — approve the "Nearby devices" ' +
         'dialog, then tap Scan again.',
     );
+  }
+
+  // Make sure no previous scan is still occupying the single global scanner
+  // before we start ours, then give the plugin a moment to settle.
+  try {
+    await stopScan();
+    await new Promise((r) => setTimeout(r, 120));
+  } catch {
+    /* nothing was scanning */
   }
 
   const byAddr = new Map<string, BleDevice>();
@@ -204,6 +223,12 @@ export async function scanDevices(
   // killing the scan ~0ms in.
   await startScan(handler, timeoutMs);
   await new Promise((r) => setTimeout(r, timeoutMs));
+  // A newer scan claimed the scanner while we were waiting — leave it alone,
+  // otherwise we'd stop the fresh scan the user just asked for.
+  if (myToken !== _scanToken) {
+    log('superseded by a newer scan — not stopping it');
+    return [...byAddr.values()];
+  }
   try {
     await stopScan();
   } catch {
