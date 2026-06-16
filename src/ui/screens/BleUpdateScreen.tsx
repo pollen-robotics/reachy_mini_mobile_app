@@ -41,10 +41,11 @@ import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRound
 
 import {
   type BleDevice,
+  type ScanController,
   connect as bleConnect,
   disconnect as bleDisconnect,
   reachyBySignal,
-  scanDevices,
+  startContinuousScan,
   watchConnection,
 } from '@/features/ble/bleWifi';
 import { authenticate } from '@/features/ble-provisioning/protocol';
@@ -60,7 +61,6 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
-const SCAN_TIMEOUT_MS = 12_000;
 const POLL_INTERVAL_MS = 3_000;
 /** Stop polling after this many ticks (~10 min) as a safety net. */
 const MAX_POLL_TICKS = 200;
@@ -92,6 +92,7 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
 
   const jobIdRef = useRef<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanCtrlRef = useRef<ScanController | null>(null);
   const stepRef = useRef<Step>(step);
   stepRef.current = step;
 
@@ -102,11 +103,19 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
-  // Clean teardown: stop the poll loop and drop the BLE link whenever
+  const stopScanLoop = useCallback(async () => {
+    const ctrl = scanCtrlRef.current;
+    scanCtrlRef.current = null;
+    if (ctrl) await ctrl.stop();
+  }, []);
+
+  // Clean teardown: stop the poll + scan loops and drop the BLE link whenever
   // the tool unmounts, regardless of which step we were on.
   useEffect(
     () => () => {
       stopPolling();
+      void scanCtrlRef.current?.stop();
+      scanCtrlRef.current = null;
       void bleDisconnect();
     },
     [stopPolling],
@@ -126,37 +135,56 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
     });
   }, []);
 
-  const runScan = useCallback(async () => {
+  // Continuous scan: keeps the nearby list live the whole time the scan step
+  // is up (new robots appear, vanished ones drop out) instead of one frozen
+  // sweep. Restarted on refocus and explicit rescan; stopped before connect.
+  const runScan = useCallback(() => {
     setScanning(true);
     setDevices([]);
-    try {
-      const all = await scanDevices(SCAN_TIMEOUT_MS, (live) => setDevices(reachyBySignal(live)));
-      setDevices(reachyBySignal(all));
-    } catch {
-      // Surface nothing inline: the empty-state copy already tells the
-      // user to power the robot on and scan again.
-    } finally {
-      setScanning(false);
-    }
-  }, []);
+    void stopScanLoop();
+    scanCtrlRef.current = startContinuousScan({
+      onUpdate: (live) => setDevices(reachyBySignal(live)),
+      // Empty-state copy already tells the user to power the robot on; an
+      // error (e.g. permission) just stops the live indicator.
+      onError: () => setScanning(false),
+    });
+  }, [stopScanLoop]);
 
   const handleStart = useCallback(() => {
     setStep('scan');
-    void runScan();
+    runScan();
   }, [runScan]);
 
-  const handlePick = useCallback(async (d: BleDevice) => {
-    setBusy(true);
-    try {
-      await bleConnect(d.address);
-      setStep('pin');
-    } catch (e) {
-      setErrorText(`Could not connect: ${(e as Error).message}`);
-      setStep('failed');
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  // Re-scan when the app returns to the foreground while on the scan step:
+  // mobile OSes kill an in-flight BLE scan when the app is backgrounded.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && stepRef.current === 'scan') {
+        runScan();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [runScan]);
+
+  const handlePick = useCallback(
+    async (d: BleDevice) => {
+      setBusy(true);
+      try {
+        // The radio can't scan and connect at once — stop the loop first.
+        await stopScanLoop();
+        setScanning(false);
+        await bleConnect(d.address);
+        setStep('pin');
+      } catch (e) {
+        setErrorText(`Could not connect: ${(e as Error).message}`);
+        setStep('failed');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [stopScanLoop],
+  );
 
   const runCheck = useCallback(async () => {
     setStep('checking');
@@ -403,7 +431,7 @@ function ScanView({
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
       <Headline
         title="Nearby Reachies"
-        caption={scanning ? 'Scanning over Bluetooth…' : 'Tap the robot you want to update.'}
+        caption={hasDevices ? 'Tap the robot you want to update.' : 'Scanning over Bluetooth…'}
       />
       {scanning && !hasDevices ? <CircularProgress size={28} sx={{ color: 'text.secondary' }} /> : null}
 
@@ -425,13 +453,21 @@ function ScanView({
         </Typography>
       ) : null}
 
+      {/* Live affordance: the list keeps refreshing while the view is open. */}
+      {scanning && hasDevices ? (
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <CircularProgress size={14} sx={{ color: 'text.secondary' }} />
+          <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>Still searching nearby…</Typography>
+        </Stack>
+      ) : null}
+
       <Button
         onClick={onRescan}
         startIcon={<RefreshIcon />}
-        disabled={scanning || busy}
+        disabled={busy}
         sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
       >
-        {scanning ? 'Scanning…' : 'Scan again'}
+        Scan again
       </Button>
     </Stack>
   );

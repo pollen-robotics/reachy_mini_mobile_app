@@ -270,7 +270,7 @@ function ScanView({
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
       <Headline
         title="Looking for new Reachies"
-        caption={scanning ? 'Scanning over Bluetooth…' : 'Tap your robot to start the setup.'}
+        caption={hasDevices ? 'Tap your robot to start the setup.' : 'Scanning over Bluetooth…'}
       />
       {scanning && !hasDevices ? (
         <CircularProgress size={28} sx={{ color: 'text.secondary' }} />
@@ -293,13 +293,20 @@ function ScanView({
         </Typography>
       ) : null}
 
+      {/* Live affordance: the list keeps refreshing while the view is open. */}
+      {scanning && hasDevices ? (
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <CircularProgress size={14} sx={{ color: 'text.secondary' }} />
+          <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>Still searching nearby…</Typography>
+        </Stack>
+      ) : null}
+
       <Button
         onClick={onRescan}
         startIcon={<RefreshIcon />}
-        disabled={scanning}
         sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
       >
-        {scanning ? 'Scanning…' : 'Scan again'}
+        Scan again
       </Button>
     </Stack>
   );

@@ -24,10 +24,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   type BleDevice,
+  type ScanController,
   connect as bleConnect,
   disconnect as bleDisconnect,
   reachyBySignal,
-  scanDevices,
+  startContinuousScan,
   watchConnection,
 } from '@/features/ble/bleWifi';
 import {
@@ -47,7 +48,6 @@ import {
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import type { RobotIdentity, SetupError, SetupPhase, SetupResult } from './types';
 
-const SCAN_MS = 15_000;
 // Wi-Fi join polling: nmcli connect + DHCP can take a while; the daemon
 // reverts to its hotspot on failure (and sets `error`).
 const WIFI_POLL_INTERVAL_MS = 2_500;
@@ -111,12 +111,23 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const identityRef = useRef<RobotIdentity | null>(null);
   const mountedRef = useRef(true);
   const runIdRef = useRef(0);
+  // The live continuous-scan loop (null when not scanning). Stopped before any
+  // connect (the radio can't scan + connect at once) and on unmount.
+  const scanCtrlRef = useRef<ScanController | null>(null);
+
+  const stopScanLoop = useCallback(async () => {
+    const ctrl = scanCtrlRef.current;
+    scanCtrlRef.current = null;
+    if (ctrl) await ctrl.stop();
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      // Best-effort: drop the BLE link when the wizard unmounts.
+      // Best-effort: stop scanning + drop the BLE link when the wizard unmounts.
+      void scanCtrlRef.current?.stop();
+      scanCtrlRef.current = null;
       void bleDisconnect();
     };
   }, []);
@@ -151,26 +162,28 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
   // ── PAIR ──────────────────────────────────────────────────────────────────
 
+  // Continuous scan: keeps the list live the whole time the scan view is up
+  // (new robots appear, vanished ones drop out) instead of a single frozen
+  // sweep. Restarted on refocus and explicit rescan; stopped before connect.
   const startScanning = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
     setDevices([]);
     setScanning(true);
     setPhase('scanning');
-    void (async () => {
-      try {
-        const found = await scanDevices(SCAN_MS, (live) => {
-          if (runId === runIdRef.current && mountedRef.current) {
-            // Reachy Minis only, strongest signal first.
-            setDevices(reachyBySignal(live));
-          }
-        });
+    void stopScanLoop();
+    scanCtrlRef.current = startContinuousScan({
+      onUpdate: (live) => {
+        if (runId === runIdRef.current && mountedRef.current) {
+          // Reachy Minis only, strongest signal first.
+          setDevices(reachyBySignal(live));
+        }
+      },
+      onError: (e) => {
         if (runId !== runIdRef.current || !mountedRef.current) return;
-        setDevices(reachyBySignal(found));
-      } catch (e) {
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        const msg = (e as Error).message ?? String(e);
+        const msg = e.message ?? String(e);
         const permission = /permission/i.test(msg);
+        setScanning(false);
         setError({
           code: permission ? 'permission-denied' : 'unknown',
           message: permission
@@ -179,39 +192,56 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           recoverPhase: 'scanning',
         });
         setPhase('error');
-      } finally {
-        if (runId === runIdRef.current && mountedRef.current) setScanning(false);
-      }
-    })();
-  }, []);
+      },
+    });
+  }, [stopScanLoop]);
 
   const rescan = useCallback(() => startScanning(), [startScanning]);
 
-  const selectDevice = useCallback((device: BleDevice) => {
-    const runId = (runIdRef.current += 1);
-    setError(null);
-    setPhase('connecting');
-    void (async () => {
-      try {
-        await bleConnect(device.address);
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        const id = await readIdentity();
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        identityRef.current = id;
-        setIdentity(id);
-        // Name guess for display: prefer the advertised name, else generic.
-        setPhase('pin');
-      } catch {
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        setError({
-          code: 'connect-failed',
-          message: 'Could not connect to this robot. Make sure it is powered on and close by.',
-          recoverPhase: 'scanning',
-        });
-        setPhase('error');
+  // Re-scan when the app comes back to the foreground while the scan view is
+  // showing: mobile OSes kill an in-flight BLE scan when the app backgrounds,
+  // so without this the list would silently stop refreshing on return.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && phaseRef.current === 'scanning') {
+        startScanning();
       }
-    })();
-  }, []);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [startScanning]);
+
+  const selectDevice = useCallback(
+    (device: BleDevice) => {
+      const runId = (runIdRef.current += 1);
+      setError(null);
+      setScanning(false);
+      setPhase('connecting');
+      void (async () => {
+        try {
+          // The radio can't scan and connect simultaneously — stop the loop first.
+          await stopScanLoop();
+          await bleConnect(device.address);
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+          const id = await readIdentity();
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+          identityRef.current = id;
+          setIdentity(id);
+          // Name guess for display: prefer the advertised name, else generic.
+          setPhase('pin');
+        } catch {
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+          setError({
+            code: 'connect-failed',
+            message: 'Could not connect to this robot. Make sure it is powered on and close by.',
+            recoverPhase: 'scanning',
+          });
+          setPhase('error');
+        }
+      })();
+    },
+    [stopScanLoop],
+  );
 
   const submitPin = useCallback(
     (pin: string) => {
@@ -368,6 +398,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
   const reset = useCallback(() => {
     runIdRef.current += 1;
+    void stopScanLoop();
     void bleDisconnect();
     pinRef.current = '';
     keyexRef.current = '';
@@ -380,7 +411,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setSelectedSsid(null);
     setResult(null);
     setPhase('permission');
-  }, []);
+  }, [stopScanLoop]);
 
   return {
     phase,

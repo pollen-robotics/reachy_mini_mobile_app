@@ -243,6 +243,136 @@ export async function scanDevices(
   return [...byAddr.values()];
 }
 
+export interface ScanController {
+  /** Stop the continuous scan loop and release the scanner (best-effort). */
+  stop: () => Promise<void>;
+}
+
+// Continuous-scan tuning. Each cycle re-arms the plugin's single-shot scanner
+// for `WINDOW_MS`; a device not re-seen within `STALE_MS` (≈2 windows) is
+// pruned so a powered-off / carried-away robot drops out of the live list.
+// `PRUNE_MS` re-emits between ticks so stale entries disappear even when no
+// new advertisements arrive.
+const CONT_SCAN_WINDOW_MS = 5_000;
+const CONT_SCAN_STALE_MS = 11_000;
+const CONT_SCAN_PRUNE_MS = 2_000;
+
+/**
+ * Continuously scan for BLE devices until `stop()` is called.
+ *
+ * Unlike {@link scanDevices} (one fixed window that then freezes), this re-arms
+ * the plugin's single-shot scanner in a loop and streams a LIVE list via
+ * `onUpdate`: new robots appear within a window, and a robot that goes away is
+ * pruned after `staleAfterMs`. Built to back a "looking for Reachies" view that
+ * stays fresh the whole time it is on screen — the caller restarts it on
+ * refocus (mobile kills BLE scans when the app is backgrounded) and MUST call
+ * `stop()` before connecting (the radio can't scan and connect at once).
+ *
+ * Shares the global `_scanToken` with {@link scanDevices}: starting any newer
+ * scan supersedes this loop, which then exits without fighting over the single
+ * plugin scanner.
+ */
+export function startContinuousScan(opts: {
+  onUpdate: (devices: BleDevice[]) => void;
+  onError?: (err: Error) => void;
+  windowMs?: number;
+  staleAfterMs?: number;
+  log?: (s: string) => void;
+}): ScanController {
+  const windowMs = opts.windowMs ?? CONT_SCAN_WINDOW_MS;
+  const staleAfterMs = opts.staleAfterMs ?? CONT_SCAN_STALE_MS;
+  const log = opts.log ?? (() => {});
+  const myToken = ++_scanToken;
+  let stopped = false;
+
+  const seen = new Map<string, { device: BleDevice; ts: number }>();
+
+  const emit = (): void => {
+    const cutoff = Date.now() - staleAfterMs;
+    for (const [addr, e] of seen) {
+      if (e.ts < cutoff) seen.delete(addr);
+    }
+    opts.onUpdate([...seen.values()].map((e) => e.device));
+  };
+
+  const handler = (msg: unknown): void => {
+    const list: unknown[] = Array.isArray(msg)
+      ? msg
+      : msg && typeof msg === 'object' && 'result' in msg
+        ? [(msg as { result: unknown }).result]
+        : msg
+          ? [msg]
+          : [];
+    const now = Date.now();
+    for (const raw of list) {
+      const d = normalizeDevice(raw as Record<string, unknown>);
+      if (d.address) seen.set(d.address, { device: d, ts: now });
+    }
+    emit();
+  };
+
+  const pruneTimer = setInterval(emit, CONT_SCAN_PRUNE_MS);
+
+  void (async () => {
+    const granted = await checkPermissions();
+    if (!granted) {
+      stopped = true;
+      clearInterval(pruneTimer);
+      opts.onError?.(
+        new Error(
+          'Bluetooth permission not granted yet — approve the "Nearby devices" ' +
+            'dialog, then scan again.',
+        ),
+      );
+      return;
+    }
+    log('continuous scan started');
+    while (!stopped && myToken === _scanToken) {
+      // Clear any prior/auto-stopped window before re-arming, then settle.
+      try {
+        await stopScan();
+        await new Promise((r) => setTimeout(r, 80));
+      } catch {
+        /* nothing was scanning */
+      }
+      if (stopped || myToken !== _scanToken) break;
+      try {
+        // startScan resolves immediately and auto-stops after windowMs; we
+        // wait the window out, then loop to re-arm.
+        await startScan(handler, windowMs);
+      } catch (e) {
+        opts.onError?.(e as Error);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, windowMs));
+    }
+    clearInterval(pruneTimer);
+    if (myToken === _scanToken) {
+      try {
+        await stopScan();
+      } catch {
+        /* already auto-stopped */
+      }
+    }
+    log('continuous scan loop exited');
+  })();
+
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(pruneTimer);
+      // Only release the scanner if a newer scan hasn't already claimed it.
+      if (myToken === _scanToken) {
+        try {
+          await stopScan();
+        } catch {
+          /* fine */
+        }
+      }
+    },
+  };
+}
+
 /** Reject a promise if it doesn't settle within `ms` (so no step hangs silently). */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
