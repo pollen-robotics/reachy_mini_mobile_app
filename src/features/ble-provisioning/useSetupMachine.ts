@@ -243,6 +243,31 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     [stopScanLoop],
   );
 
+  // The daemon's first `WIFI_SCAN` right after the robot leaves AP/hotspot mode
+  // usually returns an EMPTY list: `scan_available_wifi()` kicks off an async
+  // `nmcli rescan` then reads the cache immediately, so the fresh results land
+  // only on the next call. That's why a manual "Rescan" worked. Retry a few
+  // times automatically so the user never sees a spuriously empty list.
+  const scanWifiResilient = useCallback(async (runId: number): Promise<string[]> => {
+    const ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1800;
+    let found: string[] = [];
+    for (let i = 0; i < ATTEMPTS; i++) {
+      try {
+        found = await scanWifi();
+      } catch (e) {
+        // A transient "busy" (a rescan already in flight) is worth retrying;
+        // any other error — or busy on the last attempt — propagates.
+        if (i === ATTEMPTS - 1 || !/busy/i.test((e as Error).message ?? '')) throw e;
+      }
+      if (runId !== runIdRef.current || !mountedRef.current) return found;
+      if (found.length > 0) return found;
+      if (i < ATTEMPTS - 1) await sleep(RETRY_DELAY_MS);
+      if (runId !== runIdRef.current || !mountedRef.current) return found;
+    }
+    return found;
+  }, []);
+
   const submitPin = useCallback(
     (pin: string) => {
       const runId = (runIdRef.current += 1);
@@ -263,7 +288,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           keyexRef.current = keyex;
           // chain straight into the Wi-Fi scan
           setPhase('wifi-scanning');
-          const ssids = await scanWifi();
+          const ssids = await scanWifiResilient(runId);
           if (runId !== runIdRef.current || !mountedRef.current) return;
           setNetworks(ssids);
           setPhase('wifi-pick');
@@ -273,7 +298,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         }
       })();
     },
-    [fail],
+    [fail, scanWifiResilient],
   );
 
   // ── NETWORK ────────────────────────────────────────────────────────────────
@@ -284,7 +309,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setPhase('wifi-scanning');
     void (async () => {
       try {
-        const ssids = await scanWifi();
+        const ssids = await scanWifiResilient(runId);
         if (runId !== runIdRef.current || !mountedRef.current) return;
         setNetworks(ssids);
         setPhase('wifi-pick');
@@ -293,7 +318,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         fail((e as Error).message ?? String(e), 'wifi-scanning');
       }
     })();
-  }, [fail]);
+  }, [fail, scanWifiResilient]);
 
   const selectNetwork = useCallback((ssid: string) => {
     setSelectedSsid(ssid);
