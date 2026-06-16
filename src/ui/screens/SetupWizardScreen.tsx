@@ -15,7 +15,8 @@
  * mockups this implements.
  */
 
-import { useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -30,7 +31,6 @@ import {
   alpha,
 } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
-import BluetoothSearchingIcon from '@mui/icons-material/BluetoothSearching';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
@@ -43,15 +43,43 @@ import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import connectionUrl from '@/assets/connection.svg';
 import lockedReachyUrl from '@/assets/locked-reachy.svg';
+import reachySpeakerUrl from '@/assets/reachy-speaker.svg';
 import type { BleDevice } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
-import { type SetupResult } from '@/features/ble-provisioning/types';
+import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
+
+/** Hero illustration size shared by every step (bigger = more story). */
+const HERO_ILLO = 224;
+
+/** Total perceived steps shown as "Step N of 4" in the header. */
+const TOTAL_STEPS = 4;
+
+/**
+ * Fine-grained 0→1 fill for the top progress bar. The *step number* comes from
+ * {@link stageForPhase} (4 perceived stages); this map just lets the bar creep
+ * forward smoothly within a stage so it always feels alive.
+ */
+const PHASE_FRACTION: Record<SetupPhase, number> = {
+  permission: 0.05,
+  scanning: 0.12,
+  connecting: 0.2,
+  pin: 0.27,
+  authenticating: 0.34,
+  'wifi-scanning': 0.46,
+  'wifi-pick': 0.56,
+  'wifi-password': 0.66,
+  'wifi-connecting': 0.76,
+  'linking-account': 0.84,
+  'central-waiting': 0.93,
+  done: 1,
+  error: 0,
+};
 
 interface SetupWizardScreenProps {
   token: string;
@@ -64,6 +92,9 @@ interface SetupWizardScreenProps {
 
 export default function SetupWizardScreen({ token, onCancel, onComplete }: SetupWizardScreenProps) {
   const m = useSetupMachine({ token });
+  const fraction = useClampedProgress(m.phase);
+  const showProgress = m.phase !== 'error';
+  const step = stepFromFraction(fraction);
 
   return (
     <Stack
@@ -74,12 +105,27 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         color: 'text.primary',
       }}
     >
-      {/* Top bar: a single back/close affordance. Back always exits the
-          wizard - BLE teardown is handled on unmount by the FSM. */}
+      {/* Edge-to-edge progress bar, flush to the top of the wizard surface. A
+          thin track is always present so the filled portion reads as progress
+          (not a buffering spinner); it animates as the flow advances. */}
+      <Box sx={{ height: 3, width: '100%', bgcolor: theme => alpha(theme.palette.text.primary, 0.08) }}>
+        <Box
+          sx={{
+            height: '100%',
+            width: showProgress ? `${fraction * 100}%` : '0%',
+            bgcolor: 'primary.main',
+            transition: 'width 400ms cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
+        />
+      </Box>
+
+      {/* Top bar: back/close on the left, step counter on the right. Back always
+          exits the wizard - BLE teardown is handled on unmount by the FSM. */}
       <Stack
         direction="row"
         sx={{
           alignItems: 'center',
+          justifyContent: 'space-between',
           pt: `calc(${LAYOUT.safeAreaTop} + 12px)`,
           pb: 1,
           px: 1,
@@ -99,9 +145,15 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         >
           Back
         </Button>
+        {showProgress ? (
+          <Typography sx={{ pr: 1.5, fontSize: TYPO.xs, color: 'text.secondary', fontVariantNumeric: 'tabular-nums' }}>
+            {`Step ${step} of ${TOTAL_STEPS}`}
+          </Typography>
+        ) : null}
       </Stack>
 
-      {/* Scrollable content column. */}
+      {/* Scrollable content column. Each phase cross-fades + lifts in/out so the
+          flow feels like turning pages rather than hard cuts. */}
       <Stack sx={{ flex: 1, minHeight: 0, width: '100%', overflowY: 'auto' }}>
         <Stack
           sx={{
@@ -113,7 +165,18 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
             alignItems: 'center',
           }}
         >
-          <StepView m={m} onCancel={onCancel} onComplete={onComplete} />
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={m.phase}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.26, ease: [0.4, 0, 0.2, 1] }}
+              style={{ width: '100%' }}
+            >
+              <StepView m={m} onCancel={onCancel} onComplete={onComplete} />
+            </motion.div>
+          </AnimatePresence>
         </Stack>
       </Stack>
     </Stack>
@@ -140,13 +203,13 @@ function StepView({
     case 'scanning':
       return <ScanView devices={m.devices} scanning={m.scanning} onPick={m.selectDevice} onRescan={m.rescan} />;
     case 'connecting':
-      return <BusyView title="Connecting to your Reachy" caption="Opening a Bluetooth link…" />;
+      return <BusyView title="Saying hello" caption="Opening a Bluetooth link…" />;
     case 'pin':
       return <PinView onSubmit={m.submitPin} />;
     case 'authenticating':
-      return <BusyView title="Verifying" caption="Checking the setup code…" />;
+      return <BusyView title="Checking the code" caption="One moment…" />;
     case 'wifi-scanning':
-      return <BusyView title="Choosing a network" caption="Scanning for Wi-Fi networks (this can take ~10 s)…" />;
+      return <BusyView title="Finding networks" caption="Scanning for Wi-Fi nearby - this can take ~10 s…" />;
     case 'wifi-pick':
       return <WifiPickView networks={m.networks} onPick={m.selectNetwork} onRescan={m.rescanWifi} />;
     case 'wifi-password':
@@ -166,12 +229,36 @@ function StepView({
 
 /* --- shared bits ---------------------------------------------------------- */
 
+/**
+ * Monotonic 0→1 progress for the header bar. A sub-step retry (wrong PIN, Wi-Fi
+ * rescan) never makes it jump backward; it only resets when the flow genuinely
+ * restarts pairing (permission/scanning) or hits an error.
+ */
+function useClampedProgress(phase: SetupPhase): number {
+  const maxRef = useRef(0);
+  const target = PHASE_FRACTION[phase] ?? 0;
+  if (phase === 'permission' || phase === 'scanning' || phase === 'error') {
+    maxRef.current = target;
+  } else {
+    maxRef.current = Math.max(maxRef.current, target);
+  }
+  return maxRef.current;
+}
+
+/** Perceived "Step N of 4" derived from the clamped fill (stays monotonic). */
+function stepFromFraction(f: number): number {
+  if (f < 0.42) return 1;
+  if (f < 0.72) return 2;
+  if (f < 0.97) return 3;
+  return TOTAL_STEPS;
+}
+
 function Headline({ title, caption }: { title: string; caption?: string }) {
   return (
     <Stack spacing={0.75} sx={{ alignItems: 'center', textAlign: 'center' }}>
-      <Typography sx={{ fontSize: TYPO.xl, fontWeight: FONT_WEIGHT.semibold }}>{title}</Typography>
+      <Typography sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold }}>{title}</Typography>
       {caption ? (
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', maxWidth: 300, lineHeight: 1.5 }}>
+        <Typography sx={{ fontSize: TYPO.md, color: 'text.secondary', maxWidth: 320, lineHeight: 1.5 }}>
           {caption}
         </Typography>
       ) : null}
@@ -239,12 +326,10 @@ function IconHero({ children, tint }: { children: React.ReactNode; tint?: string
 function PermissionView({ onContinue }: { onContinue: () => void }) {
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <IconHero>
-        <BluetoothSearchingIcon sx={{ fontSize: 52 }} />
-      </IconHero>
+      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline
-        title="Connect over Bluetooth"
-        caption="To set up a new Reachy we use Bluetooth to send it your Wi-Fi details. Your Wi-Fi password is encrypted on your phone before being sent, so it is never transmitted in clear - and it is never stored."
+        title="Let's wake up your Reachy"
+        caption="We'll hand it your Wi-Fi keys over Bluetooth. Your password is sealed on this phone first - so it never travels in clear, and we never store it."
       />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
         <SecondaryButton onClick={onContinue}>Continue</SecondaryButton>
@@ -269,9 +354,14 @@ function ScanView({
   const hasDevices = devices.length > 0;
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
+      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline
-        title="Looking for new Reachies"
-        caption={hasDevices ? 'Tap your robot to start the setup.' : 'Scanning over Bluetooth…'}
+        title="Looking around…"
+        caption={
+          hasDevices
+            ? 'Found it. Tap your Reachy to start.'
+            : 'Hold your Reachy close to the phone - this only takes a moment.'
+        }
       />
       {scanning && !hasDevices ? (
         <CircularProgress size={28} sx={{ color: 'text.secondary' }} />
@@ -401,8 +491,8 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
   };
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={lockedReachyUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
-      <Headline title="Enter the setup code" caption="Find the 5-character code printed under your Reachy." />
+      <Box component="img" src={lockedReachyUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
+      <Headline title="Prove it's yours" caption="Type the 5-character code printed under your Reachy's base." />
       <TextField
         value={pin}
         onChange={e => setPin(e.target.value.replace(/\s/g, '').slice(0, PIN_LENGTH))}
@@ -426,7 +516,7 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
         }}
         sx={{ width: 240 }}
       />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
+      <Box sx={{ width: 240 }}>
         <SecondaryButton onClick={submit} disabled={!ready}>
           Verify
         </SecondaryButton>
@@ -448,7 +538,8 @@ function WifiPickView({
 }) {
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline title="Choose a Wi-Fi network" caption="Pick the network your Reachy should join." />
+      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
+      <Headline title="Pick a home network" caption="Choose the Wi-Fi your Reachy will live on." />
       {networks.length > 0 ? (
         <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
           {networks.map(ssid => (
@@ -494,7 +585,7 @@ function PasswordView({ ssid, onSubmit }: { ssid: string; onSubmit: (psk: string
       <IconHero>
         <WifiIcon sx={{ fontSize: 48 }} />
       </IconHero>
-      <Headline title="Connect to" caption={ssid} />
+      <Headline title="The secret handshake" caption={`Enter the password for "${ssid}".`} />
       <TextField
         value={psk}
         onChange={e => setPsk(e.target.value)}
@@ -539,14 +630,14 @@ function PasswordView({ ssid, onSubmit }: { ssid: string; onSubmit: (psk: string
 /* --- 6. connecting / central-waiting -------------------------------------- */
 
 function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'registering' }) {
-  const title = stage === 'joining' ? 'Connecting your Reachy' : 'Almost ready…';
+  const title = stage === 'joining' ? 'Bringing it online' : 'Almost there';
   const caption =
     stage === 'joining'
       ? `Joining ${ssid || 'the network'}…`
       : 'Registering with Hugging Face…';
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
+      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline title={title} caption={caption} />
       <CircularProgress size={26} sx={{ color: 'primary.main' }} />
     </Stack>
@@ -558,7 +649,7 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
 function LinkAccountView({ onLink }: { onLink: () => void }) {
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
+      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline
         title="Link your Reachy"
         caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
@@ -586,25 +677,35 @@ function SuccessView({
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
       <Box sx={{ position: 'relative' }}>
-        <RobotAvatar size={96} />
-        <CheckCircleIcon
-          sx={{
-            position: 'absolute',
-            right: -4,
-            bottom: -4,
-            fontSize: 32,
-            color: STATUS.success,
-            bgcolor: 'background.default',
-            borderRadius: RADIUS.circle,
-          }}
-        />
+        <motion.div
+          initial={{ scale: 0.7, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+        >
+          <RobotAvatar size={96} />
+        </motion.div>
+        <motion.div
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ type: 'spring', stiffness: 520, damping: 18, delay: 0.18 }}
+          style={{ position: 'absolute', right: -4, bottom: -4, display: 'flex' }}
+        >
+          <CheckCircleIcon
+            sx={{
+              fontSize: 32,
+              color: STATUS.success,
+              bgcolor: 'background.default',
+              borderRadius: RADIUS.circle,
+            }}
+          />
+        </motion.div>
       </Box>
       <Headline
-        title={robot ? `${name} is online!` : "Wi-Fi set up!"}
+        title={robot ? `Meet ${name}` : 'Wi-Fi set up!'}
         caption={
           robot
-            ? 'Ready to use over Wi-Fi.'
-            : "Your Reachy joined the network. It will show up in your list in a few moments."
+            ? "It's online and ready to chat."
+            : 'Your Reachy joined the network. It will show up in your list in a few moments.'
         }
       />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
