@@ -30,10 +30,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Collapse, Stack, Typography, CircularProgress } from '@mui/material';
+import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
-import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded';
 
+import rocketUrl from '@/assets/rocket.svg';
 import { isDaemonOutdated } from '@/features/daemon-update/latestRelease';
 import { useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
@@ -152,6 +153,28 @@ export default function DaemonUpdateGate({
         pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
       }}
     >
+      {/* Top-right exit: leave the session and reconnect from the lobby. Hidden
+          while the update is actively installing (no safe bail-out) and on the
+          success screen (Continue is the natural next step). */}
+      {(phase === 'prompt' || phase === 'rebooting' || phase === 'failed') && (
+        <Button
+          onClick={onBackToRobots}
+          startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 14 }} />}
+          sx={{
+            position: 'absolute',
+            top: `calc(${LAYOUT.safeAreaTop} + 8px)`,
+            right: 8,
+            color: 'text.secondary',
+            textTransform: 'none',
+            fontWeight: FONT_WEIGHT.semibold,
+            fontSize: TYPO.sm,
+            borderRadius: 999,
+          }}
+        >
+          Back to robots
+        </Button>
+      )}
+
       <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%', maxWidth: 360 }}>
         <PhaseIcon phase={phase} />
 
@@ -190,20 +213,9 @@ export default function DaemonUpdateGate({
         )}
 
         <Stack spacing={1} sx={{ width: '100%', alignItems: 'center' }}>
-          {phase === 'prompt' && (
-            <>
-              <PrimaryButton onClick={handleUpdateNow}>Update now</PrimaryButton>
-              <TextLink onClick={onBackToRobots}>Back to robots</TextLink>
-            </>
-          )}
-          {phase === 'rebooting' && <TextLink onClick={onBackToRobots}>Back to robots</TextLink>}
+          {phase === 'prompt' && <PrimaryButton onClick={handleUpdateNow}>Update now</PrimaryButton>}
           {phase === 'done' && <PrimaryButton onClick={handleContinue}>Continue</PrimaryButton>}
-          {phase === 'failed' && (
-            <>
-              <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>
-              <TextLink onClick={onBackToRobots}>Back to robots</TextLink>
-            </>
-          )}
+          {phase === 'failed' && <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>}
         </Stack>
       </Stack>
     </Box>
@@ -220,7 +232,7 @@ function PhaseIcon({ phase }: { phase: Phase }) {
   if (phase === 'failed') {
     return <ErrorOutlineRoundedIcon sx={{ fontSize: 56, color: 'error.main' }} />;
   }
-  return <SystemUpdateAltRoundedIcon sx={{ fontSize: 56, color: 'primary.main' }} />;
+  return <Box component="img" src={rocketUrl} alt="" aria-hidden sx={{ width: 200, height: 200 }} />;
 }
 
 function titleFor(phase: Phase): string {
@@ -314,9 +326,8 @@ function PrimaryButton({
 }) {
   return (
     <Button
-      variant="contained"
+      variant="outlined"
       color="primary"
-      disableElevation
       onClick={onClick}
       fullWidth
       sx={{
@@ -326,22 +337,6 @@ function PrimaryButton({
         borderRadius: `${RADIUS.md}px`,
         py: 1.25,
         maxWidth: 280,
-      }}
-    >
-      {children}
-    </Button>
-  );
-}
-
-function TextLink({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <Button
-      onClick={onClick}
-      sx={{
-        textTransform: 'none',
-        fontSize: TYPO.sm,
-        fontWeight: FONT_WEIGHT.medium,
-        color: 'text.secondary',
       }}
     >
       {children}
