@@ -170,6 +170,11 @@ export interface RobotSessionHandle {
    *  when the channel isn't open or the daemon predates `get_version`. */
   getDaemonVersion: () => Promise<string | null>;
 
+  /** Trigger a daemon self-update over the data channel (fire-and-ack;
+   *  the daemon updates then `systemctl restart`s, dropping the
+   *  session). Returns `false` when the channel isn't open. */
+  startDaemonUpdate: (options?: { preRelease?: boolean }) => boolean;
+
   /**
    * Latest measured microphone level in [0, 1]. Sampled on every
    * audio frame inside the engine (via the level monitor's `onLevels`
@@ -540,6 +545,13 @@ export function useRobotSession({
     return handleRef.current?.getDaemonVersion() ?? Promise.resolve(null);
   }, []);
 
+  const startDaemonUpdate = useCallback(
+    (options?: { preRelease?: boolean }): boolean => {
+      return handleRef.current?.startDaemonUpdate(options) ?? false;
+    },
+    [],
+  );
+
   // Mic level getter: the engine writes its smoothed value into a
   // closure-level variable on every audio frame; here we just read
   // it via the handle. Returning `0` when the engine isn't mounted
@@ -601,6 +613,7 @@ export function useRobotSession({
     getMicrophoneVolume,
     setMicrophoneVolume,
     getDaemonVersion,
+    startDaemonUpdate,
     getMicLevel,
     playSound,
     setHeadRpyDeg,

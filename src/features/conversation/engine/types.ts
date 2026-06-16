@@ -329,6 +329,21 @@ export interface ConversationEngineHandle {
   getDaemonVersion: () => Promise<string | null>;
 
   /**
+   * Trigger a daemon self-update over the WebRTC data channel
+   * (`{ type: 'start_update' }`, see pollen-robotics/reachy_mini#1208).
+   *
+   * Fire-and-ack: the daemon acks immediately, runs the PyPI update on
+   * a background thread, then ends with a `systemctl restart` that
+   * tears the transport down. No progress is streamed on this channel
+   * - pair with `subscribeLogs` for live output and watch the session
+   * drop to know the restart has begun.
+   *
+   * Returns `false` when the data channel isn't open (nothing sent).
+   * Non-throwing. `preRelease` opts into pre-release builds.
+   */
+  startDaemonUpdate: (options?: { preRelease?: boolean }) => boolean;
+
+  /**
    * Latest measured microphone level in [0, 1], smoothed by the
    * engine's `MicLevelMonitor`. Updated every audio frame; consumers
    * are expected to read it from a `requestAnimationFrame` loop

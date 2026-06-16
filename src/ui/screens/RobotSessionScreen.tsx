@@ -99,10 +99,12 @@ import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
+import DaemonUpdateGate from './session/DaemonUpdateGate';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
+import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -183,6 +185,10 @@ function ConnectedSession({
     token,
     audioLevelsTargetRef: orbRef,
   });
+
+  // Latest published daemon version (GitHub). Fail-open: `null` until it
+  // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
+  const latestDaemonVersion = useLatestDaemonVersion();
 
   // Remember which personality this robot is wearing, keyed by its
   // stable hardware id, so the discovery list ("Your Reachies") can
@@ -941,6 +947,18 @@ function ConnectedSession({
           <FullScreenTransition>
             <SessionErrorView message={session.errorMessage} onBack={handleLeave} />
           </FullScreenTransition>
+        )}
+
+        {/* Daemon update gate. Self-contained full-screen flow that
+            takes over (zIndex 1400, above every transition above) when
+            the connected robot's daemon is behind the latest release.
+            Renders nothing while up to date / version unknown. */}
+        {!leaving && (
+          <DaemonUpdateGate
+            session={session}
+            latestVersion={latestDaemonVersion}
+            onBackToRobots={handleLeave}
+          />
         )}
       </Stack>
     </DaemonStateProvider>

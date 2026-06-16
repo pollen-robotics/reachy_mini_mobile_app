@@ -510,6 +510,32 @@ export function createConversationHandle(
       }
     },
 
+    startDaemonUpdate: (options) => {
+      const robot = getRobot();
+      // The daemon `start_update` command (reachy_mini#1208) is a plain
+      // typed data-channel message. We send it via `sendRaw` rather than a
+      // dedicated SDK helper so it works even on SDK builds that predate
+      // the typed `startDaemonUpdate` method - the daemon understands the
+      // wire shape regardless. Older daemons ignore it; callers gate the
+      // call on a positive version check.
+      if (isUnmounted() || !robot || typeof robot.sendRaw !== "function") {
+        console.warn("[engine] startDaemonUpdate: engine not ready");
+        return false;
+      }
+      try {
+        const message: { type: "start_update"; pre_release?: boolean } = {
+          type: "start_update",
+        };
+        if (options?.preRelease) message.pre_release = true;
+        const ok = robot.sendRaw(message);
+        if (!ok) console.warn("[engine] startDaemonUpdate: data channel not open");
+        return ok;
+      } catch (err) {
+        console.warn("[engine] startDaemonUpdate failed:", err);
+        return false;
+      }
+    },
+
     getMicLevel: () => getMicLevel(),
 
     playSound: (file: string) => {
