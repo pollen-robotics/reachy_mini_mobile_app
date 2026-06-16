@@ -886,16 +886,32 @@ async function doStart(): Promise<void> {
   );
   setConnectionState("live");
 
-  if (!convoActiveRequested.get()) {
-    // Park on a `live` connection with the conversation FSM still
-    // `idle` so the host renders the orb's "press to start"
-    // affordance. The user's tap routes through `handleOrbClick`
-    // (connection `live` + conversation `idle`) which calls
-    // `runConversationParts()` to bring up HF realtime + the audio
-    // pumps + motion modules.
-    return;
-  }
+  // Connection reached `live`. Hand off to the conversation layer,
+  // which owns the decision to auto-start the AI pipeline (it reads
+  // the `convoActiveRequested` gate). The connection bring-up no
+  // longer reaches into conversation internals - it just announces
+  // that the transport is live and lets the seam react.
+  await onConnectionLive();
+}
 
+/**
+ * Conversation-layer reaction to the connection reaching `live`.
+ *
+ * This is the connection → conversation seam (the future
+ * `ConversationController` will own it). The connection bring-up
+ * (`doStart`) calls this the moment the transport is live; we decide
+ * HERE whether to bring the AI pipeline up:
+ *
+ *   - host already opted in (`convoActiveRequested`) → run the
+ *     conversation parts now;
+ *   - otherwise park on a live connection with the conversation FSM
+ *     still `idle` so the host renders the orb's "press to start"
+ *     affordance. The user's tap routes through `handleOrbClick`
+ *     (connection `live` + conversation `idle`) back into
+ *     `runConversationParts()`.
+ */
+async function onConnectionLive(): Promise<void> {
+  if (!convoActiveRequested.get()) return;
   await runConversationParts();
 }
 
@@ -1558,15 +1574,31 @@ async function tearDownConversationPipeline({
   conversationStarted.off();
 }
 
-async function teardown(): Promise<void> {
-  // Pipeline tear-down WITHOUT glide: gotoSleep is about to play
-  // its own head + antennas trajectory and we don't want our 700ms
-  // ease-out fighting it on the bus.
-  await tearDownConversationPipeline({ glide: false });
-  // The AI side is gone: drop the conversation FSM to idle so every
-  // caller (handleHostStop, unmount, onFatalError) inherits a clean
-  // conversation cursor and only has to re-park the connection FSM.
+/**
+ * Conversation-layer reaction to the connection going down.
+ *
+ * The connection → conversation seam's teardown half (mirror of
+ * `onConnectionLive`). The connection teardown calls this so it
+ * never has to know about the conversation pipeline internals: tear
+ * the AI pipeline (`glide:false` on the power-off path where
+ * `gotoSleep` owns the head trajectory) and drop the conversation
+ * FSM to `idle`, so every teardown caller inherits a clean
+ * conversation cursor.
+ */
+async function onConnectionLost({ glide }: { glide: boolean }): Promise<void> {
+  await tearDownConversationPipeline({ glide });
   setConversationState("idle");
+}
+
+async function teardown(): Promise<void> {
+  // Announce the connection is going down. The conversation seam
+  // tears its pipeline WITHOUT glide here - `gotoSleep` below is
+  // about to play its own head + antennas trajectory and a 700ms
+  // ease-out would fight it on the bus - and parks the conversation
+  // FSM on `idle` so every teardown caller (handleHostStop, unmount,
+  // onFatalError) inherits a clean conversation cursor and only has
+  // to re-park the connection FSM.
+  await onConnectionLost({ glide: false });
 
   // Capture the session flag BEFORE resetting it - we need it to
   // decide whether to run the goto-sleep dance below. Resetting
