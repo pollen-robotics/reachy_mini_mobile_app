@@ -8,48 +8,37 @@
  */
 
 /**
- * Engine state machine.
+ * Connection (transport) state machine.
  *
- * Hoisted to its own module so the React watchdog and the
- * `onStateChange` observer can pattern-match on it without
- * duplicating the union.
+ * Owns the lifecycle of the SDK / WebRTC / DataChannel link to the
+ * robot - the "is a robot physically reachable" question. It is
+ * deliberately separate from `ConversationState` (the AI pipeline on
+ * top): the connection can be `live` while no conversation runs, and
+ * a conversation only exists while the connection is `live`.
+ *
+ * Hoisted to its own module so the React watchdog, the phase derivation
+ * and the `onConnectionStateChange` observer can pattern-match on it
+ * without duplicating the union.
  */
-export type AppState =
+export type ConnectionState =
   | "signed-out"
   | "authenticated"
   | "connecting"
   | "connected"
-  | "auto-selecting"
+  | "selecting"
   | "starting"
   /**
    * SDK + WebRTC + DataChannel are up, the wake-up trajectory has
    * been kicked off, motors are enabled - the robot is physically
-   * "online" - but the conversation pipeline has NOT yet been
-   * started (no HF realtime client, no tool routing, no audio
-   * pumps). Reached when the host opted out of `autoStartConversation`,
-   * which is the mobile-app default: tap the orb explicitly to flip
-   * to `starting` and bring the AI side up.
+   * "online". The conversation pipeline may or may not be running on
+   * top (see `ConversationState`); `live` is purely the transport
+   * statement "we hold a working session to this robot".
    *
-   * `ready` exists as its own state (rather than reusing `connected`)
-   * because the visual identity of the orb differs: `ready` shows
-   * the play-icon "press to start" affordance, `connected` is a
-   * pure transient state during the connect handshake.
+   * `live` is its own state (rather than reusing `connected`) because
+   * `connected` is the transient handshake state, whereas `live` is a
+   * stable parking state the engine can sit in between conversations.
    */
-  | "ready"
-  | "listening"
-  | "user-speaking"
-  | "processing"
-  | "ai-speaking"
-  /**
-   * Transient wind-down state entered the instant the user taps the
-   * stop button, BEFORE the (deliberately gentle) pipeline teardown
-   * runs - the 700 ms glide-to-neutral plus the OpenAI bridge close.
-   * Without it the orb would keep showing the live conversation
-   * state for the whole shutdown and the tap would feel laggy; here
-   * the orb flips to its spinner immediately. `stopConversation()`
-   * leaves this state for `ready` once the teardown settles.
-   */
-  | "stopping"
+  | "live"
   /**
    * Session was deliberately released for a handoff (e.g. an embedded
    * iframe app needs the robot's WebRTC peer slot). HF auth + SSE are
@@ -68,12 +57,33 @@ export type AppState =
   | "error";
 
 /**
- * Alias kept for symmetry with the option-name `onStateChange`. Some
- * callers prefer `ConversationState` over `AppState` because the
- * former is less generic-sounding outside this file; both are the
- * same union, exported from the same place.
+ * Conversation (AI pipeline) state machine.
+ *
+ * Owns the lifecycle of the realtime backend + motion + tools that
+ * sit ON TOP of a `live` connection. `idle` means the transport is up
+ * but no AI side is running (the orb shows "tap to start"). Every
+ * non-`idle` value only ever occurs while `ConnectionState === "live"`.
  */
-export type ConversationState = AppState;
+export type ConversationState =
+  /** No conversation running. The transport may be `live` (orb shows
+   *  "tap to start") or not up at all. */
+  | "idle"
+  /** Conversation bring-up: HF realtime handshake + motion stack
+   *  start, before the first `listening`. */
+  | "starting"
+  | "listening"
+  | "user-speaking"
+  | "processing"
+  | "ai-speaking"
+  /**
+   * Transient wind-down entered the instant the user taps stop, BEFORE
+   * the (deliberately gentle) pipeline teardown runs - the 700 ms
+   * glide-to-neutral plus the realtime bridge close. Without it the orb
+   * would keep showing the live conversation state for the whole
+   * shutdown and the tap would feel laggy; here it flips to its spinner
+   * immediately. Leaves for `idle` once the teardown settles.
+   */
+  | "stopping";
 
 /**
  * Active ICE candidate pair classification. Exported so external
@@ -383,22 +393,30 @@ export interface ConversationEngineOptions {
   preselectedRobotId?: string | null;
 
   /**
-   * Fires on every state-machine transition (`signed-out` → `connecting`
-   * → `starting` → …). The React wrapper uses it to drive an external
-   * watchdog that flips the UI to "Robot unresponsive - Retry" when we
-   * sit in a transient state (`connecting`, `starting`, `auto-selecting`)
-   * beyond a reasonable budget.
+   * Fires on every CONNECTION transition (`signed-out` → `connecting`
+   * → `starting` → `live` → …). The React wrapper uses it to drive the
+   * session phase + an external watchdog that flips the UI to "Robot
+   * unresponsive - Retry" when we sit in a transient state
+   * (`connecting`, `starting`, `selecting`) beyond a reasonable budget.
    *
    * Deliberately a single callback (not EventTarget) to keep the
    * engine's public surface minimal and because React's effect cleanup
    * is the natural disposal point: the wrapper wires it up on mount
    * and throws the callback away on unmount.
    *
-   * Called synchronously from inside `setState()` so the observer
-   * sees every transition in order, including fast ones (e.g.
-   * `connected` → `auto-selecting`) that happen within a single tick.
+   * Called synchronously from inside the connection FSM's `set()` so
+   * the observer sees every transition in order, including fast ones
+   * (e.g. `connected` → `selecting`) that happen within a single tick.
    */
-  onStateChange?: (state: AppState) => void;
+  onConnectionStateChange?: (state: ConnectionState) => void;
+
+  /**
+   * Fires on every CONVERSATION transition (`idle` → `starting` →
+   * `listening` → `user-speaking` → …). The React wrapper drives the
+   * orb's live visual + the "conversation engaged" affordances from it.
+   * Every non-`idle` value only occurs while the connection is `live`.
+   */
+  onConversationStateChange?: (state: ConversationState) => void;
 
   /**
    * When `true` (default), the engine auto-starts the full conversation

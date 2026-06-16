@@ -149,7 +149,8 @@ import { wireRobotEvents } from "./robot-events";
 import { createConversationHandle } from "./host-handle";
 import { createEngineCore } from "./engine-core";
 import type {
-  AppState,
+  ConnectionState,
+  ConversationState,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -160,7 +161,7 @@ import type {
 // Public-types re-exports so the prior import path keeps working.
 // New code should pull these straight from `./types`.
 export type {
-  AppState,
+  ConnectionState,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -189,11 +190,19 @@ const preselectedRobotId: string | null =
     ? options.preselectedRobotId
     : null;
 
-// Optional external state observer (mobile-side watchdog). Fired once
-// per transition from inside setState(). We never touch it after the
-// mount returns - the consumer disposes by unmounting the engine.
-const onStateChange: ((state: AppState) => void) | null =
-  typeof options.onStateChange === "function" ? options.onStateChange : null;
+// Optional external state observers (mobile-side watchdog + orb).
+// `onConnectionStateChange` fires once per CONNECTION transition,
+// `onConversationStateChange` once per CONVERSATION transition. Fired
+// from inside the matching FSM's subscriber. We never touch them after
+// the mount returns - the consumer disposes by unmounting the engine.
+const onConnectionStateChange: ((state: ConnectionState) => void) | null =
+  typeof options.onConnectionStateChange === "function"
+    ? options.onConnectionStateChange
+    : null;
+const onConversationStateChange: ((state: ConversationState) => void) | null =
+  typeof options.onConversationStateChange === "function"
+    ? options.onConversationStateChange
+    : null;
 
 // Optional external observer for the live WebRTC transport (active ICE
 // candidate-pair classification + instantaneous bitrate). Fired by the
@@ -302,16 +311,18 @@ const emitConnectionAttempt = (
 // antennas / backend / wobbler stay quiet until the user explicitly
 // hits "Start conversation".
 const core = createEngineCore({
-  initialState: "connecting",
+  initialConnectionState: "connecting",
   convoActiveRequested: options.autoStartConversation !== false,
 });
-const { fsm } = core;
+const { connection, conversation } = core;
 const { conversationStarted, convoActiveRequested, unmounted, movePlaying } =
   core.gates;
-// Tiny alias so the dozens of `setState("x")` call sites stay terse.
-// The FSM owns the cursor + the subscriber fan-out; this is just a
-// pretty name for `fsm.set`.
-const setState = fsm.set;
+// Terse aliases for the two FSM cursors. `setConnectionState` drives
+// the transport machine (connecting → live → released …);
+// `setConversationState` drives the AI pipeline machine (idle →
+// starting → listening …). Each owns its cursor + subscriber fan-out.
+const setConnectionState = connection.set;
+const setConversationState = conversation.set;
 
 // Settings, defaults, tool descriptors and head-pose lookup
 // table all live in their own modules now to keep this file focused
@@ -319,11 +330,12 @@ const setState = fsm.set;
 //   - `./settings.ts` → `Settings`, `loadSettings()`, defaults, storage keys
 //   - `./tools.ts`    → `ROBOT_TOOLS`, `HEAD_POSES`, `HeadPoseName`
 
-// ─── App state machine ──────────────────────────────────────────────────
-// `AppState` itself is defined at module scope (above `mountConversation`)
-// so `ConversationEngineOptions.onStateChange` can reference it. This
-// closure still uses it via the normal outer-scope lookup, nothing else
-// to thread.
+// ─── State machines ─────────────────────────────────────────────────────
+// `ConnectionState` + `ConversationState` are defined in `./types` so
+// `ConversationEngineOptions.onConnectionStateChange` /
+// `onConversationStateChange` can reference them. The two FSMs live on
+// `core` (see above); this closure drives them through
+// `setConnectionState` / `setConversationState`.
 
 // Per-state caption + disabled mapping used to live here as
 // `STATE_VIEWS` / `STATE_CLASS`. Both are now owned by the React orb
@@ -463,16 +475,28 @@ session.setTransportListener(onTransportChange);
 // the FSM so a broken host callback can't take the whole transition
 // down.
 
-// 1. Host-facing state observer (React mobile shell, watchdog timers,
-//    test loggers). The FSM already logs the transition itself via
-//    the `label: "engine"` option in `createEngineCore`, so we don't
+// 1. Host-facing state observers (React mobile shell, watchdog timers,
+//    test loggers). One per FSM. Each FSM already logs the transition
+//    itself via its `label` in `createEngineCore`, so we don't
 //    duplicate that here.
-if (onStateChange) {
-  fsm.subscribe((next) => {
+if (onConnectionStateChange) {
+  connection.subscribe((next) => {
     try {
-      onStateChange(next);
+      onConnectionStateChange(next);
     } catch (err) {
-      console.warn("[conversation-engine] onStateChange threw:", err);
+      console.warn("[conversation-engine] onConnectionStateChange threw:", err);
+    }
+  });
+}
+if (onConversationStateChange) {
+  conversation.subscribe((next) => {
+    try {
+      onConversationStateChange(next);
+    } catch (err) {
+      console.warn(
+        "[conversation-engine] onConversationStateChange threw:",
+        err,
+      );
     }
   });
 }
@@ -480,9 +504,9 @@ if (onStateChange) {
 // 2. Error-message clearing on leave-error. The host typically renders
 //    a small caption / tooltip under the orb when in `error`; we drop
 //    it as soon as the user navigates away (e.g. tapping retry takes
-//    us back to `authenticated`).
+//    us back to `authenticated`). `error` is a CONNECTION state.
 if (onErrorMessageChange) {
-  fsm.subscribe((next, prev) => {
+  connection.subscribe((next, prev) => {
     if (prev !== "error" || next === "error") return;
     try {
       onErrorMessageChange(null);
@@ -504,30 +528,33 @@ function emitErrorMessage(message: string | null): void {
   }
 }
 
-// 3. Daemon-side motor mode dedup, see `syncMotorModeForState` below.
-//    Registered last so the user-visible transition has already been
-//    fanned out by the time we hit the DataChannel.
-fsm.subscribe((next) => syncMotorModeForState(next));
+// 3. Daemon-side motor mode dedup, see `syncMotorMode` below. Driven
+//    by BOTH FSMs (connection bring-up needs motors, and so does an
+//    active conversation). Registered last so the user-visible
+//    transition has already been fanned out by the time we hit the
+//    DataChannel.
+connection.subscribe(() => syncMotorMode());
+conversation.subscribe(() => syncMotorMode());
 
 /**
- * Sync the daemon-side motor mode to the new FSM state, with two
- * layers of dedup so we don't flood the data channel with redundant
- * `setMotorMode` calls (every state transition during a back-and-
- * forth conversation would otherwise fire one).
+ * Sync the daemon-side motor mode to the current state of both FSMs,
+ * with a dedup layer so we don't flood the data channel with redundant
+ * `setMotorMode` calls (every conversation turn boundary would
+ * otherwise fire one).
  *
  * Two regimes:
- *   - active conv (`starting`, `listening`, `user-speaking`,
+ *   - connection `starting` (WebRTC bring-up + wake-up) OR an active
+ *     conversation (`starting`, `listening`, `user-speaking`,
  *     `processing`, `ai-speaking`) → `enabled`. Wobbler / antennas
  *     oscillator + tool-call poses need responsive servoing.
- *   - everything else (`ready`, `released`, `error`, pre-session) →
- *     no-op. We deliberately do NOT switch the robot into a
- *     "compliant" mode on `ready` (we tried `gravity_compensation`
- *     but the daemon's default kinematics engine - non-Placo -
- *     refuses it: "Gravity compensation mode is only supported
- *     with the Placo kinematics engine."). The motors stay in
- *     `enabled` between conversations; the glide-to-neutral
- *     above lands them at exactly (0,0,0) so the residual PID
- *     activity is near-zero and the robot stays calm.
+ *   - everything else (connection `live` between conversations,
+ *     `released`, `error`, pre-session) → no-op. We deliberately do
+ *     NOT switch the robot into a "compliant" mode (we tried
+ *     `gravity_compensation` but the daemon's default kinematics
+ *     engine - non-Placo - refuses it). The motors stay in `enabled`
+ *     between conversations; the glide-to-neutral lands them at
+ *     exactly (0,0,0) so the residual PID activity is near-zero and
+ *     the robot stays calm.
  *
  * The teardown path drives `setMotorMode('disabled')` directly
  * after `gotoSleep` resolves; this helper deliberately stays out
@@ -536,20 +563,18 @@ fsm.subscribe((next) => syncMotorModeForState(next));
 // `session.getLastMotorMode()` / `session.recordMotorMode()` (was: a
 // bare `let lastSetMotorMode: ... = null` here) hold the dedup cache.
 
-function syncMotorModeForState(next: AppState): void {
+function syncMotorMode(): void {
   if (!robot || !session.isEstablished()) return;
-  let mode: "enabled" | null = null;
-  switch (next) {
-    case "starting":
-    case "listening":
-    case "user-speaking":
-    case "processing":
-    case "ai-speaking":
-      mode = "enabled";
-      break;
-    default:
-      return;
-  }
+  const conv = conversation.current();
+  const motorsActive =
+    connection.current() === "starting" ||
+    conv === "starting" ||
+    conv === "listening" ||
+    conv === "user-speaking" ||
+    conv === "processing" ||
+    conv === "ai-speaking";
+  if (!motorsActive) return;
+  const mode = "enabled" as const;
   // Dedup: most conversation transitions (listening ↔ user-speaking
   // ↔ processing ↔ ai-speaking) all map to the same `enabled` mode.
   // Without this guard the engine would emit a setMotorMode message
@@ -584,16 +609,16 @@ function syncMotorModeForState(next: AppState): void {
 function renderRobotList(robots: RobotInfo[]): void {
   session.setKnownRobots(robots);
 
-  if (fsm.current() !== "connected") return;
+  if (connection.current() !== "connected") return;
   if (!robots.length) return;
   // `pickFirstIfNone()` is a no-op if a robot is already selected,
   // so we don't need a separate `getSelectedRobotId()` guard here -
   // the helper returns null and we fall through.
   const picked = session.pickFirstIfNone();
   if (!picked) return;
-  setState("auto-selecting");
+  setConnectionState("selecting");
   window.setTimeout(() => {
-    if (fsm.current() === "auto-selecting") void doStart();
+    if (connection.current() === "selecting") void doStart();
   }, 300);
 }
 
@@ -610,7 +635,7 @@ function renderRobotList(robots: RobotInfo[]): void {
 
 async function handleOrbClick(): Promise<void> {
   try {
-    switch (fsm.current()) {
+    switch (connection.current()) {
       case "signed-out":
         if (!robot) return;
         await robot.login();
@@ -620,14 +645,17 @@ async function handleOrbClick(): Promise<void> {
         await doConnect();
         return;
 
-      case "ready":
+      case "live":
         // SDK + DataChannel are up, the robot has woken and motors
-        // are enabled. The user just tapped the orb to opt into the
-        // AI side: flip `convoActiveRequested` so re-entries do not
-        // bounce back to `ready` if the runner is interrupted, and
-        // run the conversation pipeline (HF backend handshake, audio
-        // pumps, motion modules). `runConversationParts` itself
-        // re-arms `setState("starting")` to keep the orb honest.
+        // are enabled. A tap only means "start the AI side" when no
+        // conversation is running yet (conversation idle); ignore taps
+        // while a conversation is already live / winding down.
+        if (conversation.current() !== "idle") return;
+        // Flip `convoActiveRequested` so re-entries do not bounce back
+        // to idle if the runner is interrupted, and run the
+        // conversation pipeline (HF backend handshake, audio pumps,
+        // motion modules). `runConversationParts` itself sets the
+        // conversation FSM to `starting` to keep the orb honest.
         convoActiveRequested.on();
         await runConversationParts();
         return;
@@ -635,9 +663,9 @@ async function handleOrbClick(): Promise<void> {
       case "error":
         session.setSelectedRobotId(null);
         if (robot?.isAuthenticated) {
-          setState("authenticated");
+          setConnectionState("authenticated");
         } else {
-          setState("signed-out");
+          setConnectionState("signed-out");
         }
         return;
 
@@ -676,15 +704,17 @@ async function handleHostStop(): Promise<void> {
   await teardown();
   session.setSelectedRobotId(null);
   applyMicMuted(false);
+  // `teardown()` already parked the conversation FSM on `idle`; here we
+  // re-park the connection FSM on the closest sensible resting state.
   if (!robot) {
-    setState("signed-out");
+    setConnectionState("signed-out");
   } else if (robot.state !== "disconnected") {
-    setState("connected");
+    setConnectionState("connected");
     renderRobotList(session.getKnownRobots() as RobotInfo[]);
   } else if (robot.isAuthenticated) {
-    setState("authenticated");
+    setConnectionState("authenticated");
   } else {
-    setState("signed-out");
+    setConnectionState("signed-out");
   }
 }
 
@@ -693,7 +723,7 @@ async function handleHostStop(): Promise<void> {
 async function doConnect(): Promise<void> {
   if (!robot) return;
   console.log("[shell-webrtc] doConnect: entering, robot.state =", robot.state);
-  setState("connecting");
+  setConnectionState("connecting");
   try {
     // WebKit privacy quirk on iOS: get the LAN host candidates flowing
     // *before* we kick off the SDK's `connect()` (which immediately
@@ -726,7 +756,7 @@ async function doConnect(): Promise<void> {
         "[shell-webrtc] doConnect: already connected, skipping connect()",
       );
     }
-    setState("connected");
+    setConnectionState("connected");
 
     // Fast path (mobile): we already know which robot to talk to from
     // the ScanScreen selection (central robot list), so skip the
@@ -739,7 +769,7 @@ async function doConnect(): Promise<void> {
     // principle.
     if (preselectedRobotId) {
       session.setSelectedRobotId(preselectedRobotId);
-      setState("auto-selecting");
+      setConnectionState("selecting");
       await doStart();
       return;
     }
@@ -766,7 +796,7 @@ async function doStart(): Promise<void> {
   // starts talking. The HF websocket is opened lazily in
   // `runConversationParts()` after the user starts the conversation.
 
-  setState("starting");
+  setConnectionState("starting");
 
   // NB: we deliberately do NOT call robot.stopSession() here as a
   // preemptive cleanup. It seems safe on paper ("send endSession for
@@ -848,18 +878,21 @@ async function doStart(): Promise<void> {
   // can pick up where we left off when it flips the gate.
   setSessionEstablished(true);
 
+  // SDK + DataChannel are up, wake-up was fired, motors are enabled:
+  // the transport is `live`. Whether the AI side runs on top is a
+  // separate (conversation) decision below.
+  console.log(
+    `[DIAG] doStart: setConnectionState("live") at t+${Math.round(performance.now() - tDoStart0)}ms`,
+  );
+  setConnectionState("live");
+
   if (!convoActiveRequested.get()) {
-    // SDK + DataChannel are up, wake-up was fired, motors are
-    // enabled - everything is "ready" except the AI side. Park
-    // here and surface the `ready` state so the host can render
-    // the orb's "press to start" affordance. The user's tap on
-    // the orb routes through `handleOrbClick("ready")` which
-    // calls `runConversationParts()` to bring up HF realtime
-    // + the audio pumps + motion modules.
-    console.log(
-      `[DIAG] doStart: setState("ready") at t+${Math.round(performance.now() - tDoStart0)}ms`,
-    );
-    setState("ready");
+    // Park on a `live` connection with the conversation FSM still
+    // `idle` so the host renders the orb's "press to start"
+    // affordance. The user's tap routes through `handleOrbClick`
+    // (connection `live` + conversation `idle`) which calls
+    // `runConversationParts()` to bring up HF realtime + the audio
+    // pumps + motion modules.
     return;
   }
 
@@ -884,11 +917,12 @@ async function runConversationParts(): Promise<void> {
   emitErrorMessage(null);
   conversationStarted.on();
 
-  // Arm the "starting" UI before the HF backend handshake so the orb
-  // flips to its connecting spinner the instant the user taps. From the
-  // deferred (tap-to-start) path the FSM is in `ready` here; from the
-  // auto-start path it's already `starting`, so this is a no-op there.
-  if (fsm.current() === "ready") setState("starting");
+  // Arm the conversation `starting` state before the HF backend
+  // handshake so the orb flips to its connecting spinner the instant
+  // the user taps. The connection FSM is already `live` here (both the
+  // deferred tap-to-start path and the auto-start path reach this after
+  // `setConnectionState("live")` in `doStart`).
+  setConversationState("starting");
 
   // Swap the realtime bridge if the user changed the provider in the
   // conversation settings since it was last built. Runs before the
@@ -1031,7 +1065,9 @@ async function recoverConversationStartFailure(err: unknown): Promise<void> {
   emitErrorMessage(formatConversationError(detail));
   await tearDownConversationPipeline({ glide: true });
   if (!unmounted.get() && session.isEstablished()) {
-    setState("ready");
+    // Transport stays `live`; just drop the conversation back to idle
+    // so the orb returns to its "tap to start" affordance.
+    setConversationState("idle");
   }
 }
 
@@ -1323,11 +1359,11 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
     // (spinner) and run a gentle ~700 ms teardown. The HF bridge
     // can still emit a trailing status as it closes (a final
     // `connected` from the in-flight response completing, or a late
-    // activity flip) which would otherwise call `setState("listening")`
-    // below and yank the orb straight back into a live look,
-    // swallowing the "ending" spinner. Ignore status events while we
-    // are deliberately winding down.
-    if (fsm.current() === "stopping") return;
+    // activity flip) which would otherwise call
+    // `setConversationState("listening")` below and yank the orb
+    // straight back into a live look, swallowing the "ending" spinner.
+    // Ignore status events while we are deliberately winding down.
+    if (conversation.current() === "stopping") return;
     switch (status) {
       case "connected":
         // The websocket backend marks `connected` after its queued
@@ -1335,18 +1371,18 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
         // precise tail-end probe so the orb does not snap back to
         // listening while Reachy's speaker is finishing the last
         // syllable.
-        if (fsm.current() === "ai-speaking") {
+        if (conversation.current() === "ai-speaking") {
           audioMonitors.waitForAiSilence(400, () => {
             // Another event may have moved us elsewhere in the
             // meantime (user barge-in, error, teardown). Only
             // transition if we're still the ones holding the mic.
-            if (fsm.current() === "ai-speaking") {
-              setState("listening");
+            if (conversation.current() === "ai-speaking") {
+              setConversationState("listening");
               motion.onListening();
             }
           });
         } else {
-          setState("listening");
+          setConversationState("listening");
           motion.onListening();
         }
         break;
@@ -1355,16 +1391,16 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
         // previous response so it doesn't overwrite the new state a
         // few hundred ms after the user started talking.
         audioMonitors.cancelAiSilenceWait();
-        setState("user-speaking");
+        setConversationState("user-speaking");
         motion.onUserSpeak();
         break;
       case "processing":
-        setState("processing");
+        setConversationState("processing");
         motion.onProcessing();
         break;
       case "ai-speaking":
         audioMonitors.cancelAiSilenceWait();
-        setState("ai-speaking");
+        setConversationState("ai-speaking");
         motion.onAiSpeak();
         break;
     }
@@ -1379,8 +1415,8 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
   onReconnecting: () => {
     // The bridge is rebuilding the realtime backend connection. Pause motion
     // (their input track is about to go away) and drop the orb
-    // back to a transient "starting" visual.
-    setState("starting");
+    // back to a transient conversation "starting" visual.
+    setConversationState("starting");
     motion.onReconnecting();
   },
   onFatalError: (err) => {
@@ -1527,6 +1563,10 @@ async function teardown(): Promise<void> {
   // its own head + antennas trajectory and we don't want our 700ms
   // ease-out fighting it on the bus.
   await tearDownConversationPipeline({ glide: false });
+  // The AI side is gone: drop the conversation FSM to idle so every
+  // caller (handleHostStop, unmount, onFatalError) inherits a clean
+  // conversation cursor and only has to re-park the connection FSM.
+  setConversationState("idle");
 
   // Capture the session flag BEFORE resetting it - we need it to
   // decide whether to run the goto-sleep dance below. Resetting
@@ -1588,7 +1628,7 @@ async function onFatalError(err: unknown): Promise<void> {
   // Log the raw detail for diagnosis, but surface only the honest,
   // classified copy to the orb caption - never the raw engine string.
   console.error("[main] error:", detail);
-  setState("error");
+  setConnectionState("error");
   emitErrorMessage(formatConversationError(detail));
   await teardown();
 }
@@ -1634,7 +1674,7 @@ async function boot(): Promise<void> {
     isUnmounted: unmounted.get,
     renderRobotList,
     applyMicMuted,
-    setState,
+    setConnectionState,
     onFatalError,
   });
 
@@ -1660,7 +1700,7 @@ async function boot(): Promise<void> {
   }
 
   if (authenticated) {
-    setState("authenticated");
+    setConnectionState("authenticated");
 
     // Mobile fast path: if the ConversePanel pre-fetched the robot's
     // central peer id for us (via /api/hf-auth/central-robot-status
@@ -1693,7 +1733,7 @@ async function boot(): Promise<void> {
       await doConnect();
     }
   } else {
-    setState("signed-out");
+    setConnectionState("signed-out");
   }
 }
 
@@ -1712,11 +1752,13 @@ async function boot(): Promise<void> {
 // `class="circle"`.
 //
 // Firing a no-op `set(current())` is what fans the initial value
-// out to every subscriber (host `onStateChange`, motor mode sync)
-// so the watchdog timers in `ConversePanel` arm right at mount,
+// out to every subscriber (host `onConnectionStateChange`, motor mode
+// sync) so the watchdog timers in `ConversePanel` arm right at mount,
 // instead of waiting until `boot()` has run far enough to set its
-// first explicit state.
-fsm.set(fsm.current());
+// first explicit state. The conversation FSM starts `idle` and the
+// host initialises to the same value, so no initial paint is needed
+// on that side.
+connection.set(connection.current());
 
 // The legacy "booting" class strip was tied to the engine's old
 // inline markup (where the orb's `.ind` defaults clashed with the
@@ -1766,10 +1808,10 @@ const disposeBackgroundResilience = installBackgroundResilience({
   centralSendUrl: `${CENTRAL_SIGNALING_URL}/send`,
   onResume: () => {
     if (
-      fsm.current() === "listening" ||
-      fsm.current() === "user-speaking" ||
-      fsm.current() === "processing" ||
-      fsm.current() === "ai-speaking"
+      conversation.current() === "listening" ||
+      conversation.current() === "user-speaking" ||
+      conversation.current() === "processing" ||
+      conversation.current() === "ai-speaking"
     ) {
       resumeAudioContexts();
       void probeRobotLink();
@@ -1804,7 +1846,7 @@ const disposeBackgroundResilience = installBackgroundResilience({
     //                                 toggles.
     if (
       preselectedRobotId &&
-      fsm.current() === "authenticated" &&
+      connection.current() === "authenticated" &&
       robot?.isAuthenticated &&
       !session.isEstablished()
     ) {
@@ -1842,7 +1884,8 @@ const handle: ConversationEngineHandle = createConversationHandle({
   applyMicMuted,
   handleHostStop,
   handleOrbClick,
-  setState,
+  setConnectionState,
+  setConversationState,
   emitConnectionAttempt,
   onFatalError,
   getMicLevel: audioMonitors.getMicLevel,

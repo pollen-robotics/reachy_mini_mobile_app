@@ -54,14 +54,14 @@ import { useEffect, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 
 import connectionUrl from '@/assets/connection.svg';
-import type { ConversationConnectionAttempt, ConversationState } from '@/features/conversation';
+import type { ConversationConnectionAttempt, ConnectionState } from '@/features/conversation';
 import StepsProgressIndicator from '@/ui/design/StepsProgressIndicator';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface ConnectingViewProps {
-  /** Current engine state. Drives both the secondary caption and the
-   *  stepper's active index. */
-  state: ConversationState;
+  /** Current connection state. Drives both the secondary caption and
+   *  the stepper's active index. */
+  state: ConnectionState;
   /** In-flight retry info from `useRobotSession`. Non-null while the
    *  engine is on its second (or further) attempt at `startSession`.
    *  `null` on the first attempt, on success, or on fatal error. */
@@ -201,13 +201,13 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
  * fires `connectionAttempt = null` exactly between `session.start()`
  * resolving and `session.wakeUp()` starting.
  */
-function stepIndexFor(state: ConversationState, inWakePhase: boolean): 0 | 1 | 2 {
+function stepIndexFor(state: ConnectionState, inWakePhase: boolean): 0 | 1 | 2 {
   switch (state) {
     case 'signed-out':
     case 'authenticated':
     case 'connecting':
     case 'connected':
-    case 'auto-selecting':
+    case 'selecting':
       return 0;
     case 'starting':
       return inWakePhase ? 2 : 1;
@@ -217,7 +217,7 @@ function stepIndexFor(state: ConversationState, inWakePhase: boolean): 0 | 1 | 2
 }
 
 interface CaptionInputs {
-  state: ConversationState;
+  state: ConnectionState;
   connectionAttempt: ConversationConnectionAttempt | null;
   inWakePhase: boolean;
   slowHintVisible: boolean;
@@ -243,7 +243,7 @@ function captionFor({
     case 'authenticated':
     case 'connecting':
     case 'connected':
-    case 'auto-selecting':
+    case 'selecting':
       return 'Opening secure link to Hugging Face';
     case 'starting':
       // `starting` is the umbrella for both `session.start()` (the
@@ -280,7 +280,7 @@ function captionFor({
  * after a release+reacquire) starts fresh from the Session step.
  */
 function useReachedWakePhase(
-  state: ConversationState,
+  state: ConnectionState,
   connectionAttempt: ConversationConnectionAttempt | null
 ): boolean {
   const [reached, setReached] = useState(false);
@@ -314,7 +314,7 @@ function useReachedWakePhase(
  * `starting`. Used to surface the "taking a moment" hint after ~6 s,
  * never to drive the stepper itself.
  */
-function useStartingElapsedPast(state: ConversationState, delayMs: number): boolean {
+function useStartingElapsedPast(state: ConnectionState, delayMs: number): boolean {
   const [past, setPast] = useState(false);
 
   useEffect(() => {

@@ -28,7 +28,8 @@
  */
 
 export type {
-  AppState as ConversationState,
+  ConnectionState,
+  ConversationState,
   ConversationConnectionAttempt,
 } from './engine/conversation-engine';
 export { flushEngineLifecycle } from '@/features/robot-session/lifecycle-queue';

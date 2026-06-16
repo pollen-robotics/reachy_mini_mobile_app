@@ -29,8 +29,9 @@
  * session through that hook and pipes user actions into it.
  *
  * `<ConversationPanel>` is a pure D-layer consumer: it renders the
- * orb chrome from `session.engineState` and forwards user gestures
- * to `session.triggerOrbAction()` / `session.setMicMuted()` etc.
+ * orb chrome from `session.connectionState` + `session.conversationState`
+ * and forwards user gestures to `session.triggerOrbAction()` /
+ * `session.setMicMuted()` etc.
  * It never decides when to connect, when to wake, or when to put
  * the robot to sleep.
  *
@@ -379,14 +380,14 @@ function ConnectedSession({
   // the module level, so other screens can opt into the same lock
   // without coordination.
   const isConversing =
-    session.engineState === 'listening' ||
-    session.engineState === 'user-speaking' ||
-    session.engineState === 'processing' ||
-    session.engineState === 'ai-speaking';
+    session.conversationState === 'listening' ||
+    session.conversationState === 'user-speaking' ||
+    session.conversationState === 'processing' ||
+    session.conversationState === 'ai-speaking';
   const isBringingUp =
-    session.engineState === 'connecting' ||
-    session.engineState === 'auto-selecting' ||
-    session.engineState === 'starting';
+    session.connectionState === 'connecting' ||
+    session.connectionState === 'selecting' ||
+    session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
   useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
 
@@ -906,7 +907,7 @@ function ConnectedSession({
         {showConnectingOverlay && (
           <FullScreenTransition>
             <ConnectingView
-              state={session.engineState}
+              state={session.connectionState}
               connectionAttempt={session.connectionAttempt}
             />
           </FullScreenTransition>

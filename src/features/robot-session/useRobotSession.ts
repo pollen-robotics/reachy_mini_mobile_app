@@ -39,7 +39,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
 import {
   mountConversation,
-  type AppState,
+  type ConnectionState,
+  type ConversationState,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
@@ -57,10 +58,13 @@ export interface RobotSessionHandle {
   /** High-level phase observed by the host. Use this to drive the
    *  primary transition overlays (connecting / leaving / etc.). */
   phase: SessionPhase;
-  /** Raw engine FSM state. Use this for the orb chrome or for
-   *  fine-grained UX (e.g. distinguishing `listening` from `ai-
-   *  speaking`). */
-  engineState: AppState;
+  /** Transport / connection FSM state. Drives the bring-up overlay
+   *  and the "is a robot reachable" question. */
+  connectionState: ConnectionState;
+  /** AI conversation FSM state. Use this for the orb chrome's live
+   *  visual (distinguishing `listening` from `ai-speaking`, etc.).
+   *  Only ever non-`idle` while `connectionState === 'live'`. */
+  conversationState: ConversationState;
   /** Last fatal error message surfaced by the engine, or null. */
   errorMessage: string | null;
   /** Mic gate state mirrored from the engine. */
@@ -219,7 +223,10 @@ export function useRobotSession({
   // cancel token.
   const cancelTokenRef = useRef<{ cancelled: boolean } | null>(null);
 
-  const [engineState, setEngineState] = useState<AppState>('signed-out');
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>('signed-out');
+  const [conversationState, setConversationState] =
+    useState<ConversationState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [toolToastLabel, setToolToastLabel] = useState<string | null>(null);
@@ -256,22 +263,16 @@ export function useRobotSession({
     }
   }, [token]);
 
-  // Sticky `hasReachedReady` latch. We flip on the first `ready`-or-
-  // further state. Stays true through a release+reacquire cycle so
+  // Sticky `hasReachedReady` latch. We flip on the first `live`
+  // connection. Stays true through a release+reacquire cycle so
   // the host doesn't replay the connecting overlay every time. Reset
   // explicitly inside `tearDown()` so the next session starts fresh.
   useEffect(() => {
     if (hasReachedReady) return;
-    if (
-      engineState === 'ready' ||
-      engineState === 'listening' ||
-      engineState === 'user-speaking' ||
-      engineState === 'processing' ||
-      engineState === 'ai-speaking'
-    ) {
+    if (connectionState === 'live') {
       setHasReachedReady(true);
     }
-  }, [engineState, hasReachedReady]);
+  }, [connectionState, hasReachedReady]);
 
   // Engine lifecycle. Mounts on first render with the current
   // `robotId`; tears down on unmount or on a `robotId` change. The
@@ -300,9 +301,13 @@ export function useRobotSession({
         // audio frame so its CSS-var writes always hit the
         // currently-mounted orb instead of an old detached node.
         audioLevelsTarget: () => audioLevelsTargetRef.current,
-        onStateChange: (state) => {
+        onConnectionStateChange: (state) => {
           if (cancelToken.cancelled) return;
-          setEngineState(state);
+          setConnectionState(state);
+        },
+        onConversationStateChange: (state) => {
+          if (cancelToken.cancelled) return;
+          setConversationState(state);
         },
         onErrorMessageChange: (message) => {
           if (cancelToken.cancelled) return;
@@ -508,11 +513,12 @@ export function useRobotSession({
     [],
   );
 
-  const phase = derivePhase(engineState, phaseHint);
+  const phase = derivePhase(connectionState, phaseHint);
 
   return {
     phase,
-    engineState,
+    connectionState,
+    conversationState,
     errorMessage,
     micMuted,
     toolToastLabel,

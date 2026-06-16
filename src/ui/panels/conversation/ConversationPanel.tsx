@@ -21,7 +21,7 @@
  * Responsibilities (D layer)
  * ──────────────────────────
  *   - Render the orb chrome + caption + side buttons + toast based
- *     on `session.engineState`.
+ *     on `session.connectionState` + `session.conversationState`.
  *   - Wire user gestures (tap orb, mute, stop) to the session
  *     methods (`triggerOrbAction`, `setMicMuted`, `requestStop`).
  *
@@ -44,7 +44,10 @@ import { ConversationCaption } from './orb/ConversationCaption';
 import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
 import { ConversationSettingsPanel } from './ConversationSettingsPanel';
-import type { AppState } from '@/features/conversation/engine/conversation-engine';
+import type {
+  ConnectionState,
+  ConversationState,
+} from '@/features/conversation/engine/conversation-engine';
 import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { type Personality, useActivePersonality } from '@/features/personalities';
@@ -59,8 +62,9 @@ import {
 export interface ConversationPanelProps {
   /**
    * Session handle from `useRobotSession`. The panel reads
-   * `engineState`, `errorMessage`, `micMuted`, `toolToastLabel`
-   * from here and forwards user gestures to the session methods.
+   * `connectionState`, `conversationState`, `errorMessage`, `micMuted`,
+   * `toolToastLabel` from here and forwards user gestures to the
+   * session methods.
    */
   session: RobotSessionHandle;
   /**
@@ -94,24 +98,23 @@ export function ConversationPanel({
   orbRef,
   active = true,
 }: ConversationPanelProps) {
-  const orbState = mapAppStateToOrb(session.engineState);
+  const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
-    session.engineState === 'listening' ||
-    session.engineState === 'user-speaking' ||
-    session.engineState === 'processing' ||
-    session.engineState === 'ai-speaking';
+    session.conversationState === 'listening' ||
+    session.conversationState === 'user-speaking' ||
+    session.conversationState === 'processing' ||
+    session.conversationState === 'ai-speaking';
 
   // "Engaged" = the user has opted into the AI conversation by tapping
-  // the orb, regardless of whether OpenAI has answered yet. Tapping the
-  // orb in `ready` flips the engine to `starting` (ephemeral key mint +
-  // OpenAI handshake) BEFORE it reaches `listening`, so `live` alone
-  // would leave the personality picker reachable during that gap. We
-  // treat that post-tap `starting` as engaged too. The `starting` of
-  // the initial robot bring-up is excluded via `hasReachedReady` (which
-  // only latches once we've first hit `ready`), so the picker stays
-  // available while the orb says "Tap to start conversation".
+  // the orb, regardless of whether the backend has answered yet.
+  // Tapping the orb flips the conversation FSM to `starting` (handshake)
+  // BEFORE it reaches `listening`, so `live` alone would leave the
+  // personality picker reachable during that gap - we treat that
+  // `starting` as engaged too. The connection bring-up's own `starting`
+  // lives on a SEPARATE FSM now, so the picker stays available while
+  // the orb says "Tap to start conversation".
   const conversationEngaged =
-    live || (session.engineState === 'starting' && session.hasReachedReady);
+    live || session.conversationState === 'starting';
 
   // Daemon-side audio state (volumes + mute toggles). Read here so
   // the bottom audio strip stays in lockstep with the daemon
@@ -155,11 +158,11 @@ export function ConversationPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
-    if (conversationEngaged || session.engineState === 'error') {
+    if (conversationEngaged || session.connectionState === 'error') {
       setPickerOpen(false);
       setSettingsOpen(false);
     }
-  }, [conversationEngaged, session.engineState]);
+  }, [conversationEngaged, session.connectionState]);
 
   const togglePicker = useCallback(() => {
     setSettingsOpen(false);
@@ -437,7 +440,7 @@ export function ConversationPanel({
             <ConversationCaption
               state={orbState}
               message={
-                session.engineState === 'stopping'
+                session.conversationState === 'stopping'
                   ? 'Ending conversation'
                   : session.errorMessage
               }
@@ -548,7 +551,7 @@ export function ConversationPanel({
                 <ButtonBase
                   aria-label="Conversation settings"
                   aria-pressed={settingsOpen}
-                  disabled={conversationEngaged || session.engineState === 'error'}
+                  disabled={conversationEngaged || session.connectionState === 'error'}
                   onClick={toggleSettings}
                   sx={{
                     flexShrink: 0,
@@ -568,7 +571,7 @@ export function ConversationPanel({
                     // treatment as the personality band's chevron/pencil - so
                     // it reads as inert without dimming the whole strip cell.
                     color:
-                      conversationEngaged || session.engineState === 'error'
+                      conversationEngaged || session.connectionState === 'error'
                         ? 'action.disabled'
                         : 'primary.main',
                     // Active (panel open): a clean white card surface that
@@ -726,25 +729,46 @@ function StripDivider() {
 }
 
 /**
- * Collapse the engine's full state machine onto the smaller visual
- * vocabulary the orb knows. `released` maps to `idle` so the orb
- * shows a neutral state during a handoff (the panel is typically
- * hidden at that point but we keep the mapping defensive).
+ * Collapse the engine's two state machines (connection + conversation)
+ * onto the smaller visual vocabulary the orb knows.
+ *
+ * The connection state takes precedence: `error` and the bring-up /
+ * idle transport states don't depend on the conversation FSM. Only
+ * once the connection is `live` does the orb reflect the conversation
+ * FSM (idle = "tap to start", the rest pass through). `released` maps
+ * to `idle` so the orb shows a neutral state during a handoff.
  *
  * Exported for unit testing.
  */
-export function mapAppStateToOrb(state: AppState): OrbState {
-  switch (state) {
-    // `stopping` reuses the connecting spinner so the orb shows immediate
-    // feedback during the gentle teardown after the stop tap. The caption
-    // disambiguates ("Ending conversation", see below).
+export function mapToOrb(
+  connectionState: ConnectionState,
+  conversationState: ConversationState,
+): OrbState {
+  if (connectionState === 'error') return 'error';
+  switch (connectionState) {
     case 'connecting':
+    case 'selecting':
     case 'starting':
-    case 'auto-selecting':
+      return 'connecting';
+    case 'signed-out':
+    case 'authenticated':
+    case 'connected':
+    case 'released':
+      return 'idle';
+    case 'live':
+      break;
+    default:
+      return 'idle';
+  }
+  // Connection is `live`: the orb reflects the conversation FSM.
+  switch (conversationState) {
+    // `starting` / `stopping` reuse the connecting spinner so the orb
+    // shows immediate feedback during bring-up / the gentle teardown
+    // after the stop tap. The caption disambiguates ("Ending
+    // conversation", see below).
+    case 'starting':
     case 'stopping':
       return 'connecting';
-    case 'ready':
-      return 'ready';
     case 'listening':
       return 'listening';
     case 'user-speaking':
@@ -753,13 +777,8 @@ export function mapAppStateToOrb(state: AppState): OrbState {
       return 'processing';
     case 'ai-speaking':
       return 'ai-speaking';
-    case 'error':
-      return 'error';
-    case 'signed-out':
-    case 'authenticated':
-    case 'connected':
-    case 'released':
+    case 'idle':
     default:
-      return 'idle';
+      return 'ready';
   }
 }

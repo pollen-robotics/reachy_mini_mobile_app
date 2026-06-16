@@ -29,7 +29,7 @@ import type {
   ReachyMiniInstance,
   RobotInfo,
 } from "@/features/robot-session/sdk-types";
-import type { AppState } from "./types";
+import type { ConnectionState } from "./types";
 
 export interface WireRobotEventsDeps {
   /** SDK ref to wire. We require a non-null value here because the
@@ -47,8 +47,8 @@ export interface WireRobotEventsDeps {
   /** Forwarded to the unsolicited-drop path so the host's mute
    *  side-button re-syncs to "unmuted" before we hand back. */
   applyMicMuted: (muted: boolean) => void;
-  /** Drive the FSM directly for the `disconnected` event. */
-  setState: (state: AppState) => void;
+  /** Drive the connection FSM directly for the `disconnected` event. */
+  setConnectionState: (state: ConnectionState) => void;
   /** Fatal-error sink for the unsolicited-drop path. Awaited so the
    *  listener returns after the user-facing teardown completes. */
   onFatalError: (err: unknown) => Promise<void>;
@@ -61,7 +61,7 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     isUnmounted,
     renderRobotList,
     applyMicMuted,
-    setState,
+    setConnectionState,
     onFatalError,
   } = deps;
 
@@ -175,9 +175,9 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // any of its cleanup.
     if (isUnmounted()) return;
     if (robot.isAuthenticated) {
-      setState("authenticated");
+      setConnectionState("authenticated");
     } else {
-      setState("signed-out");
+      setConnectionState("signed-out");
     }
   });
 
