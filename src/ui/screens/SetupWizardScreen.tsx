@@ -293,21 +293,26 @@ function ScanView({
         </Typography>
       ) : null}
 
-      {/* Live affordance: the list keeps refreshing while the view is open. */}
-      {scanning && hasDevices ? (
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          <CircularProgress size={14} sx={{ color: 'text.secondary' }} />
-          <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>Still searching nearby…</Typography>
-        </Stack>
-      ) : null}
-
-      <Button
-        onClick={onRescan}
-        startIcon={<RefreshIcon />}
-        sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
-      >
-        Scan again
-      </Button>
+      {/* The scan runs continuously while this view is open, so there is no
+          "Scan again" button in the normal case — a live indicator conveys
+          that the list keeps refreshing. The manual restart only appears when
+          the loop has actually stopped (e.g. permission denied / error). */}
+      {scanning ? (
+        hasDevices ? (
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <CircularProgress size={14} sx={{ color: 'text.secondary' }} />
+            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>Still searching nearby…</Typography>
+          </Stack>
+        ) : null
+      ) : (
+        <Button
+          onClick={onRescan}
+          startIcon={<RefreshIcon />}
+          sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
+        >
+          Scan again
+        </Button>
+      )}
     </Stack>
   );
 }
