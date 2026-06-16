@@ -286,6 +286,20 @@ const onConnectionAttempt: ((info: ConversationConnectionAttempt | null) => void
     ? options.onConnectionAttempt
     : null;
 
+const onDaemonVersionChange: ((version: string | null) => void) | null =
+  typeof options.onDaemonVersionChange === "function"
+    ? options.onDaemonVersionChange
+    : null;
+
+const emitDaemonVersion = (version: string | null): void => {
+  if (!onDaemonVersionChange) return;
+  try {
+    onDaemonVersionChange(version);
+  } catch (err) {
+    console.warn("[conversation-engine] onDaemonVersionChange threw:", err);
+  }
+};
+
 const emitConnectionAttempt = (
   info: ConversationConnectionAttempt | null,
 ): void => {
@@ -550,6 +564,7 @@ const connectionController: ConnectionController = createConnectionController({
   preselectedRobotId,
   emitConnectionAttempt,
   emitErrorMessage,
+  emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
   onConnectionLost: (opts) => onConnectionLost(opts),
   resumeAudioContexts: () => resumeAudioContexts(),

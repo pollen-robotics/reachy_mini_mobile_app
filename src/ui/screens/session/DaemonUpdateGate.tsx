@@ -34,17 +34,42 @@ import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 
-import rocketUrl from '@/assets/rocket.svg';
-import { isDaemonOutdated } from '@/features/daemon-update/latestRelease';
+import updateBoxUrl from '@/assets/reachy-update-box.svg';
+import { compareSemver, isDaemonOutdated, parseSemver } from '@/features/daemon-update/latestRelease';
 import { useDaemonLogs } from '@/features/daemon-logs';
-import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
+import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 /** If the daemon never restarts within this window after we asked it to
  *  update, something went wrong silently → surface a failure. */
 const UPDATE_STALL_TIMEOUT_MS = 180_000;
+
+/**
+ * First daemon release that understands the in-app WebRTC `start_update`
+ * command (reachy_mini#1208, landed in v1.8.2). Below this - or when the
+ * daemon never reported its version - the in-app "Update now" path can't
+ * work, so we send the user to the Reachy desktop app instead of offering
+ * a button that would silently do nothing.
+ */
+const MIN_DAEMON_VERSION_FOR_SELF_UPDATE = '1.8.2';
+
+/** Public troubleshooting docs - same target as the Help & Support overlay. */
+const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
+
+/** Showcase site download page (Reachy Mini website Space). Where users
+ *  grab the desktop app that can update a daemon too old for OTA. */
+const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
+
+/** True only when the daemon version is known AND new enough to self-update
+ *  over the WebRTC data channel. Unknown / unparseable → false (→ desktop
+ *  app fallback). */
+function supportsSelfUpdate(current: string | null): boolean {
+  const c = parseSemver(current);
+  const min = parseSemver(MIN_DAEMON_VERSION_FOR_SELF_UPDATE);
+  return !!c && !!min && compareSemver(c, min) >= 0;
+}
 
 type Phase = 'idle' | 'prompt' | 'updating' | 'rebooting' | 'done' | 'failed';
 
@@ -70,13 +95,14 @@ export default function DaemonUpdateGate({
 
   const { getDaemonVersion } = session;
 
-  // Initial detection reads the SHARED daemon version from the
-  // provider. That hook owns a robust retry-on-null fetch, so the
-  // value reliably resolves shortly after connect - unlike a one-shot
-  // `getDaemonVersion()` fired on the `live` edge, which races the
-  // provider's own `get_version` round-trip on the same data channel
-  // and frequently came back `null` (the prompt then never opened).
-  const { daemonVersion } = useDaemonState();
+  // Initial detection reads the version the connection layer resolved
+  // DURING bring-up (`session.daemonVersion`), emitted just before the
+  // session reached `live`. Reading it here - rather than firing our own
+  // post-`ready` `get_version` round-trip - is what removes the visible
+  // latency between "connected" and the gate appearing: the value is
+  // already known the instant this screen mounts, so an outdated robot
+  // shows the gate immediately instead of flashing the live UI first.
+  const daemonVersion = session.daemonVersion;
   // After a post-update reboot the provider won't refetch (its version
   // is sticky across reacquires), so we re-read it directly once we
   // reconnect to confirm the new version. This overrides the provider
@@ -85,13 +111,21 @@ export default function DaemonUpdateGate({
   const current = confirmedVersion ?? daemonVersion;
 
   const outdated = isDaemonOutdated(current, latestVersion);
+  // Can this robot update itself from the app? Needs a daemon new enough to
+  // understand the WebRTC `start_update` command. When false, the prompt
+  // switches to a "use the desktop app" message instead of "Update now".
+  const canSelfUpdate = supportsSelfUpdate(current);
 
-  // Open the prompt once we positively know the robot is behind.
-  useEffect(() => {
-    if (phase === 'idle' && live && outdated && !completedRef.current) {
-      setPhase('prompt');
-    }
-  }, [phase, live, outdated]);
+  // Derive the prompt SYNCHRONOUSLY (no effect) the moment we positively
+  // know the robot is behind. Flipping `phase` from an effect would leave
+  // one frame where the connecting overlay is gone but the gate hasn't
+  // mounted yet → the live UI flickers through. Computing it during render
+  // means the gate paints in the same commit the session turns `live`,
+  // with no intermediate "connected" frame. Once the user has cleared the
+  // flow (`completedRef`) or kicked off the update (`phase` ≠ idle), the
+  // real `phase` state takes over.
+  const shouldBlock = live && outdated && !completedRef.current;
+  const effectivePhase: Phase = phase === 'idle' && shouldBlock ? 'prompt' : phase;
 
   // The restart tore the transport down → we're rebooting.
   useEffect(() => {
@@ -133,7 +167,7 @@ export default function DaemonUpdateGate({
     setPhase('idle');
   }, []);
 
-  if (phase === 'idle') return null;
+  if (effectivePhase === 'idle') return null;
 
   return (
     <Box
@@ -156,14 +190,16 @@ export default function DaemonUpdateGate({
       {/* Top-right exit: leave the session and reconnect from the lobby. Hidden
           while the update is actively installing (no safe bail-out) and on the
           success screen (Continue is the natural next step). */}
-      {(phase === 'prompt' || phase === 'rebooting' || phase === 'failed') && (
+      {(effectivePhase === 'prompt' ||
+        effectivePhase === 'rebooting' ||
+        effectivePhase === 'failed') && (
         <Button
           onClick={onBackToRobots}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 14 }} />}
           sx={{
             position: 'absolute',
             top: `calc(${LAYOUT.safeAreaTop} + 8px)`,
-            right: 8,
+            left: 8,
             color: 'text.secondary',
             textTransform: 'none',
             fontWeight: FONT_WEIGHT.semibold,
@@ -176,7 +212,7 @@ export default function DaemonUpdateGate({
       )}
 
       <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%', maxWidth: 360 }}>
-        <PhaseIcon phase={phase} />
+        <PhaseIcon phase={effectivePhase} />
 
         <Stack spacing={1} sx={{ alignItems: 'center' }}>
           <Typography
@@ -188,7 +224,7 @@ export default function DaemonUpdateGate({
               letterSpacing: '-0.2px',
             }}
           >
-            {titleFor(phase)}
+            {titleFor(effectivePhase, canSelfUpdate)}
           </Typography>
           <Typography
             sx={{
@@ -199,7 +235,7 @@ export default function DaemonUpdateGate({
               maxWidth: 320,
             }}
           >
-            {bodyFor(phase, current, latestVersion)}
+            {bodyFor(effectivePhase, current, latestVersion, canSelfUpdate)}
           </Typography>
         </Stack>
 
@@ -213,9 +249,22 @@ export default function DaemonUpdateGate({
         )}
 
         <Stack spacing={1} sx={{ width: '100%', alignItems: 'center' }}>
-          {phase === 'prompt' && <PrimaryButton onClick={handleUpdateNow}>Update now</PrimaryButton>}
-          {phase === 'done' && <PrimaryButton onClick={handleContinue}>Continue</PrimaryButton>}
-          {phase === 'failed' && <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>}
+          {effectivePhase === 'prompt' && canSelfUpdate && (
+            <PrimaryButton onClick={handleUpdateNow}>Update now</PrimaryButton>
+          )}
+          {effectivePhase === 'done' && (
+            <PrimaryButton onClick={handleContinue}>Continue</PrimaryButton>
+          )}
+          {effectivePhase === 'failed' && canSelfUpdate && (
+            <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>
+          )}
+          {((effectivePhase === 'prompt' && !canSelfUpdate) || effectivePhase === 'failed') && (
+            <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
+              Get the desktop app ↗
+            </PrimaryButton>
+          )}
+          {((effectivePhase === 'prompt' && !canSelfUpdate) ||
+            effectivePhase === 'failed') && <TroubleshootingLink />}
         </Stack>
       </Stack>
     </Box>
@@ -232,10 +281,10 @@ function PhaseIcon({ phase }: { phase: Phase }) {
   if (phase === 'failed') {
     return <ErrorOutlineRoundedIcon sx={{ fontSize: 56, color: 'error.main' }} />;
   }
-  return <Box component="img" src={rocketUrl} alt="" aria-hidden sx={{ width: 200, height: 200 }} />;
+  return <Box component="img" src={updateBoxUrl} alt="" aria-hidden sx={{ width: 200, height: 200 }} />;
 }
 
-function titleFor(phase: Phase): string {
+function titleFor(phase: Phase, canSelfUpdate: boolean): string {
   switch (phase) {
     case 'updating':
       return 'Updating your Reachy…';
@@ -246,11 +295,16 @@ function titleFor(phase: Phase): string {
     case 'failed':
       return "Update couldn't start";
     default:
-      return 'Update required';
+      return canSelfUpdate ? 'Update required' : 'Update from the desktop app';
   }
 }
 
-function bodyFor(phase: Phase, current: string | null, latest: string | null): string {
+function bodyFor(
+  phase: Phase,
+  current: string | null,
+  latest: string | null,
+  canSelfUpdate: boolean,
+): string {
   switch (phase) {
     case 'updating':
       return 'Installing the latest software. Keep the app open - the robot will reboot when it is done.';
@@ -259,8 +313,16 @@ function bodyFor(phase: Phase, current: string | null, latest: string | null): s
     case 'done':
       return current ? `Now running v${current}.` : 'Your Reachy is now up to date.';
     case 'failed':
-      return 'The update could not be started. Make sure you are close to the robot and that it is online, then try again.';
+      return 'The robot did not respond to the update request. Make sure you are close to it and it is online, then try again - or update it from the Reachy desktop app.';
     default:
+      // `prompt`. Two flavours: a daemon new enough to update itself from the
+      // app, vs. one that's too old (or silent) and must be updated from the
+      // desktop app.
+      if (!canSelfUpdate) {
+        return current
+          ? `This Reachy runs v${current}, which is too old to update over the air. Install the Reachy desktop app to update it, then reconnect here.`
+          : `This Reachy needs version v${MIN_DAEMON_VERSION_FOR_SELF_UPDATE} or newer to update from the app. Install the Reachy desktop app to update it, then reconnect here.`;
+      }
       return current && latest
         ? `This Reachy runs v${current}. Version v${latest} is required to continue. The robot will reboot during the update (~2 min).`
         : 'A required software update is available for this Reachy.';
@@ -314,6 +376,25 @@ function UpdateLogDisclosure({
         </Box>
       </Collapse>
     </Stack>
+  );
+}
+
+/** Subtle link to the public troubleshooting docs - shown when the update
+ *  can't run from the app, in case there's something to fix on that page. */
+function TroubleshootingLink() {
+  return (
+    <Button
+      onClick={() => void openExternalUrl(TROUBLESHOOTING_URL)}
+      size="small"
+      sx={{
+        textTransform: 'none',
+        fontSize: TYPO.sm,
+        fontWeight: FONT_WEIGHT.medium,
+        color: 'text.secondary',
+      }}
+    >
+      Open troubleshooting guide ↗
+    </Button>
   );
 }
 

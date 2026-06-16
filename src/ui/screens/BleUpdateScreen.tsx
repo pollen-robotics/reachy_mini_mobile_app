@@ -357,7 +357,8 @@ function Headline({ title, caption }: { title: string; caption?: string }) {
 function PrimaryButton(props: React.ComponentProps<typeof Button>) {
   return (
     <Button
-      variant="contained"
+      variant="outlined"
+      color="primary"
       fullWidth
       disableElevation
       {...props}

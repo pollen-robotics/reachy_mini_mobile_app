@@ -106,6 +106,17 @@ export interface RobotSessionHandle {
    * renders whatever lands in this state.
    */
   webrtcTransport: ConversationTransportInfo | null;
+  /**
+   * Daemon version resolved as part of the connection bring-up (emitted
+   * just before the connection reaches `live`), or `null` when unknown
+   * (read timed out / daemon doesn't expose a version / pre-`live`).
+   *
+   * This is the source of truth for the update gate: because it lands
+   * BEFORE the session UI is shown, the gate can decide without the
+   * post-connect "pop" the old post-`ready` round-trip caused. Reset to
+   * `null` on `tearDown()`; re-emitted after a post-update reboot.
+   */
+  daemonVersion: string | null;
 
   /** Conversation parts (D layer): start / stop the HF realtime
    *  pipeline, antennas, head wobbler. No-op if the engine isn't
@@ -239,6 +250,7 @@ export function useRobotSession({
     "info",
   );
   const [hasReachedReady, setHasReachedReady] = useState(false);
+  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
   const [webrtcTransport, setWebrtcTransport] =
@@ -337,6 +349,10 @@ export function useRobotSession({
         onConnectionAttempt: (info) => {
           if (cancelToken.cancelled) return;
           setConnectionAttempt(info);
+        },
+        onDaemonVersionChange: (version) => {
+          if (cancelToken.cancelled) return;
+          setDaemonVersion(version);
         },
         onTransportChange: (info) => {
           if (cancelToken.cancelled) return;
@@ -462,6 +478,10 @@ export function useRobotSession({
       // we kept the stale one the badge would show a confusing
       // "previous run" value during the connecting overlay.
       setWebrtcTransport(null);
+      // Same reasoning for the version: the next bring-up re-resolves
+      // it, so drop the stale value to keep the update gate dormant
+      // until the fresh read lands.
+      setDaemonVersion(null);
     }
   }, []);
 
@@ -536,6 +556,7 @@ export function useRobotSession({
     toolToastLabel,
     toolToastVariant,
     hasReachedReady,
+    daemonVersion,
     connectionAttempt,
     webrtcTransport,
     startConversation,

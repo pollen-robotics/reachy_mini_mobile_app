@@ -426,6 +426,17 @@ export interface ConversationEngineOptions {
   onConnectionStateChange?: (state: ConnectionState) => void;
 
   /**
+   * Daemon version resolved as PART of the connection bring-up: emitted
+   * once, just before the connection flips to `live`, so the host's
+   * update gate can decide before the session UI is ever shown (no
+   * post-connect "pop"). Bounded + fail-open on the engine side - `null`
+   * means the read timed out / the daemon doesn't expose a version, which
+   * keeps the gate dormant. Re-emitted after a post-update reboot when the
+   * connection comes back up.
+   */
+  onDaemonVersionChange?: (version: string | null) => void;
+
+  /**
    * Fires on every CONVERSATION transition (`idle` → `starting` →
    * `listening` → `user-speaking` → …). The React wrapper drives the
    * orb's live visual + the "conversation engaged" affordances from it.

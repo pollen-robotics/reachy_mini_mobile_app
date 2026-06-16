@@ -62,6 +62,9 @@ export interface ConnectionControllerDeps {
   emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
   /** Push a user-facing caption under the orb (null clears it). */
   emitErrorMessage: (message: string | null) => void;
+  /** Surface the daemon version resolved during bring-up (just before
+   *  `live`). `null` on a timed-out / unsupported read. */
+  emitDaemonVersion: (version: string | null) => void;
 
   // ─── Conversation seam ────────────────────────────────────────────
   /** Connection reached `live`: the conversation layer decides whether
@@ -105,6 +108,33 @@ export interface ConnectionController {
   start(): { bootChain: Promise<void>; disposeBackgroundResilience: () => void };
 }
 
+// Version read during bring-up. The DataChannel proxy has been up for the
+// whole wake-up by the time we read, so the first try almost always
+// answers; we still allow a couple of cheap retries (the daemon proxy can
+// briefly 404 right after the DC opens) and hard-bound the whole thing so a
+// silent / unsupported daemon can NEVER stall the bring-up. Fail-open: a
+// `null` result just leaves the update gate dormant.
+const VERSION_BRINGUP_TIMEOUT_MS = 2_500;
+const VERSION_BRINGUP_RETRY_MS = 250;
+
+async function readDaemonVersionDuringBringUp(
+  robot: ReachyMiniInstance,
+  timeoutMs: number,
+): Promise<string | null> {
+  if (typeof robot.getVersion !== "function") return null;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const v = await robot.getVersion();
+      if (typeof v === "string" && v.length > 0) return v;
+    } catch (err) {
+      console.warn("[shell-webrtc] getVersion during bring-up failed:", err);
+    }
+    if (Date.now() + VERSION_BRINGUP_RETRY_MS >= deadline) return null;
+    await new Promise((r) => setTimeout(r, VERSION_BRINGUP_RETRY_MS));
+  }
+}
+
 export function createConnectionController(
   deps: ConnectionControllerDeps,
 ): ConnectionController {
@@ -114,6 +144,7 @@ export function createConnectionController(
     preselectedRobotId,
     emitConnectionAttempt,
     emitErrorMessage,
+    emitDaemonVersion,
     onConnectionLive,
     onConnectionLost,
     resumeAudioContexts,
@@ -341,6 +372,20 @@ export function createConnectionController(
     // we may park here with a live DC and no antennas / backend -
     // that's the desired state during the wake-up animation.
     session.setEstablished(true);
+
+    // Resolve the daemon version as the LAST bring-up step, before we
+    // announce `live`. Emitting it now (while the connecting overlay is
+    // still up) means the host's update gate can decide before the
+    // session UI is ever painted - no jarring post-connect "pop". The
+    // read is hard-bounded + fail-open so a slow / unsupported daemon
+    // can't trap the user on the connecting screen.
+    if (robot) {
+      const version = await readDaemonVersionDuringBringUp(
+        robot,
+        VERSION_BRINGUP_TIMEOUT_MS,
+      );
+      emitDaemonVersion(version);
+    }
 
     // SDK + DataChannel are up, wake-up was fired, motors are enabled:
     // the transport is `live`. Whether the AI side runs on top is a
