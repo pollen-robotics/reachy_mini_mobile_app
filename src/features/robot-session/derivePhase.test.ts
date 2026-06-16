@@ -2,14 +2,14 @@
  * Tests for `derivePhase`, the pure mapping that decides which
  * top-level session phase the host should display given:
  *
- *   - the engine's `AppState` (the FSM state machine we observe
- *     through `onStateChange`);
+ *   - the engine's `ConnectionState` (the transport FSM we observe
+ *     through `onConnectionStateChange`);
  *   - the `phaseHint` we set ourselves around release / reacquire
  *     / teardown transitions (the engine doesn't track those).
  */
 import { describe, expect, it } from 'vitest';
 
-import type { AppState } from '@/features/conversation/engine/types';
+import type { ConnectionState } from '@/features/conversation/engine/types';
 
 import { derivePhase, type SessionPhase } from './phase';
 
@@ -23,48 +23,41 @@ describe('derivePhase', () => {
       'live',
       'bringing-up',
       'error',
-    ])('hint %s overrides any engine state', (hint) => {
-      // Even if the engine says "ready" (= live), an explicit hint
+    ])('hint %s overrides any connection state', (hint) => {
+      // Even if the connection says "live", an explicit hint
       // wins because the hint represents an in-flight transition
       // the engine itself doesn't track.
-      expect(derivePhase('ready', hint)).toBe(hint);
+      expect(derivePhase('live', hint)).toBe(hint);
     });
 
-    it("ignores the 'idle' hint and falls through to engine state", () => {
+    it("ignores the 'idle' hint and falls through to connection state", () => {
       // 'idle' is the post-teardown reset value of the hint -
-      // we want subsequent engine transitions to drive the UI
+      // we want subsequent connection transitions to drive the UI
       // again, not stick on 'idle' forever.
-      expect(derivePhase('ready', 'idle')).toBe('live');
+      expect(derivePhase('live', 'idle')).toBe('live');
     });
 
-    it('falls through to engine state when hint is null', () => {
-      expect(derivePhase('listening', null)).toBe('live');
+    it('falls through to connection state when hint is null', () => {
+      expect(derivePhase('live', null)).toBe('live');
     });
   });
 
-  describe('engine-state mapping (no hint)', () => {
-    const bringingUpStates: AppState[] = [
+  describe('connection-state mapping (no hint)', () => {
+    const bringingUpStates: ConnectionState[] = [
       'signed-out',
       'authenticated',
       'connecting',
       'connected',
-      'auto-selecting',
+      'selecting',
       'starting',
-    ];
-    const liveStates: AppState[] = [
-      'ready',
-      'listening',
-      'user-speaking',
-      'processing',
-      'ai-speaking',
     ];
 
     it.each(bringingUpStates)("maps %s -> 'bringing-up'", (state) => {
       expect(derivePhase(state, null)).toBe('bringing-up');
     });
 
-    it.each(liveStates)("maps %s -> 'live'", (state) => {
-      expect(derivePhase(state, null)).toBe('live');
+    it("maps 'live' to 'live'", () => {
+      expect(derivePhase('live', null)).toBe('live');
     });
 
     it("maps 'released' to 'released'", () => {
@@ -75,9 +68,9 @@ describe('derivePhase', () => {
       expect(derivePhase('error', null)).toBe('error');
     });
 
-    it("falls through to 'bringing-up' on a future / unknown engine state", () => {
+    it("falls through to 'bringing-up' on a future / unknown connection state", () => {
       // Cast through unknown so we can probe the default branch.
-      expect(derivePhase('something-new' as AppState, null)).toBe(
+      expect(derivePhase('something-new' as ConnectionState, null)).toBe(
         'bringing-up',
       );
     });

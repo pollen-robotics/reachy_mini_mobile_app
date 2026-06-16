@@ -17,8 +17,7 @@
  *     compose the lifecycle helpers passed in through `deps`.
  *   - SDK pass-throughs (`getSpeakerVolume`, `setSpeakerVolume`,
  *     `getMicrophoneVolume`, `setMicrophoneVolume`,
- *     `getDaemonVersion`, `playSound`, `setHeadRpyDeg`,
- *     `setBodyYawDeg`, `subscribeLogs`, `attachVideo`): wrap the
+ *     `getDaemonVersion`, `playSound`, `subscribeLogs`): wrap the
  *     SDK call with the standard "engine ready?" guard and
  *     non-throwing error handling.
  *   - Read accessors (`getMicLevel`): expose engine-cached values.
@@ -33,7 +32,8 @@ import { SESSION_TIMINGS } from "@/features/robot-session/timings";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type {
-  AppState,
+  ConnectionState,
+  ConversationState,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
 } from "./types";
@@ -95,8 +95,11 @@ export interface ConversationHandleDeps {
   handleHostStop: () => Promise<void>;
   handleOrbClick: () => Promise<void>;
 
-  // ─── State machine ────────────────────────────────────────────────
-  setState: (state: AppState) => void;
+  // ─── State machines ───────────────────────────────────────────────
+  /** Drive the transport / connection FSM (connecting → live → …). */
+  setConnectionState: (state: ConnectionState) => void;
+  /** Drive the AI conversation FSM (idle → starting → listening → …). */
+  setConversationState: (state: ConversationState) => void;
 
   // ─── Observer plumbing ────────────────────────────────────────────
   emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
@@ -129,7 +132,8 @@ export function createConversationHandle(
     applyMicMuted,
     handleHostStop,
     handleOrbClick,
-    setState,
+    setConnectionState,
+    setConversationState,
     emitConnectionAttempt,
     onFatalError,
     getMicLevel,
@@ -230,8 +234,8 @@ export function createConversationHandle(
       // so without this the orb would keep showing the live
       // conversation state for the whole wind-down and the stop tap
       // would feel unresponsive. `stopping` maps to the spinner in the
-      // orb; we leave it for `ready` once teardown settles.
-      setState("stopping");
+      // orb; we leave it for `idle` once teardown settles.
+      setConversationState("stopping");
       // "Lite" teardown: stop the conversation pipeline (D layer) but
       // leave the SDK / DataChannel alive so the daemon proxy keeps
       // working. The helper takes care of the convo gate, motion
@@ -239,22 +243,17 @@ export function createConversationHandle(
       // ease-out to neutral. It is also idempotent when no
       // conversation is currently running.
       await tearDownConversationPipeline({ glide: true });
-      // Drop back to the "session up, no convo" parking state so the
-      // host can call `startConversation()` again later without the
-      // engine's UI lying about its current capabilities. `ready`
-      // (not `connected`) is the right target: the SDK + DataChannel
-      // are still up and motors are still enabled - the user only
-      // dismissed the AI side. The accompanying `setMotorMode(
-      // 'gravity_compensation')` (driven by `syncMotorModeForState`)
-      // silences the Dynamixel idle buzz now that we've landed on
-      // a known neutral pose just above.
-      if (session.isEstablished()) {
-        setState("ready");
-      } else {
+      // Drop the conversation FSM back to `idle` so the host can call
+      // `startConversation()` again later. The transport normally stays
+      // `live` (SDK + DataChannel up, motors still enabled - the user
+      // only dismissed the AI side).
+      setConversationState("idle");
+      if (!session.isEstablished()) {
         // Session vanished mid-teardown (not reachable from the mobile
         // stop button, which only shows with an established session) -
-        // don't strand the orb on its "ending" spinner.
-        setState("connected");
+        // re-park the connection FSM so the orb doesn't lie about being
+        // live.
+        setConnectionState("connected");
       }
     },
 
@@ -330,11 +329,13 @@ export function createConversationHandle(
       // SSE producer subscription. Robot stays physically awake.
       await session.release();
 
-      // Step 3 - park in `released` so the host (and any visual state
-      // observer) can distinguish "we deliberately let go of the robot"
-      // from "we never connected" (`connected`) or "we're tearing down
-      // for a goodbye" (no explicit state, the panel unmounts).
-      setState("released");
+      // Step 3 - conversation is gone (idle), and the connection parks
+      // in `released` so the host (and any visual state observer) can
+      // distinguish "we deliberately let go of the robot" from "we
+      // never connected" (`connected`) or "we're tearing down for a
+      // goodbye" (no explicit state, the panel unmounts).
+      setConversationState("idle");
+      setConnectionState("released");
     },
 
     reacquireSession: async () => {
@@ -354,7 +355,7 @@ export function createConversationHandle(
         return;
       }
 
-      setState("starting");
+      setConnectionState("starting");
 
       // `session.reacquire()` reconnects the SDK if it's dropped (we
       // disconnect during `release()` to free central's producer
@@ -382,17 +383,8 @@ export function createConversationHandle(
       // back on the conv tab and will tap the orb to start a fresh
       // conversation.
       session.setEstablished(true);
-      setState("ready");
-    },
-
-    attachVideo: (videoElement: HTMLVideoElement) => {
-      if (isUnmounted()) return () => {};
-      // `session.attachVideo` already handles the no-robot guard +
-      // late-attach catch-up via the cache (the SDK's `videoTrack`
-      // event is a one-shot fired during session negotiation; the
-      // cache replay fixes the common "camera card mounts AFTER
-      // hasReachedReady" race). Returns the SDK's detach callback.
-      return session.attachVideo(videoElement);
+      setConnectionState("live");
+      setConversationState("idle");
     },
 
     // ─── Audio volume controls ──────────────────────────────────────
@@ -553,41 +545,6 @@ export function createConversationHandle(
         return ok;
       } catch (err) {
         console.warn("[engine] playSound failed:", err);
-        return false;
-      }
-    },
-
-    setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => {
-      const robot = getRobot();
-      if (isUnmounted() || !robot) {
-        // Manual head control surfaces (e.g. the joystick) call this
-        // at 20 Hz while the user drags. Spamming a warn on every tick
-        // before the engine boots would be noisy; stay silent.
-        return false;
-      }
-      try {
-        const ok = robot.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg);
-        return ok !== false; // SDK returns undefined on older builds
-      } catch (err) {
-        console.warn("[engine] setHeadRpyDeg failed:", err);
-        return false;
-      }
-    },
-
-    setBodyYawDeg: (yawDeg: number) => {
-      const robot = getRobot();
-      if (isUnmounted() || !robot) {
-        // Same rationale as `setHeadRpyDeg`: the joystick's velocity
-        // controller calls this on every tick when the head saturates
-        // and the user keeps pushing. Stay silent before the engine
-        // is mounted; the next viable tick will land.
-        return false;
-      }
-      try {
-        const ok = robot.setBodyYawDeg(yawDeg);
-        return ok !== false; // SDK returns undefined on older builds
-      } catch (err) {
-        console.warn("[engine] setBodyYawDeg failed:", err);
         return false;
       }
     },

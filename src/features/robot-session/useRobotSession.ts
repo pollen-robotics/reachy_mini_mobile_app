@@ -39,7 +39,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
 import {
   mountConversation,
-  type AppState,
+  type ConnectionState,
+  type ConversationState,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
@@ -57,10 +58,13 @@ export interface RobotSessionHandle {
   /** High-level phase observed by the host. Use this to drive the
    *  primary transition overlays (connecting / leaving / etc.). */
   phase: SessionPhase;
-  /** Raw engine FSM state. Use this for the orb chrome or for
-   *  fine-grained UX (e.g. distinguishing `listening` from `ai-
-   *  speaking`). */
-  engineState: AppState;
+  /** Transport / connection FSM state. Drives the bring-up overlay
+   *  and the "is a robot reachable" question. */
+  connectionState: ConnectionState;
+  /** AI conversation FSM state. Use this for the orb chrome's live
+   *  visual (distinguishing `listening` from `ai-speaking`, etc.).
+   *  Only ever non-`idle` while `connectionState === 'live'`. */
+  conversationState: ConversationState;
   /** Last fatal error message surfaced by the engine, or null. */
   errorMessage: string | null;
   /** Mic gate state mirrored from the engine. */
@@ -138,18 +142,6 @@ export interface RobotSessionHandle {
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
   tearDown: () => Promise<void>;
-  /**
-   * Bind a `<video>` element to the robot's camera stream. Returns a
-   * detach function the caller MUST run on unmount. The binding is
-   * resilient to release / reacquire cycles (the SDK clears the
-   * `srcObject` on `stopSession` and refills it on the next
-   * `videoTrack` event), so the host can attach once and forget.
-   *
-   * Safe to call before the engine has finished mounting: if the
-   * underlying SDK instance isn't ready yet we return a no-op so the
-   * host's effect cleanup is symmetric.
-   */
-  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 
   // ─── Audio volume controls (pass-through to the SDK) ──────────────
   //
@@ -191,41 +183,6 @@ export interface RobotSessionHandle {
    * Non-throwing.
    */
   playSound: (file: string) => boolean;
-
-  /**
-   * Push an absolute head orientation (degrees) to the robot. Thin
-   * pass-through to the engine's `setHeadRpyDeg`. Used by manual
-   * control surfaces like the camera-tab joystick; never used while
-   * a conversation is active (the conversation owns the head via
-   * its pose dispatcher).
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
-
-  /**
-   * Push an absolute body yaw target (degrees) to the robot. Thin
-   * pass-through to the engine's `setBodyYawDeg`. Used by the
-   * camera-tab joystick when the head saturates and the user keeps
-   * pushing - the velocity controller spills overflow yaw demand
-   * into the base so the user can scan the room past the head's
-   * hard stop. Never used while a conversation is active (the
-   * dispatcher owns body_yaw too).
-   *
-   * IMPORTANT: the daemon's safe-IK clamps any body_yaw we send to
-   * keep `|head_yaw_world - body_yaw| ≤ 65°`. The joystick controller
-   * stays under that envelope by tracking the head yaw RELATIVE to the
-   * base (`headYawRel`) and clamping it inside the constants, then
-   * composing the world-frame head command as `headYawRel + bodyYaw`
-   * - so the relative twist is constant by construction and the
-   * IK never has to rewrite our target. See
-   * `useHeadVelocityControl.ts` for the full picture.
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setBodyYawDeg: (yawDeg: number) => boolean;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
@@ -271,7 +228,10 @@ export function useRobotSession({
   // cancel token.
   const cancelTokenRef = useRef<{ cancelled: boolean } | null>(null);
 
-  const [engineState, setEngineState] = useState<AppState>('signed-out');
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>('signed-out');
+  const [conversationState, setConversationState] =
+    useState<ConversationState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [toolToastLabel, setToolToastLabel] = useState<string | null>(null);
@@ -308,22 +268,16 @@ export function useRobotSession({
     }
   }, [token]);
 
-  // Sticky `hasReachedReady` latch. We flip on the first `ready`-or-
-  // further state. Stays true through a release+reacquire cycle so
+  // Sticky `hasReachedReady` latch. We flip on the first `live`
+  // connection. Stays true through a release+reacquire cycle so
   // the host doesn't replay the connecting overlay every time. Reset
   // explicitly inside `tearDown()` so the next session starts fresh.
   useEffect(() => {
     if (hasReachedReady) return;
-    if (
-      engineState === 'ready' ||
-      engineState === 'listening' ||
-      engineState === 'user-speaking' ||
-      engineState === 'processing' ||
-      engineState === 'ai-speaking'
-    ) {
+    if (connectionState === 'live') {
       setHasReachedReady(true);
     }
-  }, [engineState, hasReachedReady]);
+  }, [connectionState, hasReachedReady]);
 
   // Engine lifecycle. Mounts on first render with the current
   // `robotId`; tears down on unmount or on a `robotId` change. The
@@ -352,9 +306,13 @@ export function useRobotSession({
         // audio frame so its CSS-var writes always hit the
         // currently-mounted orb instead of an old detached node.
         audioLevelsTarget: () => audioLevelsTargetRef.current,
-        onStateChange: (state) => {
+        onConnectionStateChange: (state) => {
           if (cancelToken.cancelled) return;
-          setEngineState(state);
+          setConnectionState(state);
+        },
+        onConversationStateChange: (state) => {
+          if (cancelToken.cancelled) return;
+          setConversationState(state);
         },
         onErrorMessageChange: (message) => {
           if (cancelToken.cancelled) return;
@@ -507,12 +465,6 @@ export function useRobotSession({
     }
   }, []);
 
-  const attachVideo = useCallback((el: HTMLVideoElement): (() => void) => {
-    const handle = handleRef.current;
-    if (!handle) return () => {};
-    return handle.attachVideo(el);
-  }, []);
-
   // Audio volume pass-throughs. All four return `null` if the
   // engine hasn't booted yet; the consumer's UI can keep its
   // current value displayed (typically the last seen one) or fall
@@ -564,19 +516,6 @@ export function useRobotSession({
     return handleRef.current?.playSound(file) ?? false;
   }, []);
 
-  const setHeadRpyDeg = useCallback(
-    (rollDeg: number, pitchDeg: number, yawDeg: number): boolean => {
-      return (
-        handleRef.current?.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg) ?? false
-      );
-    },
-    [],
-  );
-
-  const setBodyYawDeg = useCallback((yawDeg: number): boolean => {
-    return handleRef.current?.setBodyYawDeg(yawDeg) ?? false;
-  }, []);
-
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
       const handle = handleRef.current;
@@ -586,11 +525,12 @@ export function useRobotSession({
     [],
   );
 
-  const phase = derivePhase(engineState, phaseHint);
+  const phase = derivePhase(connectionState, phaseHint);
 
   return {
     phase,
-    engineState,
+    connectionState,
+    conversationState,
     errorMessage,
     micMuted,
     toolToastLabel,
@@ -607,7 +547,6 @@ export function useRobotSession({
     releaseForHandoff,
     reacquire,
     tearDown,
-    attachVideo,
     getSpeakerVolume,
     setSpeakerVolume,
     getMicrophoneVolume,
@@ -616,8 +555,6 @@ export function useRobotSession({
     startDaemonUpdate,
     getMicLevel,
     playSound,
-    setHeadRpyDeg,
-    setBodyYawDeg,
     subscribeLogs,
   };
 }
