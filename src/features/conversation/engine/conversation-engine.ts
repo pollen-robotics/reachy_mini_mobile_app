@@ -122,6 +122,10 @@ import { getActivePersonality, resolvePersonaVoice } from "@/features/personalit
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { RobotSession } from "@/features/robot-session/RobotSession";
+import {
+  createLiveSession,
+  type LiveSession,
+} from "@/features/robot-session/live-session";
 import { createToolCallHandler } from "./tools/tool-call-handler";
 import { createMotionOrchestrator } from "./motion-control/orchestrator";
 import {
@@ -417,7 +421,13 @@ let backend: RealtimeBackendController | null = null;
 const session = new RobotSession();
 const sessionGuard = session.guard;
 const expectedStop = sessionGuard.expectedStop;
-const videoCache = session.videoCache;
+// Narrow transport capability the conversation pipeline (motion,
+// tools, realtime backend, vision) consumes. It never reaches into
+// `RobotSession` or the SDK ref directly - the connection layer
+// (currently this closure) owns WHEN a robot is live; this view
+// exposes only `getRobot` / `getVideoStream`. The seam the upcoming
+// ConversationController will depend on instead of the closure.
+const liveSession: LiveSession = createLiveSession(session);
 // Wire the host's transport listener once. The class owns all the
 // start/stop bookkeeping internally so the monitor follows the
 // session pc lifecycle (`start` / `reacquire` / `stop` / `release` /
@@ -1109,7 +1119,7 @@ function setSessionEstablished(value: boolean): void {
 // pause cleanly during a choreography.
 
 const toolCallHandler = createToolCallHandler({
-  getRobot: () => robot,
+  getRobot: liveSession.getRobot,
   // Late-bound through the bridge variable below: the bridge is
   // created AFTER this handler so we can pass `handleToolCall` into
   // its `onToolCall` deps without a circular reference. The `?? false`
@@ -1206,7 +1216,7 @@ const probeRobotLink = dcHealth.probeRobotLink;
 // 30 Hz tick (with SCTP backpressure throttling). See the
 // orchestrator file's docstring for the full rationale.
 const motion = createMotionOrchestrator({
-  getRobot: () => robot,
+  getRobot: liveSession.getRobot,
   isPoseLocked: () => toolCallHandler.isPoseLocked(),
   isMovePlaying: movePlaying.get,
   recordSend,
@@ -1236,7 +1246,7 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 // blissfully unaware of any of that.
 
 const realtimeBackendDeps: RealtimeBackendDeps = {
-  getRobot: () => robot,
+  getRobot: liveSession.getRobot,
   // Resolve the voice lazily (re-read on every `buildClient()` so a
   // personality OR backend switch picks up the right voice on the next
   // reconnect, without rebuilding the bridge). The persona pins one
@@ -1413,7 +1423,7 @@ backend = createRealtimeBackendController({
   attachVision: (bridge) =>
     attachVision({
       realtime: bridge.getRealtimePort(),
-      getVideoStream: () => videoCache.get(),
+      getVideoStream: liveSession.getVideoStream,
       getHfToken: readHfTokenFromStorage,
     }),
 });
