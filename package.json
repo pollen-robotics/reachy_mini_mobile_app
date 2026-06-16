@@ -25,7 +25,7 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@mnlphlp/plugin-blec": "^0.4.0",
+    "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^9.0.0",
     "@mui/material": "^9.0.0",
     "@noble/ciphers": "^1.0.0",

@@ -234,12 +234,12 @@ export async function scanDevices(
   } catch {
     /* already auto-stopped by the plugin */
   }
-  // IMPORTANT: this plugin (0.4.x) DROPS any device whose name is null in the
-  // scan record (Kotlin `sendResult`: `if (name == null) return`). So a device
-  // the OS shows by name can still be invisible here if its name rides only in
-  // the scan response and wasn't captured. If the robot never appears but other
-  // NAMED devices do, that's this drop — not a permission problem.
-  log(`scan done: ${byAddr.size} named device(s) seen over ${ticks} tick(s)`);
+  // NOTE: plugin 0.4.x DROPPED any device whose name was null in the scan
+  // record (Kotlin `sendResult`: `if (name == null) return`), so a robot whose
+  // name rode only in the scan response could be invisible. 0.8.x reports a
+  // (possibly empty) string instead, so this drop no longer applies — we still
+  // match on the service UUID (`looksLikeReachy`) as belt-and-suspenders.
+  log(`scan done: ${byAddr.size} device(s) seen over ${ticks} tick(s)`);
   return [...byAddr.values()];
 }
 

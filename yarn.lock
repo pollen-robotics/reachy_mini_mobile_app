@@ -533,10 +533,10 @@
     "@jridgewell/resolve-uri" "^3.1.0"
     "@jridgewell/sourcemap-codec" "^1.4.14"
 
-"@mnlphlp/plugin-blec@^0.4.0":
-  version "0.4.1"
-  resolved "https://registry.yarnpkg.com/@mnlphlp/plugin-blec/-/plugin-blec-0.4.1.tgz#e18c3360c8731e27340d4a33b8085177fecd2b56"
-  integrity sha512-oxxgZVjh3anarvkp+nyHuM9/5KMQr6EdU6SWEult7Y4ZJFf314nDYZR8ExRoKQP9YOBQZ3tmpJlhchqRKjLXdA==
+"@mnlphlp/plugin-blec@^0.8.0":
+  version "0.8.0"
+  resolved "https://registry.yarnpkg.com/@mnlphlp/plugin-blec/-/plugin-blec-0.8.0.tgz#2349fd7ccb797bdda396fd3641a36cda33e7cfff"
+  integrity sha512-KFcjgHkNi7poymIGbF+9VpmB2D9iEmPJKERiVaw2jDFO2dO5Om7kQ0JoYJZts59iT3qpNYUy8t5vtA6UOYcgFw==
   dependencies:
     "@tauri-apps/api" ">=2.0.0-beta.6"
 
