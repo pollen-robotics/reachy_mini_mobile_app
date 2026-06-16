@@ -284,22 +284,6 @@ export interface ConversationEngineHandle {
    * double-acquire defensively).
    */
   reacquireSession: () => Promise<void>;
-  /**
-   * Bind a `<video>` element to the robot's WebRTC video track.
-   *
-   * The SDK keeps the binding alive across release / reacquire
-   * cycles: on `stopSession` the source is cleared, on the next
-   * `videoTrack` event it picks up the new stream automatically.
-   * Safe to call before the robot has connected - the listener
-   * just sits and waits for the first track.
-   *
-   * @returns A detach function. Call on unmount to release the
-   *   listeners and null the video element's `srcObject`.
-   *
-   * No-op (returns a no-op cleanup) if the engine has been
-   * unmounted or the SDK instance hasn't been created yet.
-   */
-  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //
@@ -349,39 +333,6 @@ export interface ConversationEngineHandle {
    * down. Non-throwing.
    */
   playSound: (file: string) => boolean;
-
-  /**
-   * Push a head orientation target (roll/pitch/yaw in degrees) to the
-   * robot. Thin pass-through to the SDK's `setHeadRpyDeg` -
-   * non-blocking, no completion event. Returns `true` when the
-   * command was queued onto the DataChannel, `false` if the engine
-   * isn't ready or the DC is down. Non-throwing.
-   *
-   * Used by manual control surfaces (e.g. the mobile app's joystick
-   * over the camera feed). The conversation pipeline routes through
-   * the pose dispatcher instead, NOT via this method, so the two
-   * paths can't fight: the dispatcher is silent while the
-   * conversation is stopped, which is the only time manual control
-   * is offered to the user.
-   */
-  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
-
-  /**
-   * Push a body yaw target (degrees, absolute) to the robot. Thin
-   * pass-through to the SDK's `setBodyYawDeg` - non-blocking, no
-   * completion event. Returns `true` when the command was queued
-   * onto the DataChannel, `false` if the engine isn't ready or the
-   * DC is down. Non-throwing.
-   *
-   * Used by the camera-tab joystick when the head reaches its yaw
-   * limit and the user keeps pushing in the same direction: at that
-   * point the velocity controller spills over into the base so the
-   * user can keep scanning the room past the head's hard stop. Like
-   * `setHeadRpyDeg`, the conversation pipeline does NOT use this
-   * path - it routes body_yaw targets through the pose dispatcher
-   * so the two surfaces can't fight.
-   */
-  setBodyYawDeg: (yawDeg: number) => boolean;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`

@@ -84,14 +84,6 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
-// `CameraOverlay` is intentionally NOT imported here at the moment.
-// The conversation tab keeps the orb visually clean (no floating
-// PIP). Re-add the import + render it back inside the
-// `tab === 'conv'` block if/when we want a small PIP during
-// conversations (the underlying `VideoFeed` already supports
-// release/reacquire and concurrent mounts on the same SDK track).
-// Full-frame camera + manual head steering live in the dedicated
-// telepresence app.
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { DaemonStateProvider } from '@/features/daemon-state';

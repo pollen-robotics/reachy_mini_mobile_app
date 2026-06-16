@@ -138,18 +138,6 @@ export interface RobotSessionHandle {
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
   tearDown: () => Promise<void>;
-  /**
-   * Bind a `<video>` element to the robot's camera stream. Returns a
-   * detach function the caller MUST run on unmount. The binding is
-   * resilient to release / reacquire cycles (the SDK clears the
-   * `srcObject` on `stopSession` and refills it on the next
-   * `videoTrack` event), so the host can attach once and forget.
-   *
-   * Safe to call before the engine has finished mounting: if the
-   * underlying SDK instance isn't ready yet we return a no-op so the
-   * host's effect cleanup is symmetric.
-   */
-  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 
   // ─── Audio volume controls (pass-through to the SDK) ──────────────
   //
@@ -186,41 +174,6 @@ export interface RobotSessionHandle {
    * Non-throwing.
    */
   playSound: (file: string) => boolean;
-
-  /**
-   * Push an absolute head orientation (degrees) to the robot. Thin
-   * pass-through to the engine's `setHeadRpyDeg`. Used by manual
-   * control surfaces like the camera-tab joystick; never used while
-   * a conversation is active (the conversation owns the head via
-   * its pose dispatcher).
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
-
-  /**
-   * Push an absolute body yaw target (degrees) to the robot. Thin
-   * pass-through to the engine's `setBodyYawDeg`. Used by the
-   * camera-tab joystick when the head saturates and the user keeps
-   * pushing - the velocity controller spills overflow yaw demand
-   * into the base so the user can scan the room past the head's
-   * hard stop. Never used while a conversation is active (the
-   * dispatcher owns body_yaw too).
-   *
-   * IMPORTANT: the daemon's safe-IK clamps any body_yaw we send to
-   * keep `|head_yaw_world - body_yaw| ≤ 65°`. The joystick controller
-   * stays under that envelope by tracking the head yaw RELATIVE to the
-   * base (`headYawRel`) and clamping it inside the constants, then
-   * composing the world-frame head command as `headYawRel + bodyYaw`
-   * - so the relative twist is constant by construction and the
-   * IK never has to rewrite our target. See
-   * `useHeadVelocityControl.ts` for the full picture.
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setBodyYawDeg: (yawDeg: number) => boolean;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
@@ -502,12 +455,6 @@ export function useRobotSession({
     }
   }, []);
 
-  const attachVideo = useCallback((el: HTMLVideoElement): (() => void) => {
-    const handle = handleRef.current;
-    if (!handle) return () => {};
-    return handle.attachVideo(el);
-  }, []);
-
   // Audio volume pass-throughs. All four return `null` if the
   // engine hasn't booted yet; the consumer's UI can keep its
   // current value displayed (typically the last seen one) or fall
@@ -552,19 +499,6 @@ export function useRobotSession({
     return handleRef.current?.playSound(file) ?? false;
   }, []);
 
-  const setHeadRpyDeg = useCallback(
-    (rollDeg: number, pitchDeg: number, yawDeg: number): boolean => {
-      return (
-        handleRef.current?.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg) ?? false
-      );
-    },
-    [],
-  );
-
-  const setBodyYawDeg = useCallback((yawDeg: number): boolean => {
-    return handleRef.current?.setBodyYawDeg(yawDeg) ?? false;
-  }, []);
-
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
       const handle = handleRef.current;
@@ -595,7 +529,6 @@ export function useRobotSession({
     releaseForHandoff,
     reacquire,
     tearDown,
-    attachVideo,
     getSpeakerVolume,
     setSpeakerVolume,
     getMicrophoneVolume,
@@ -603,8 +536,6 @@ export function useRobotSession({
     getDaemonVersion,
     getMicLevel,
     playSound,
-    setHeadRpyDeg,
-    setBodyYawDeg,
     subscribeLogs,
   };
 }
