@@ -42,6 +42,7 @@ import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import connectionUrl from '@/assets/connection.svg';
+import lockedReachyUrl from '@/assets/locked-reachy.svg';
 import type { BleDevice } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupResult } from '@/features/ble-provisioning/types';
@@ -400,9 +401,7 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
   };
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <IconHero>
-        <LockOutlinedIcon sx={{ fontSize: 48 }} />
-      </IconHero>
+      <Box component="img" src={lockedReachyUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
       <Headline title="Enter the setup code" caption="Find the 5-character code printed under your Reachy." />
       <TextField
         value={pin}
@@ -428,9 +427,9 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
         sx={{ width: 240 }}
       />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <PrimaryButton onClick={submit} disabled={!ready}>
+        <SecondaryButton onClick={submit} disabled={!ready}>
           Verify
-        </PrimaryButton>
+        </SecondaryButton>
       </Box>
     </Stack>
   );
@@ -529,9 +528,9 @@ function PasswordView({ ssid, onSubmit }: { ssid: string; onSubmit: (psk: string
         <Typography sx={{ fontSize: TYPO.xs }}>Encrypted on this phone before it's sent</Typography>
       </Stack>
       <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <PrimaryButton onClick={() => onSubmit(psk)} disabled={psk.length === 0}>
+        <SecondaryButton onClick={() => onSubmit(psk)} disabled={psk.length === 0}>
           Connect
-        </PrimaryButton>
+        </SecondaryButton>
       </Box>
     </Stack>
   );
