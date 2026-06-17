@@ -40,6 +40,7 @@ import {
   connectSealed,
   keyExchange,
   readIdentity,
+  readNetworkInfo,
   scanWifi,
   toSetupError,
   wifiStatus,
@@ -56,12 +57,22 @@ const WIFI_POLL_TIMEOUT_MS = 45_000;
 // the HF Space and register as a producer, which lags the local join.
 const CENTRAL_POLL_INTERVAL_MS = 4_000;
 const CENTRAL_POLL_TIMEOUT_MS = 75_000;
+// After a Wi-Fi join, the daemon's NETWORK_STATUS characteristic (cdef4)
+// refreshes on a ~10 s tick, so the freshly-assigned LAN IP can lag the join by
+// a few seconds. Poll it briefly so we can hand OAuth a literal IP.
+const IP_POLL_INTERVAL_MS = 1_500;
+const IP_POLL_TIMEOUT_MS = 12_000;
+
 // Robot-side OAuth entry point: opening this in the system browser makes the
 // robot's daemon redirect to Hugging Face, handle the callback, store its own
-// token, and start the central relay. Reached by mDNS hostname (matches the
-// daemon's registered OAuth redirect URI) — the phone must be on the robot's
-// Wi-Fi for this to resolve and for HF to redirect back.
-const ROBOT_OAUTH_BEGIN_URL = 'http://reachy-mini.local:8000/api/hf-auth/oauth/begin';
+// token, and start the central relay. We prefer the LAN IP we just read over
+// BLE — mDNS (`reachy-mini.local`) is unreliable on many networks — and fall
+// back to the hostname when no IP could be read. Either way the phone must be
+// on the robot's Wi-Fi for HF to redirect back.
+const ROBOT_OAUTH_MDNS_HOST = 'reachy-mini.local';
+function robotOAuthBeginUrl(host: string): string {
+  return `http://${host}:8000/api/hf-auth/oauth/begin`;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -81,6 +92,9 @@ export interface SetupMachine {
   networks: string[];
   selectedSsid: string | null;
   result: SetupResult | null;
+  /** LAN IP the robot got after joining Wi-Fi, discovered over BLE. `null`
+   *  until known (or if it couldn't be read — OAuth then falls back to mDNS). */
+  robotLanIp: string | null;
 
   // actions
   startScanning: () => void;
@@ -104,11 +118,15 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const [networks, setNetworks] = useState<string[]>([]);
   const [selectedSsid, setSelectedSsid] = useState<string | null>(null);
   const [result, setResult] = useState<SetupResult | null>(null);
+  const [robotLanIp, setRobotLanIp] = useState<string | null>(null);
 
   // Values threaded through async chains (avoid stale-closure reads).
   const pinRef = useRef<string>('');
   const keyexRef = useRef<string>('');
   const identityRef = useRef<RobotIdentity | null>(null);
+  // LAN IP read over BLE after the Wi-Fi join; drives the OAuth URL. Kept in a
+  // ref too so `linkAccount` reads it without a stale closure.
+  const robotIpRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const runIdRef = useRef(0);
 
@@ -311,10 +329,35 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
             }
           }
 
-          // Joined Wi-Fi. Stop here and let the user link the robot to their
-          // Hugging Face account via robot-side OAuth (see `linkAccount`): a
-          // token-less robot boots with the central relay disabled and never
-          // appears in the list. The user drives the next step with a tap.
+          // Joined Wi-Fi. Read the LAN IP the robot just got so we can reach its
+          // OAuth endpoint directly. NETWORK_STATUS refreshes on a ~10 s tick, so
+          // poll briefly until it reports `connected` with an address. Entirely
+          // best-effort: any failure leaves the IP null and `linkAccount` falls
+          // back to mDNS.
+          robotIpRef.current = null;
+          setRobotLanIp(null);
+          const ipDeadline = Date.now() + IP_POLL_TIMEOUT_MS;
+          for (;;) {
+            try {
+              const net = await readNetworkInfo();
+              if (runId !== runIdRef.current || !mountedRef.current) return;
+              if (net.mode === 'connected' && net.ip) {
+                robotIpRef.current = net.ip;
+                setRobotLanIp(net.ip);
+                break;
+              }
+            } catch {
+              if (runId !== runIdRef.current || !mountedRef.current) return;
+            }
+            if (Date.now() > ipDeadline) break; // give up; mDNS fallback
+            await sleep(IP_POLL_INTERVAL_MS);
+            if (runId !== runIdRef.current || !mountedRef.current) return;
+          }
+
+          // Stop here and let the user link the robot to their Hugging Face
+          // account via robot-side OAuth (see `linkAccount`): a token-less robot
+          // boots with the central relay disabled and never appears in the list.
+          // The user drives the next step with a tap.
           setPhase('linking-account');
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
@@ -327,16 +370,20 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
   // ── ACCOUNT LINK (robot-side OAuth) ──────────────────────────────────────────
 
-  // Open the robot's OAuth entry point in the system browser. The robot
-  // (reachy-mini.local) redirects to Hugging Face, handles the callback, stores
-  // its OWN durable token, and starts the central relay. We then just wait for
-  // it to appear on central — the same poll the wizard already uses.
+  // Open the robot's OAuth entry point in the system browser (by LAN IP when
+  // we have one, else mDNS). The robot redirects to Hugging Face, handles the
+  // callback, stores its OWN durable token, and starts the central relay. We
+  // then just wait for it to appear on central — the same poll the wizard
+  // already uses.
   const linkAccount = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
     void (async () => {
       try {
-        await openExternalUrl(ROBOT_OAUTH_BEGIN_URL);
+        // Prefer the LAN IP discovered over BLE; fall back to mDNS if we never
+        // read one (older daemon / quiet GATT / robot not yet `connected`).
+        const host = robotIpRef.current ?? ROBOT_OAUTH_MDNS_HOST;
+        await openExternalUrl(robotOAuthBeginUrl(host));
         if (runId !== runIdRef.current || !mountedRef.current) return;
         setPhase('central-waiting');
         const hwid = identityRef.current?.hardwareId ?? null;
@@ -372,6 +419,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     pinRef.current = '';
     keyexRef.current = '';
     identityRef.current = null;
+    robotIpRef.current = null;
+    setRobotLanIp(null);
     setError(null);
     setScanning(false);
     setDevices([]);
@@ -391,6 +440,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     networks,
     selectedSsid,
     result,
+    robotLanIp,
     startScanning,
     rescan,
     selectDevice,

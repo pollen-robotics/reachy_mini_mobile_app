@@ -158,7 +158,7 @@ function StepView({
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
     case 'linking-account':
-      return <LinkAccountView onLink={m.linkAccount} />;
+      return <LinkAccountView onLink={m.linkAccount} lanIp={m.robotLanIp} />;
     case 'central-waiting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="registering" />;
     case 'done':
@@ -484,7 +484,7 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
 
-function LinkAccountView({ onLink }: { onLink: () => void }) {
+function LinkAccountView({ onLink, lanIp }: { onLink: () => void; lanIp: string | null }) {
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
       <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: 132, height: 132 }} />
@@ -492,10 +492,50 @@ function LinkAccountView({ onLink }: { onLink: () => void }) {
         title="Link your Reachy"
         caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
       />
+      <RobotAddressNote lanIp={lanIp} />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
         <PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>
       </Box>
     </Stack>
+  );
+}
+
+/**
+ * Tell the user how we'll reach the robot for the OAuth step. When we read its
+ * LAN IP over Bluetooth we show it (the reliable path); otherwise we fall back
+ * to mDNS by name and say so, so a failure to resolve isn't a mystery.
+ */
+function RobotAddressNote({ lanIp }: { lanIp: string | null }) {
+  if (lanIp) {
+    return (
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: 'center',
+          px: 1.5,
+          py: 1,
+          borderRadius: RADIUS.md,
+          bgcolor: alpha(STATUS.success, 0.12),
+        }}
+      >
+        <WifiIcon sx={{ fontSize: 18, color: STATUS.success }} />
+        <Typography sx={{ fontSize: TYPO.sm, color: 'text.primary' }}>
+          Found your Reachy at{' '}
+          <Box
+            component="span"
+            sx={{ fontWeight: FONT_WEIGHT.semibold, fontVariantNumeric: 'tabular-nums' }}
+          >
+            {lanIp}
+          </Box>
+        </Typography>
+      </Stack>
+    );
+  }
+  return (
+    <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
+      We'll reach your Reachy by name on your Wi-Fi (reachy-mini.local).
+    </Typography>
   );
 }
 

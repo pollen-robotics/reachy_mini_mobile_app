@@ -17,7 +17,9 @@
 import {
   HARDWARE_ID_CHAR,
   NETWORK_STATUS_CHAR,
+  type RobotNetInfo,
   buildSealedConnect,
+  parseNetworkStatus,
   readCharacteristic,
   sendCommand,
 } from '@/features/ble/bleWifi';
@@ -83,6 +85,19 @@ export async function readIdentity(): Promise<RobotIdentity> {
     networkStatus = null;
   }
   return { hardwareId: hardwareId || null, networkStatus: networkStatus || null };
+}
+
+/**
+ * Read + parse the live NETWORK_STATUS characteristic (cdef4): the robot's
+ * connection mode and, once it's on a real network, its LAN IPv4.
+ *
+ * Used right after a Wi-Fi join to learn the address the robot just got, so we
+ * can reach its OAuth endpoint by IP instead of the flakier `reachy-mini.local`
+ * mDNS name. Best-effort: throws only on a transport/read error, which the
+ * caller treats as "fall back to mDNS".
+ */
+export async function readNetworkInfo(): Promise<RobotNetInfo> {
+  return parseNetworkStatus(await readCharacteristic(NETWORK_STATUS_CHAR));
 }
 
 /** `PING` → true if the robot answers `PONG`. */
