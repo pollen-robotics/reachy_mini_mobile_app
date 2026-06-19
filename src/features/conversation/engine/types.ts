@@ -7,6 +7,8 @@
  * the engine internals stay in `conversation-engine.ts`.
  */
 
+import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
+
 /**
  * Connection (transport) state machine.
  *
@@ -379,6 +381,20 @@ export interface ConversationEngineHandle {
     onLine: (entry: { timestamp: string; line: string }) => void;
     onError?: (error: string) => void;
   }) => () => void;
+
+  /**
+   * Raw SDK instance accessor, or `null` when the engine isn't live.
+   * Escape hatch for surfaces that need low-level access not covered by
+   * the dedicated pass-throughs (e.g. the first wake-up wizard reading the
+   * robot mic track off `_pc` or replaying the wake-up trajectory).
+   */
+  getRobot: () => ReachyMiniInstance | null;
+
+  /**
+   * Bind the robot's video stream to a `<video>` element, replaying the
+   * cached track if it already arrived. Returns a detach callback.
+   */
+  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 }
 
 export interface ConversationEngineOptions {
@@ -406,6 +422,20 @@ export interface ConversationEngineOptions {
    * optimisation, never a point of failure.
    */
   preselectedRobotId?: string | null;
+
+  /**
+   * Gate consulted by the connection bring-up right before it wakes the
+   * robot. When it returns `true`, the engine SKIPS the initial wake-up
+   * and reaches `live` with the robot still asleep, leaving the very
+   * first `wakeUp()` to the host's first-wake-up wizard (so its motor
+   * step actually plays the wake trajectory instead of no-op'ing on an
+   * already-awake robot).
+   *
+   * Evaluated fresh on every bring-up, so a host getter can flip between
+   * sessions (wizard pending → defer; wizard already completed → wake as
+   * usual). When `undefined`, bring-up always wakes the robot.
+   */
+  shouldDeferInitialWakeUp?: () => boolean;
 
   /**
    * Fires on every CONNECTION transition (`signed-out` → `connecting`

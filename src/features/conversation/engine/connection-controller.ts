@@ -56,6 +56,13 @@ export interface ConnectionControllerDeps {
    *  pre-selected on the scan screen. When set, `boot()` auto-connects
    *  and the background-resilience path re-arms on an unsolicited drop. */
   preselectedRobotId: string | null;
+  /** Host-controlled gate consulted at bring-up. When it returns true,
+   *  the initial `wakeUp()` is DEFERRED to the host: the first-wake-up
+   *  wizard owns the wake so its motor step actually plays the trajectory
+   *  (waking an already-awake robot is a daemon no-op). When false /
+   *  omitted, bring-up wakes the robot as usual. Evaluated fresh on every
+   *  `doStart` so a host getter can flip between sessions. */
+  shouldDeferInitialWakeUp?: () => boolean;
 
   // ─── Observer plumbing ────────────────────────────────────────────
   /** Per-attempt progress for the host's "Connecting…" view. */
@@ -142,6 +149,7 @@ export function createConnectionController(
     core,
     session,
     preselectedRobotId,
+    shouldDeferInitialWakeUp,
     emitConnectionAttempt,
     emitErrorMessage,
     emitDaemonVersion,
@@ -351,14 +359,30 @@ export function createConnectionController(
     // the duration of the wake animation. The state machine doesn't
     // flip to `live` until motors are actually enabled and the head /
     // antennas have settled into their wake pose.
-    const tBeforeWake = performance.now();
-    console.log(`[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`);
-    await session.wakeUp();
-    console.log(
-      `[DIAG] doStart: session.wakeUp() resolved in ${Math.round(
-        performance.now() - tBeforeWake,
-      )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
-    );
+    //
+    // EXCEPTION: when the host signals a pending first-wake-up wizard
+    // (`shouldDeferInitialWakeUp()` → true), we deliberately SKIP the
+    // bring-up wake and reach `live` with the robot still asleep. The
+    // wizard's motor step then owns the very first `wakeUp()`, so the
+    // user actually sees the head + antennas play their trajectory
+    // (waking an already-awake robot is a daemon no-op, which is why the
+    // motor test looked dead when bring-up had already woken it). The
+    // wizard guarantees the robot ends up awake on finish / skip.
+    if (shouldDeferInitialWakeUp?.()) {
+      console.log(
+        `[DIAG] doStart: deferring initial wake-up to host (first-wake-up ` +
+          `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`,
+      );
+    } else {
+      const tBeforeWake = performance.now();
+      console.log(`[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`);
+      await session.wakeUp();
+      console.log(
+        `[DIAG] doStart: session.wakeUp() resolved in ${Math.round(
+          performance.now() - tBeforeWake,
+        )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
+      );
+    }
 
     // Apply the tuned XVF3800 audio-board parameters now that the
     // DataChannel is live. Best-effort: a missing audio board (Lite /

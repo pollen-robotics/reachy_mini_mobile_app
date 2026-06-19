@@ -37,6 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
+import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import {
   mountConversation,
   type ConnectionState,
@@ -210,6 +211,20 @@ export interface RobotSessionHandle {
     onLine: (entry: { timestamp: string; line: string }) => void;
     onError?: (error: string) => void;
   }) => () => void;
+
+  /**
+   * Raw SDK instance accessor, or `null` when no session is live.
+   * Low-level escape hatch for the first wake-up wizard (reading the
+   * robot mic track off `_pc`, replaying the wake-up trajectory). Most
+   * consumers should prefer the dedicated pass-throughs above.
+   */
+  getRobot: () => ReachyMiniInstance | null;
+
+  /**
+   * Bind the robot's video stream to a `<video>` element (with cache
+   * replay for late mounts). Returns a detach callback.
+   */
+  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 }
 
 interface UseRobotSessionOptions {
@@ -224,6 +239,11 @@ interface UseRobotSessionOptions {
    *  spin up at conversation-start time, so it's fine for this ref
    *  to populate slightly after the hook mounts. */
   audioLevelsTargetRef: React.RefObject<HTMLElement | null>;
+  /** Bring-up gate: when it returns true, the engine defers the initial
+   *  wake-up to the host so the first-wake-up wizard's motor step owns
+   *  the very first `wakeUp()`. Evaluated fresh on every bring-up (read
+   *  through a ref), so the host can flip it between sessions. */
+  shouldDeferInitialWakeUp?: () => boolean;
 }
 
 const TOOL_TOAST_MIN_MS = 1500;
@@ -232,8 +252,14 @@ export function useRobotSession({
   robotId,
   token,
   audioLevelsTargetRef,
+  shouldDeferInitialWakeUp,
 }: UseRobotSessionOptions): RobotSessionHandle {
   const handleRef = useRef<ConversationEngineHandle | null>(null);
+  // Keep the latest host getter in a ref so the engine (mounted once per
+  // `robotId`) always reads the current value at bring-up instead of the
+  // closure captured on first render.
+  const shouldDeferInitialWakeUpRef = useRef(shouldDeferInitialWakeUp);
+  shouldDeferInitialWakeUpRef.current = shouldDeferInitialWakeUp;
   // Used for StrictMode-safe mount: a fast remount could race with
   // the previous engine's teardown if we didn't gate on a per-mount
   // cancel token.
@@ -311,6 +337,10 @@ export function useRobotSession({
       const handle = mountConversation(inertRoot, {
         preselectedRobotId: robotId,
         autoStartConversation: false,
+        // Read through the ref so the engine always sees the host's
+        // current first-wake-up decision, not the one at mount time.
+        shouldDeferInitialWakeUp: () =>
+          shouldDeferInitialWakeUpRef.current?.() ?? false,
         // Pass a *getter*, not `audioLevelsTargetRef.current`: the
         // orb DOM may be unmounted/remounted while the engine
         // stays alive (tab switches between Conv ↔ Apps, iframe
@@ -536,6 +566,17 @@ export function useRobotSession({
     return handleRef.current?.playSound(file) ?? false;
   }, []);
 
+  const getRobot = useCallback((): ReachyMiniInstance | null => {
+    return handleRef.current?.getRobot() ?? null;
+  }, []);
+
+  const attachVideo = useCallback(
+    (videoElement: HTMLVideoElement): (() => void) => {
+      return handleRef.current?.attachVideo(videoElement) ?? (() => {});
+    },
+    [],
+  );
+
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
       const handle = handleRef.current;
@@ -577,5 +618,7 @@ export function useRobotSession({
     getMicLevel,
     playSound,
     subscribeLogs,
+    getRobot,
+    attachVideo,
   };
 }
