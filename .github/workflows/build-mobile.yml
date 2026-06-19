@@ -527,6 +527,34 @@ jobs:
             done
           fi
 
+      - name: Patch Android Gradle config (minSdk)
+        # tauri-plugin-blec 0.8.1 (the BLE Wi-Fi setup flow) declares
+        # minSdk 26 in its library manifest. Tauri's `android init`
+        # regenerates the app with minSdk = 24, so the manifest merger
+        # aborts the build with:
+        #   uses-sdk:minSdkVersion 24 cannot be smaller than version 26
+        #   declared in library [:tauri-plugin-blec] ... as the library
+        #   might be using APIs not available in 24
+        # We bump the regenerated gradle to minSdk 26 (Android 8.0).
+        # The release job applies the same bump in its own combined
+        # "Patch Android Gradle config (minSdk, applicationId, signing)"
+        # step. Idempotent.
+        run: |
+          set -euxo pipefail
+          GRADLE_FILE="src-tauri/gen/android/app/build.gradle.kts"
+          test -f "$GRADLE_FILE"
+          python3 - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
+          s = p.read_text()
+          s2, n = re.subn(r'minSdk\s*=\s*\d+', 'minSdk = 26', s, count=1)
+          if n == 0:
+              print("::error::minSdk assignment not found in build.gradle.kts", file=sys.stderr)
+              sys.exit(1)
+          p.write_text(s2)
+          print(f"Patched minSdk -> 26 ({n} match)")
+          PY
+
       - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
         # Two patches, applied together:
         #
@@ -1430,6 +1458,19 @@ jobs:
           if s2 == s:
               print("::warning::applicationId pattern not matched — Tauri layout may have changed.", file=sys.stderr)
           s = s2
+
+          # 2. Bump minSdk to 26. tauri-plugin-blec 0.8.1 (BLE Wi-Fi
+          #    setup) declares minSdk 26 in its library manifest; Tauri's
+          #    `android init` generates the app with minSdk = 24, so the
+          #    manifest merger aborts with "uses-sdk:minSdkVersion 24
+          #    cannot be smaller than version 26 declared in library
+          #    [:tauri-plugin-blec]". Mirrors the debug job's
+          #    "Patch Android Gradle config (minSdk)" step.
+          s3, n_minsdk = re.subn(r'minSdk\s*=\s*\d+', 'minSdk = 26', s, count=1)
+          if n_minsdk == 0:
+              print("::error::minSdk assignment not found — Tauri layout may have changed.", file=sys.stderr)
+              sys.exit(1)
+          s = s3
 
           # NB: versionName / versionCode are intentionally NOT patched
           # here. Tauri re-syncs both from the (effective) config on

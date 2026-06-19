@@ -221,6 +221,69 @@ daemon-side behaviour. See the rule
 `.cursor/rules/robot-ssh-access.mdc` for usage etiquette and
 useful commands.
 
+## CI / native build gotchas (mobile)
+
+The mobile CI (`.github/workflows/build-mobile.yml`) **regenerates the
+native projects from scratch** on every run: it `rm -rf`s
+`src-tauri/gen/apple` + `src-tauri/gen/android` and re-runs
+`tauri ios init` / `tauri android init`. So any fix that lives in the
+committed `gen/` tree is wiped in CI — native build fixes must be
+**re-applied as post-init patch steps** (the workflow already does this
+for icons, Info.plist, signing, manifest permissions, etc.).
+
+When a Rust dependency pulls in a platform framework or bumps a
+platform requirement, you have to wire it in by hand in BOTH the
+relevant jobs. Two real cases caused by the BLE Wi-Fi setup feature
+(`tauri-plugin-blec` / `btleplug`):
+
+### iOS: link CoreBluetooth.framework
+
+`btleplug`'s CoreBluetooth backend makes the Rust staticlib
+(`libapp.a`) reference CoreBluetooth symbols
+(`_CBAdvertisementDataLocalNameKey`,
+`_CBCentralManagerScanOptionAllowDuplicatesKey`, …). The framework
+isn't autolinked (the link is driven by Xcode, which doesn't read
+Rust's `#[link]` metadata for a staticlib), so the iOS link step fails
+with:
+
+```
+Undefined symbols for architecture arm64:
+  "_CBAdvertisementDataLocalNameKey", referenced from: btleplug::...
+ld: symbol(s) not found for architecture arm64
+```
+
+Fix (same pattern as `AuthenticationServices` for HF OAuth): force-link
+via `OTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth"`, injected
+into the regenerated `pbxproj` in **both** the simulator job
+("Disable code signing in pbxproj") **and** the device release job
+("Configure pbxproj for manual signing"). The committed
+`gen/apple/project.yml` also lists `- sdk: CoreBluetooth.framework` for
+local Xcode dev (where `gen/apple` is NOT regenerated).
+
+### Android: minSdk 26
+
+`tauri-plugin-blec` 0.8.1 declares `minSdk 26` in its library manifest.
+Tauri's `android init` generates the app with `minSdk = 24`, so the
+manifest merger aborts with:
+
+```
+uses-sdk:minSdkVersion 24 cannot be smaller than version 26 declared
+in library [:tauri-plugin-blec]
+```
+
+Fix: bump the regenerated `gen/android/app/build.gradle.kts` to
+`minSdk = 26` (Android 8.0) via a post-init patch step in **both** the
+debug job ("Patch Android Gradle config (minSdk)") and the release job
+("Patch Android Gradle config (minSdk, applicationId, signing)").
+
+### Rule of thumb
+
+Adding/upgrading any Rust crate with a native platform backend
+(Bluetooth, audio, camera, secure storage, …)? Check whether it needs a
+new `-framework` on iOS or a higher `minSdk`/permission on Android, and
+add the patch to **every** matching job — there's no single source of
+truth because `gen/` is regenerated.
+
 ## Companion docs
 
 | File | What |
