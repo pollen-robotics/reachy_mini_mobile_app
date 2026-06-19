@@ -47,6 +47,7 @@ import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
+import serialNumberImg from '@/assets/serial-number.jpg';
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
@@ -483,6 +484,36 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
   };
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
+      {/* Slight 3D-tilted photo card: a soft drop shadow + a couple
+          degrees of perspective rotation give the serial-number shot a
+          gentle "held in hand" feel without reading as a gimmick. */}
+      <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', perspective: '1000px' }}>
+        <Box
+          sx={{
+            width: '100%',
+            maxWidth: 280,
+            bgcolor: 'background.paper',
+            borderRadius: `${RADIUS.lg}px`,
+            border: theme => `1px solid ${alpha(theme.palette.text.primary, 0.22)}`,
+            boxShadow: '0 3px 10px rgba(0, 0, 0, 0.12)',
+            overflow: 'hidden',
+            transform: 'rotateX(2deg) rotateY(-2deg)',
+            transformStyle: 'preserve-3d',
+          }}
+        >
+          <Box
+            component="img"
+            src={serialNumberImg}
+            alt="The 5-character code is printed on a label under your Reachy's base"
+            sx={{
+              width: '100%',
+              display: 'block',
+              userSelect: 'none',
+              pointerEvents: 'none',
+            }}
+          />
+        </Box>
+      </Box>
       <Headline title="Prove it's yours" caption="Type the 5-character code printed under your Reachy's base." />
       <TextField
         value={pin}
