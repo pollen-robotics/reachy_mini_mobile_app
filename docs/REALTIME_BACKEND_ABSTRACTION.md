@@ -1,19 +1,26 @@
-# Realtime backend abstraction
+# Realtime backend
 
 Status: **implemented**. Owner: `@tfrere`. Lives in
 `src/features/conversation/engine/`.
 
-The conversation's realtime LLM backend is **swappable at runtime**. The
-engine talks to one interface (`RealtimeBackend`) and never to a concrete
-provider. Two providers ship today - **Hugging Face** (default) and
-**OpenAI** - and the user picks one from the conversation settings panel.
+The conversation's realtime LLM backend is the **Hugging Face realtime
+service**. The engine talks to one interface (`RealtimeBackend`) and
+never to the concrete client, so the transport details stay isolated
+behind a single seam.
+
+> History: the app briefly shipped a second, opt-in OpenAI Realtime
+> provider behind a runtime picker. That provider was removed - Hugging
+> Face is now the sole backend. The `RealtimeBackend` interface is kept
+> as a clean seam (it makes the engine agnostic of transport details and
+> keeps the bridge independently testable), not as a multi-provider
+> abstraction.
 
 **Read this before touching any of:**
 
 - `src/features/conversation/engine/realtime/types.ts` (the contract)
-- `src/features/conversation/engine/realtime/index.ts` (the factory)
+- `src/features/conversation/engine/realtime/backend-controller.ts`
+  (builds the bridge + owns the vision side-channel)
 - `src/features/conversation/engine/bridge/huggingface-bridge.ts`
-- `src/features/conversation/engine/bridge/openai-bridge.ts`
 - `src/features/conversation/engine/conversation-engine.ts` (the single
   wiring point)
 
@@ -21,96 +28,52 @@ provider. Two providers ship today - **Hugging Face** (default) and
 
 ```
 conversation-engine.ts
-        │  depends on the interface only; reads the selected kind from
-        │  conversation-settings and passes provider-agnostic deps
+        │  depends on the interface only; passes provider-agnostic deps
         ▼
-  createRealtimeBackend(kind, deps)        ◀── realtime/index.ts (factory)
-        │  injects provider auth here, never in the engine
-   ┌────┴───────────────────┐
-   ▼                        ▼
-huggingface-bridge.ts   openai-bridge.ts
-   │   getHfToken            │   getApiKey (mintEphemeralKey) + model
-huggingface-realtime.ts  openai-realtime.ts
-hf-token.ts              ephemeral-key.ts
+createRealtimeBackendController(deps)   ◀── realtime/backend-controller.ts
+        │  builds the bridge once + wires vision; injects the HF token
+        ▼
+huggingface-bridge.ts
+        │  getHfToken (readHfTokenFromStorage)
+huggingface-realtime.ts
+hf-token.ts
 ```
 
-All four bridge/client files satisfy the same `RealtimeBackend` contract.
 `RealtimeStatusKind`, `RealtimeToolCallEvent`, `RealtimePort`,
 `RealtimeBackendDeps` and `RealtimeBackend` are defined once in
-`realtime/types.ts`; both bridges import them.
+`realtime/types.ts`; the bridge imports them.
 
 ## The contract (`realtime/types.ts`)
 
 `RealtimeBackendDeps` is the provider-agnostic deps the engine supplies
 (`getRobot`, `voice`, `composeInstructions`, `tools?`, and the `on*`
-callbacks). **Provider auth is intentionally NOT in it**: HF reads the
-user's stored token, OpenAI mints a short-lived ephemeral key. Each
-bridge extends the shared deps with its own credential:
+callbacks). **Provider auth is intentionally NOT in it**: the backend
+controller injects the user's stored HF token into the bridge, so the
+engine never has to know which credential the backend uses:
 
 ```ts
 interface HuggingFaceBridgeDeps extends RealtimeBackendDeps {
   getHfToken: () => string | null;
 }
-interface OpenaiBridgeDeps extends RealtimeBackendDeps {
-  getApiKey: () => Promise<string>;
-  model: string;
-}
 ```
 
-## The factory (`realtime/index.ts`)
+## The controller (`realtime/backend-controller.ts`)
 
-```ts
-export function createRealtimeBackend(
-  kind: RealtimeBackendKind,
-  deps: RealtimeBackendDeps,
-): RealtimeBackend {
-  switch (kind) {
-    case "openai":
-      return createOpenaiBridge({ ...deps, getApiKey: mintEphemeralKey, model: OPENAI_REALTIME_MODEL });
-    case "huggingface":
-      return createHuggingFaceBridge({ ...deps, getHfToken: readHfTokenFromStorage });
-  }
-}
-```
-
-The factory is the only place that injects provider auth. Adding a
-provider = one `case` here + its bridge file. The engine is untouched.
-
-## Selection (runtime)
-
-The active provider is a persisted setting, not a build flag:
-
-- Stored in `conversation-settings` (`realtimeBackend`, localStorage key
-  `reachyMini.conversationSettings.realtimeBackend`), default
-  `huggingface`.
-- UI: a two-chip selector in `ConversationSettingsPanel`
-  (`useRealtimeBackend` / `setRealtimeBackend`).
-- The engine reads `getRealtimeBackend()` lazily at each (re)connect and
-  passes it to the factory. The settings cog is disabled while a
-  conversation is live, so a change always applies on the **next**
-  conversation start - there is no live-swap path to reason about.
-
-Optional build-time override of the OpenAI model:
-`VITE_OPENAI_REALTIME_MODEL` (defaults to `gpt-realtime-2`).
+Builds the Hugging Face bridge once (injecting `readHfTokenFromStorage`
+as its auth) and wires the vision side-channel onto it. It owns the
+vision wiring - rather than the engine - because vision attaches to the
+bridge's `RealtimePort`; keeping the build + attach in one place means
+the engine can't forget to wire it.
 
 ## Provider notes
 
 - **Hugging Face**: PCM over WebSocket. The user's HF token (from the
   OAuth flow, mirrored into `sessionStorage.hf_token`) authenticates the
   session directly via `readHfTokenFromStorage`.
-- **OpenAI**: WebRTC. The phone never holds an OpenAI key; it POSTs its
-  HF token to the website's `/api/openai/ephemeral` endpoint, which mints
-  a ~10 min client secret (`ephemeral-key.ts`). That endpoint must be
-  reachable for the OpenAI path to start.
 
-## Dropping a provider (end state)
+## Voice selection
 
-If a provider is ever retired, the change is mechanical and
-self-contained:
-
-- Delete its bridge + client (+ `ephemeral-key.ts` for OpenAI).
-- Remove its `case` and its `RealtimeBackendKind` member.
-- Drop its chip from `REALTIME_BACKENDS` in `ConversationSettingsPanel`.
-
-No change to `conversation-engine.ts`, motion, vision, tools, or the FSM.
-That isolation is the whole point.
+A persona pins a single synth voice (an HF Qwen3-TTS speaker id). The
+engine reads the active persona's `voice` lazily on each (re)connect and
+snaps it onto the HF catalog via `resolvePersonaVoice` (see
+`features/personalities/builtin.ts`).

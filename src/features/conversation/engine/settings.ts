@@ -2,18 +2,14 @@
  * Engine-side fallback configuration: a default voice + system prompt.
  *
  * These are last-resort constants only. In practice the live session
- * draws its voice + instructions from the ACTIVE PERSONALITY (resolved
- * per-backend via `resolvePersonaVoice`), and the realtime provider is
- * the user's choice in the Conversation settings panel
- * (`ConversationSettingsPanel.tsx`). The shipped default provider is
- * the Hugging Face realtime backend (app-managed session allocator or
- * a direct local websocket, see `shared/env.ts`); OpenAI Realtime is
- * opt-in via that picker. See `conversation-settings/storage.ts`
- * (`DEFAULT_BACKEND`) for the persisted default.
+ * draws its voice + instructions from the ACTIVE PERSONALITY (the voice
+ * resolved via `resolvePersonaVoice`). The realtime backend is the
+ * Hugging Face realtime service (app-managed session allocator or a
+ * direct local websocket, see `shared/env.ts`).
  *
  * `DEFAULT_VOICE` is kept as an HF-shaped fallback for code paths that
  * resolve a voice before a personality is known; it is snapped to the
- * selected backend's catalog downstream.
+ * HF catalog downstream.
  */
 
 import { HF_DEFAULT_VOICE } from "./huggingface-realtime";

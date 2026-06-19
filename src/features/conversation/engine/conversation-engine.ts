@@ -143,7 +143,6 @@ import {
   getLanguagePromptAppendix,
 } from "../../conversation-language";
 import {
-  getRealtimeBackend,
   isMemoryEnabled,
   isVisionEnabled,
 } from "../../conversation-settings";
@@ -562,6 +561,7 @@ const connectionController: ConnectionController = createConnectionController({
   core,
   session,
   preselectedRobotId,
+  shouldDeferInitialWakeUp: options.shouldDeferInitialWakeUp,
   emitConnectionAttempt,
   emitErrorMessage,
   emitDaemonVersion,
@@ -729,12 +729,6 @@ async function runConversationParts(): Promise<void> {
   // `setConnectionState("live")` in `doStart`).
   setConversationState("starting");
 
-  // Swap the realtime bridge if the user changed the provider in the
-  // conversation settings since it was last built. Runs before the
-  // backend handshake below so this conversation actually talks to the
-  // selected provider (the settings cog is stopped-only, so we always
-  // reach here before the user can talk on the new backend).
-  await backend?.ensureSelection();
   if (unmounted.get()) {
     conversationStarted.off();
     return;
@@ -1000,14 +994,13 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 const realtimeBackendDeps: RealtimeBackendDeps = {
   getRobot: liveSession.getRobot,
   // Resolve the voice lazily (re-read on every `buildClient()` so a
-  // personality OR backend switch picks up the right voice on the next
-  // reconnect, without rebuilding the bridge). The persona pins one
-  // voice per backend; we pick the entry for the active backend and let
-  // `resolvePersonaVoice` snap it onto that backend's catalog (falling
-  // back to the backend default for a stale/unknown id).
+  // personality switch picks up the right voice on the next reconnect,
+  // without rebuilding the bridge). `resolvePersonaVoice` snaps the
+  // persona's voice onto the HF catalog (falling back to the default
+  // for a stale/unknown id).
   voice: () => {
     const personality = getActivePersonality();
-    return resolvePersonaVoice(personality.voices, getRealtimeBackend());
+    return resolvePersonaVoice(personality.voice);
   },
   // Keep the input transcriber's language in sync with the app-wide
   // conversation-language preference (same id used for the prompt
@@ -1142,13 +1135,11 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
 
 // ─── Realtime backend controller ───────────────────────────────────────
 //
-// Owns the live provider-specific bridge AND the vision side-channel
-// wired onto it. The bridge is read from the conversation settings at
-// construction and re-checked at every conversation (re)start (via
-// `backend.ensureSelection()` in `runConversationParts`) so a switch in
-// the stopped-only settings cog actually swaps the transport: the
-// bridge is provider-specific (HF realtime vs OpenAI realtime), and the
-// lazily-read voice / prompt / tools alone can't change it.
+// Owns the live Hugging Face realtime bridge AND the vision side-channel
+// wired onto it. The bridge is built once here (there is a single
+// realtime backend); the lazily-read voice / prompt / tools let a
+// personality, language or tool change apply on the next conversation
+// start without rebuilding it.
 //
 // Vision side-channel (see `docs/VISION.md`)
 // ──────────────────────────────────────────
@@ -1157,8 +1148,8 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
 // mirrored into the realtime context as a `<scene_observation>` block.
 // `attachVision` returns null when no HF token is available, and every
 // call site degrades to a no-op via optional chaining. Vision lives on
-// the bridge's `RealtimePort`, so it dies on a swap - the controller
-// re-attaches it atomically, hence the `attachVision` callback here.
+// the bridge's `RealtimePort`; the controller keeps the build + attach
+// in one place so the engine can't forget to wire it.
 //
 // The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits Hugging
 // Face's Inference Providers router with the USER'S OWN HF token (the
@@ -1166,11 +1157,8 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
 // allocator), deliberately decoupling vision from the voice pipeline:
 //   - no master model-provider key on the wire (no server-side proxy, no shared bill);
 //   - per-user billing (each user's calls land on their own HF tier);
-//   - backend-swap-friendly: switching the conversation provider doesn't
-//     touch vision; changing the VLM model is a one-line edit in
-//     `vision/config.ts`.
+//   - changing the VLM model is a one-line edit in `vision/config.ts`.
 backend = createRealtimeBackendController({
-  getSelectedKind: getRealtimeBackend,
   bridgeDeps: realtimeBackendDeps,
   attachVision: (bridge) =>
     attachVision({
