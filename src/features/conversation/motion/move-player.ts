@@ -189,7 +189,7 @@ interface MoveFile {
 }
 
 interface LoadedMove {
-  readonly id: MoveId;
+  readonly id: string;
   readonly description: string;
   readonly duration: number;
   readonly times: readonly number[];
@@ -349,46 +349,73 @@ export class MovePlayer {
    * Safe to call ahead of time to prewarm a move that's likely to play.
    */
   async load(id: MoveId): Promise<LoadedMove> {
-    const cached = this.cache.get(id);
-    if (cached) return cached;
-
     const entry = findMove(id);
     if (!entry) throw new Error(`Unknown move id '${id}'`);
-
     const url = `${HF_DATASET_BASE}/${entry.dataset}/resolve/main/${encodeURIComponent(entry.file)}.json`;
+    return this.loadFrom(id, url, entry.description);
+  }
+
+  /**
+   * Load (or hit cache) a recorded move from an arbitrary dataset resolve
+   * URL. `cacheKey` namespaces the in-memory cache; pass a stable string.
+   * Used for moves outside the curated catalog (e.g. the persona-change
+   * FX in `tfrere/reachy-personalities`).
+   */
+  async loadFrom(
+    cacheKey: string,
+    url: string,
+    fallbackDescription = "",
+  ): Promise<LoadedMove> {
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
+
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(
-        `Failed to fetch move '${id}' from ${entry.dataset}: ${response.status} ${response.statusText}`,
+        `Failed to fetch move '${cacheKey}' from ${url}: ${response.status} ${response.statusText}`,
       );
     }
     const raw = (await response.json()) as MoveFile;
     if (!Array.isArray(raw.time) || !Array.isArray(raw.set_target_data)) {
-      throw new Error(`Malformed move file '${id}'`);
+      throw new Error(`Malformed move file '${cacheKey}'`);
     }
     if (raw.time.length !== raw.set_target_data.length) {
-      throw new Error(`Move '${id}' has mismatched time/frame lengths`);
+      throw new Error(`Move '${cacheKey}' has mismatched time/frame lengths`);
     }
 
     const move: LoadedMove = {
-      id,
-      description: raw.description ?? entry.description,
+      id: cacheKey,
+      description: raw.description ?? fallbackDescription,
       times: raw.time.slice(),
       frames: raw.set_target_data,
       duration: raw.time[raw.time.length - 1] ?? 0,
     };
-    this.cache.set(id, move);
+    this.cache.set(cacheKey, move);
     return move;
   }
 
   /**
-   * Play a move. If another move is already streaming it is cancelled
-   * first. Resolves when the move finishes (or is cancelled via `stop()`).
+   * Play a curated catalog move. If another move is already streaming it
+   * is cancelled first. Resolves when the move finishes (or is cancelled
+   * via `stop()`).
    */
   async play(id: MoveId): Promise<void> {
     const move = await this.load(id);
-    this.stop();
+    return this.startStreaming(move);
+  }
 
+  /**
+   * Play a recorded move fetched from an arbitrary dataset resolve URL.
+   * Same playback semantics as `play()`; for moves outside the curated
+   * catalog (e.g. the persona-change FX).
+   */
+  async playUrl(cacheKey: string, url: string): Promise<void> {
+    const move = await this.loadFrom(cacheKey, url);
+    return this.startStreaming(move);
+  }
+
+  private startStreaming(move: LoadedMove): Promise<void> {
+    this.stop();
     return new Promise<void>((resolve) => {
       this.onFinish = resolve;
       this.current = { move, t0: performance.now() / 1000 };

@@ -3,9 +3,8 @@
  *
  * A personality is the "skin" applied to the conversation:
  *   - `instructions`: system prompt fed to the realtime backend
- *   - `voices`       : one synth voice per realtime backend (HF +
- *                      OpenAI), resolved by the engine against the
- *                      active backend
+ *   - `voice`        : the synth voice (an HF Qwen3-TTS speaker id),
+ *                      snapped to the catalog by the engine
  *   - `glow`         : accent colour driving the orb's warm-up states
  *                      (idle / connecting / ready). Mid-conversation
  *                      states (listening / processing / ai-speaking)
@@ -24,22 +23,6 @@
 
 export type PersonalityKind = 'builtin' | 'custom';
 
-/**
- * Per-backend synth voice assignment. Each realtime backend exposes a
- * disjoint voice catalog (HF Qwen3-TTS speakers vs OpenAI realtime
- * voices), so a persona pins one id for each. The engine reads the
- * entry matching the active backend at connection time. There is no
- * manual voice picker: built-ins ship a curated pair, and custom
- * personas get one authored from their vibe (the OpenAI entry is
- * derived from the HF pick via a fixed mapping).
- */
-export interface PersonaVoices {
-  /** Hugging Face Qwen3-TTS speaker id (e.g. `Aiden`). */
-  huggingface: string;
-  /** OpenAI realtime voice id (e.g. `cedar`). */
-  openai: string;
-}
-
 export interface Personality {
   /** Stable identifier. Built-in: `builtin:<slug>`. Custom: `custom:<slug>`. */
   id: string;
@@ -54,10 +37,9 @@ export interface Personality {
   tagline: string;
   /** Full system prompt sent to the realtime backend. */
   instructions: string;
-  /** One synth voice per realtime backend. The engine picks the entry
-   *  matching the active backend; an empty/unknown id falls back to
-   *  that backend's default voice. */
-  voices: PersonaVoices;
+  /** Synth voice (HF Qwen3-TTS speaker id). The engine snaps it to the
+   *  catalog; an empty/unknown id falls back to the default voice. */
+  voice: string;
   /** Hex colour used for the orb glow during warm-up states. */
   glow: string;
   /** Vite-imported avatar URL. */
@@ -66,16 +48,16 @@ export interface Personality {
 
 /**
  * Shape of the data the user supplies when creating a custom
- * personality. Voices / glow are optional - we fall back to the
- * default values when they're absent. The voice picker is gone: the
- * generator supplies the HF voice (the OpenAI entry is derived), and a
- * plain edit omits `voices` to keep the persona's existing pair.
+ * personality. Voice / glow are optional - we fall back to the default
+ * values when they're absent. The voice picker is gone: the generator
+ * supplies the voice, and a plain edit omits `voice` to keep the
+ * persona's existing one.
  */
 export interface CustomPersonalityInput {
   name: string;
   tagline?: string;
   instructions: string;
-  voices?: Partial<PersonaVoices>;
+  voice?: string;
   glow?: string;
   /**
    * Avatar image src. Usually a generated-sticker data URI

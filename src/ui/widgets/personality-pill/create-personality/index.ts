@@ -9,6 +9,9 @@ export { NAME_MAX, TAGLINE_MAX, VIBE_MAX, ctaSx, diceBtnSx, genBtnSx, shrinkLabe
 export { useVibeRoll } from './useVibeRoll';
 export type { VibeRoll } from './useVibeRoll';
 
+export { useVoiceAudition } from './useVoiceAudition';
+export type { VoiceAudition } from './useVoiceAudition';
+
 export { CreatePersonalityHero } from './Hero';
 export type { CreatePersonalityHeroProps } from './Hero';
 export { CreatePersonalityGenerating } from './Generating';
