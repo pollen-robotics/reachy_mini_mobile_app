@@ -59,9 +59,12 @@ interface LinkQualityBarsProps {
   level: LinkQuality;
   /** Accessible label / tooltip; defaults to the level's word. */
   title?: string;
+  /** Size multiplier applied to bar widths, heights, and the gap.
+   *  Defaults to `1` (the compact topbar size). */
+  scale?: number;
 }
 
-export function LinkQualityBars({ level, title }: LinkQualityBarsProps) {
+export function LinkQualityBars({ level, title, scale = 1 }: LinkQualityBarsProps) {
   const meta = LEVEL_META[level];
   const label = title ?? `Link quality: ${meta.label}`;
 
@@ -71,10 +74,10 @@ export function LinkQualityBars({ level, title }: LinkQualityBarsProps) {
       aria-label={label}
       title={label}
       direction="row"
-      spacing="2px"
+      spacing={`${2 * scale}px`}
       sx={{
         alignItems: 'flex-end',
-        height: BAR_HEIGHTS_PX[BAR_HEIGHTS_PX.length - 1],
+        height: BAR_HEIGHTS_PX[BAR_HEIGHTS_PX.length - 1] * scale,
       }}
     >
       {BAR_HEIGHTS_PX.map((h, i) => {
@@ -83,8 +86,8 @@ export function LinkQualityBars({ level, title }: LinkQualityBarsProps) {
           <Box
             key={i}
             sx={{
-              width: BAR_WIDTH_PX,
-              height: h,
+              width: BAR_WIDTH_PX * scale,
+              height: h * scale,
               borderRadius: '1px',
               bgcolor: lit
                 ? (meta.color ?? 'text.disabled')

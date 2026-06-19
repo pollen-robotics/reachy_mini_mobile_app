@@ -37,9 +37,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
+import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import {
   mountConversation,
-  type AppState,
+  type ConnectionState,
+  type ConversationState,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
@@ -57,10 +59,13 @@ export interface RobotSessionHandle {
   /** High-level phase observed by the host. Use this to drive the
    *  primary transition overlays (connecting / leaving / etc.). */
   phase: SessionPhase;
-  /** Raw engine FSM state. Use this for the orb chrome or for
-   *  fine-grained UX (e.g. distinguishing `listening` from `ai-
-   *  speaking`). */
-  engineState: AppState;
+  /** Transport / connection FSM state. Drives the bring-up overlay
+   *  and the "is a robot reachable" question. */
+  connectionState: ConnectionState;
+  /** AI conversation FSM state. Use this for the orb chrome's live
+   *  visual (distinguishing `listening` from `ai-speaking`, etc.).
+   *  Only ever non-`idle` while `connectionState === 'live'`. */
+  conversationState: ConversationState;
   /** Last fatal error message surfaced by the engine, or null. */
   errorMessage: string | null;
   /** Mic gate state mirrored from the engine. */
@@ -102,6 +107,17 @@ export interface RobotSessionHandle {
    * renders whatever lands in this state.
    */
   webrtcTransport: ConversationTransportInfo | null;
+  /**
+   * Daemon version resolved as part of the connection bring-up (emitted
+   * just before the connection reaches `live`), or `null` when unknown
+   * (read timed out / daemon doesn't expose a version / pre-`live`).
+   *
+   * This is the source of truth for the update gate: because it lands
+   * BEFORE the session UI is shown, the gate can decide without the
+   * post-connect "pop" the old post-`ready` round-trip caused. Reset to
+   * `null` on `tearDown()`; re-emitted after a post-update reboot.
+   */
+  daemonVersion: string | null;
 
   /** Conversation parts (D layer): start / stop the HF realtime
    *  pipeline, antennas, head wobbler. No-op if the engine isn't
@@ -138,18 +154,6 @@ export interface RobotSessionHandle {
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
   tearDown: () => Promise<void>;
-  /**
-   * Bind a `<video>` element to the robot's camera stream. Returns a
-   * detach function the caller MUST run on unmount. The binding is
-   * resilient to release / reacquire cycles (the SDK clears the
-   * `srcObject` on `stopSession` and refills it on the next
-   * `videoTrack` event), so the host can attach once and forget.
-   *
-   * Safe to call before the engine has finished mounting: if the
-   * underlying SDK instance isn't ready yet we return a no-op so the
-   * host's effect cleanup is symmetric.
-   */
-  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 
   // ─── Audio volume controls (pass-through to the SDK) ──────────────
   //
@@ -170,6 +174,11 @@ export interface RobotSessionHandle {
    *  when the channel isn't open or the daemon predates `get_version`. */
   getDaemonVersion: () => Promise<string | null>;
 
+  /** Trigger a daemon self-update over the data channel (fire-and-ack;
+   *  the daemon updates then `systemctl restart`s, dropping the
+   *  session). Returns `false` when the channel isn't open. */
+  startDaemonUpdate: (options?: { preRelease?: boolean }) => boolean;
+
   /**
    * Latest measured microphone level in [0, 1]. Sampled on every
    * audio frame inside the engine (via the level monitor's `onLevels`
@@ -188,41 +197,6 @@ export interface RobotSessionHandle {
   playSound: (file: string) => boolean;
 
   /**
-   * Push an absolute head orientation (degrees) to the robot. Thin
-   * pass-through to the engine's `setHeadRpyDeg`. Used by manual
-   * control surfaces like the camera-tab joystick; never used while
-   * a conversation is active (the conversation owns the head via
-   * its pose dispatcher).
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setHeadRpyDeg: (rollDeg: number, pitchDeg: number, yawDeg: number) => boolean;
-
-  /**
-   * Push an absolute body yaw target (degrees) to the robot. Thin
-   * pass-through to the engine's `setBodyYawDeg`. Used by the
-   * camera-tab joystick when the head saturates and the user keeps
-   * pushing - the velocity controller spills overflow yaw demand
-   * into the base so the user can scan the room past the head's
-   * hard stop. Never used while a conversation is active (the
-   * dispatcher owns body_yaw too).
-   *
-   * IMPORTANT: the daemon's safe-IK clamps any body_yaw we send to
-   * keep `|head_yaw_world - body_yaw| ≤ 65°`. The joystick controller
-   * stays under that envelope by tracking the head yaw RELATIVE to the
-   * base (`headYawRel`) and clamping it inside the constants, then
-   * composing the world-frame head command as `headYawRel + bodyYaw`
-   * - so the relative twist is constant by construction and the
-   * IK never has to rewrite our target. See
-   * `useHeadVelocityControl.ts` for the full picture.
-   *
-   * Returns `true` when the command was queued, `false` if the
-   * engine isn't ready or the DC is down. Non-throwing.
-   */
-  setBodyYawDeg: (yawDeg: number) => boolean;
-
-  /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
    * stream over the WebRTC data channel. Returns an `unsubscribe()`
    * callback that's safe to call more than once.
@@ -237,6 +211,20 @@ export interface RobotSessionHandle {
     onLine: (entry: { timestamp: string; line: string }) => void;
     onError?: (error: string) => void;
   }) => () => void;
+
+  /**
+   * Raw SDK instance accessor, or `null` when no session is live.
+   * Low-level escape hatch for the first wake-up wizard (reading the
+   * robot mic track off `_pc`, replaying the wake-up trajectory). Most
+   * consumers should prefer the dedicated pass-throughs above.
+   */
+  getRobot: () => ReachyMiniInstance | null;
+
+  /**
+   * Bind the robot's video stream to a `<video>` element (with cache
+   * replay for late mounts). Returns a detach callback.
+   */
+  attachVideo: (videoElement: HTMLVideoElement) => () => void;
 }
 
 interface UseRobotSessionOptions {
@@ -251,6 +239,11 @@ interface UseRobotSessionOptions {
    *  spin up at conversation-start time, so it's fine for this ref
    *  to populate slightly after the hook mounts. */
   audioLevelsTargetRef: React.RefObject<HTMLElement | null>;
+  /** Bring-up gate: when it returns true, the engine defers the initial
+   *  wake-up to the host so the first-wake-up wizard's motor step owns
+   *  the very first `wakeUp()`. Evaluated fresh on every bring-up (read
+   *  through a ref), so the host can flip it between sessions. */
+  shouldDeferInitialWakeUp?: () => boolean;
 }
 
 const TOOL_TOAST_MIN_MS = 1500;
@@ -259,14 +252,23 @@ export function useRobotSession({
   robotId,
   token,
   audioLevelsTargetRef,
+  shouldDeferInitialWakeUp,
 }: UseRobotSessionOptions): RobotSessionHandle {
   const handleRef = useRef<ConversationEngineHandle | null>(null);
+  // Keep the latest host getter in a ref so the engine (mounted once per
+  // `robotId`) always reads the current value at bring-up instead of the
+  // closure captured on first render.
+  const shouldDeferInitialWakeUpRef = useRef(shouldDeferInitialWakeUp);
+  shouldDeferInitialWakeUpRef.current = shouldDeferInitialWakeUp;
   // Used for StrictMode-safe mount: a fast remount could race with
   // the previous engine's teardown if we didn't gate on a per-mount
   // cancel token.
   const cancelTokenRef = useRef<{ cancelled: boolean } | null>(null);
 
-  const [engineState, setEngineState] = useState<AppState>('signed-out');
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>('signed-out');
+  const [conversationState, setConversationState] =
+    useState<ConversationState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [toolToastLabel, setToolToastLabel] = useState<string | null>(null);
@@ -274,6 +276,7 @@ export function useRobotSession({
     "info",
   );
   const [hasReachedReady, setHasReachedReady] = useState(false);
+  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
   const [webrtcTransport, setWebrtcTransport] =
@@ -303,22 +306,16 @@ export function useRobotSession({
     }
   }, [token]);
 
-  // Sticky `hasReachedReady` latch. We flip on the first `ready`-or-
-  // further state. Stays true through a release+reacquire cycle so
+  // Sticky `hasReachedReady` latch. We flip on the first `live`
+  // connection. Stays true through a release+reacquire cycle so
   // the host doesn't replay the connecting overlay every time. Reset
   // explicitly inside `tearDown()` so the next session starts fresh.
   useEffect(() => {
     if (hasReachedReady) return;
-    if (
-      engineState === 'ready' ||
-      engineState === 'listening' ||
-      engineState === 'user-speaking' ||
-      engineState === 'processing' ||
-      engineState === 'ai-speaking'
-    ) {
+    if (connectionState === 'live') {
       setHasReachedReady(true);
     }
-  }, [engineState, hasReachedReady]);
+  }, [connectionState, hasReachedReady]);
 
   // Engine lifecycle. Mounts on first render with the current
   // `robotId`; tears down on unmount or on a `robotId` change. The
@@ -340,6 +337,10 @@ export function useRobotSession({
       const handle = mountConversation(inertRoot, {
         preselectedRobotId: robotId,
         autoStartConversation: false,
+        // Read through the ref so the engine always sees the host's
+        // current first-wake-up decision, not the one at mount time.
+        shouldDeferInitialWakeUp: () =>
+          shouldDeferInitialWakeUpRef.current?.() ?? false,
         // Pass a *getter*, not `audioLevelsTargetRef.current`: the
         // orb DOM may be unmounted/remounted while the engine
         // stays alive (tab switches between Conv ↔ Apps, iframe
@@ -347,9 +348,13 @@ export function useRobotSession({
         // audio frame so its CSS-var writes always hit the
         // currently-mounted orb instead of an old detached node.
         audioLevelsTarget: () => audioLevelsTargetRef.current,
-        onStateChange: (state) => {
+        onConnectionStateChange: (state) => {
           if (cancelToken.cancelled) return;
-          setEngineState(state);
+          setConnectionState(state);
+        },
+        onConversationStateChange: (state) => {
+          if (cancelToken.cancelled) return;
+          setConversationState(state);
         },
         onErrorMessageChange: (message) => {
           if (cancelToken.cancelled) return;
@@ -374,6 +379,10 @@ export function useRobotSession({
         onConnectionAttempt: (info) => {
           if (cancelToken.cancelled) return;
           setConnectionAttempt(info);
+        },
+        onDaemonVersionChange: (version) => {
+          if (cancelToken.cancelled) return;
+          setDaemonVersion(version);
         },
         onTransportChange: (info) => {
           if (cancelToken.cancelled) return;
@@ -499,13 +508,11 @@ export function useRobotSession({
       // we kept the stale one the badge would show a confusing
       // "previous run" value during the connecting overlay.
       setWebrtcTransport(null);
+      // Same reasoning for the version: the next bring-up re-resolves
+      // it, so drop the stale value to keep the update gate dormant
+      // until the fresh read lands.
+      setDaemonVersion(null);
     }
-  }, []);
-
-  const attachVideo = useCallback((el: HTMLVideoElement): (() => void) => {
-    const handle = handleRef.current;
-    if (!handle) return () => {};
-    return handle.attachVideo(el);
   }, []);
 
   // Audio volume pass-throughs. All four return `null` if the
@@ -540,6 +547,13 @@ export function useRobotSession({
     return handleRef.current?.getDaemonVersion() ?? Promise.resolve(null);
   }, []);
 
+  const startDaemonUpdate = useCallback(
+    (options?: { preRelease?: boolean }): boolean => {
+      return handleRef.current?.startDaemonUpdate(options) ?? false;
+    },
+    [],
+  );
+
   // Mic level getter: the engine writes its smoothed value into a
   // closure-level variable on every audio frame; here we just read
   // it via the handle. Returning `0` when the engine isn't mounted
@@ -552,18 +566,16 @@ export function useRobotSession({
     return handleRef.current?.playSound(file) ?? false;
   }, []);
 
-  const setHeadRpyDeg = useCallback(
-    (rollDeg: number, pitchDeg: number, yawDeg: number): boolean => {
-      return (
-        handleRef.current?.setHeadRpyDeg(rollDeg, pitchDeg, yawDeg) ?? false
-      );
+  const getRobot = useCallback((): ReachyMiniInstance | null => {
+    return handleRef.current?.getRobot() ?? null;
+  }, []);
+
+  const attachVideo = useCallback(
+    (videoElement: HTMLVideoElement): (() => void) => {
+      return handleRef.current?.attachVideo(videoElement) ?? (() => {});
     },
     [],
   );
-
-  const setBodyYawDeg = useCallback((yawDeg: number): boolean => {
-    return handleRef.current?.setBodyYawDeg(yawDeg) ?? false;
-  }, []);
 
   const subscribeLogs = useCallback<RobotSessionHandle['subscribeLogs']>(
     (options) => {
@@ -574,16 +586,18 @@ export function useRobotSession({
     [],
   );
 
-  const phase = derivePhase(engineState, phaseHint);
+  const phase = derivePhase(connectionState, phaseHint);
 
   return {
     phase,
-    engineState,
+    connectionState,
+    conversationState,
     errorMessage,
     micMuted,
     toolToastLabel,
     toolToastVariant,
     hasReachedReady,
+    daemonVersion,
     connectionAttempt,
     webrtcTransport,
     startConversation,
@@ -595,16 +609,16 @@ export function useRobotSession({
     releaseForHandoff,
     reacquire,
     tearDown,
-    attachVideo,
     getSpeakerVolume,
     setSpeakerVolume,
     getMicrophoneVolume,
     setMicrophoneVolume,
     getDaemonVersion,
+    startDaemonUpdate,
     getMicLevel,
     playSound,
-    setHeadRpyDeg,
-    setBodyYawDeg,
     subscribeLogs,
+    getRobot,
+    attachVideo,
   };
 }

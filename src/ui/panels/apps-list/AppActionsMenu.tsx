@@ -195,8 +195,8 @@ export default function AppActionsMenu({
         size="small"
         sx={{
           p: 0.25,
-          color: 'text.secondary',
-          '&:hover': { color: 'text.primary' },
+          color: 'primary.main',
+          '&:hover': { color: 'primary.dark' },
           ...buttonSx,
         }}
       >

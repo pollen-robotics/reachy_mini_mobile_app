@@ -10,12 +10,14 @@
  * and `derivePhase` from here so existing imports keep working.
  */
 
-import type { AppState } from '@/features/conversation/engine/types';
+import type { ConnectionState } from '@/features/conversation/engine/types';
 
 /**
  * High-level session phase observed by the host. Derived from the
- * engine's `AppState` plus the in-flight handoff transitions that
- * the engine doesn't track itself.
+ * engine's `ConnectionState` plus the in-flight handoff transitions
+ * that the engine doesn't track itself. The conversation FSM does NOT
+ * factor in: a live conversation always runs on a `live` connection,
+ * which already maps to the `'live'` phase.
  */
 export type SessionPhase =
   /** No engine yet (initial render, or after teardown). */
@@ -39,32 +41,28 @@ export type SessionPhase =
   | 'error';
 
 /**
- * Map an engine `AppState` to the host-facing session phase, given
- * a `phaseHint` that captures the in-flight handoff transitions
+ * Map an engine `ConnectionState` to the host-facing session phase,
+ * given a `phaseHint` that captures the in-flight handoff transitions
  * (which the engine itself doesn't track).
  *
- * The hint takes precedence over the engine state EXCEPT for the
+ * The hint takes precedence over the connection state EXCEPT for the
  * `'idle'` value, which is the post-teardown reset and lets the
  * engine drive the UI again on the next mount.
  */
 export function derivePhase(
-  engineState: AppState,
+  connectionState: ConnectionState,
   phaseHint: SessionPhase | null,
 ): SessionPhase {
   if (phaseHint && phaseHint !== 'idle') return phaseHint;
-  switch (engineState) {
+  switch (connectionState) {
     case 'signed-out':
     case 'authenticated':
     case 'connecting':
     case 'connected':
-    case 'auto-selecting':
+    case 'selecting':
     case 'starting':
       return 'bringing-up';
-    case 'ready':
-    case 'listening':
-    case 'user-speaking':
-    case 'processing':
-    case 'ai-speaking':
+    case 'live':
       return 'live';
     case 'released':
       return 'released';

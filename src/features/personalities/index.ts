@@ -8,7 +8,6 @@
  */
 export type {
   CustomPersonalityInput,
-  PersonaVoices,
   Personality,
   PersonalityKind,
 } from './types';
@@ -19,10 +18,12 @@ export {
   DEFAULT_GLOW,
   DEFAULT_PERSONALITY_ID,
   GLOW_PALETTE,
+  VOICE_DESCRIPTIONS,
   getDefaultPersonality,
   resolvePersonaVoice,
 } from './builtin';
 export type { VoiceId } from './builtin';
+export { VOICE_SAMPLES, getVoiceSampleUrl } from './voice-samples';
 export {
   generatePersonality,
   generateRandomPersonality,

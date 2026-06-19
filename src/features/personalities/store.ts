@@ -31,8 +31,7 @@ import {
   DEFAULT_GLOW,
   DEFAULT_PERSONALITY_ID,
   getDefaultPersonality,
-  hfVoiceToOpenai,
-  snapVoiceForBackend,
+  snapVoice,
 } from './builtin';
 import {
   readActivePersonalityId,
@@ -40,27 +39,9 @@ import {
   writeActivePersonalityId,
   writeCustomPersonalities,
 } from './storage';
-import type { CustomPersonalityInput, PersonaVoices, Personality } from './types';
+import type { CustomPersonalityInput, Personality } from './types';
 
 type Listener = () => void;
-
-/**
- * Resolve the per-backend voices for a custom persona from the authoring
- * input. The voice picker is gone, so callers usually supply only the
- * HF voice (authored from the persona's vibe); the OpenAI entry is
- * derived from it unless explicitly provided. Each id is snapped to its
- * backend catalog, falling back to the backend default.
- */
-function resolveInputVoices(
-  voices: Partial<PersonaVoices> | undefined,
-): PersonaVoices {
-  const huggingface = snapVoiceForBackend('huggingface', voices?.huggingface);
-  const openai =
-    voices?.openai != null
-      ? snapVoiceForBackend('openai', voices.openai)
-      : hfVoiceToOpenai(huggingface);
-  return { huggingface, openai };
-}
 
 interface State {
   customs: Personality[];
@@ -198,7 +179,7 @@ export function addCustomPersonality(input: CustomPersonalityInput): Personality
     name: input.name.trim(),
     tagline: (input.tagline ?? '').trim(),
     instructions: input.instructions.trim(),
-    voices: resolveInputVoices(input.voices),
+    voice: snapVoice(input.voice),
     glow: input.glow ?? DEFAULT_GLOW,
     avatar: input.avatar?.trim() || DEFAULT_AVATAR_URL,
   };
@@ -226,9 +207,9 @@ export function updateCustomPersonality(
     name: input.name.trim(),
     tagline: (input.tagline ?? '').trim(),
     instructions: input.instructions.trim(),
-    // The editor no longer collects voices; keep the persona's existing
-    // pair unless the generator supplied a fresh one.
-    voices: input.voices ? resolveInputVoices(input.voices) : prev.voices,
+    // The editor no longer collects a voice; keep the persona's existing
+    // one unless the generator supplied a fresh one.
+    voice: input.voice ? snapVoice(input.voice) : prev.voice,
     glow: input.glow ?? prev.glow ?? DEFAULT_GLOW,
     // Only overwrite the avatar when a new one is supplied; an
     // omitted avatar keeps whatever the persona already had (e.g. a

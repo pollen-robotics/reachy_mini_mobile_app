@@ -29,8 +29,9 @@
  * session through that hook and pipes user actions into it.
  *
  * `<ConversationPanel>` is a pure D-layer consumer: it renders the
- * orb chrome from `session.engineState` and forwards user gestures
- * to `session.triggerOrbAction()` / `session.setMicMuted()` etc.
+ * orb chrome from `session.connectionState` + `session.conversationState`
+ * and forwards user gestures to `session.triggerOrbAction()` /
+ * `session.setMicMuted()` etc.
  * It never decides when to connect, when to wake, or when to put
  * the robot to sleep.
  *
@@ -70,11 +71,11 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 
 import AppsIcon from '@/ui/design/icons/AppsIcon';
-import MicIcon from '@/ui/design/icons/MicIcon';
+import ChatBubbleIcon from '@/ui/design/icons/ChatBubbleIcon';
 
 import {
   extractRobotHardwareId,
@@ -84,25 +85,22 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
-// `CameraOverlay` is intentionally NOT imported here at the moment.
-// The conversation tab keeps the orb visually clean (no floating
-// PIP). Re-add the import + render it back inside the
-// `tab === 'conv'` block if/when we want a small PIP during
-// conversations (the underlying `VideoFeed` already supports
-// release/reacquire and concurrent mounts on the same SDK track).
-// Full-frame camera + manual head steering live in the dedicated
-// telepresence app.
+import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
+import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
+import DaemonUpdateGate from './session/DaemonUpdateGate';
+import FirstWakeUpWizard from './session/first-wake-up';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
+import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -162,6 +160,16 @@ interface ConnectedSessionProps {
 }
 
 /**
+ * Master switch for the first wake-up wizard. TEMPORARY: kept OFF for
+ * now while the flow is still being polished. When `false`, the wizard
+ * never mounts AND the bring-up wakes the robot itself as usual (the
+ * `shouldDeferInitialWakeUp` gate stays closed because `wakeUpDone`
+ * starts `true`), so it stays disabled on the first connection and on
+ * every reconnect. Flip to `true` to re-enable the wizard.
+ */
+const FIRST_WAKE_UP_WIZARD_ENABLED = false;
+
+/**
  * Inner component split from the export so we can call
  * `useRobotSession()` only AFTER we've validated `robotId` is non-
  * null. React doesn't allow conditional hook calls; nesting the
@@ -178,11 +186,31 @@ function ConnectedSession({
   onBack,
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
+
+  // First wake-up wizard. TEMPORARY: gated behind
+  // `FIRST_WAKE_UP_WIZARD_ENABLED` (currently OFF). When disabled we seed
+  // `wakeUpDone` to `true` so the wizard never mounts - on the first
+  // connection AND on every reconnect - and the bring-up wakes the robot
+  // itself. When re-enabled it starts `false` and, with no persistence
+  // yet, triggers on EVERY connection until the daemon/SDK
+  // `get/set_first_wake_up` flag lands.
+  //
+  // Declared BEFORE `useRobotSession` so we can hand the engine a
+  // first-wake-up gate: while the wizard is still pending we defer the
+  // bring-up wake-up to it (its motor step plays the wake trajectory),
+  // and once it's done (or the wizard is disabled) we wake on connect.
+  const [wakeUpDone, setWakeUpDone] = useState(!FIRST_WAKE_UP_WIZARD_ENABLED);
+
   const session = useRobotSession({
     robotId,
     token,
     audioLevelsTargetRef: orbRef,
+    shouldDeferInitialWakeUp: () => !wakeUpDone,
   });
+
+  // Latest published daemon version (GitHub). Fail-open: `null` until it
+  // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
+  const latestDaemonVersion = useLatestDaemonVersion();
 
   // Remember which personality this robot is wearing, keyed by its
   // stable hardware id, so the discovery list ("Your Reachies") can
@@ -198,6 +226,16 @@ function ConnectedSession({
   useEffect(() => {
     rememberRobotPersona(robotMemoryKey, activePersona.id);
   }, [robotMemoryKey, activePersona.id]);
+
+  // Play a short choreography on the robot whenever the user switches
+  // personality. Gated on a live transport with NO conversation running
+  // (persona switching only happens from the idle picker), so the move
+  // never fights the conversation's live motion stack.
+  useChangePersonaAnimation({
+    getRobot: session.getRobot,
+    isLive: session.connectionState === 'live',
+    isIdle: session.conversationState === 'idle',
+  });
 
   const [tab, setTab] = useState<Tab>('conv');
   // The conv tab is kept mounted (just `display: none`d) so its orb
@@ -244,15 +282,23 @@ function ConnectedSession({
    * release.
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
+  // Robot Settings overlay, toggled from the topbar cog. This is now the
+  // single topbar sheet: it leads with robot-level Audio + the
+  // conversation options, and drills into "About & diagnostics" (the old
+  // info panel: hardware id, connection, software, account, live logs)
+  // via `settingsView`. `position: fixed` under the topbar; covers the
+  // body + bottom nav, so it stays put until dismissed. Mounted /
+  // unmounted via the flag (the daemon log buffer is gated inside
+  // `useDaemonLogs` on the engine being live, and the content is cheap
+  // to remount).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /**
-   * Robot-info panel visibility. The panel itself is mounted /
-   * unmounted via this flag (no need to keep a hidden subscription
-   * alive: the daemon log buffer that the panel reads is gated
-   * inside `useDaemonLogs` on the engine being live, and the
-   * panel's content is cheap to remount). Topbar `ⓘ` toggles, X
-   * inside the panel sets to `false`.
+   * Which Settings page is showing: the root list, or the drilled-in
+   * "About & diagnostics" sub-page (the old `RobotInfoPanel`). Reset to
+   * `'root'` every time the overlay is toggled so it always opens at the
+   * top level and a fresh open never lands deep in diagnostics.
    */
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState<'root' | 'about'>('root');
 
   // Daemon version is fetched (with retry-on-null) by the
   // `<DaemonStateProvider>` further down and read by the info sheet
@@ -387,14 +433,14 @@ function ConnectedSession({
   // the module level, so other screens can opt into the same lock
   // without coordination.
   const isConversing =
-    session.engineState === 'listening' ||
-    session.engineState === 'user-speaking' ||
-    session.engineState === 'processing' ||
-    session.engineState === 'ai-speaking';
+    session.conversationState === 'listening' ||
+    session.conversationState === 'user-speaking' ||
+    session.conversationState === 'processing' ||
+    session.conversationState === 'ai-speaking';
   const isBringingUp =
-    session.engineState === 'connecting' ||
-    session.engineState === 'auto-selecting' ||
-    session.engineState === 'starting';
+    session.connectionState === 'connecting' ||
+    session.connectionState === 'selecting' ||
+    session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
   useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
 
@@ -455,15 +501,14 @@ function ConnectedSession({
          * transport chip (Wi-Fi / USB) + short hardware id.
          *
          * Right edge carries two icon buttons:
-         *   - `[ⓘ]` opens `<RobotInfoPanel>` with the debug-grade
-         *     signals (daemon version, live WebRTC kind + IP +
-         *     bitrate) and the daemon log tail. The info button
-         *     replaces what used to be a dedicated `Robot` tab in
-         *     the bottom-nav; same surface, on-demand instead of
-         *     always-mounted. While the panel is open the glyph
-         *     swaps to a cross (`✕`) so a second tap dismisses;
-         *     the panel itself doesn't paint its own close button
-         *     (the session topbar IS the chrome for it).
+         *   - `[⚙]` opens the robot Settings sheet (Audio + the
+         *     conversation options). The debug-grade signals (daemon
+         *     version, live WebRTC kind + IP + bitrate, daemon log
+         *     tail) that used to sit behind a dedicated `[ⓘ]` button
+         *     now live one level deeper, behind the Settings sheet's
+         *     "About & diagnostics" row (`<RobotInfoPanel>` as a
+         *     drilled-in sub-page). While the sheet is open the cog
+         *     glyph swaps to a cross (`✕`) so a second tap dismisses.
          *   - `[⏻]` powers the robot down (gotoSleep + motors
          *     disabled + stopSession + disconnect). Rightmost glyph
          *     by design: it's destructive, the user's thumb naturally
@@ -481,8 +526,9 @@ function ConnectedSession({
           sx={{
             alignItems: 'center',
             flexShrink: 0,
-            mx: -3,
-            px: 3,
+            ml: -2,
+            mr: -3,
+            px: 2,
             pb: 1.5,
             pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 10px)',
             minHeight: 68,
@@ -523,27 +569,29 @@ function ConnectedSession({
               flexShrink: 0,
             }}
           >
-            {/* Info button. Same slot, swappable glyph:
-                  - closed : `ⓘ` invites the user to open the panel.
-                  - open   : `✕` makes "tap again to dismiss" the
-                             only logical action and matches the
-                             usual close-affordance idiom (single
-                             cross at the top-right of an opened
-                             sheet / modal). We deliberately keep
-                             a single button rather than rendering
-                             two siblings: the user's thumb already
-                             found the spot once, the same target
-                             closes the view - no relearning. */}
+            {/* Settings cog. Sits to the LEFT of the info button and
+                behaves identically (same slot, glyph swaps to `✕` when
+                open, tap-again dismisses). Opens the robot Settings panel
+                (robot-level Audio first, then the conversation options).
+                Shown on every tab (like the info button) so the robot
+                settings are reachable from Conversation AND Apps. Opening
+                it closes the info panel (the two sheets are mutually
+                exclusive). */}
             <IconButton
-              aria-label={infoOpen ? 'Close robot info' : 'Robot info'}
-              onClick={() => setInfoOpen(open => !open)}
+              aria-label={settingsOpen ? 'Close settings' : 'Settings'}
+              onClick={() => {
+                // Always land on the root Settings page when (re)opening;
+                // resetting on close too keeps the next open predictable.
+                setSettingsView('root');
+                setSettingsOpen(open => !open);
+              }}
               color="primary"
               sx={{ flexShrink: 0 }}
             >
-              {infoOpen ? (
+              {settingsOpen ? (
                 <CloseIcon sx={{ fontSize: 24 }} />
               ) : (
-                <InfoOutlinedIcon sx={{ fontSize: 24 }} />
+                <SettingsOutlinedIcon sx={{ fontSize: 24 }} />
               )}
             </IconButton>
             {/* `edge="end"` is the MUI-canonical way to neutralise the
@@ -563,10 +611,14 @@ function ConnectedSession({
               onClick={handleLeave}
               color="primary"
               disabled={leaving}
-              edge="end"
-              // Half the IconButton's intrinsic right padding (8 -> 4px)
-              // so the glyph sits closer to the screen edge.
-              sx={{ flexShrink: 0, pr: 0 }}
+              // Pull the glyph toward the screen edge with a negative
+              // MARGIN (not `edge="end"`, which uses -12px, nor a padding
+              // override which would oval the hover). `mr: -1` (-8px)
+              // matches the personality band's chevron below exactly
+              // (same 40x40 button, same -8px), so the two stay aligned on
+              // the same vertical axis. Margin keeps the button square, so
+              // the hover/ripple background stays a perfect circle.
+              sx={{ flexShrink: 0 }}
             >
               <PowerSettingsNewIcon sx={{ fontSize: 24 }} />
             </IconButton>
@@ -606,13 +658,11 @@ function ConnectedSession({
                 │                                  │
                 └──────────────────────────────────┘
 
-              The Speaker / Microphone cards now live under the orb
-              inside `<ConversationPanel>` (see its bottom audio
-              strip) - the conv tab is the canonical place to hear
-              and talk to Reachy, so the volume controls belong
-              right there. Keeping the orb full-height above them
-              matches the desktop minimal-conversation shell and
-              lets the orb breathe on small phones. */}
+              The Speaker / Microphone sliders now live in the
+              conversation settings overlay (opened from the topbar
+              cog, left of info) alongside the language / privacy
+              options, so the orb gets the full body height to
+              breathe on small phones. */}
           {!leaving && !isError && (
             <Box
               sx={{
@@ -836,13 +886,11 @@ function ConnectedSession({
             },
           })}
         >
-          {/* Conversation = "tap to talk to Reachy". We use the
-              shared `MicIcon` (a stroke-only outlined mic, the
-              same SVG that lives at the centre of the
-              `<ConversationOrb>`) so a glance at the bottom nav
-              tells the user "this tab is the mic at the centre of
-              the orb you'll see inside". */}
-          <BottomNavigationAction value="conv" label="Conversation" icon={<MicIcon />} />
+          {/* Conversation = "tap to talk to Reachy". A stroke-only
+              outlined speech bubble (`ChatBubbleIcon`) keyed to the
+              same 1.8px outline treatment as `AppsIcon`, signalling
+              the conversational nature of the tab. */}
+          <BottomNavigationAction value="conv" label="Conversation" icon={<ChatBubbleIcon />} />
           {/* Bespoke `AppsIcon` (4 hollow rounded squares in a 2×2
               grid) so the glyph matches the visual rhythm of
               `MicIcon` - same `1.8 px` stroke weight, same
@@ -850,27 +898,32 @@ function ConnectedSession({
           <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
         </BottomNavigation>
 
-        {/* `<RobotInfoPanel>` overlay. Pinned BELOW the session
-            topbar so the topbar's identity chips + the [✕] action
-            stay visible: the user always knows which robot they're
-            inspecting and has an obvious "tap-again-to-dismiss"
-            affordance in the same spot they opened the panel from
-            (the info button glyph swaps to a cross while open).
-            The overlay still covers the body + the bottom nav, so
-            tab switching is suppressed while info is up (no
-            ambiguous "I'm reading logs of which tab?" state).
-              - `top: max(68px, safe-area + 62px)` is the exact
-                total height of the session topbar (pt 10 + ~40
-                content + pb 12 = 62 above the inset):
+        {/* Settings overlay. The single topbar sheet, pinned BELOW the
+            session topbar so the topbar's identity chips + the cog's
+            `✕` (tap-again-to-dismiss) stay visible. Covers the body +
+            bottom nav, so tab switching is suppressed while it's up.
+            Two pages swap in place:
+              - `'root'`  : the `<ConversationSettingsPanel>` (Audio +
+                conversation options + the "About & diagnostics" row).
+              - `'about'` : the `<RobotInfoPanel>` (hardware id,
+                connection, software, account, live logs), reached by
+                drilling in from the root and dismissed back to it via
+                the panel's own back header.
+            Geometry:
+              - `top: max(68px, safe-area + 62px)` is the exact total
+                height of the session topbar (pt 10 + ~40 content + pb
+                12 = 62 above the inset):
                   desktop  : max(68, 0+62)  = 68 ✓
                   iPhone X : max(68, 47+62) = 109 ✓
-                The `max()` accounts for the topbar's `minHeight:
-                68` floor on platforms without a notch.
-              - zIndex 1200 stays above body content / bottom nav
-                but BELOW the AppIframeOverlay / FullScreenTransition
-                layer (1300) so a connecting / leaving / iframe-open
-                event still takes precedence over a stale info panel. */}
-        {infoOpen && (
+                The `max()` accounts for the topbar's `minHeight: 68`
+                floor on platforms without a notch.
+              - zIndex 1200 stays above body content / bottom nav but
+                BELOW the AppIframeOverlay / FullScreenTransition layer
+                (1300) so a connecting / leaving / iframe-open event
+                still takes precedence over a stale sheet.
+            `display: flex` lets either panel's `flex: 1` column fill
+            the overlay. */}
+        {settingsOpen && (
           <Box
             sx={{
               position: 'fixed',
@@ -879,16 +932,31 @@ function ConnectedSession({
               right: 0,
               bottom: 0,
               zIndex: 1200,
+              display: 'flex',
+              flexDirection: 'column',
+              bgcolor: 'background.default',
             }}
           >
-            <RobotInfoPanel
-              onClose={() => setInfoOpen(false)}
-              hardwareId={robotHardwareId}
-              fallbackId={robotId}
-              username={username}
-              session={session}
-              isLive={session.hasReachedReady}
-            />
+            {settingsView === 'about' ? (
+              <RobotInfoPanel
+                onBack={() => setSettingsView('root')}
+                onClose={() => {
+                  setSettingsView('root');
+                  setSettingsOpen(false);
+                }}
+                hardwareId={robotHardwareId}
+                fallbackId={robotId}
+                username={username}
+                session={session}
+                isLive={session.hasReachedReady}
+              />
+            ) : (
+              <ConversationSettingsPanel
+                audioReady={session.hasReachedReady}
+                onOpenAbout={() => setSettingsView('about')}
+                conversationLive={session.conversationState !== 'idle'}
+              />
+            )}
           </Box>
         )}
 
@@ -914,7 +982,7 @@ function ConnectedSession({
         {showConnectingOverlay && (
           <FullScreenTransition>
             <ConnectingView
-              state={session.engineState}
+              state={session.connectionState}
               connectionAttempt={session.connectionAttempt}
             />
           </FullScreenTransition>
@@ -941,6 +1009,31 @@ function ConnectedSession({
           <FullScreenTransition>
             <SessionErrorView message={session.errorMessage} onBack={handleLeave} />
           </FullScreenTransition>
+        )}
+
+        {/* Daemon update gate. Self-contained full-screen flow that
+            takes over (zIndex 1400, above every transition above) when
+            the connected robot's daemon is behind the latest release.
+            Renders nothing while up to date / version unknown. */}
+        {!leaving && (
+          <DaemonUpdateGate
+            session={session}
+            latestVersion={latestDaemonVersion}
+            onBackToRobots={handleLeave}
+          />
+        )}
+
+        {/* First wake-up wizard. Shown once the session is live, on top of
+            the conversation UI but BELOW the daemon update gate (zIndex
+            1380 vs 1400) so a mandatory update still wins. TEMPORARY: it
+            re-triggers on every connection until the persisted
+            first-wake-up flag is wired in. */}
+        {FIRST_WAKE_UP_WIZARD_ENABLED && !leaving && session.phase === 'live' && !wakeUpDone && (
+          <FirstWakeUpWizard
+            session={session}
+            robotName={robotName}
+            onFinish={() => setWakeUpDone(true)}
+          />
         )}
       </Stack>
     </DaemonStateProvider>

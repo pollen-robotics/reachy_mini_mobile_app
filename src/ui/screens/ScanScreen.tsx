@@ -16,9 +16,8 @@
  *   │             (·_·)    ← reachy-buste     │
  *   │             /│  │\      hero illu        │
  *   │                                          │
- *   │            Your Reachies                 │
+ *   │          Your Reachies   [ ↻ ]           │  ← refresh (right of title)
  *   │       N online · tap to connect          │
- *   │                                          │
  *   │   ┌────────────────────────────────┐     │
  *   │   │ [reachy]  ● Name               │     │
  *   │   │           Wi-Fi  · #ab12    >  │     │
@@ -29,7 +28,7 @@
  *   │   └────────────────────────────────┘     │
  *   │                                          │
  *   │  ────────────────────────────────────────│
- *   │              ↻ Refresh                   │  ← sticky bottom bar
+ *   │         +  Set up a new Reachy           │  ← sticky bottom bar
  *   └──────────────────────────────────────────┘
  *
  *   - HF account bar: avatar + username + Sign out grouped on
@@ -49,12 +48,19 @@
  *     (and the close affordance) while reading the support panel.
  *   - Hero illustration: the reachy-buste from the splash, 95%
  *     opaque, gives the screen a brand identity beyond the cards.
- *   - Refresh: pinned at the bottom (with safe-area inset), out
- *     of the scrollable area so it's always one tap away
- *     regardless of how many robots are listed.
+ *   - Refresh indicator: a discreet, non-interactive spinner to the
+ *     RIGHT of the "Your Reachies" title. NOT a button - the list
+ *     refreshes on its own (realtime SSE + a 60 s safety-net poll),
+ *     so this is pure feedback: it shows ONLY while a fetch is in
+ *     flight (with a minimum-visible floor so a fast fetch isn't
+ *     clipped) and is absent otherwise.
+ *   - Add a Reachy: a single borderless, labelled CTA pinned at
+ *     the bottom (with safe-area inset), out of the scrollable
+ *     area so the entry point to BLE setup is always one tap
+ *     away regardless of how many robots are listed.
  *   - Empty / error states: the list area collapses to a
- *     centred message + retry CTA (the hero illu still sits at
- *     the top and the sticky refresh stays accessible).
+ *     centred message (the hero illu still sits at the top); the
+ *     auto-poll / SSE keep retrying on their own.
  *
  * Parked surfaces
  * ───────────────
@@ -63,7 +69,7 @@
  * shell right now - the focus is the Central listing path.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
   Box,
@@ -76,9 +82,9 @@ import {
   Stack,
   Tooltip,
   Typography,
-  alpha,
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import AddIcon from '@mui/icons-material/Add';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
@@ -107,6 +113,10 @@ import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
+  /** Open the first-time setup wizard (BLE Wi-Fi provisioning). */
+  onStartSetup: () => void;
+  /** Open the standalone "update over Bluetooth" maintenance tool. */
+  onOpenBleUpdate: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -120,6 +130,8 @@ interface ScanScreenProps {
 
 export default function ScanScreen({
   onRemotePicked,
+  onStartSetup,
+  onOpenBleUpdate,
   onSignOutRemote,
   token,
   username,
@@ -138,14 +150,15 @@ export default function ScanScreen({
   const robots = remote.state.kind !== 'no-token' ? remote.state.robots : [];
   const hasRobots = robots.length > 0;
   // The refresh icon spins for ANY in-flight fetch (initial load
-  // included), and the bar is always mounted. Hiding the bar on
-  // the very first load used to make the body shift vertically
-  // the moment central returned the list - the bottom sticky
-  // changes the available height for the `m: 'auto'` centring
-  // trick above, so the content jumps. Keeping the bar
-  // permanently mounted (with the icon spinning while a fetch is
-  // pending) keeps the layout dimensions stable across every
-  // state (loading → empty → 1 robot → N robots → error).
+  // included). Both the refresh icon (right of the list) and the
+  // bottom add bar stay mounted in every state: conditionally
+  // hiding either used to make the body shift vertically the
+  // moment central returned the list, because they change the
+  // available height for the `m: 'auto'` centring trick above, so
+  // the content jumps. Keeping them permanently mounted (the icon
+  // just spinning while a fetch is pending) keeps the layout
+  // dimensions stable across every state (loading → empty → 1
+  // robot → N robots → error).
   const isRefreshing = remote.state.kind === 'loading';
 
   // Help & Support overlay is the contact-information surface
@@ -210,7 +223,12 @@ export default function ScanScreen({
             }}
           >
             <HeroBuste />
-            <RobotsHeader state={remote.state.kind} count={robots.length} hasRobots={hasRobots} />
+            <RobotsHeader
+              state={remote.state.kind}
+              count={robots.length}
+              hasRobots={hasRobots}
+              isRefreshing={isRefreshing}
+            />
           </Stack>
 
           {hasRobots ? (
@@ -262,12 +280,12 @@ export default function ScanScreen({
         </Stack>
       </Stack>
       {/* Sticky bottom action bar. Sits outside the scrollable area
-          so the refresh stays one tap away regardless of how many
-          robots are listed. Always mounted, so the available
-          height of the centred content above never changes - the
-          button just spins + disables in place during any fetch
-          (initial load, refresh, poll). */}
-      <StickyRefreshBar onRefresh={() => void remote.refresh()} isRefreshing={isRefreshing} />
+          so the single "set up a new Reachy" entry point stays one
+          tap away regardless of how many robots are listed (and in
+          every state - empty / error included). Always mounted, so
+          the available height of the centred content above never
+          changes. */}
+      <StickyAddBar onStartSetup={onStartSetup} />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
           Google-mandated contact channels for UGC-bearing apps.
@@ -295,7 +313,13 @@ export default function ScanScreen({
             zIndex: 1200,
           }}
         >
-          <HelpAndSupportOverlay onClose={closeHelp} />
+          <HelpAndSupportOverlay
+            onClose={closeHelp}
+            onStartBleUpdate={() => {
+              closeHelp();
+              onOpenBleUpdate();
+            }}
+          />
         </Box>
       )}
     </Stack>
@@ -586,76 +610,153 @@ function HeroBuste() {
   );
 }
 
-/* --- Sticky bottom refresh bar -------------------------------------- */
+/* --- Refresh activity indicator ------------------------------------- */
 
-/**
- * Combined rotate + breathe so the icon feels alive instead of
- * mechanical. Subtle scale-down at mid-rotation gives an organic
- * "pulse" reminiscent of physical hardware activity LEDs. Paired
- * with a cubic-bezier ease-in-out so the motion accelerates out of
- * each rotation and decelerates into the next, breaking the
- * uncanny perfect-linear loop.
- */
+// Floor we keep the indicator on screen once a refresh starts, so an
+// instant (cached) fetch still shows a complete, smooth turn instead
+// of a one-frame flash that reads as "cut off".
+const MIN_VISIBLE_MS = 900;
+
+// Trailing debounce: a single logical refresh often fires two fetches
+// back-to-back (the poll/refetch plus an SSE-driven invalidation), so
+// `isRefreshing` flips true→false→true. We hold the spinner for this
+// long after activity STOPS; any follow-up fetch within the window
+// re-arms it, coalescing the burst into one continuous spinner
+// instead of two flashes.
+const TAIL_DEBOUNCE_MS = 600;
+
+// Single clean linear turn for the arrows glyph. The icon only exists
+// while visible, so the loop runs uninterrupted for its whole lifetime
+// and unmounts cleanly - no mid-rotation snap.
 const refreshSpinKeyframes = keyframes`
-  0% {
-    transform: rotate(0deg) scale(1);
+  from {
+    transform: rotate(0deg);
   }
-  50% {
-    transform: rotate(180deg) scale(0.92);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
+  to {
+    transform: rotate(360deg);
   }
 `;
 
 /**
- * One-shot "wind-up + spin" played on tap. The icon rotates
- * backwards a hair (the wind-up) before completing a full
- * forward rotation, mimicking a physical refresh control. We
- * key it with a remount counter so a second tap immediately
- * replays the animation even if the previous one is still
- * playing.
+ * Discreet, non-interactive refresh indicator sitting to the right of
+ * the title. NOT a button: there's nothing to tap. The list refreshes
+ * on its own (realtime SSE push + a 60 s safety-net poll), so this is
+ * pure feedback - it shows the slowly-spinning refresh arrows ONLY
+ * while refresh activity is happening and is absent otherwise.
+ *
+ * Two timers shape the lifetime: a minimum visibility floor
+ * (`MIN_VISIBLE_MS`) so a fast fetch isn't clipped, and a trailing
+ * debounce (`TAIL_DEBOUNCE_MS`) that merges the back-to-back fetch
+ * bursts of one refresh into a single spin. It lives in a fixed-width
+ * slot so the title stays optically centered whether or not the
+ * indicator is showing (no layout shift).
  */
-const refreshTapKeyframes = keyframes`
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  12% {
-    transform: rotate(-32deg) scale(0.94);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
-  }
-`;
+// Opacity cross-fade applied on enter / leave so the glyph eases in
+// and out instead of popping. The icon stays mounted (still spinning)
+// through the fade-out, then unmounts once it's fully transparent.
+const FADE_MS = 320;
+const REST_OPACITY = 0.32;
 
-function StickyRefreshBar({
-  onRefresh,
-  isRefreshing,
-}: {
-  onRefresh: () => void;
-  isRefreshing: boolean;
-}) {
-  // Bumped on every tap so the wind-up animation re-plays cleanly
-  // even when the user spam-taps. React keys the icon on this
-  // counter, so a remount restarts the keyframe from frame 0
-  // without us having to reach into the DOM to restart the
-  // animation manually.
-  const [tapCounter, setTapCounter] = useState(0);
+function RefreshIndicator({ isRefreshing }: { isRefreshing: boolean }) {
+  const [visible, setVisible] = useState(false);
+  const startedAtRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleClick = () => {
-    setTapCounter(c => c + 1);
-    onRefresh();
-  };
+  useEffect(() => {
+    if (isRefreshing) {
+      // Activity (re)started: cancel any pending hide so a follow-up
+      // fetch keeps the existing spinner alive rather than spawning a
+      // second one.
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (!visible) {
+        startedAtRef.current = Date.now();
+        setVisible(true);
+      }
+    } else if (visible && !timerRef.current) {
+      // Activity stopped: hide once BOTH the min-visible floor and the
+      // trailing debounce have elapsed, whichever is longer.
+      const sinceStart = Date.now() - startedAtRef.current;
+      const delay = Math.max(MIN_VISIBLE_MS - sinceStart, TAIL_DEBOUNCE_MS);
+      timerRef.current = setTimeout(() => {
+        setVisible(false);
+        timerRef.current = null;
+      }, delay);
+    }
+  }, [isRefreshing, visible]);
 
-  // While a fetch is in flight: the loop animation owns the icon.
-  // Otherwise: the wind-up animation plays once per tap, then
-  // settles back to its rest position.
-  const iconAnimation = isRefreshing
-    ? `${refreshSpinKeyframes} 1.1s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite`
-    : tapCounter > 0
-      ? `${refreshTapKeyframes} 0.55s cubic-bezier(0.34, 1.56, 0.64, 1)`
-      : 'none';
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
+  // Fade layer: `mounted` keeps the glyph in the DOM through its
+  // fade-out, `shown` drives the opacity target. Toggling `shown` one
+  // frame after mount lets the CSS transition animate the enter.
+  const [mounted, setMounted] = useState(false);
+  const [shown, setShown] = useState(false);
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (fadeTimerRef.current) {
+      clearTimeout(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+    if (visible) {
+      setMounted(true);
+      const id = requestAnimationFrame(() => setShown(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setShown(false);
+    fadeTimerRef.current = setTimeout(() => setMounted(false), FADE_MS);
+    return () => {
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+    };
+  }, [visible]);
+
+  return (
+    <Box
+      sx={{
+        width: 40,
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      aria-hidden={!visible}
+    >
+      {mounted && (
+        <RefreshIcon
+          aria-label="Refreshing robot list"
+          sx={{
+            fontSize: 22,
+            color: 'text.disabled',
+            opacity: shown ? REST_OPACITY : 0,
+            transition: `opacity ${FADE_MS}ms ease`,
+            transformOrigin: 'center',
+            animation: `${refreshSpinKeyframes} 1.4s linear infinite`,
+          }}
+        />
+      )}
+    </Box>
+  );
+}
+
+/* --- Sticky bottom add bar ------------------------------------------ */
+
+/**
+ * Single entry point to BLE Wi-Fi setup, pinned at the bottom.
+ *
+ * Borderless text button with an explicit label (not a bare `+`): on
+ * a lobby screen the action "add a robot to my account" deserves a
+ * legible CTA, and the borderless treatment keeps it from competing
+ * with the robot cards above. Always mounted (in every state) so the
+ * centred body never changes height and the entry stays one tap away.
+ */
+function StickyAddBar({ onStartSetup }: { onStartSetup: () => void }) {
   return (
     <Stack
       sx={{
@@ -671,25 +772,8 @@ function StickyRefreshBar({
       <Button
         variant="text"
         color="primary"
-        disabled={isRefreshing}
-        startIcon={
-          <RefreshIcon
-            // Re-keying on the tap counter forces a remount, which
-            // restarts the keyframe animation from frame 0. Cheap
-            // way to retrigger CSS animations in React.
-            key={`refresh-icon-${tapCounter}-${isRefreshing}`}
-            sx={{
-              fontSize: 22,
-              transformOrigin: 'center',
-              animation: iconAnimation,
-              // Inherit the button's `color` so icon + label always
-              // sit at the same hue (primary at rest, primary +
-              // tinted bg while refreshing, primary while disabled).
-              color: 'inherit',
-            }}
-          />
-        }
-        onClick={handleClick}
+        onClick={onStartSetup}
+        startIcon={<AddIcon sx={{ fontSize: 22 }} />}
         sx={{
           textTransform: 'none',
           fontSize: TYPO.md,
@@ -697,27 +781,9 @@ function StickyRefreshBar({
           borderRadius: 999,
           px: 3,
           py: 1,
-          transition: theme =>
-            theme.transitions.create(['background-color', 'color'], {
-              duration: theme.transitions.duration.short,
-            }),
-          // While refreshing: faintly tint the bg so the active
-          // state reads at a glance (icon spin + bg + colour all
-          // pointing at "something is happening"). The colour is
-          // already primary via the `color="primary"` prop.
-          ...(isRefreshing && {
-            bgcolor: theme => alpha(theme.palette.primary.main, 0.08),
-          }),
-          // Disabled is just our way to block double-fires - keep
-          // the look identical to the active refreshing state
-          // (primary colour, full opacity, tinted bg).
-          '&.Mui-disabled': {
-            color: 'primary.main',
-            opacity: 1,
-          },
         }}
       >
-        Refresh
+        Set up a new Reachy
       </Button>
     </Stack>
   );
@@ -729,10 +795,12 @@ function RobotsHeader({
   state,
   count,
   hasRobots,
+  isRefreshing,
 }: {
   state: ReturnType<typeof useRemoteRobots>['state']['kind'];
   count: number;
   hasRobots: boolean;
+  isRefreshing: boolean;
 }) {
   const subtitle = (() => {
     if (!hasRobots && state === 'loading') return 'Looking for your Reachies…';
@@ -750,19 +818,40 @@ function RobotsHeader({
         width: '100%',
       }}
     >
-      <Typography
-        component="h1"
+      {/* Title row. The title sits centered, flanked by two equal
+          fixed-width slots: a mirror spacer on the left and the
+          discreet refresh indicator slot on the right. Because both
+          slots keep their width whether or not the spinner shows, the
+          title stays optically centred with no layout shift when a
+          refresh starts or ends. The "set up a new Reachy" entry
+          point lives separately in the sticky bottom bar. */}
+      <Box
         sx={{
-          m: 0,
-          textAlign: 'center',
-          fontSize: TYPO.display,
-          fontWeight: FONT_WEIGHT.semibold,
-          color: 'text.primary',
-          letterSpacing: '-0.3px',
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
         }}
       >
-        Your Reachies
-      </Typography>
+        {/* Left spacer mirrors the indicator slot's footprint so the
+            title stays centered on the screen. */}
+        <Box sx={{ width: 40, flexShrink: 0 }} aria-hidden />
+        <Typography
+          component="h1"
+          sx={{
+            m: 0,
+            textAlign: 'center',
+            fontSize: TYPO.display,
+            fontWeight: FONT_WEIGHT.semibold,
+            color: 'text.primary',
+            letterSpacing: '-0.3px',
+          }}
+        >
+          Your Reachies
+        </Typography>
+        <RefreshIndicator isRefreshing={isRefreshing} />
+      </Box>
       <Typography
         sx={{
           fontSize: TYPO.sm,

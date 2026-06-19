@@ -11,12 +11,15 @@
     "os:allow-os-type",
     "auth-session:default",
     "keep-screen-on:default",
+    "blec:default",
+    "blec:allow-check-permissions",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://huggingface.co/*" },
         { "url": "https://*.hf.space/*" },
-        { "url": "https://*.huggingface.co/*" }
+        { "url": "https://*.huggingface.co/*" },
+        { "url": "http://reachy-mini.local:8000/*" }
       ]
     },
     {

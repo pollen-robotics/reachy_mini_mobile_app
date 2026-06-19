@@ -21,7 +21,7 @@ import type {
 } from "../realtime/types";
 
 /** HF-specific deps: the shared contract plus the user's HF token getter
- *  (the provider auth the factory injects). */
+ *  (the provider auth the backend controller injects). */
 export interface HuggingFaceBridgeDeps extends RealtimeBackendDeps {
   getHfToken: () => string | null;
 }

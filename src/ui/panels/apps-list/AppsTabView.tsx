@@ -4,7 +4,23 @@
  * Reachy Mini app store, mobile flavour. Driven by the redesign
  * spec in `docs/APPS_TAB_REDESIGN.md`.
  *
- * Three rendering modes, all hosted on a single scrollable
+ * Two top-level views, navigated like a master/detail push:
+ *
+ *   - Pinned  - default landing. A 2-column launcher of big
+ *               `AppLauncherCard`s (icon + name + description, the
+ *               whole card opens the app) over the user's curated set,
+ *               seeded with the official Pollen apps. A prominent
+ *               `StoreCta` button at the bottom opens the store. See
+ *               `LauncherView`.
+ *   - Store   - the full catalog (search + per-category rails + the
+ *               drill-down focus list). Unchanged from the original
+ *               single-surface design; its three rendering modes are
+ *               described below. A "Back to launcher" chevron at the
+ *               top returns to the launcher (hidden while a category is
+ *               drilled into - Focus owns the screen with its own
+ *               back affordance).
+ *
+ * Store rendering modes, all hosted on a single scrollable
  * surface so navigation feels stateless and the launch-iframe
  * contract (`onOpen(app)`) is the only outward effect:
  *
@@ -40,6 +56,7 @@ import {
   Alert,
   Box,
   Button,
+  ButtonBase,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -47,12 +64,35 @@ import {
   Stack,
   TextField,
   Typography,
+  alpha,
 } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import CloseIcon from '@mui/icons-material/Close';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SearchIcon from '@mui/icons-material/Search';
 import StarOutlineIcon from '@mui/icons-material/StarBorder';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
+import AppsIcon from '@/ui/design/icons/AppsIcon';
 import ReachiesCarousel from '@/ui/widgets/reachies-carousel/ReachiesCarousel';
 
 import { resolveTaxonomy } from '@/features/apps/categoryTaxonomy';
@@ -62,12 +102,13 @@ import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
+import IllustratedState from '@/ui/design/IllustratedState';
 import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import AppCompactTile from './AppCompactTile';
 import AppCreateYourOwnTile from './AppCreateYourOwnTile';
-import AppPinnedTile from './AppPinnedTile';
+import AppLauncherCard from './AppLauncherCard';
 import AppRail from './AppRail';
 import AppsCreateFooter from './AppsCreateFooter';
 import LazyMount from './LazyMount';
@@ -97,24 +138,6 @@ const RAIL_PREVIEW_CAP = 12;
  * ahead of the fold so any small mismatch settles off-screen.
  */
 const RAIL_PLACEHOLDER_HEIGHT = 260;
-
-/**
- * Shared min-height for the pinned panel header row (label on the
- * left, `Edit` button on the right). The `Edit` button now shares the
- * rail action-chip style (`railActionButtonSx`: `TYPO.sm` × 1.4 +
- * 2 × py(4px) + 2 × border ≈ 28 px). This min-height MUST stay >= that
- * rendered button height: only then does the pinned header row settle
- * at exactly `PINNED_HEADER_MIN_HEIGHT` (min-height wins over the
- * button) and match the phantom row below. 32 clears the button with a
- * touch of breathing room and lands on the 8 px design grid.
- *
- * The `IntroPanel` (empty state) reserves the SAME min-height for
- * its phantom header so the "no pins → first pin" transition keeps
- * the body's vertical rhythm pixel-stable. Without this, the
- * intro panel sits shorter than the pinned panel and the whole rail
- * stack underneath jumps as soon as the user pins their first app.
- */
-const PINNED_HEADER_MIN_HEIGHT = 32;
 
 /**
  * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
@@ -197,7 +220,32 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
   // category's flat list instead of the browse layout.
   const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
 
+  // Top-level Apps sub-view: the curated launcher ('pinned', default)
+  // vs the full store ('store'). Toggled from the bottom strip. The
+  // launcher lands first so the user's apps (and the seeded official
+  // ones) are the first thing they see when opening the tab.
+  const [view, setView] = useState<'pinned' | 'store'>('pinned');
+  const handleChangeView = useCallback((next: 'pinned' | 'store') => {
+    setView(next);
+    // Leaving the store drops any drill-down so coming back starts on
+    // the clean browse layout (and the bottom toggle stays visible).
+    if (next === 'pinned') setFocusedCategoryId(null);
+  }, []);
+
   const pinnedApps = usePinnedApps();
+
+  // Seed the pinned dock with the official Pollen apps the first time
+  // the catalog loads. One-shot (guarded inside `seedDefaults`): once a
+  // user has been seeded, their curation wins - unpinning a default
+  // sticks across reloads. We pass the official ids derived from the
+  // live catalog so the default set tracks whatever the server flags
+  // as official, rather than a hardcoded list that would drift.
+  const { seedDefaults } = pinnedApps;
+  useEffect(() => {
+    if (state.kind !== 'ready') return;
+    const officialIds = apps.filter(app => app.isOfficial).map(app => app.id);
+    seedDefaults(officialIds);
+  }, [state.kind, apps, seedDefaults]);
 
   // "Your apps" rail data: the user's own Reachy JS apps (private
   // repos included), fetched straight from the HF Hub. Independent
@@ -354,7 +402,16 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
           pb: 2,
         }}
       >
-        {initialPlaceholder ?? (
+        {initialPlaceholder ?? (view === 'pinned' ? (
+          <LauncherView
+            apps={filtered.pinned}
+            recentlyAddedId={pinnedApps.recentlyAddedId}
+            onOpen={onOpen}
+            onUnpin={app => pinnedApps.unpin(app.id)}
+            onReorder={pinnedApps.reorder}
+            onBrowseStore={() => handleChangeView('store')}
+          />
+        ) : (
           <>
             {/* Focused-category header: a thin in-body sub-header
                 with a back chevron + label + count. Replaces the
@@ -403,25 +460,14 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
                 Each lives in its own bottom-divider panel. */}
             {!focusedBucket && (
               <>
-                {pinnedApps.ids.length > 0 && filtered.pinned.length > 0 ? (
-                  <Box sx={PANEL_SX}>
-                    <PinnedGrid
-                      apps={filtered.pinned}
-                      recentlyAddedId={pinnedApps.recentlyAddedId}
-                      onOpen={onOpen}
-                      onUnpin={app => pinnedApps.unpin(app.id)}
-                    />
-                  </Box>
-                ) : (
-                  // Intro slot: occupies the same panel position
-                  // the pinned grid would fill, sized to match
-                  // the visual weight of one pinned-row + label
-                  // so the body's vertical rhythm is unchanged
-                  // before/after the user pins their first app.
-                  <Box sx={PANEL_SX}>
-                    <IntroPanel />
-                  </Box>
-                )}
+                {/* Store header: folds the back affordance INTO the
+                    title row (no standalone chevron row eating a whole
+                    line) and carries a one-line "tap ★ to add to your
+                    launcher" hint. Replaces the old illustration-heavy
+                    intro panel. */}
+                <Box sx={{ ...PANEL_SX, pt: 3.5, pb: 1 }}>
+                  <StoreHeader onBack={() => handleChangeView('pinned')} />
+                </Box>
 
                 {/* Search panel: sticky once it scrolls to the
                     top of the body. The `position: sticky` works
@@ -598,7 +644,7 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
               />
             )}
           </>
-        )}
+        ))}
       </Box>
       <Snackbar
         open={snackbar !== null}
@@ -625,268 +671,208 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
 // ===========================================================================
 
 /**
- * Intro panel: replaces the pinned grid until the user has at
- * least one pinned app. Sized to mirror the visual weight of a
- * pinned panel with a single row (label + one tile + caption)
- * so the body's vertical rhythm is unchanged whether or not the
- * user has pinned anything yet.
+ * Store header: the store's top block, in two tiers.
+ *
+ *   1. Title row - a back IconButton sits inline to the left of the
+ *      "Discover apps" title (so "return to launcher" costs zero extra
+ *      vertical space - no standalone chevron row). The title is sized
+ *      to match the Settings sheet header (`TYPO.xxl` / bold) so the
+ *      two top-level surfaces read at the same hierarchy.
+ *   2. Hero row - a short blurb + the "tap ★ to add to your launcher"
+ *      hint on the left, the rotating `<ReachiesCarousel>` (a Reachy
+ *      persona cross-fading every ~0.75 s, the touch the old
+ *      illustration-heavy `IntroPanel` carried) on the right.
  *
  * Layout:
  *
- *   ┌──────────┐
- *   │          │   "Discover apps for your Reachy Mini."
- *   │    ✨    │
- *   │          │   Tap the ★ on any app to pin it here for
- *   └──────────┘   quick access.
- *
- * The icon-box on the left has the same dimensions as a pinned
- * tile (`(100% - 24px) / 3` wide, square). The text on the
- * right runs two paragraphs: the hero one-liner and the affordance
- * education.
+ *   [‹]  Discover apps
+ *   Browse community-made apps for your Reachy.   ┌────┐
+ *   Tap the ★ on any app to add it to your ...    │ 🤖 │
+ *                                                 └────┘
  */
-function IntroPanel() {
+function StoreHeader({ onBack }: { onBack: () => void }) {
   return (
     <Box sx={COLUMN_SX}>
-      {/* Phantom header. The earlier draft rendered an
-          "Apps · {count}" label here; we dropped the chrome
-          because the count is implicit (rails carry their own
-          counts) and the label was just adding noise on a
-          surface that's already heavy with copy. The phantom
-          element preserves the panel height so the transition
-          to the pinned panel (which DOES have a "Pinned · N"
-          label + outlined `Edit` chip) is seamless: the body's
-          vertical rhythm stays identical whether or not the
-          user has pinned anything.
-          ────────────────
-          We size with `minHeight: PINNED_HEADER_MIN_HEIGHT`
-          (NOT a `<Typography>` of TYPO.tiny which only renders
-          ~12 px tall), so the phantom matches the actual rendered
-          height of the pinned panel's `Edit` outlined chip
-          (~23 px). Without this match, pinning the first app made
-          the body jump ~12 px - the whole rail stack underneath
-          shifted at the exact moment the user looked at their
-          new pin, which read as a UI glitch. */}
-      <Box
-        aria-hidden
-        sx={{
-          mb: 1.5,
-          minHeight: PINNED_HEADER_MIN_HEIGHT,
-        }}
-      />
-      <Stack
-        direction="row"
-        spacing={2}
-        sx={{
-          alignItems: 'center',
-        }}
-      >
-        {/* Hero column. Mirrors the WIDTH of a single
-            `AppPinnedTile` (same `1fr` share of the 3-column
-            grid). The caption phantom that pads the pinned tile's
-            bottom (~20 px: `mt: 0.75` + a `TYPO.tiny` line) lives
-            OUTSIDE this Stack — see the `Box` after the Stack —
-            so it preserves the panel's total height without
-            polluting the row's alignment baseline. With the
-            phantom in here, the text column's vertical center
-            ended up ~10 px below the square's visual center,
-            which read as "Discover apps not centred". */}
+      {/* Single row so the rotating Reachy persona can take the FULL
+          header height (title row + blurb) and visually overflow up to
+          the "Discover apps" title, rather than being boxed into a small
+          square next to the blurb only. Left column stacks the title +
+          blurb; the carousel on the right `stretch`es to that column's
+          height. */}
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'stretch' }}>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <IconButton
+              size="small"
+              aria-label="Back to launcher"
+              onClick={onBack}
+              sx={{ ml: -0.5, flexShrink: 0 }}
+            >
+              <ArrowBackIosNewIcon sx={{ fontSize: TYPO.md }} />
+            </IconButton>
+            <Typography
+              component="h2"
+              sx={{
+                fontSize: TYPO.xxl,
+                fontWeight: FONT_WEIGHT.bold,
+                color: 'text.primary',
+                letterSpacing: '-0.3px',
+                lineHeight: 1.2,
+              }}
+            >
+              Discover apps
+            </Typography>
+          </Stack>
+
+          <Stack spacing={0.5} sx={{ mt: 1.5, flex: 1, justifyContent: 'center' }}>
+            <Typography
+              sx={{
+                fontSize: TYPO.body,
+                fontWeight: FONT_WEIGHT.medium,
+                color: 'text.primary',
+                lineHeight: 1.4,
+              }}
+            >
+              Browse community-made apps for your Reachy.
+            </Typography>
+            <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.4 }}>
+              Tap the{' '}
+              <Box component="span" sx={{ display: 'inline-flex', verticalAlign: '-4px' }}>
+                <StarOutlineIcon sx={{ fontSize: 18 }} />
+              </Box>{' '}
+              on any app to add it to your launcher.
+            </Typography>
+          </Stack>
+        </Stack>
+
+        {/* Carousel fills the full header height. `overflow: hidden`
+            clips the carousel's `zoom > 1` spill to the slot. */}
         <Box
           aria-hidden
           sx={{
             flexShrink: 0,
-            // Match the pinned grid's column width pixel-for-pixel
-            // so the hero illustration occupies the same slot a
-            // single pinned tile would. The grid uses
-            // `repeat(3, minmax(0, 1fr))` with `columnGap: 3`
-            // (24 px), so each cell is `(100% - 2 × 24px) / 3`.
-            width: 'calc((100% - 48px) / 3)',
-            aspectRatio: '1 / 1',
-            // No `overflow: hidden`: the carousel's `zoom > 1` is
-            // intentionally allowed to spill past the square so the
-            // sticker reads larger than its slot. The transparent
-            // alpha margin around each WebP keeps the spillover
-            // invisible in practice.
-            boxSizing: 'border-box',
-            minWidth: 0,
+            alignSelf: 'stretch',
+            width: 'calc((100% - 48px) / 3.2)',
+            overflow: 'hidden',
           }}
         >
-          {/* Framing tuned for the canvas-centred WebP set produced by
-              `scripts/build-reachies-top-sided.py`. Those frames have
-              the robot face at ~62 % of the image height (consistent
-              across every persona) and a uniform transparent margin
-              around the sticker. The earlier 1.12 scale wrapper +
-              `zoom={1.4}` + `verticalAlign="60%"` triplet was a stack
-              of workarounds for the legacy small-top-sided pngs whose
-              cropping was inconsistent.
-              `zoom={1.6}` (≈ +1/3 vs the prior `1.2`) overflows the
-              wrapper square by design - the carousel no longer clips
-              (see `ReachiesCarousel` and the wrapper above), and the
-              WebP padding fraction keeps the spillover transparent,
-              so the sticker reads larger than its slot without
-              eating into the "Discover apps" column. */}
-          <ReachiesCarousel zoom={1.6} verticalAlign="42%" />
+          <ReachiesCarousel zoom={1.1} verticalAlign="55%" />
         </Box>
-
-        <Stack spacing={1} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography
-            sx={{
-              fontSize: TYPO.xxl,
-              fontWeight: FONT_WEIGHT.bold,
-              color: 'text.primary',
-              letterSpacing: '-0.4px',
-              lineHeight: 1.15,
-            }}
-          >
-            Discover apps
-          </Typography>
-          <Typography
-            sx={{
-              fontSize: TYPO.body,
-              color: 'text.secondary',
-              lineHeight: 1.45,
-            }}
-          >
-            Tap the{' '}
-            <Box
-              component="span"
-              sx={{
-                display: 'inline-flex',
-                verticalAlign: '-5px',
-              }}
-            >
-              <StarOutlineIcon sx={{ fontSize: 22 }} />
-            </Box>{' '}
-            on any app to pin it here for quick access.
-          </Typography>
-        </Stack>
       </Stack>
-      {/* Phantom caption row: same vertical footprint as the
-          `AppPinnedTile`'s name caption (`mt: 0.75` + a
-          `TYPO.tiny / lineHeight 1.2` line ≈ 20 px). Sits below
-          the row instead of inside the icon column so the row's
-          two columns center on their VISIBLE centers (the square
-          and the heading), while the panel's total height still
-          matches a pinned panel with one row of tiles — keeps
-          the "no pins → first pin" transition free of vertical
-          jump. */}
-      <Typography
-        aria-hidden
-        sx={{
-          mt: 0.75,
-          fontSize: TYPO.tiny,
-          fontWeight: FONT_WEIGHT.medium,
-          lineHeight: 1.2,
-          visibility: 'hidden',
-        }}
-      >
-        &nbsp;
-      </Typography>
     </Box>
   );
 }
 
 /**
- * Pinned panel: a fixed 3-column grid of `AppPinnedTile`s, in
- * insertion order. Diverges from the horizontal-rail pattern used
- * by the thematic categories: pinned apps are a "dock" the user
- * curates, so a stable grid that doesn't require horizontal scroll
- * is more legible than a strip. Cap of 12 (`MAX_PINNED`) means at
- * most 4 rows.
- *
- * The header reuses the same "LABEL · N" rhythm as the category
- * rails so the panel feels of a piece with the rest of the body
- * even though the inner layout is different.
- *
- * Pop-in animation:
- *   - Driven by `recentlyAddedId`, sourced from `usePinnedApps`
- *     so the signal survives this component's mount/unmount.
- *     The first pin in a session transitions the IntroPanel away
- *     and mounts this grid fresh; without a hook-level signal
- *     the grid would have no notion of "this id just landed".
- *   - When `recentlyAddedId === app.id`, the matching tile renders
- *     with `isNew={true}` and plays its pop-in keyframe. Every
- *     other tile mounts statically.
- *   - The hook auto-resets the signal after ~500 ms (just past
- *     the animation budget), so a tab-switch round-trip during
- *     the animation doesn't lose it mid-flight, and a stale
- *     value can't trigger a phantom replay.
+ * Launcher view: the "Pinned" sub-view. A 2-column grid of big
+ * `AppLauncherCard`s (icon + name + description, whole card opens the
+ * app) presenting the user's curated set - seeded with the official
+ * Pollen apps - as a home screen. Reuses the same "LABEL · N" header +
+ * Edit/Done toggle rhythm as the store's `PinnedGrid`. Empty until the
+ * user pins something, where it points them to the store.
  */
-function PinnedGrid({
+function LauncherView({
   apps,
   recentlyAddedId,
   onOpen,
   onUnpin,
+  onReorder,
+  onBrowseStore,
 }: {
   apps: AppEntry[];
   recentlyAddedId: string | null;
   onOpen: (app: AppEntry) => void;
   onUnpin: (app: AppEntry) => void;
+  onReorder: (orderedIds: string[]) => void;
+  onBrowseStore: () => void;
 }) {
-  // Edit mode toggles the iOS-style "jiggle" UX on every tile:
-  // each one sprouts a ✕ badge in its top-left corner and starts
-  // a subtle wiggle to signal "tap me to remove". Local state
-  // because the affordance has no meaning outside this panel,
-  // and we want it to auto-reset on tab switch (the grid
-  // unmounts and the next visit starts in the clean read mode).
   const [editMode, setEditMode] = useState(false);
 
-  // Auto-exit when the grid empties out: with no tiles left,
-  // "Done" would dangle next to a 0-count header. We also leave
-  // edit mode the moment the cap hits 0, even if the user emptied
-  // it via the star toggles on compact tiles elsewhere (cross-panel
-  // unpins still trickle in via `useFilteredApps` → `apps`).
+  // Drag-to-reorder sensors (edit mode only). A small distance / delay
+  // activation keeps taps (open app) and the unpin badge clickable: a
+  // press only becomes a drag once the pointer travels past the
+  // threshold. Keyboard sensor gives the grid arrow-key reordering for
+  // free (a11y).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = apps.findIndex(a => a.id === active.id);
+      const newIndex = apps.findIndex(a => a.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      onReorder(arrayMove(apps, oldIndex, newIndex).map(a => a.id));
+    },
+    [apps, onReorder],
+  );
+
+  // Auto-exit edit mode once the launcher empties out (the last unpin
+  // would otherwise leave a dangling "Done" over an empty grid).
   useEffect(() => {
-    if (apps.length === 0 && editMode) {
-      setEditMode(false);
-    }
+    if (apps.length === 0 && editMode) setEditMode(false);
   }, [apps.length, editMode]);
 
+  if (apps.length === 0) {
+    return <LauncherEmpty onBrowseStore={onBrowseStore} />;
+  }
+
   return (
-    <Box sx={COLUMN_SX}>
+    <Box sx={{ ...COLUMN_SX, pt: 3.5 }}>
       <Stack
         direction="row"
         sx={{
           alignItems: 'center',
           justifyContent: 'space-between',
-          mb: 1.5,
-          minHeight: PINNED_HEADER_MIN_HEIGHT,
+          mb: 3,
         }}
       >
-        <Typography
-          sx={{
-            fontSize: TYPO.tiny,
-            fontWeight: FONT_WEIGHT.semibold,
-            color: 'text.secondary',
-            textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-            lineHeight: 1.1,
-          }}
-        >
-          Pinned apps
-          <Box component="span" sx={{ opacity: 0.6, fontWeight: FONT_WEIGHT.medium, ml: 0.75 }}>
-            · {apps.length}
-          </Box>
-        </Typography>
-        {/* Edit / Done toggle. Sentence-case (not uppercase) so the
-            user's primary path "tap Edit" reads as a verb rather
-            than a label; it sits visually heavier than the
-            "PINNED APPS" header letterform so the eye finds it
-            quickly once the user is hunting for a way to remove
-            a pin. Mounted unconditionally - even with a single
-            pin, the user might want to remove it - so the
-            affordance is always there from pin #1 onward. */}
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
+          {/* Same 4-square glyph as the bottom-nav "Apps" tab, so the
+              launcher title visually ties back to its tab. */}
+          <AppsIcon sx={{ fontSize: 24, color: 'text.primary', flexShrink: 0 }} />
+          <Typography
+            component="h2"
+            sx={{
+              fontSize: TYPO.xxl,
+              fontWeight: FONT_WEIGHT.bold,
+              color: 'text.primary',
+              letterSpacing: '-0.3px',
+              lineHeight: 1.2,
+            }}
+          >
+            Your launcher
+            <Box
+              component="span"
+              sx={{
+                color: 'text.disabled',
+                fontWeight: FONT_WEIGHT.regular,
+                fontSize: TYPO.lg,
+                ml: 0.75,
+              }}
+            >
+              · {apps.length}
+            </Box>
+          </Typography>
+        </Stack>
         <Button
           variant="outlined"
           color="primary"
           size="small"
           onClick={() => setEditMode(prev => !prev)}
           aria-pressed={editMode}
-          aria-label={editMode ? 'Done editing pinned apps' : 'Edit pinned apps'}
-          // Same size + border language as the rail "See all" / "New"
-          // chips. Bigger than the old tight chip, so the shared
-          // PINNED_HEADER_MIN_HEIGHT is sized to clear it - keeping the
-          // no-pin (phantom) and pinned header rows the SAME height.
-          sx={railActionButtonSx}
+          aria-label={editMode ? 'Done editing launcher' : 'Edit launcher'}
+          startIcon={
+            editMode ? (
+              <CheckRoundedIcon sx={{ fontSize: 16 }} />
+            ) : (
+              <EditOutlinedIcon sx={{ fontSize: 16 }} />
+            )
+          }
+          sx={{ ...railActionButtonSx, '& .MuiButton-startIcon': { ml: -0.25, mr: 0.5 } }}
         >
           {editMode ? 'Done' : 'Edit'}
         </Button>
@@ -894,33 +880,254 @@ function PinnedGrid({
       <Box
         sx={{
           display: 'grid',
-          // `minmax(0, 1fr)` (not bare `1fr`) so a tile with a
-          // long caption can't push its column wider than 1/3 of
-          // the row. Bare `1fr` resolves its lower bound to
-          // `auto` = `min-content`, which lets a long word in
-          // the caption stretch the column and break the
-          // "all tiles the same size" guarantee.
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          // Column gap is intentionally generous so the dock
-          // reads as discrete icons rather than a packed grid.
-          // Row gap stays smaller (the captions provide their
-          // own bit of breathing room before the next square).
-          columnGap: 3,
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          columnGap: 2,
           rowGap: 2,
         }}
       >
-        {apps.map(app => (
-          <AppPinnedTile
-            key={app.id}
-            app={app}
-            isNew={recentlyAddedId === app.id}
-            editMode={editMode}
-            onOpen={onOpen}
-            onUnpin={onUnpin}
-          />
-        ))}
+        {editMode ? (
+          // Edit mode: the grid becomes a sortable surface. Each tile is
+          // a drag handle (whole card) that reorders the pinned set;
+          // dropping persists the new order via `onReorder`. The store
+          // tile is omitted here - editing is about curating the
+          // existing set, not browsing.
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={apps.map(a => a.id)} strategy={rectSortingStrategy}>
+              {apps.map(app => (
+                <SortableLauncherCard
+                  key={app.id}
+                  app={app}
+                  recentlyAddedId={recentlyAddedId}
+                  onOpen={onOpen}
+                  onUnpin={onUnpin}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          <>
+            {apps.map(app => (
+              <AppLauncherCard
+                key={app.id}
+                app={app}
+                isNew={recentlyAddedId === app.id}
+                editMode={false}
+                onOpen={onOpen}
+                onUnpin={onUnpin}
+              />
+            ))}
+            {/* Store entry as the last grid cell: a dashed tile that
+                reads as "add more / there's a catalog", sitting inline
+                with the apps rather than displacing them. */}
+            <StoreGridTile onClick={onBrowseStore} />
+          </>
+        )}
       </Box>
     </Box>
+  );
+}
+
+/**
+ * Sortable wrapper for a launcher card (edit mode only). dnd-kit's
+ * sort transform/transition live on THIS wrapper (translate as
+ * neighbours shuffle), while the inner `AppLauncherCard` keeps its own
+ * edit-mode wiggle (a CSS rotate on a separate element, so the two
+ * transforms compose cleanly). The whole tile is the drag handle.
+ */
+function SortableLauncherCard({
+  app,
+  recentlyAddedId,
+  onOpen,
+  onUnpin,
+}: {
+  app: AppEntry;
+  recentlyAddedId: string | null;
+  onOpen: (app: AppEntry) => void;
+  onUnpin: (app: AppEntry) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: app.id,
+  });
+  return (
+    <Box
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      sx={{
+        // Required so touch drags don't get hijacked by the scroll
+        // container; only applied to tiles while editing.
+        touchAction: 'none',
+        cursor: isDragging ? 'grabbing' : 'grab',
+        position: 'relative',
+        zIndex: isDragging ? 5 : 1,
+        opacity: isDragging ? 0.9 : 1,
+        outline: 'none',
+        '&:focus-visible': { outline: 'none' },
+      }}
+    >
+      <AppLauncherCard
+        app={app}
+        isNew={recentlyAddedId === app.id}
+        editMode
+        onOpen={onOpen}
+        onUnpin={onUnpin}
+      />
+    </Box>
+  );
+}
+
+/** Empty launcher: a friendly nudge toward the store. Built on the
+ *  shared `IllustratedState` so its sizing matches the app's other
+ *  full-screen states. */
+function LauncherEmpty({ onBrowseStore }: { onBrowseStore: () => void }) {
+  return (
+    <Box
+      sx={{
+        ...COLUMN_SX,
+        pt: 5,
+        display: 'flex',
+        justifyContent: 'center',
+      }}
+    >
+      <IllustratedState
+        illustration={<ReachiesCarousel zoom={1.5} verticalAlign="42%" />}
+        title="Your launcher is empty"
+        description="Pin apps from the store and they'll show up here for one-tap access."
+      >
+        <StoreCta onClick={onBrowseStore} />
+      </IllustratedState>
+    </Box>
+  );
+}
+
+/**
+ * Store grid tile: the store entry for a NON-empty launcher. Rendered
+ * as the last cell of the 2-up launcher grid so it sits inline with the
+ * user's apps (never pushing them down). Dashed outline + storefront
+ * glyph read as "there's a catalog to browse / add more", echoing an
+ * empty-slot affordance while matching `AppLauncherCard`'s footprint.
+ */
+function StoreGridTile({ onClick }: { onClick: () => void }) {
+  return (
+    <ButtonBase
+      onClick={onClick}
+      aria-label="Browse the store"
+      sx={theme => ({
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        textAlign: 'center',
+        height: '100%',
+        minHeight: 172,
+        boxSizing: 'border-box',
+        p: 2,
+        borderRadius: `${RADIUS.lg}px`,
+        border: `1.5px dashed ${alpha(theme.palette.primary.main, 0.5)}`,
+        bgcolor: alpha(theme.palette.primary.main, 0.04),
+        WebkitTapHighlightColor: 'transparent',
+        transition: 'background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+        '&:hover': {
+          bgcolor: alpha(theme.palette.primary.main, 0.08),
+          borderColor: alpha(theme.palette.primary.main, 0.8),
+        },
+        '&:focus-visible': {
+          outline: `2px solid ${theme.palette.primary.main}`,
+          outlineOffset: 2,
+        },
+        '&:active': { transform: 'scale(0.97)' },
+      })}
+    >
+      <Box
+        sx={theme => ({
+          width: 56,
+          height: 56,
+          borderRadius: `${RADIUS.md}px`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: alpha(theme.palette.primary.main, 0.12),
+          color: 'primary.main',
+        })}
+      >
+        <StorefrontOutlinedIcon sx={{ fontSize: 30 }} />
+      </Box>
+      <Typography
+        sx={{ mt: 1.25, fontSize: TYPO.md, fontWeight: FONT_WEIGHT.bold, color: 'text.primary', lineHeight: 1.25 }}
+      >
+        Browse the store
+      </Typography>
+      <Typography sx={{ mt: 0.5, fontSize: TYPO.xs, color: 'text.secondary', lineHeight: 1.4 }}>
+        Discover more apps
+      </Typography>
+    </ButtonBase>
+  );
+}
+
+/**
+ * Store call-to-action: a big, friendly button used as the empty
+ * launcher's hero (nothing else competes there). Signals "there's a
+ * whole catalog beyond your pinned apps" and opens the store.
+ */
+function StoreCta({ onClick }: { onClick: () => void }) {
+  return (
+    <ButtonBase
+      onClick={onClick}
+      aria-label="Browse the store"
+      sx={theme => ({
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1.75,
+        px: 2.25,
+        py: 2,
+        borderRadius: `${RADIUS.lg}px`,
+        textAlign: 'left',
+        // Dashed outline reads as "open container / there's more to add"
+        // rather than a solid committed surface like an app card.
+        border: `1.5px dashed ${alpha(theme.palette.primary.main, 0.55)}`,
+        bgcolor: alpha(theme.palette.primary.main, 0.05),
+        transition: 'background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+        WebkitTapHighlightColor: 'transparent',
+        '&:hover': {
+          bgcolor: alpha(theme.palette.primary.main, 0.09),
+          borderColor: alpha(theme.palette.primary.main, 0.8),
+        },
+        '&:active': { transform: 'scale(0.99)' },
+      })}
+    >
+      <Box
+        sx={theme => ({
+          width: 46,
+          height: 46,
+          flexShrink: 0,
+          borderRadius: `${RADIUS.md}px`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: alpha(theme.palette.primary.main, 0.14),
+          color: 'primary.main',
+        })}
+      >
+        <StorefrontOutlinedIcon sx={{ fontSize: 26 }} />
+      </Box>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.bold, color: 'text.primary', lineHeight: 1.25 }}
+        >
+          Browse the store
+        </Typography>
+        <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+          Discover more apps for your Reachy
+        </Typography>
+      </Box>
+      <ChevronRightRoundedIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
+    </ButtonBase>
   );
 }
 

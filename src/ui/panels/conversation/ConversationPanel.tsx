@@ -21,7 +21,7 @@
  * Responsibilities (D layer)
  * ──────────────────────────
  *   - Render the orb chrome + caption + side buttons + toast based
- *     on `session.engineState`.
+ *     on `session.connectionState` + `session.conversationState`.
  *   - Wire user gestures (tap orb, mute, stop) to the session
  *     methods (`triggerOrbAction`, `setMicMuted`, `requestStop`).
  *
@@ -35,21 +35,20 @@
  * THIS panel via a ref forwarded back to the session through
  * `audioLevelsTargetRef` on the host side.
  */
-import { Box, ButtonBase, Divider, Stack } from '@mui/material';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import { Box, Stack } from '@mui/material';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
 import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
-import { ConversationSettingsPanel } from './ConversationSettingsPanel';
-import type { AppState } from '@/features/conversation/engine/conversation-engine';
-import { useDaemonState } from '@/features/daemon-state';
+import type {
+  ConnectionState,
+  ConversationState,
+} from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { type Personality, useActivePersonality } from '@/features/personalities';
 import { useActiveLanguageId } from '@/features/conversation-language';
-import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import {
   PersonalityStore,
   PersonalityPill,
@@ -59,8 +58,9 @@ import {
 export interface ConversationPanelProps {
   /**
    * Session handle from `useRobotSession`. The panel reads
-   * `engineState`, `errorMessage`, `micMuted`, `toolToastLabel`
-   * from here and forwards user gestures to the session methods.
+   * `connectionState`, `conversationState`, `errorMessage`, `micMuted`,
+   * `toolToastLabel` from here and forwards user gestures to the
+   * session methods.
    */
   session: RobotSessionHandle;
   /**
@@ -94,34 +94,23 @@ export function ConversationPanel({
   orbRef,
   active = true,
 }: ConversationPanelProps) {
-  const orbState = mapAppStateToOrb(session.engineState);
+  const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
-    session.engineState === 'listening' ||
-    session.engineState === 'user-speaking' ||
-    session.engineState === 'processing' ||
-    session.engineState === 'ai-speaking';
+    session.conversationState === 'listening' ||
+    session.conversationState === 'user-speaking' ||
+    session.conversationState === 'processing' ||
+    session.conversationState === 'ai-speaking';
 
   // "Engaged" = the user has opted into the AI conversation by tapping
-  // the orb, regardless of whether OpenAI has answered yet. Tapping the
-  // orb in `ready` flips the engine to `starting` (ephemeral key mint +
-  // OpenAI handshake) BEFORE it reaches `listening`, so `live` alone
-  // would leave the personality picker reachable during that gap. We
-  // treat that post-tap `starting` as engaged too. The `starting` of
-  // the initial robot bring-up is excluded via `hasReachedReady` (which
-  // only latches once we've first hit `ready`), so the picker stays
-  // available while the orb says "Tap to start conversation".
+  // the orb, regardless of whether the backend has answered yet.
+  // Tapping the orb flips the conversation FSM to `starting` (handshake)
+  // BEFORE it reaches `listening`, so `live` alone would leave the
+  // personality picker reachable during that gap - we treat that
+  // `starting` as engaged too. The connection bring-up's own `starting`
+  // lives on a SEPARATE FSM now, so the picker stays available while
+  // the orb says "Tap to start conversation".
   const conversationEngaged =
-    live || (session.engineState === 'starting' && session.hasReachedReady);
-
-  // Daemon-side audio state (volumes + mute toggles). Read here so
-  // the bottom audio strip stays in lockstep with the daemon
-  // without round-tripping props down through the orb subtree.
-  // While the engine hasn't reached `ready` for the first time the
-  // values are `null`; the sliders fall back to 50 (the daemon's
-  // own default) and the strip is disabled so the user can't drag
-  // against an unreachable daemon.
-  const daemon = useDaemonState();
-  const audioReady = session.hasReachedReady;
+    live || session.conversationState === 'starting';
 
   // Active personality is consumed for its `id` only: when the user
   // picks a new persona via the grid, the engine reads the active
@@ -146,31 +135,14 @@ export function ConversationPanel({
   // opens the picker explicitly via the hero band's chevron.
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Conversation settings ("cog") surface. Opened from the bottom
-  // strip, it swaps the orb area for the settings panel via the same
-  // body-slot mechanism as the picker. It's mutually exclusive with the
-  // picker / authoring form (opening one closes the others). The cog is
-  // only reachable while stopped (see the strip cell's `disabled`), so
-  // a conversation going live also force-closes it defensively.
-  const [settingsOpen, setSettingsOpen] = useState(false);
-
   useEffect(() => {
-    if (conversationEngaged || session.engineState === 'error') {
+    if (conversationEngaged || session.connectionState === 'error') {
       setPickerOpen(false);
-      setSettingsOpen(false);
     }
-  }, [conversationEngaged, session.engineState]);
+  }, [conversationEngaged, session.connectionState]);
 
   const togglePicker = useCallback(() => {
-    setSettingsOpen(false);
     setPickerOpen(prev => !prev);
-  }, []);
-  const toggleSettings = useCallback(() => {
-    setSettingsOpen(prev => {
-      const next = !prev;
-      if (next) setPickerOpen(false);
-      return next;
-    });
   }, []);
 
   // Persona authoring form: create a new persona OR edit an existing
@@ -191,11 +163,9 @@ export function ConversationPanel({
   const [immersiveForm, setImmersiveForm] = useState(false);
   // Band trailing affordance: closes any open form, else opens create.
   const toggleForm = useCallback(() => {
-    setSettingsOpen(false);
     setFormMode(prev => (prev ? null : { kind: 'create' }));
   }, []);
   const openEdit = useCallback((persona: Personality) => {
-    setSettingsOpen(false);
     setFormMode({ kind: 'edit', persona });
   }, []);
   const closeForm = useCallback(() => setFormMode(null), []);
@@ -206,7 +176,6 @@ export function ConversationPanel({
   // personality picker / authoring form left open from last time.
   useEffect(() => {
     if (active) return;
-    setSettingsOpen(false);
     setPickerOpen(false);
     setFormMode(null);
     setImmersiveForm(false);
@@ -309,11 +278,9 @@ export function ConversationPanel({
       {/* SUB-HEADER: full-bleed band that hosts the personality
           hero. Visible while the picker/store is open (it stays the
           persistent "select" affordance whose chevron toggles back to
-          the orb), but HIDDEN while the conversation settings panel is
-          open: the settings overlay sits "above" the band, and the
-          body slot below expands upward to fill the freed space, so the
-          panel reads as a sheet covering everything except the bottom
-          strip (cog + sliders stay put down there). */}
+          the orb). Hidden only while the create form is in its
+          full-panel "Meet" phase, so the body slot expands to fill the
+          freed space. */}
       <Box
         sx={{
           width: '100vw',
@@ -321,10 +288,10 @@ export function ConversationPanel({
           flexShrink: 0,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
-          // Hidden while settings are open OR while the create form is in its
-          // full-panel "Meet" phase, so the body slot below expands to fill the
-          // freed space (the app's top bar / bottom nav stay put either way).
-          display: settingsOpen || immersiveForm ? 'none' : 'block',
+          // Hidden while the create form is in its full-panel "Meet"
+          // phase, so the body slot below expands to fill the freed
+          // space (the app's top bar / bottom nav stay put either way).
+          display: immersiveForm ? 'none' : 'block',
           // Let the persona avatar disc spill slightly past the band's
           // bottom divider and paint OVER the body slot below it.
           position: 'relative',
@@ -391,7 +358,7 @@ export function ConversationPanel({
             width: '100%',
             pt: 1.5,
             pb: 3,
-            display: pickerOpen || formOpen || settingsOpen ? 'none' : 'grid',
+            display: pickerOpen || formOpen ? 'none' : 'grid',
             gridTemplateRows: '1fr auto 1fr',
             justifyItems: 'center',
           }}
@@ -437,7 +404,7 @@ export function ConversationPanel({
             <ConversationCaption
               state={orbState}
               message={
-                session.engineState === 'stopping'
+                session.conversationState === 'stopping'
                   ? 'Ending conversation'
                   : session.errorMessage
               }
@@ -448,191 +415,6 @@ export function ConversationPanel({
             />
           </Stack>
         </Box>
-
-        {/* Conversation settings panel. Rendered HERE (above the bottom
-            strip, in place of the orb grid which is display:none while
-            open). With the personality band hidden above (see SUB-HEADER
-            note), the body slot expands upward and this panel fills the
-            whole area down to the strip - reading as a sheet "above" the
-            band. The strip stays below with its cog tinted active, so the
-            cog remains the toggle back to the orb. */}
-        {settingsOpen && <ConversationSettingsPanel />}
-
-        {/* Bottom audio strip: speaker + microphone sliders. Lives
-            inside the body box as a sibling of the orb's centered
-            stack, so the column flow anchors it to the bottom of
-            the conv area while the orb stays centered in the
-            remaining space above. Used to live in the Robot tab
-            but the user is more likely to want to nudge their
-            volume while looking at the orb (mid-conversation)
-            than from the diagnostics tab.
-
-            Hidden while the personality picker is open: the user
-            is browsing personas, sliders below the grid would
-            split attention. Re-rendering on toggle is cheap (no
-            heavy state - the sliders just read `daemon`). */}
-        {!pickerOpen && !formOpen && (
-          <Box
-            sx={{
-              flexShrink: 0,
-              // Full-bleed escape, mirrors the persona sub-header
-              // at the top of the panel. The strip is rendered
-              // inside `RobotSessionScreen`, which wraps the whole
-              // tab body in a `Stack` with `px: 3` (24 px on each
-              // side) for the orb's breathing room. Without this
-              // escape, the strip would inherit those 24 px gaps
-              // on both sides and the borderTop hairline would
-              // stop short of the screen edges - which is exactly
-              // what the user has been seeing.
-              //
-              // `width: '100vw'` + `mx: 'calc(50% - 50vw)'` is the
-              // canonical way to break out of an arbitrary parent
-              // padding chain in a centred layout: the box sizes
-              // itself to the viewport and recenters via a
-              // negative margin computed from its own offset.
-              width: '100vw',
-              mx: 'calc(50% - 50vw)',
-              // Top border detaches the strip from the orb / caption
-              // area above. Using the theme's divider keeps the line
-              // consistent with the persona sub-header divider at the
-              // top of the panel - the conv area now sits between two
-              // matching hairlines, which reads as a properly framed
-              // body slot rather than a free-floating orb.
-              borderTop: t => `1px solid ${t.palette.divider}`,
-            }}
-          >
-            {/* Bottom utility strip. Three tools in a single row,
-                each cell visually separated by a thin vertical
-                "tick" divider that spans the strip edge-to-edge:
-                  │[🇫🇷]│[🔊 ──●──]│[🎤 ──●──]│
-                The dividers reinforce that each cell is its own
-                control - language preference is independent from
-                speaker volume which is independent from mic
-                volume - and give the strip a "toolbar" rhythm in
-                line with the borderTop hairline above. The audio
-                cards keep a 50/50 split of the remaining width;
-                the picker takes its intrinsic width (32×32
-                anchor) and never compresses on small screens.
-
-                Stack `spacing={0}` (cells touch the dividers
-                directly) + per-cell `px: STRIP_CELL_PX` give us
-                the breathing room around the divider WITHOUT
-                inserting gaps between cells and dividers. That
-                way the dividers reach the full strip height
-                (thanks to `alignItems="stretch"`) and the strip
-                content reaches the full strip width.
-
-                The strip content spans the FULL width (no inner
-                max-width cap) so the cells line up flush with the
-                full-bleed hairline above - the leftmost cog reaches
-                the screen's left edge and the audio cards reach the
-                right edge, reading as one edge-to-edge toolbar. */}
-            <Box sx={{ width: '100%' }}>
-              <Stack
-                direction="row"
-                spacing={0}
-                sx={{
-                  alignItems: 'stretch',
-                  width: '100%',
-                }}
-              >
-                {/* Conversation settings ("cog"). The WHOLE strip cell is
-                    the button: no inner circular pill, so the ripple and
-                    the active bg tint fill the entire block. When its
-                    panel is open the cell carries a soft primary bg tint
-                    + a primary glyph (and the gear gives a small turn),
-                    so it reads as active without a heavy outlined pill.
-                    Disabled while a conversation is live (the options
-                    inside are stopped-only, read by the engine at the
-                    next start). */}
-                <ButtonBase
-                  aria-label="Conversation settings"
-                  aria-pressed={settingsOpen}
-                  disabled={conversationEngaged || session.engineState === 'error'}
-                  onClick={toggleSettings}
-                  sx={{
-                    flexShrink: 0,
-                    // Fill the WHOLE strip cell: stretch to the row
-                    // height and take a comfortable fixed width with
-                    // symmetric padding. No border-radius so the ripple
-                    // + active bg tint cover the entire rectangular
-                    // block (flush to the dividers) instead of being
-                    // confined to a small rounded/circular pill.
-                    alignSelf: 'stretch',
-                    px: 2,
-                    borderRadius: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    // Greyed (not primary) while a live call locks it - same
-                    // treatment as the personality band's chevron/pencil - so
-                    // it reads as inert without dimming the whole strip cell.
-                    color:
-                      conversationEngaged || session.engineState === 'error'
-                        ? 'action.disabled'
-                        : 'primary.main',
-                    // Active (panel open): a clean white card surface that
-                    // pops off the strip's `background.default` canvas, rather
-                    // than the old primary tint that read grey-ish.
-                    bgcolor: settingsOpen ? 'background.paper' : 'transparent',
-                    transition: 'background-color 0.15s ease, color 0.15s ease',
-                    '&:hover': {
-                      bgcolor: settingsOpen ? 'background.paper' : 'action.hover',
-                    },
-                    '&.Mui-disabled': { color: 'action.disabled' },
-                    WebkitTapHighlightColor: 'transparent',
-                  }}
-                >
-                  <SettingsOutlinedIcon
-                    sx={{
-                      fontSize: 20,
-                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                      transform: settingsOpen ? 'rotate(45deg)' : 'rotate(0deg)',
-                    }}
-                  />
-                </ButtonBase>
-                <StripDivider />
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    px: STRIP_CELL_PX,
-                    py: STRIP_CELL_PY,
-                  }}
-                >
-                  <AudioControlCard
-                    kind="speaker"
-                    value={daemon.speakerVolume ?? 50}
-                    onChange={daemon.setSpeakerVolume}
-                    onToggleMute={daemon.toggleSpeakerMute}
-                    disabled={!audioReady}
-                  />
-                </Box>
-                <StripDivider />
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    px: STRIP_CELL_PX,
-                    py: STRIP_CELL_PY,
-                  }}
-                >
-                  <AudioControlCard
-                    kind="microphone"
-                    value={daemon.microphoneVolume ?? 50}
-                    onChange={daemon.setMicrophoneVolume}
-                    onToggleMute={daemon.toggleMicrophoneMute}
-                    disabled={!audioReady}
-                  />
-                </Box>
-              </Stack>
-            </Box>
-          </Box>
-        )}
 
         {pickerOpen && !formOpen && (
           <PersonalityStore onCreate={() => setFormMode({ kind: 'create' })} />
@@ -675,76 +457,46 @@ export function ConversationPanel({
 }
 
 /**
- * Vertical padding applied to each cell of the bottom utility
- * strip (in MUI spacing units - 1.75 = 14px).
+ * Collapse the engine's two state machines (connection + conversation)
+ * onto the smaller visual vocabulary the orb knows.
  *
- * Lives on the cells (not on the outer strip Box) so the inter-
- * cell vertical dividers can stretch the full strip height. The
- * cells then center their own content vertically, so the visual
- * outcome matches the previous "centered row" layout while the
- * dividers gain top-to-bottom reach.
- *
- * Kept as a module-level constant so both audio cells and the
- * language cell stay in lockstep - a future tweak to row breath
- * only needs to change one number.
- */
-const STRIP_CELL_PY = 1.75;
-
-/**
- * Horizontal padding applied to each cell of the bottom utility
- * strip (in MUI spacing units - 1.5 = 12px).
- *
- * Same rationale as `STRIP_CELL_PY`: by moving the L/R breathing
- * room from the outer strip box onto each cell, the vertical
- * dividers can sit flush against the cells (Stack `spacing={0}`)
- * and the strip's content reaches all the way to the strip's
- * own left + right edges. Tuned slightly tighter than the
- * vertical padding so the strip reads as a horizontal toolbar
- * rather than a chunky button row.
- */
-const STRIP_CELL_PX = 1.5;
-
-/**
- * Vertical "tick" divider used between the three cells of the
- * bottom utility strip (language picker, speaker, microphone).
- *
- * Local component because we render it twice and want both
- * occurrences to stay byte-identical: future tweaks (height,
- * colour, opacity) propagate in one place instead of drifting
- * between the two call sites. Kept private to the file - this is
- * panel-internal styling chrome, not something to expose.
- *
- * Visual posture: edge-to-edge of the strip (no vertical margin)
- * so the line reads as a clean toolbar separator rather than a
- * floating tick. Combined with the `alignItems="stretch"` on the
- * outer row and the per-cell `py: STRIP_CELL_PY`, this divider
- * reaches from the strip's `borderTop` hairline all the way to
- * its bottom edge, framing each cell as its own column.
- */
-function StripDivider() {
-  return <Divider orientation="vertical" flexItem sx={{ borderColor: 'divider' }} />;
-}
-
-/**
- * Collapse the engine's full state machine onto the smaller visual
- * vocabulary the orb knows. `released` maps to `idle` so the orb
- * shows a neutral state during a handoff (the panel is typically
- * hidden at that point but we keep the mapping defensive).
+ * The connection state takes precedence: `error` and the bring-up /
+ * idle transport states don't depend on the conversation FSM. Only
+ * once the connection is `live` does the orb reflect the conversation
+ * FSM (idle = "tap to start", the rest pass through). `released` maps
+ * to `idle` so the orb shows a neutral state during a handoff.
  *
  * Exported for unit testing.
  */
-export function mapAppStateToOrb(state: AppState): OrbState {
-  switch (state) {
-    // `stopping` reuses the connecting spinner so the orb shows immediate
-    // feedback during the gentle teardown after the stop tap. The caption
-    // disambiguates ("Ending conversation", see below).
+export function mapToOrb(
+  connectionState: ConnectionState,
+  conversationState: ConversationState,
+): OrbState {
+  if (connectionState === 'error') return 'error';
+  switch (connectionState) {
     case 'connecting':
+    case 'selecting':
     case 'starting':
-    case 'auto-selecting':
+      return 'connecting';
+    case 'signed-out':
+    case 'authenticated':
+    case 'connected':
+    case 'released':
+      return 'idle';
+    case 'live':
+      break;
+    default:
+      return 'idle';
+  }
+  // Connection is `live`: the orb reflects the conversation FSM.
+  switch (conversationState) {
+    // `starting` / `stopping` reuse the connecting spinner so the orb
+    // shows immediate feedback during bring-up / the gentle teardown
+    // after the stop tap. The caption disambiguates ("Ending
+    // conversation", see below).
+    case 'starting':
     case 'stopping':
       return 'connecting';
-    case 'ready':
-      return 'ready';
     case 'listening':
       return 'listening';
     case 'user-speaking':
@@ -753,13 +505,8 @@ export function mapAppStateToOrb(state: AppState): OrbState {
       return 'processing';
     case 'ai-speaking':
       return 'ai-speaking';
-    case 'error':
-      return 'error';
-    case 'signed-out':
-    case 'authenticated':
-    case 'connected':
-    case 'released':
+    case 'idle':
     default:
-      return 'idle';
+      return 'ready';
   }
 }

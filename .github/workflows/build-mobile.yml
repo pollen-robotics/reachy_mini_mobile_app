@@ -59,14 +59,10 @@ name: Build mobile
 #   is pinned to ${{ github.run_number }} so each tag push gets a
 #   fresh code without manual coordination.
 #
-# OpenAI access is brokered by the website Space's
-# `/api/openai/ephemeral` endpoint (see
-# `src/features/conversation/engine/ephemeral-key.ts` and the
-# `OPENAI_API_KEY` secret on the website Space). The mobile bundle
-# no longer carries a long-lived OpenAI key, so this workflow no
-# longer needs an `OPENAI_API_KEY` repo secret or any build-time
-# `VITE_OPENAI_API_KEY` injection - the equivalent step blocks
-# were removed alongside the website-side mint endpoint.
+# Voice conversation runs entirely through the Hugging Face realtime
+# backend, authenticated by the user's own HF token via an
+# HF-token-gated session allocator. No model-provider key is bundled,
+# so this workflow needs no provider secret or build-time key injection.
 on:
   push:
     tags:
@@ -272,7 +268,7 @@ jobs:
         #     build doesn't surface "Missing Compliance" until a
         #     human goes click through the Export Compliance form.
         #     We use only standard HTTPS/TLS (talking to HF Space,
-        #     OpenAI Realtime, WebRTC), which is exempt under the
+        #     HF realtime, WebRTC), which is exempt under the
         #     "uses standard encryption" carve-out.
         #
         # `plutil -insert` is idempotent enough for our needs; if a
@@ -292,7 +288,7 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
-          # Background-audio capability: needed so the OpenAI Realtime
+          # Background-audio capability: needed so the realtime
           # WebRTC session + WKWebView keep running when the user
           # locks the screen / backgrounds the app mid-conversation.
           # See `src-tauri/Info.plist` + the runtime keepalive in
@@ -945,7 +941,7 @@ jobs:
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
-          # Background-audio capability: needed so the OpenAI Realtime
+          # Background-audio capability: needed so the realtime
           # WebRTC session + WKWebView keep running when the user
           # locks the screen / backgrounds the app mid-conversation.
           # See `src-tauri/Info.plist` + the runtime keepalive in

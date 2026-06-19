@@ -25,6 +25,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 const STORAGE_KEY = 'reachy.apps.pinnedIds';
 
 /**
+ * Flag marking that the one-time "pin the official Pollen apps by
+ * default" seeding has run. Stored separately from the pinned ids so
+ * that once a user has been seeded, unpinning an official app sticks
+ * (we never re-add it on the next catalog load).
+ */
+const SEEDED_KEY = 'reachy.apps.pinnedSeeded';
+
+/**
  * Maximum number of pinned apps. Picked to fit 3 rows of 4 tiles
  * on a 360 px viewport with the V1 pinned-tile size. The 13th pin
  * attempt prompts the user to unpin something first.
@@ -46,6 +54,25 @@ interface UsePinnedAppsReturn {
   pin: (id: string) => boolean;
   /** Unpin an id (no-op if not pinned). */
   unpin: (id: string) => void;
+  /**
+   * Replace the pinned order with `orderedIds`. Used by the launcher's
+   * drag-to-reorder. Defensive: only ids currently pinned are kept (any
+   * unknown id is dropped) and any currently-pinned id missing from the
+   * argument is appended at the end, so a partial / stale order can
+   * never silently lose or duplicate a pin.
+   */
+  reorder: (orderedIds: string[]) => void;
+  /**
+   * One-time seeding of the default pinned apps (the official Pollen
+   * apps). Pins every id in `defaultIds` that isn't already pinned,
+   * but only on the very first call EVER (guarded by a persisted
+   * flag). Subsequent calls - and calls after the user has curated
+   * their pins - are no-ops, so unpinning a default sticks. Pass the
+   * official ids once the catalog has loaded; an empty list is
+   * ignored so we wait for the catalog rather than marking the seed
+   * done prematurely.
+   */
+  seedDefaults: (defaultIds: string[]) => void;
   /** Whether the cap allows another pin. Equivalent to `ids.length < MAX_PINNED`. */
   canPinMore: boolean;
   /** Convenience: is this id currently pinned? */
@@ -97,6 +124,22 @@ function writeStorage(ids: string[]): void {
     // localStorage may be unavailable (private mode on iOS,
     // quota exceeded). Silently fail; the in-memory state still
     // reflects the user's action this session.
+  }
+}
+
+function readSeeded(): boolean {
+  try {
+    return localStorage.getItem(SEEDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeSeeded(): void {
+  try {
+    localStorage.setItem(SEEDED_KEY, '1');
+  } catch {
+    // Same private-mode / quota caveat as `writeStorage`.
   }
 }
 
@@ -158,6 +201,45 @@ export function usePinnedApps(): UsePinnedAppsReturn {
     });
   }, []);
 
+  const reorder = useCallback((orderedIds: string[]): void => {
+    setIds((prev) => {
+      const prevSet = new Set(prev);
+      // Keep only ids that are actually pinned, in the requested order.
+      const next = orderedIds.filter((id) => prevSet.has(id));
+      // Append any pinned id the caller forgot (e.g. an entry hidden
+      // from the visible grid because its app is unpublished) so we
+      // never drop a pin.
+      const nextSet = new Set(next);
+      for (const id of prev) {
+        if (!nextSet.has(id)) next.push(id);
+      }
+      // No-op guard: bail if the order is unchanged to avoid a
+      // pointless write + re-render.
+      if (next.length === prev.length && next.every((id, i) => id === prev[i])) {
+        return prev;
+      }
+      writeStorage(next);
+      return next;
+    });
+  }, []);
+
+  const seedDefaults = useCallback((defaultIds: string[]): void => {
+    // Already seeded once → never touch the user's curated pins again.
+    if (readSeeded()) return;
+    // Catalog not loaded yet (no official ids to seed). Don't mark the
+    // seed done; wait for a later call once the ids are known.
+    if (defaultIds.length === 0) return;
+    setIds((prev) => {
+      const next = [...prev];
+      for (const id of defaultIds) {
+        if (!next.includes(id) && next.length < MAX_PINNED) next.push(id);
+      }
+      writeStorage(next);
+      return next;
+    });
+    writeSeeded();
+  }, []);
+
   const toggle = useCallback(
     (id: string): boolean => {
       // Use the synchronous `ids` snapshot rather than reading from
@@ -186,6 +268,8 @@ export function usePinnedApps(): UsePinnedAppsReturn {
     toggle,
     pin,
     unpin,
+    reorder,
+    seedDefaults,
     canPinMore: ids.length < MAX_PINNED,
     isPinned,
     recentlyAddedId,

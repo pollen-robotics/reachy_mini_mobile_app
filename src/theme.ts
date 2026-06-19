@@ -1,11 +1,24 @@
 import { createTheme, type Theme } from '@mui/material/styles';
 
+import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
+
 /**
  * Minimal but production-shaped MUI theme.
  *
  * Two instances (light + dark) built from the same accent, selected at
  * runtime via `prefers-color-scheme`. Keeping both pre-built avoids a
  * visible flash when the user toggles their system appearance.
+ *
+ * Typography foundation
+ * ─────────────────────
+ * The MUI variant scale (`h1…h6`, `subtitle*`, `body*`, `caption`,
+ * `overline`, `button`) is mapped onto the shared `TYPO` token scale so
+ * that a bare `<Typography variant="h3">` is already on-spec WITHOUT a
+ * per-call `sx={{ fontSize, fontWeight }}`. This is the "standard by
+ * default" layer; existing call-sites that still hand-roll `fontSize`
+ * keep working (their `sx` wins) and get migrated to variants
+ * incrementally. The token scale stays the single source of truth -
+ * the theme just exposes it through MUI's variant system.
  */
 
 const ACCENT = '#FF9500'; // Pollen-ish orange, matches the desktop app.
@@ -37,7 +50,28 @@ function buildTheme(mode: 'light' | 'dark'): Theme {
     },
     typography: {
       fontFamily: FONT_FAMILY,
-      button: { textTransform: 'none', fontWeight: 600 },
+      // Headings: the title scale. `h3` (TYPO.xxl bold) is the canonical
+      // "screen title" used by `IllustratedState` and most section heroes.
+      h1: { fontSize: TYPO.display, fontWeight: FONT_WEIGHT.bold, lineHeight: 1.15, letterSpacing: '-0.4px' },
+      h2: { fontSize: TYPO.hero, fontWeight: FONT_WEIGHT.bold, lineHeight: 1.18, letterSpacing: '-0.3px' },
+      h3: { fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.bold, lineHeight: 1.2, letterSpacing: '-0.2px' },
+      h4: { fontSize: TYPO.xl, fontWeight: FONT_WEIGHT.semibold, lineHeight: 1.25, letterSpacing: '-0.2px' },
+      h5: { fontSize: TYPO.lg, fontWeight: FONT_WEIGHT.semibold, lineHeight: 1.3 },
+      h6: { fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold, lineHeight: 1.35 },
+      // Supporting copy.
+      subtitle1: { fontSize: TYPO.md, fontWeight: FONT_WEIGHT.medium, lineHeight: 1.4 },
+      subtitle2: { fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.semibold, lineHeight: 1.4 },
+      body1: { fontSize: TYPO.md, fontWeight: FONT_WEIGHT.regular, lineHeight: 1.5 },
+      body2: { fontSize: TYPO.body, fontWeight: FONT_WEIGHT.regular, lineHeight: 1.5 },
+      caption: { fontSize: TYPO.xs, lineHeight: 1.4 },
+      overline: {
+        fontSize: TYPO.tiny,
+        fontWeight: FONT_WEIGHT.semibold,
+        lineHeight: 1.2,
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+      },
+      button: { textTransform: 'none', fontWeight: FONT_WEIGHT.semibold, fontSize: TYPO.md },
     },
     shape: { borderRadius: RADIUS },
     components: {

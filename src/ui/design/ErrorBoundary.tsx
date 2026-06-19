@@ -176,7 +176,7 @@ function Fallback({
       <div
         style={{
           // Math-explicit horizontal sizing: `min(420px, 100vw - 56px)`
-          // means "the card is at most 420 px wide, never wider than
+          // means "the content is at most 420 px wide, never wider than
           // viewport minus 56 px (28 px guaranteed on each side)".
           // No dependency on parent padding being respected by
           // `width: 100%` - this works regardless of how the WebView
@@ -184,12 +184,12 @@ function Fallback({
           // container with padding.
           width: 'min(420px, calc(100vw - 56px))',
           boxSizing: 'border-box',
-          background: palette.surface,
-          border: `1px solid ${palette.border}`,
-          borderRadius: 12,
-          padding: 24,
+          // No card chrome (surface / border / radius / padding): the
+          // content sits centred directly on the background.
           display: 'flex',
           flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
           gap: 16,
         }}
       >
@@ -218,6 +218,8 @@ function Fallback({
           style={{
             margin: 0,
             padding: 12,
+            width: '100%',
+            boxSizing: 'border-box',
             background: palette.bg,
             border: `1px solid ${palette.border}`,
             borderRadius: 8,
@@ -225,6 +227,7 @@ function Fallback({
             fontFamily:
               'ui-monospace, SFMono-Regular, Menlo, monospace',
             color: palette.secondary,
+            textAlign: 'left',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
             maxHeight: 200,

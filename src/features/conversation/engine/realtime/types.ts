@@ -2,25 +2,17 @@
  * Realtime backend contract.
  *
  * The conversation engine talks to ONE interface (`RealtimeBackend`) and
- * never to a concrete provider. Each provider (Hugging Face, OpenAI) ships
- * a bridge that satisfies this contract; `createRealtimeBackend()` (see
- * `./index.ts`) picks one at session start.
- *
- * The shape here is derived 1:1 from what `conversation-engine` consumes
- * today - it is a *name* for a contract both bridges already satisfied
- * de facto, not a new concept. Provider-specific auth (HF token vs OpenAI
- * ephemeral key) stays INSIDE each bridge's own deps, never in the shared
- * `RealtimeBackendDeps`.
+ * never to a concrete client. The Hugging Face bridge
+ * (`bridge/huggingface-bridge.ts`) is the sole implementation today; the
+ * interface is kept as a clean seam so the engine stays agnostic of the
+ * transport details. Provider auth (the user's HF token) stays INSIDE the
+ * bridge's own deps, never in the shared `RealtimeBackendDeps`.
  */
 
 import type { ROBOT_TOOLS } from "../tools";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 
-/** Selectable realtime providers. Add a member + a `case` in the factory
- *  to introduce a new backend. */
-export type RealtimeBackendKind = "huggingface" | "openai";
-
-/** Coarse, UI-facing conversation status. Both providers normalise their
+/** Coarse, UI-facing conversation status. The bridge normalises its
  *  finer-grained client states down to this set before forwarding. */
 export type RealtimeStatusKind =
   | "connected"
@@ -50,10 +42,10 @@ export interface RealtimePort {
 }
 
 /**
- * Deps every backend needs, regardless of provider. The provider auth
- * (`getHfToken` / `getApiKey`) is intentionally absent - the factory
- * injects it per provider so the engine never has to know which
- * credential the active backend uses.
+ * Deps the backend needs from the engine. The provider auth
+ * (`getHfToken`) is intentionally absent - it is injected by the backend
+ * controller, not the engine, so the engine never has to know which
+ * credential the backend uses.
  */
 export interface RealtimeBackendDeps {
   getRobot: () => ReachyMiniInstance | null;
@@ -62,8 +54,7 @@ export interface RealtimeBackendDeps {
    * ISO 639-1 code for the input transcription model. Resolved lazily
    * (re-read on every connect / reconnect) so a language change is
    * picked up without rebuilding the backend. Consumed by the Hugging
-   * Face bridge (biases its transcriber); the OpenAI bridge ignores it
-   * (its Whisper config uses a vocabulary prompt, not a language hint).
+   * Face bridge to bias its transcriber.
    */
   transcriptionLanguage: string | (() => string);
   composeInstructions: () => string;
@@ -76,8 +67,8 @@ export interface RealtimeBackendDeps {
 }
 
 /**
- * The contract the engine drives. Both `createHuggingFaceBridge` and
- * `createOpenaiBridge` return a value assignable to this.
+ * The contract the engine drives. `createHuggingFaceBridge` returns a
+ * value assignable to this.
  */
 export interface RealtimeBackend {
   connect: (robotMicTrack: MediaStreamTrack) => Promise<void>;

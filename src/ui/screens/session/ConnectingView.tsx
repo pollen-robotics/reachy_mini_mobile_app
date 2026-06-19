@@ -54,14 +54,14 @@ import { useEffect, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 
 import connectionUrl from '@/assets/connection.svg';
-import type { ConversationConnectionAttempt, ConversationState } from '@/features/conversation';
+import type { ConversationConnectionAttempt, ConnectionState } from '@/features/conversation';
 import StepsProgressIndicator from '@/ui/design/StepsProgressIndicator';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 interface ConnectingViewProps {
-  /** Current engine state. Drives both the secondary caption and the
-   *  stepper's active index. */
-  state: ConversationState;
+  /** Current connection state. Drives both the secondary caption and
+   *  the stepper's active index. */
+  state: ConnectionState;
   /** In-flight retry info from `useRobotSession`. Non-null while the
    *  engine is on its second (or further) attempt at `startSession`.
    *  `null` on the first attempt, on success, or on fatal error. */
@@ -174,9 +174,13 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
             color: 'text.secondary',
             textAlign: 'center',
             maxWidth: 280,
-            // Reserve a stable two-line height so the slow-hint
-            // appearance doesn't shift the layout under the user.
-            minHeight: '2.6em',
+            // Reserve a FIXED two-line box (line-height × 2) so a caption
+            // wrapping from one to two lines never changes the block's
+            // height - otherwise the Y-centred layout shifts under the
+            // user. `2.6em` was just shy of two real lines, so 2-line
+            // captions (retry / slow hint) still nudged it.
+            lineHeight: 1.4,
+            height: '2.8em',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -201,13 +205,13 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
  * fires `connectionAttempt = null` exactly between `session.start()`
  * resolving and `session.wakeUp()` starting.
  */
-function stepIndexFor(state: ConversationState, inWakePhase: boolean): 0 | 1 | 2 {
+function stepIndexFor(state: ConnectionState, inWakePhase: boolean): 0 | 1 | 2 {
   switch (state) {
     case 'signed-out':
     case 'authenticated':
     case 'connecting':
     case 'connected':
-    case 'auto-selecting':
+    case 'selecting':
       return 0;
     case 'starting':
       return inWakePhase ? 2 : 1;
@@ -217,7 +221,7 @@ function stepIndexFor(state: ConversationState, inWakePhase: boolean): 0 | 1 | 2
 }
 
 interface CaptionInputs {
-  state: ConversationState;
+  state: ConnectionState;
   connectionAttempt: ConversationConnectionAttempt | null;
   inWakePhase: boolean;
   slowHintVisible: boolean;
@@ -231,8 +235,11 @@ function captionFor({
 }: CaptionInputs): string {
   // Retry caption wins over everything else - the user needs to know
   // we're actively retrying, not stuck on a stale connecting message.
+  // Kept short so it stays on a single line (the headline already says
+  // "Reconnecting"); a longer copy wrapped to 2 lines and shifted the
+  // Y-centred block.
   if (connectionAttempt && connectionAttempt.attempt > 1) {
-    return `Attempt ${connectionAttempt.attempt} of ${connectionAttempt.maxAttempts} - this can take a few seconds.`;
+    return `Attempt ${connectionAttempt.attempt} of ${connectionAttempt.maxAttempts}…`;
   }
 
   // Caption order reflects the user's mental model of the bring-up,
@@ -243,7 +250,7 @@ function captionFor({
     case 'authenticated':
     case 'connecting':
     case 'connected':
-    case 'auto-selecting':
+    case 'selecting':
       return 'Opening secure link to Hugging Face';
     case 'starting':
       // `starting` is the umbrella for both `session.start()` (the
@@ -280,7 +287,7 @@ function captionFor({
  * after a release+reacquire) starts fresh from the Session step.
  */
 function useReachedWakePhase(
-  state: ConversationState,
+  state: ConnectionState,
   connectionAttempt: ConversationConnectionAttempt | null
 ): boolean {
   const [reached, setReached] = useState(false);
@@ -314,7 +321,7 @@ function useReachedWakePhase(
  * `starting`. Used to surface the "taking a moment" hint after ~6 s,
  * never to drive the stepper itself.
  */
-function useStartingElapsedPast(state: ConversationState, delayMs: number): boolean {
+function useStartingElapsedPast(state: ConnectionState, delayMs: number): boolean {
   const [past, setPast] = useState(false);
 
   useEffect(() => {

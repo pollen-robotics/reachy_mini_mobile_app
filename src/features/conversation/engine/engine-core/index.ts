@@ -41,7 +41,7 @@
  * need to coordinate on.
  */
 
-import type { AppState } from "../types";
+import type { ConnectionState, ConversationState } from "../types";
 import { type Fsm, createFsm } from "./fsm";
 import { type Gate, makeGate } from "./gate";
 
@@ -73,31 +73,47 @@ export interface EngineCoreGates {
 }
 
 export interface EngineCore {
-  fsm: Fsm<AppState>;
+  /** Transport / connection FSM (SDK + WebRTC + DataChannel link). */
+  connection: Fsm<ConnectionState>;
+  /** AI conversation FSM (realtime backend + motion + tools), only
+   *  ever non-`idle` while `connection` is `live`. */
+  conversation: Fsm<ConversationState>;
   gates: EngineCoreGates;
 }
 
 export interface CreateEngineCoreOptions {
-  /** Initial FSM state. The mobile app starts in `"connecting"` so
-   *  the user doesn't see a flash of the `"signed-out"` intro
+  /** Initial connection state. The mobile app starts in `"connecting"`
+   *  so the user doesn't see a flash of the `"signed-out"` intro
    *  (auth already happened upstream on `RemoteSignInScreen`). */
-  initialState: AppState;
+  initialConnectionState: ConnectionState;
   /** Initial value for the `convoActiveRequested` gate. Defaults
    *  to `true` (Space-app behaviour: tap once → talking); the
    *  mobile shell passes `false` so the wake-up animation can
    *  play without the antennas / backend firing in parallel. */
   convoActiveRequested: boolean;
-  /** Diagnostic label prefixed to every FSM transition log. Pass
-   *  `null` to silence (tests). */
-  fsmLabel?: string | null;
+  /** Diagnostic label prefixed to every connection FSM transition
+   *  log. Pass `null` to silence (tests). */
+  connectionLabel?: string | null;
+  /** Diagnostic label prefixed to every conversation FSM transition
+   *  log. Pass `null` to silence (tests). */
+  conversationLabel?: string | null;
 }
 
 export function createEngineCore(
   options: CreateEngineCoreOptions,
 ): EngineCore {
   return {
-    fsm: createFsm<AppState>(options.initialState, {
-      label: options.fsmLabel === undefined ? "engine" : options.fsmLabel,
+    connection: createFsm<ConnectionState>(options.initialConnectionState, {
+      label:
+        options.connectionLabel === undefined
+          ? "connection"
+          : options.connectionLabel,
+    }),
+    conversation: createFsm<ConversationState>("idle", {
+      label:
+        options.conversationLabel === undefined
+          ? "conversation"
+          : options.conversationLabel,
     }),
     gates: {
       conversationStarted: makeGate(false),

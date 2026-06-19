@@ -254,7 +254,9 @@ function LikeButtonImpl({
         mx: -0.5,
         borderRadius: `${RADIUS.sm}px`,
         cursor: canToggle ? 'pointer' : 'default',
-        color: isLiked ? 'error.main' : 'text.secondary',
+        // Keep the row (count) neutral; only the heart icon below
+        // carries the brand colour when liked.
+        color: 'text.secondary',
         transition: 'color 220ms ease, background-color 120ms ease',
         '&:hover': canToggle ? { bgcolor: 'action.hover' } : undefined,
         '&.Mui-disabled': {
@@ -299,6 +301,9 @@ function LikeButtonImpl({
           key={`heart-${animKey}-${isLiked ? 'on' : 'off'}`}
           sx={{
             fontSize: TYPO.lg,
+            // Heart is the only coloured element: a primary outline
+            // when not liked, a solid red fill once liked.
+            color: isLiked ? 'error.main' : 'primary.main',
             // Two distinct keyframes:
             // - `like-pop`: full anticipation + overshoot on the
             //   like-up transition, paired with the portal burst.

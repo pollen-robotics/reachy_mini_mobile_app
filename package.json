@@ -23,10 +23,17 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@mnlphlp/plugin-blec": "^0.8.0",
     "@mui/icons-material": "^9.0.0",
     "@mui/material": "^9.0.0",
+    "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
     "@pollen-robotics/reachy-mini-sdk": "1.8.0-main.3d52f7d",
     "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",

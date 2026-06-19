@@ -86,11 +86,10 @@ Hugging Face Trust & Safety.
 **Privacy / data flow (Guideline 5.1)**
 
 - Voice: while a conversation is active, microphone audio is streamed
-  to OpenAI's Realtime service to generate the robot's replies (the
-  user can switch to a Hugging Face backend in settings). Audio is not
-  stored on Pollen servers. The app does not bundle any long-lived
-  OpenAI key: it uses short-lived, per-user ephemeral keys minted
-  server-side and gated by the user's Hugging Face token.
+  to Hugging Face's realtime service to generate the robot's replies.
+  Audio is not stored on Pollen servers. The app does not bundle any
+  long-lived model-provider key: the realtime session is allocated
+  server-side, gated by the user's Hugging Face token.
 - Account: the Hugging Face access token and username are stored on
   the device and used to authenticate against the Hugging Face Hub.
 - No third-party analytics/tracking SDKs; no App Tracking Transparency
@@ -119,7 +118,7 @@ Pollen-operated account system, so Sign in with Apple does not apply.
 **Export compliance**
 
 `ITSAppUsesNonExemptEncryption = NO` - the app only uses standard
-HTTPS/TLS (Hugging Face, OpenAI Realtime, WebRTC), which is exempt.
+HTTPS/TLS (Hugging Face, HF realtime, WebRTC), which is exempt.
 
 **Contact:** support@pollen-robotics.com
 
@@ -131,12 +130,12 @@ HTTPS/TLS (Hugging Face, OpenAI Realtime, WebRTC), which is exempt.
       real demo account.
 - [ ] Confirm the demo account's robot is online on
       `pollen-robotics-reachy-mini-central` during the review window.
-- [ ] Privacy Nutrition Label populated (audio -> OpenAI; HF token +
+- [ ] Privacy Nutrition Label populated (audio -> Hugging Face; HF token +
       username; robot/peer identifiers; no tracking).
 - [ ] Age rating questionnaire: answer yes to UGC + unrestricted web
       access -> expect 12+.
 - [ ] Privacy Policy URL reachable and covers: HF token/username, audio
-      to OpenAI (not stored on Pollen servers), third-party Spaces
+      to Hugging Face (not stored on Pollen servers), third-party Spaces
       operating under their own policies, in-app Report/Block.
 - [ ] Confirm Apple Developer team `4KLHP7L6KP` is the Pollen Robotics
       organisation account (required for public distribution).
