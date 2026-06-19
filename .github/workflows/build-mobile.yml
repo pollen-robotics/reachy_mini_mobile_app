@@ -327,6 +327,13 @@ jobs:
         # The regenerated project has no OTHER_LDFLAGS at all, so we
         # inject one. `$(inherited)` keeps any default flags Xcode would
         # otherwise apply.
+        #
+        # Same story for CoreBluetooth.framework: the BLE Wi-Fi setup
+        # flow pulls in `btleplug`, whose CoreBluetooth backend makes
+        # `libapp.a` reference `_CBAdvertisementDataLocalNameKey`,
+        # `_CBCentralManagerScanOptionAllowDuplicatesKey`, etc. Those are
+        # also dropped on the simulator link, so we force-link
+        # CoreBluetooth here too.
         run: |
           set -euxo pipefail
           PBXPROJ="src-tauri/gen/apple/reachy_mini_mobile_app.xcodeproj/project.pbxproj"
@@ -346,7 +353,7 @@ jobs:
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
               '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
               '\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "";\n'
-              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework AuthenticationServices";\n'
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework AuthenticationServices -framework CoreBluetooth";\n'
           )
           new_content, n = re.subn(
               r'(buildSettings = \{\n)',
@@ -992,6 +999,13 @@ jobs:
               f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile_name}";\n'
               '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
               '\t\t\t\t"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";\n'
+              # btleplug's CoreBluetooth backend (BLE Wi-Fi setup) makes
+              # libapp.a reference CoreBluetooth symbols. Unlike
+              # AuthenticationServices, CoreBluetooth isn't reliably
+              # autolinked on the device SDK either, so force-link it here
+              # to keep the signed archive / TestFlight upload from
+              # failing at the link step.
+              '\t\t\t\tOTHER_LDFLAGS = "$(inherited) -framework CoreBluetooth";\n'
           )
           # Use a callable replacement so re.subn doesn't interpret
           # `\1`, `\g<name>`, etc inside `inj` as backreferences.
