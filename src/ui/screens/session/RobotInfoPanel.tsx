@@ -1,10 +1,16 @@
 /**
- * "Info" panel rendered by `RobotSessionScreen` when the user taps
- * the `ⓘ` button in the session topbar (which swaps to a `✕` while
- * open).
+ * "About & diagnostics" panel - the drilled-in sub-page of the robot
+ * Settings sheet. The user reaches it by tapping the "About &
+ * diagnostics" row in `<ConversationSettingsPanel>` (the Settings root);
+ * the host (`RobotSessionScreen`) swaps this panel in for the root list.
+ * It paints its OWN back header (`←  About & diagnostics`) to pop back
+ * to the root list, while the topbar cog's `✕` dismisses the whole
+ * sheet.
  *
  *   ┌──────────────────────────────────────┐
- *   │ ⟵ session topbar stays visible    [✕]│  (NOT painted here)
+ *   │ ← session topbar stays visible    [✕]│  (cog ✕ dismisses sheet)
+ *   ├──────────────────────────────────────┤
+ *   │  ←  About & diagnostics              │  (back header, painted here)
  *   ├──────────────────────────────────────┤
  *   │  CONNECTION                          │
  *   │  ┌────────────────────────────────┐  │
@@ -30,18 +36,15 @@
  *   │  └─────────────────────────────────┘  │
  *   └──────────────────────────────────────┘
  *
- * Why no panel topbar
- * ───────────────────
- * Earlier iterations painted a dedicated topbar inside the panel
- * (`Robot info` title + `[✕]` close, sized to match the session
- * topbar) AND a hero identity card with `<RobotAvatar>` + robot
- * name + transport chip + full hardware id at the top of the body.
- * Both were dropped: the session topbar already carries
- * `<IdentityChipBar>` (robot name + transport chip + short id) and
- * a `[✕]` (the info button glyph swaps to a cross while the panel
- * is open) - duplicating any of that inside the panel was just
- * noise. The panel is now metadata + logs only; the session
- * topbar IS its chrome.
+ * Chrome: back header + topbar
+ * ────────────────────────────
+ * As a sub-page the panel paints a slim back header (`←  About &
+ * diagnostics`) that calls `onBack` to return to the Settings root.
+ * It still has NO hero identity card: the session topbar above keeps
+ * carrying `<IdentityChipBar>` (robot name + transport chip + short
+ * id) so the user always knows which robot they're inspecting, and
+ * the full hardware id lives in the Robot section below. Body is
+ * metadata + logs.
  *
  * Layout contract (driven by the host)
  * ────────────────────────────────────
@@ -52,21 +55,21 @@
  * to the bottom of the viewport (body + bottom nav). The expected
  * pattern in `RobotSessionScreen` is:
  *
- *   {infoOpen && (
+ *   {settingsOpen && settingsView === 'about' && (
  *     <Box sx={{ position: 'fixed', top: TOPBAR_HEIGHT,
  *                left: 0, right: 0, bottom: 0, zIndex: 1200 }}>
- *       <RobotInfoPanel onClose={...} ... />
+ *       <RobotInfoPanel onBack={...} onClose={...} ... />
  *     </Box>
  *   )}
  *
  * The panel itself never positions absolutely - that lets the host
  * decide where it lives without the panel having to know.
  *
- * `onClose` is the panel's "fully dismiss" callback. We DON'T paint
- * a close button for it ourselves (the session topbar's `[✕]`
- * carries that affordance), but we keep the prop on the API so
- * descendants (e.g. the future "ssh me into this robot" link)
- * can dismiss the panel when their work is done.
+ * `onBack` pops back to the Settings root (painted as the `←` in the
+ * back header). `onClose` is the "fully dismiss the sheet" callback,
+ * unused for now (the topbar cog's `✕` carries that affordance) but
+ * kept on the API so descendants (e.g. a future "ssh me into this
+ * robot" link) can dismiss the whole sheet when their work is done.
  *
  * Data plumbing
  * ─────────────
@@ -80,6 +83,7 @@
  */
 import { useCallback, useState } from 'react';
 import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/material';
+import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -111,25 +115,32 @@ const KIND_META = {
 const DOT_SIZE_PX = 8;
 
 /**
- * Floor for the LOGS panel inside the view. Tuned generous so the
- * live tail dominates the bottom half of the panel even before
- * scrolling - users open the info view mostly to read logs, the
- * metadata above is at-a-glance reference. 244 px ~= 7 rows of
- * `LogLineRow` (~23 px each), enough to read a small burst without
- * expanding to the dedicated full-screen logs view (the
- * `OpenInFullIcon` action on the panel header). The body scrolls if
- * the metadata + logs floor overflow on small viewports.
+ * Floor for the LOGS panel inside the view. Tuned so the live tail
+ * dominates the lower part of the panel - users open this view mostly
+ * to read logs, the metadata above is at-a-glance reference. Trimmed
+ * from 244 to 188 px (~8 rows -> ~6 rows of `LogLineRow` at ~23 px
+ * each) to claw back the height the new back header consumes, so the
+ * metadata + logs fit without scrolling on first open on a typical
+ * phone. The body still scrolls if they overflow on short viewports.
  */
-const LOGS_MIN_HEIGHT_PX = 244;
+const LOGS_MIN_HEIGHT_PX = 188;
 
 interface RobotInfoPanelProps {
   /**
-   * Fully dismisses the panel. The host (`RobotSessionScreen`)
-   * normally drives dismissal itself via the session topbar's
-   * `[✕]` button, but we keep this prop on the contract so future
-   * content inside the panel (an SSH deep-link, a "report a bug"
-   * CTA that opens its own surface, …) can close the panel as a
-   * side-effect of completing its own action.
+   * Returns to the root Settings page. This panel is now a drilled-in
+   * sub-page of the Settings sheet ("About & diagnostics"), so it
+   * paints its own back header (`←  About & diagnostics`) that calls
+   * this to pop back one level (vs `onClose`, which dismisses the
+   * whole sheet).
+   */
+  onBack: () => void;
+  /**
+   * Fully dismisses the Settings sheet. The host (`RobotSessionScreen`)
+   * normally drives dismissal itself via the topbar cog's `[✕]`
+   * button, but we keep this prop on the contract so future content
+   * inside the panel (an SSH deep-link, a "report a bug" CTA that
+   * opens its own surface, …) can close the sheet as a side-effect of
+   * completing its own action.
    *
    * Unused for now - prefix with `_` to mark intent. Drop the
    * underscore the moment a child needs it.
@@ -171,6 +182,7 @@ interface RobotInfoPanelProps {
 }
 
 export default function RobotInfoPanel({
+  onBack,
   onClose: _onClose,
   hardwareId,
   fallbackId,
@@ -342,21 +354,63 @@ export default function RobotInfoPanel({
           </Box>
         </>
       ) : (
-        /* Body. Flex column hosting the compact metadata sections
-           and the LOGS panel. The whole column is wrapped in
-           `overflowY: auto` so the metadata can spill into a normal
-           page scroll if the viewport is short, instead of
-           squashing the LOGS panel. The LOGS panel itself uses
-           `flex: 1, minHeight: …` to eat the leftover vertical
-           space and scrolls internally. */
-        <Box
+        <>
+          {/* Back header: this panel is a drilled-in sub-page of the
+              Settings sheet, so it paints its own `←` to pop back to
+              the root Settings list (the topbar cog's `✕` dismisses the
+              whole sheet). Title matches the Settings root header
+              (`TYPO.xxl` / bold); no bottom hairline so it sits flush
+              over the scrolling content like the root does. */}
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{
+              flexShrink: 0,
+              alignItems: 'center',
+              // Match the Settings root header gutter (`px: 3` / `pt:
+              // 3.5`) so navigating root <-> about doesn't shift the
+              // header horizontally or vertically.
+              px: 3,
+              pt: 3.5,
+              pb: 1,
+            }}
+          >
+            {/* Negative inset cancels the small IconButton's internal
+                padding so the arrow glyph lands exactly on the `px: 3`
+                gutter, where the root header's cog/settings icon sits. */}
+            <IconButton aria-label="Back to settings" onClick={onBack} size="small" sx={{ ml: -0.625 }}>
+              <ArrowBackRoundedIcon sx={{ fontSize: 22 }} />
+            </IconButton>
+            <Typography
+              component="h2"
+              sx={{
+                fontSize: TYPO.xxl,
+                fontWeight: FONT_WEIGHT.bold,
+                letterSpacing: '-0.3px',
+                color: 'text.primary',
+                lineHeight: 1.2,
+              }}
+            >
+              About &amp; diagnostics
+            </Typography>
+          </Stack>
+          {/* Body. Flex column hosting the compact metadata sections
+              and the LOGS panel. The whole column is wrapped in
+              `overflowY: auto` so the metadata can spill into a normal
+              page scroll if the viewport is short, instead of squashing
+              the LOGS panel. The LOGS panel itself uses `flex: 1,
+              minHeight: …` to eat the leftover vertical space and
+              scrolls internally. */}
+          <Box
           sx={{
             flex: 1,
             minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
-            px: 2,
+            // Match the standard `px: 3` settings gutter so the
+            // sections line up with the root Settings list content.
+            px: 3,
             pt: 2,
             // Bottom safe-area padding so the LOGS panel's bottom
             // edge isn't hidden under the iOS home indicator (we
@@ -565,7 +619,8 @@ export default function RobotInfoPanel({
               enabled={isLive}
             />
           </RobotPanel>
-        </Box>
+          </Box>
+        </>
       )}
     </Stack>
   );

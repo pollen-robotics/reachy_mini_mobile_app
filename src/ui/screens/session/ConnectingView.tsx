@@ -174,9 +174,13 @@ export default function ConnectingView({ state, connectionAttempt }: ConnectingV
             color: 'text.secondary',
             textAlign: 'center',
             maxWidth: 280,
-            // Reserve a stable two-line height so the slow-hint
-            // appearance doesn't shift the layout under the user.
-            minHeight: '2.6em',
+            // Reserve a FIXED two-line box (line-height × 2) so a caption
+            // wrapping from one to two lines never changes the block's
+            // height - otherwise the Y-centred layout shifts under the
+            // user. `2.6em` was just shy of two real lines, so 2-line
+            // captions (retry / slow hint) still nudged it.
+            lineHeight: 1.4,
+            height: '2.8em',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -231,8 +235,11 @@ function captionFor({
 }: CaptionInputs): string {
   // Retry caption wins over everything else - the user needs to know
   // we're actively retrying, not stuck on a stale connecting message.
+  // Kept short so it stays on a single line (the headline already says
+  // "Reconnecting"); a longer copy wrapped to 2 lines and shifted the
+  // Y-centred block.
   if (connectionAttempt && connectionAttempt.attempt > 1) {
-    return `Attempt ${connectionAttempt.attempt} of ${connectionAttempt.maxAttempts} - this can take a few seconds.`;
+    return `Attempt ${connectionAttempt.attempt} of ${connectionAttempt.maxAttempts}…`;
   }
 
   // Caption order reflects the user's mental model of the bring-up,

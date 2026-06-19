@@ -1,28 +1,27 @@
 /**
- * ConversationSettingsPanel - the "cog" surface for conversation-scoped
- * options.
+ * ConversationSettingsPanel - the "cog" Settings surface.
  *
- * Rendered in the conversation body slot (same body-swap the
- * `PersonalityStore` uses): the persistent personality band stays
- * above, the orb area is replaced by this panel, and the bottom strip
- * stays put with its cog shown active. Opened only while a conversation
- * is stopped (the strip cog is disabled while live), so every option
- * here is read by the engine at the next conversation start - there is
- * no live-apply path to reason about.
+ * Despite the legacy name, this is the robot's Settings panel: it opens
+ * from the topbar cog and leads with robot-level options, then the
+ * conversation-scoped ones. Rendered as a fixed overlay below the
+ * session topbar (the cog glyph swaps to `✕` while open).
  *
- * Three groups:
- *   - Language: the conversation language (moved here out of the bottom
- *     strip). Single-select list reused from the `conversation-language`
- *     catalog.
- *   - Vision: a toggle gating the passive scene-awareness module.
- *   - Memory: a toggle gating long-term memory + a destructive
+ * Groups, top to bottom:
+ *   - Audio (robot-level): speaker + microphone volume. These act on the
+ *     daemon's audio devices, not on any single conversation, so they
+ *     read/apply live regardless of conversation state.
+ *   - Language (conversation): the language Reachy speaks/listens in.
+ *     Single-select chips from the `conversation-language` catalog.
+ *   - Privacy & memory (conversation): a vision toggle gating passive
+ *     scene-awareness, a long-term-memory toggle, and a destructive
  *     "Clear memory" with a two-step confirm.
  */
 import { useState } from 'react';
-import { Box, Button, ButtonBase, ButtonGroup, Stack, Typography, alpha, useTheme } from '@mui/material';
+import { Box, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import MicNoneOutlinedIcon from '@mui/icons-material/MicNoneOutlined';
 
 import {
   LANGUAGES,
@@ -32,34 +31,48 @@ import {
 } from '@/features/conversation-language';
 import {
   setMemoryEnabled,
-  setRealtimeBackend,
   setVisionEnabled,
   useMemoryEnabled,
-  useRealtimeBackend,
   useVisionEnabled,
 } from '@/features/conversation-settings';
-import type { RealtimeBackendKind } from '@/features/conversation/engine/realtime/types';
 import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
+import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
+import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
-/** Selectable realtime providers, in display order. Labels are
- *  user-facing; ids match `RealtimeBackendKind`. */
-const REALTIME_BACKENDS: ReadonlyArray<{
-  id: RealtimeBackendKind;
-  label: string;
-}> = [
-  { id: 'huggingface', label: 'Hugging Face' },
-  { id: 'openai', label: 'OpenAI' },
-];
+export interface ConversationSettingsPanelProps {
+  /** Whether the daemon has reported its audio state at least once.
+   *  Gates the volume sliders so they can't be dragged against an
+   *  unreachable daemon (values fall back to 50 until then). */
+  audioReady: boolean;
+  /** Drill into the "About & diagnostics" sub-page (the host swaps this
+   *  panel for `<RobotInfoPanel>`). Surfaced as a tappable row at the
+   *  end of the panel. */
+  onOpenAbout: () => void;
+  /** `true` while a conversation is running (state ≠ `idle`). The
+   *  conversation-scoped options (Language, Privacy & memory) are read
+   *  by the engine at conversation start, so changing them mid-talk
+   *  would silently no-op; we lock them while live and show a hint.
+   *  Audio (robot-level, live) and About stay usable. */
+  conversationLive: boolean;
+}
 
-export function ConversationSettingsPanel() {
+export function ConversationSettingsPanel({
+  audioReady,
+  onOpenAbout,
+  conversationLive,
+}: ConversationSettingsPanelProps) {
   const theme = useTheme();
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
-  const realtimeBackend = useRealtimeBackend();
   const { facts, clear } = useMemoryStore();
+
+  // Daemon-side audio state (volumes + mute toggles). Read here so the
+  // speaker / microphone sliders live alongside the other conversation
+  // options instead of in a separate bottom strip.
+  const daemon = useDaemonState();
 
   const [confirmingClear, setConfirmingClear] = useState(false);
 
@@ -77,45 +90,13 @@ export function ConversationSettingsPanel() {
       }}
     >
       {/* Header. The settings overlay hides the personality band above,
-          so this title is the user's anchor that they're in the
-          conversation settings surface (and the strip cog stays lit as
-          the way out). No separator - it sits flush over the scrolling
+          so this title is the user's anchor that they're in the robot
+          Settings surface (and the topbar cog stays lit as the way
+          out). No separator - it sits flush over the scrolling
           content. */}
       <Box sx={{ flexShrink: 0, px: 3, pt: 3.5, pb: 1 }}>
         <Stack sx={{ flexDirection: 'row', alignItems: 'center', gap: 1 }}>
-          {/* Composite glyph: a microphone (the conversation) badged with
-              a small cog at the bottom-right (its settings). The badge
-              sits on a `background.default` disc so the cog reads cleanly
-              over the mic. */}
-          <Box
-            sx={{
-              position: 'relative',
-              width: 26,
-              height: 26,
-              flexShrink: 0,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'text.secondary',
-            }}
-          >
-            <MicNoneOutlinedIcon sx={{ fontSize: 24 }} />
-            <Box
-              sx={{
-                position: 'absolute',
-                right: -3,
-                bottom: -2,
-                width: 15,
-                height: 15,
-                borderRadius: '50%',
-                bgcolor: 'background.default',
-                display: 'grid',
-                placeItems: 'center',
-              }}
-            >
-              <SettingsOutlinedIcon sx={{ fontSize: 12 }} />
-            </Box>
-          </Box>
+          <SettingsOutlinedIcon sx={{ fontSize: 24, color: 'text.secondary', flexShrink: 0 }} />
           <Typography
             component="h2"
             sx={{
@@ -125,67 +106,79 @@ export function ConversationSettingsPanel() {
               lineHeight: 1.2,
             }}
           >
-            Conversation settings
+            Settings
           </Typography>
         </Stack>
       </Box>
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pt: 2, pb: 4 }}>
         <Stack spacing={4}>
-          {/* REALTIME BACKEND - which provider powers the live voice
-              session. Single-line ButtonGroup single-select. Read by the
-              engine at the next conversation start, so no live-apply path.
-              First param: it's the most structural choice in this panel. */}
-          <Section
-            label="Realtime backend"
-            blurb="Which provider powers the live voice conversation. Applies on the next conversation."
-          >
-            <Box sx={{ px: 3 }}>
-              <ButtonGroup
-                fullWidth
-                disableElevation
-                color="primary"
-                aria-label="Realtime backend"
-                sx={{ '& .MuiButtonGroup-grouped': { borderColor: theme.palette.primary.main } }}
-              >
-                {REALTIME_BACKENDS.map(opt => {
-                  const active = opt.id === realtimeBackend;
-                  return (
-                    <Button
-                      key={opt.id}
-                      onClick={() => setRealtimeBackend(opt.id)}
-                      aria-pressed={active}
-                      aria-label={`Use the ${opt.label} realtime backend`}
-                      variant="outlined"
-                      color="primary"
-                      disableRipple
-                      sx={{
-                        textTransform: 'none',
-                        fontSize: TYPO.sm,
-                        fontWeight: active ? FONT_WEIGHT.bold : FONT_WEIGHT.semibold,
-                        py: 1,
-                        color: 'primary.main',
-                        borderColor: 'primary.main',
-                        opacity: active ? 1 : 0.55,
-                        bgcolor: active
-                          ? 'background.paper'
-                          : alpha(theme.palette.primary.main, 0.12),
-                        WebkitTapHighlightColor: 'transparent',
-                        '&:hover': {
-                          borderColor: 'primary.main',
-                          bgcolor: active
-                            ? 'background.paper'
-                            : alpha(theme.palette.primary.main, 0.16),
-                        },
-                      }}
-                    >
-                      {opt.label}
-                    </Button>
-                  );
-                })}
-              </ButtonGroup>
-            </Box>
+          {/* ROBOT scope: device-level settings that apply regardless of
+              any conversation (Audio) plus the diagnostics drill-in. */}
+          <GroupLabel>Robot</GroupLabel>
+
+          {/* AUDIO - robot-level. Speaker + microphone volume act on the
+              daemon's audio devices, not on a single conversation, so
+              they lead the panel as the robot section. Each row is a
+              pure icon+slider (`AudioControlCard`); the Card provides
+              the surface. */}
+          <Section label="Audio" blurb="Speaker and microphone volume.">
+            <Card>
+              <Row divider={false}>
+                <AudioControlCard
+                  kind="speaker"
+                  value={daemon.speakerVolume ?? 50}
+                  onChange={daemon.setSpeakerVolume}
+                  onToggleMute={daemon.toggleSpeakerMute}
+                  disabled={!audioReady}
+                />
+              </Row>
+              <Row divider>
+                <AudioControlCard
+                  kind="microphone"
+                  value={daemon.microphoneVolume ?? 50}
+                  onChange={daemon.setMicrophoneVolume}
+                  onToggleMute={daemon.toggleMicrophoneMute}
+                  disabled={!audioReady}
+                />
+              </Row>
+            </Card>
           </Section>
+
+          {/* ABOUT & DIAGNOSTICS - robot-level. Drills into the old info
+              panel (connection / software / account / live logs). Sits
+              with Audio under the robot-level part of the panel, above
+              the conversation group. */}
+          <Section label="About">
+            <Card>
+              <Row as="button" onClick={onOpenAbout} aria-label="Open about and diagnostics">
+                <InfoOutlinedIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary', flexShrink: 0 }} />
+                <Stack sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
+                    About &amp; diagnostics
+                  </Typography>
+                  <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
+                    Connection, software, account and live logs.
+                  </Typography>
+                </Stack>
+                <ChevronRightRoundedIcon sx={{ fontSize: TYPO.xl, color: 'text.disabled', flexShrink: 0 }} />
+              </Row>
+            </Card>
+          </Section>
+
+          {/* Group label marking the boundary between the robot-level
+              sections above (Audio, About) and the conversation-scoped
+              options below (Language, Privacy & memory). */}
+          <GroupLabel>Conversation</GroupLabel>
+          {/* These options are read by the engine when a conversation
+              starts, so they're locked while one is running. */}
+          {conversationLive && (
+            <Typography
+              sx={{ px: 3, fontSize: TYPO.xs, color: 'text.disabled', lineHeight: 1.4 }}
+            >
+              Locked while talking - stop the conversation to change these.
+            </Typography>
+          )}
 
           {/* LANGUAGE - compact wrapping chip row. A vertical 7-row list
               ate too much height; the chips fold the same options into
@@ -200,6 +193,7 @@ export function ConversationSettingsPanel() {
                     <ButtonBase
                       key={lang.id}
                       onClick={() => setActiveLanguageId(lang.id as LanguageId)}
+                      disabled={conversationLive}
                       aria-pressed={active}
                       aria-label={`Speak ${lang.nameEnglish}`}
                       sx={{
@@ -211,6 +205,7 @@ export function ConversationSettingsPanel() {
                         py: 0.75,
                         borderRadius: `${RADIUS.sm}px`,
                         fontSize: TYPO.sm,
+                        opacity: conversationLive && !active ? 0.45 : 1,
                         // Constant weight in both states: switching to
                         // semibold on active made the (bolder) text wider
                         // and nudged the neighbouring chips in x. Active
@@ -260,6 +255,7 @@ export function ConversationSettingsPanel() {
                 <OutlinedSwitch
                   checked={visionEnabled}
                   onChange={(_, checked) => setVisionEnabled(checked)}
+                  disabled={conversationLive}
                   slotProps={{ input: { 'aria-label': 'Let Reachy see' } }}
                 />
               </Row>
@@ -275,6 +271,7 @@ export function ConversationSettingsPanel() {
                 <OutlinedSwitch
                   checked={memoryEnabled}
                   onChange={(_, checked) => setMemoryEnabled(checked)}
+                  disabled={conversationLive}
                   slotProps={{ input: { 'aria-label': 'Long-term memory' } }}
                 />
               </Row>
@@ -288,9 +285,11 @@ export function ConversationSettingsPanel() {
                   <Box
                     component="button"
                     type="button"
-                    onClick={() => facts.length > 0 && setConfirmingClear(true)}
+                    onClick={() =>
+                      !conversationLive && facts.length > 0 && setConfirmingClear(true)
+                    }
                     aria-label="Clear memory"
-                    disabled={facts.length === 0}
+                    disabled={facts.length === 0 || conversationLive}
                     sx={{
                       ...ghostBtnSx(theme.palette.error.main),
                       flex: 'none',
@@ -304,8 +303,8 @@ export function ConversationSettingsPanel() {
                       fontSize: TYPO.body,
                       fontWeight: FONT_WEIGHT.semibold,
                       bgcolor: alpha(theme.palette.error.main, 0.05),
-                      opacity: facts.length === 0 ? 0.5 : 1,
-                      cursor: facts.length === 0 ? 'default' : 'pointer',
+                      opacity: facts.length === 0 || conversationLive ? 0.5 : 1,
+                      cursor: facts.length === 0 || conversationLive ? 'default' : 'pointer',
                       '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.08) },
                     }}
                   >
@@ -400,6 +399,31 @@ function Section({
       </Stack>
       {children}
     </Box>
+  );
+}
+
+/** Top-tier group heading ("Robot" / "Conversation") that splits the
+ *  panel into its two scopes. Sized ABOVE the `Section` labels
+ *  (`TYPO.xl` vs `TYPO.lg`) so the hierarchy reads top-down:
+ *  panel title (xxl) > group (xl) > section (lg) > rows. */
+function GroupLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography
+      sx={{
+        px: 3,
+        // Pull the following section up so the heading hugs its own
+        // group (the Stack's `spacing={4}` would otherwise leave it
+        // floating equidistant between groups, breaking the grouping).
+        mb: -2,
+        fontSize: TYPO.xl,
+        fontWeight: FONT_WEIGHT.bold,
+        letterSpacing: '-0.2px',
+        lineHeight: 1.2,
+        color: 'text.primary',
+      }}
+    >
+      {children}
+    </Typography>
   );
 }
 
