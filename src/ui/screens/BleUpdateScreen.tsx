@@ -269,6 +269,41 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
     onBack();
   }, [onBack, stopPolling]);
 
+  // Contextual back: step to the PREVIOUS step instead of leaving the tool
+  // outright. Only the first step (intro) and the terminal steps fall back
+  // to a full exit; `updating` hides the affordance entirely (handled in the
+  // header) so an in-flight install can't be interrupted.
+  const handleBack = useCallback(() => {
+    switch (stepRef.current) {
+      case 'scan':
+        void stopScanLoop();
+        setScanning(false);
+        setStep('intro');
+        return;
+      case 'pin':
+        // We're connected to a robot here; drop the link and re-scan so the
+        // user lands back on a fresh nearby list (radio can't scan + hold a
+        // connection at once, so disconnect before scanning).
+        setPinError(false);
+        void (async () => {
+          await bleDisconnect();
+          setStep('scan');
+          runScan();
+        })();
+        return;
+      case 'checking':
+      case 'available':
+      case 'uptodate':
+        // BLE link stays alive; just re-show the PIN entry (re-auth on submit).
+        setPinError(false);
+        setStep('pin');
+        return;
+      default:
+        // intro, updating, done, failed → full exit.
+        handleExit();
+    }
+  }, [handleExit, runScan, stopScanLoop]);
+
   const handleRetry = useCallback(() => {
     setErrorText(null);
     setDevices([]);
@@ -284,21 +319,24 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
         pt: LAYOUT.safeAreaTop,
       }}
     >
-      {/* Top bar: a single back affordance that always exits the tool
-          (BLE teardown happens on unmount + here). */}
-      <Stack direction="row" sx={{ alignItems: 'center', px: 1, py: 1, flexShrink: 0 }}>
-        <Button
-          aria-label="Close updater"
-          onClick={handleExit}
-          startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
-          sx={{
-            color: 'text.secondary',
-            textTransform: 'none',
-            fontWeight: FONT_WEIGHT.semibold,
-          }}
-        >
-          Back
-        </Button>
+      {/* Top bar: a back affordance that steps to the previous step (and only
+          exits from intro / terminal steps). Hidden during `updating` so an
+          in-flight install can't be interrupted. */}
+      <Stack direction="row" sx={{ alignItems: 'center', px: 1, py: 1, flexShrink: 0, minHeight: 48 }}>
+        {step !== 'updating' && (
+          <Button
+            aria-label="Back"
+            onClick={handleBack}
+            startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
+            sx={{
+              color: 'text.secondary',
+              textTransform: 'none',
+              fontWeight: FONT_WEIGHT.semibold,
+            }}
+          >
+            Back
+          </Button>
+        )}
       </Stack>
 
       <Box

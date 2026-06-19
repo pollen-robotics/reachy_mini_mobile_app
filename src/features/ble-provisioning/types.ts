@@ -91,6 +91,7 @@ export interface SetupError {
     | 'connect-failed'
     | 'wrong-pin'
     | 'wifi-scan-failed'
+    | 'robot-outdated'
     | 'wrong-password'
     | 'busy'
     | 'daemon-unreachable'

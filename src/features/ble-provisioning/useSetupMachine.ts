@@ -37,6 +37,8 @@ import {
   fetchRobotsFromCentral,
 } from '@/features/auth/fetchRobotsFromCentral';
 import {
+  MIN_WIFI_SETUP_VERSION,
+  RobotOutdatedError,
   authenticate,
   connectSealed,
   keyExchange,
@@ -96,7 +98,10 @@ export interface SetupMachine {
 }
 
 export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine {
-  const [phase, setPhase] = useState<SetupPhase>('permission');
+  // The wizard opens straight on the scan step. The old intro/permission
+  // screen was pure wording - the OS Bluetooth permission prompt is raised
+  // by the scan attempt itself (see `startScanning`'s error handling).
+  const [phase, setPhase] = useState<SetupPhase>('scanning');
   const [error, setError] = useState<SetupError | null>(null);
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<BleDevice[]>([]);
@@ -160,6 +165,22 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setPhase('error');
   }, []);
 
+  // The robot echoed a setup command back instead of running it → its software
+  // predates the BLE Wi-Fi setup (v1.8.2). The echo (read synchronously off
+  // RESPONSE) is itself the definitive signal, so there's nothing more to ask:
+  // `UPDATE_CHECK` shares the same v1.8.2 floor and would just echo too.
+  const failOutdated = useCallback(() => {
+    setError({
+      code: 'robot-outdated',
+      message:
+        'This Reachy’s software is too old to set up Wi-Fi over Bluetooth. ' +
+        `It needs ${MIN_WIFI_SETUP_VERSION} or newer. Update it from the Reachy ` +
+        'desktop app, then start setup again.',
+      recoverPhase: 'scanning',
+    });
+    setPhase('error');
+  }, []);
+
   // ── PAIR ──────────────────────────────────────────────────────────────────
 
   // Continuous scan: keeps the list live the whole time the scan view is up
@@ -197,6 +218,18 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   }, [stopScanLoop]);
 
   const rescan = useCallback(() => startScanning(), [startScanning]);
+
+  // Auto-start the BLE scan on mount: the wizard lands directly on the scan
+  // step now (no intro screen to tap through). Intentionally NO mount-guard
+  // ref: under StrictMode the effect is cleaned up + re-run, and a persisted
+  // guard would skip the restart and leave the view with a dead (stopped)
+  // scanner - which showed up as an empty list. `startScanning` is stable and
+  // bumps the shared scan token, so a dev double-invoke just supersedes its
+  // own previous loop; on unmount the scanner is torn down by the cleanup
+  // effect above.
+  useEffect(() => {
+    startScanning();
+  }, [startScanning]);
 
   // Re-scan when the app comes back to the foreground while the scan view is
   // showing: mobile OSes kill an in-flight BLE scan when the app backgrounds,
@@ -294,11 +327,15 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           setPhase('wifi-pick');
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
+          if (e instanceof RobotOutdatedError) {
+            failOutdated();
+            return;
+          }
           fail((e as Error).message ?? String(e), 'pin');
         }
       })();
     },
-    [fail, scanWifiResilient],
+    [fail, failOutdated, scanWifiResilient],
   );
 
   // ── NETWORK ────────────────────────────────────────────────────────────────
@@ -315,10 +352,14 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         setPhase('wifi-pick');
       } catch (e) {
         if (runId !== runIdRef.current || !mountedRef.current) return;
+        if (e instanceof RobotOutdatedError) {
+          failOutdated();
+          return;
+        }
         fail((e as Error).message ?? String(e), 'wifi-scanning');
       }
     })();
-  }, [fail, scanWifiResilient]);
+  }, [fail, failOutdated, scanWifiResilient]);
 
   const selectNetwork = useCallback((ssid: string) => {
     setSelectedSsid(ssid);
@@ -435,8 +476,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setNetworks([]);
     setSelectedSsid(null);
     setResult(null);
-    setPhase('permission');
-  }, [stopScanLoop]);
+    startScanning();
+  }, [stopScanLoop, startScanning]);
 
   return {
     phase,

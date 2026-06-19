@@ -37,6 +37,41 @@ function isError(reply: string): boolean {
 }
 
 /**
+ * A reply the robot's BLE service didn't recognise. Its `_handle_command`
+ * falls through to `ECHO: <cmd>` for any unknown command, so an `ECHO` reply
+ * means "this firmware is too old to support that command" - distinct from a
+ * genuine empty / error result (which an old firmware can't even express).
+ */
+function isUnsupported(reply: string): boolean {
+  return reply.trim().toUpperCase().startsWith('ECHO');
+}
+
+/**
+ * Daemon version that first shipped the BLE Wi-Fi setup commands. `WIFI_SCAN`
+ * and `UPDATE_CHECK` both landed together in v1.8.2 (#1168 / #1172); a robot
+ * older than this echoes those commands back instead of running them, which is
+ * why an outdated robot used to surface as a silent "0 networks".
+ */
+export const MIN_WIFI_SETUP_VERSION = '1.8.2';
+
+/**
+ * Thrown when the robot's BLE service is too old to know a setup command: its
+ * `_handle_command` echoed the command back instead of running it. We learn
+ * this from the SYNCHRONOUS RESPONSE read right after the write (the robot
+ * always writes a reply before returning), so it's a definitive signal, not an
+ * inference from silence - a true no-reply is a transport timeout handled
+ * elsewhere. There's no point asking for the version to confirm: `UPDATE_CHECK`
+ * shares the same v1.8.2 floor, so a robot that echoes WIFI_SCAN can't report
+ * its version either.
+ */
+export class RobotOutdatedError extends Error {
+  constructor() {
+    super('robot-outdated');
+    this.name = 'RobotOutdatedError';
+  }
+}
+
+/**
  * Map a daemon `ERROR: …` reply (or a thrown transport error) onto a typed
  * `SetupError` with the right recovery target.
  */
@@ -107,6 +142,11 @@ export async function keyExchange(): Promise<string> {
 /** `WIFI_SCAN` → list of SSIDs (deduped, MTU-bounded by the daemon). */
 export async function scanWifi(): Promise<string[]> {
   const r = await sendCommand('WIFI_SCAN', 25000);
+  // A pre-1.8.2 robot doesn't know WIFI_SCAN and echoes it back. Catch it here
+  // so it surfaces as a clear "robot outdated" error: without this the
+  // JSON.parse below throws and we'd return [] - silently indistinguishable
+  // from "no networks nearby".
+  if (isUnsupported(r)) throw new RobotOutdatedError();
   if (isError(r)) throw new Error(r);
   try {
     const parsed = JSON.parse(r) as unknown;

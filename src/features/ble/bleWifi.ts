@@ -37,6 +37,16 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { gcm } from '@noble/ciphers/aes';
 
+// Pure, testable discovery core: message parsing + dedup/staleness registry
+// + Reachy filter/sort. See `bleScanCore.ts` and `docs/BLE_SCAN_ARCHITECTURE.md`.
+import {
+  type BleDevice,
+  createScanRegistry,
+  looksLikeReachy,
+  parseScanMessage,
+  reachyBySignal,
+} from './bleScanCore';
+
 // ─── GATT contract (must match the daemon) ──────────────────────────────────
 export const CMD_CHAR = '12345678-1234-5678-1234-56789abcdef1';
 export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
@@ -45,7 +55,6 @@ export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
 // since the v2 advert carries no identity (all robots advertise "ReachyMini").
 export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
 export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
-const REACHY_NAME_RE = /reachy/i;
 
 // HKDF domain-separation label — identical literal on the daemon.
 const HKDF_INFO = new TextEncoder().encode('reachy-mini-wifi-psk-v1');
@@ -113,46 +122,12 @@ function _awaitNotification(timeoutMs: number): Promise<string> {
   });
 }
 
-// The plugin's device object shape varies by version; keep it permissive and
-// surface the raw object so the UI can show exactly what came back.
-export interface BleDevice {
-  address: string;
-  name?: string | null;
-  services?: string[];
-  rssi?: number;
-  raw: unknown; // the untouched plugin object, for diagnostics
-}
-
-function normalizeDevice(d: Record<string, unknown>): BleDevice {
-  // Different plugin versions use address|id|uuid and name|localName.
-  const address = String(d.address ?? d.id ?? d.uuid ?? '');
-  const nameRaw = d.name ?? d.localName;
-  const name = typeof nameRaw === 'string' ? nameRaw : null;
-  const rawServices = (d.services ?? d.serviceUuids ?? d.advertisedServices ?? []) as unknown[];
-  const services: string[] = rawServices.map((s) => String(s).toLowerCase());
-  const rssi = typeof d.rssi === 'number' ? d.rssi : undefined;
-  return { address, name, services, rssi, raw: d };
-}
-
-/** True if a device looks like a Reachy Mini (by name OR advertised service). */
-export function looksLikeReachy(d: BleDevice): boolean {
-  if (d.name && REACHY_NAME_RE.test(d.name)) return true;
-  // Match our command/status service UUIDs even when the name is absent
-  // (common on Android: name lives in the scan response, often null here).
-  return d.services?.some((s) => s.includes('cdef0') || s.includes('cdef3')) ?? false;
-}
-
-/**
- * Keep only Reachy Minis and order them strongest-signal-first.
- *
- * RSSI is negative dBm (closer to 0 = stronger / nearer), so we sort
- * descending. Devices without an RSSI sink to the bottom rather than
- * jumping to the top of the list.
- */
-export function reachyBySignal(devices: BleDevice[]): BleDevice[] {
-  const rssiOf = (d: BleDevice): number => (typeof d.rssi === 'number' ? d.rssi : -Infinity);
-  return devices.filter(looksLikeReachy).sort((a, b) => rssiOf(b) - rssiOf(a));
-}
+// `BleDevice`, `normalizeDevice`, `parseScanMessage`, `looksLikeReachy`,
+// `reachyBySignal` and the dedup/staleness registry now live in the pure,
+// testable core (`bleScanCore.ts`). Re-exported here so existing imports from
+// `@/features/ble/bleWifi` keep resolving unchanged.
+export { looksLikeReachy, reachyBySignal };
+export type { BleDevice };
 
 // The blec plugin owns a SINGLE global scanner. Two overlapping scans
 // therefore fight over it: a stale scan's trailing stopScan() would kill a
@@ -197,21 +172,11 @@ export async function scanDevices(
 
   const byAddr = new Map<string, BleDevice>();
   let ticks = 0;
-  // The channel may deliver an array of devices, a single device, or a
-  // `{ result: device }` wrapper depending on platform/version — accept all.
+  // `parseScanMessage` handles the array / `{result}` / single / null shape
+  // variance across plugin versions in one place (see bleScanCore.ts).
   const handler = (msg: unknown) => {
     ticks++;
-    const list: unknown[] = Array.isArray(msg)
-      ? msg
-      : msg && typeof msg === 'object' && 'result' in msg
-        ? [(msg as { result: unknown }).result]
-        : msg
-          ? [msg]
-          : [];
-    for (const raw of list) {
-      const d = normalizeDevice(raw as Record<string, unknown>);
-      if (d.address) byAddr.set(d.address, d);
-    }
+    for (const d of parseScanMessage(msg)) byAddr.set(d.address, d);
     log(`  tick ${ticks}: ${byAddr.size} device(s) total`);
     onUpdate?.([...byAddr.values()]);
   };
@@ -285,32 +250,19 @@ export function startContinuousScan(opts: {
   const myToken = ++_scanToken;
   let stopped = false;
 
-  const seen = new Map<string, { device: BleDevice; ts: number }>();
+  // Pure dedup + last-seen staleness registry (see bleScanCore.ts). The wall
+  // clock is injected at each call so the loop stays a thin transport shell.
+  const registry = createScanRegistry(staleAfterMs);
 
-  const emit = (): void => {
-    const cutoff = Date.now() - staleAfterMs;
-    for (const [addr, e] of seen) {
-      if (e.ts < cutoff) seen.delete(addr);
-    }
-    opts.onUpdate([...seen.values()].map((e) => e.device));
-  };
+  const emit = (): void => opts.onUpdate(registry.live(Date.now()));
 
   const handler = (msg: unknown): void => {
-    const list: unknown[] = Array.isArray(msg)
-      ? msg
-      : msg && typeof msg === 'object' && 'result' in msg
-        ? [(msg as { result: unknown }).result]
-        : msg
-          ? [msg]
-          : [];
-    const now = Date.now();
-    for (const raw of list) {
-      const d = normalizeDevice(raw as Record<string, unknown>);
-      if (d.address) seen.set(d.address, { device: d, ts: now });
-    }
+    registry.ingest(parseScanMessage(msg), Date.now());
     emit();
   };
 
+  // Re-emit between scan windows so a vanished robot is pruned even when no
+  // new advertisements arrive.
   const pruneTimer = setInterval(emit, CONT_SCAN_PRUNE_MS);
 
   void (async () => {

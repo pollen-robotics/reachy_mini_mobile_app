@@ -38,15 +38,12 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
-import connectionUrl from '@/assets/connection.svg';
-import lockedReachyUrl from '@/assets/locked-reachy.svg';
-import reachySpeakerUrl from '@/assets/reachy-speaker.svg';
 import type { BleDevice } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
+import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
@@ -54,8 +51,13 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
 
-/** Hero illustration size shared by every step (bigger = more story). */
-const HERO_ILLO = 224;
+/** Showcase site download page (Reachy Mini website Space). Where users grab
+ *  the desktop app that can update a robot too old for Bluetooth Wi-Fi setup.
+ *  Mirrors `DaemonUpdateGate`'s desktop-app fallback. */
+const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
+
+/** Public troubleshooting docs (same target as the Help & Support overlay). */
+const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
 
 /** Total perceived steps shown as "Step N of 4" in the header. */
 const TOTAL_STEPS = 4;
@@ -195,11 +197,16 @@ function StepView({
   onComplete: (result: SetupResult) => void;
 }) {
   if (m.phase === 'error' && m.error) {
+    // An outdated robot can't be fixed by retrying the BLE flow - it needs a
+    // software update first. Route it to the dedicated "update from the desktop
+    // app" view (mirrors the in-session `DaemonUpdateGate`) instead of the
+    // generic "Something went wrong / Try again" error.
+    if (m.error.code === 'robot-outdated') {
+      return <OutdatedView message={m.error.message} onCancel={onCancel} />;
+    }
     return <ErrorView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
   }
   switch (m.phase) {
-    case 'permission':
-      return <PermissionView onContinue={m.startScanning} />;
     case 'scanning':
       return <ScanView devices={m.devices} scanning={m.scanning} onPick={m.selectDevice} onRescan={m.rescan} />;
     case 'connecting':
@@ -209,7 +216,7 @@ function StepView({
     case 'authenticating':
       return <BusyView title="Checking the code" caption="One moment…" />;
     case 'wifi-scanning':
-      return <BusyView title="Finding networks" caption="Scanning for Wi-Fi nearby - this can take ~10 s…" />;
+      return <BusyView title="Finding networks" caption="Scanning nearby Wi-Fi (~10 s)…" />;
     case 'wifi-pick':
       return <WifiPickView networks={m.networks} onPick={m.selectNetwork} onRescan={m.rescanWifi} />;
     case 'wifi-password':
@@ -269,7 +276,8 @@ function Headline({ title, caption }: { title: string; caption?: string }) {
 function PrimaryButton(props: React.ComponentProps<typeof Button>) {
   return (
     <Button
-      variant="contained"
+      variant="outlined"
+      color="primary"
       fullWidth
       {...props}
       sx={{
@@ -323,22 +331,7 @@ function IconHero({ children, tint }: { children: React.ReactNode; tint?: string
 
 /* --- 1. permission primer ------------------------------------------------- */
 
-function PermissionView({ onContinue }: { onContinue: () => void }) {
-  return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
-      <Headline
-        title="Let's wake up your Reachy"
-        caption="We'll hand it your Wi-Fi keys over Bluetooth. Your password is sealed on this phone first - so it never travels in clear, and we never store it."
-      />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <SecondaryButton onClick={onContinue}>Continue</SecondaryButton>
-      </Box>
-    </Stack>
-  );
-}
-
-/* --- 2. BLE scan ---------------------------------------------------------- */
+/* --- 1. BLE scan ---------------------------------------------------------- */
 
 function ScanView({
   devices,
@@ -354,13 +347,12 @@ function ScanView({
   const hasDevices = devices.length > 0;
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline
-        title="Looking around…"
+        title="Let's wake up your Reachy"
         caption={
           hasDevices
-            ? 'Found it. Tap your Reachy to start.'
-            : 'Hold your Reachy close to the phone - this only takes a moment.'
+            ? "Found it. Tap your Reachy and we'll set it up over Bluetooth - no Wi-Fi needed yet."
+            : "Power your Reachy on and hold it close. We'll reach it over Bluetooth to hand over your Wi-Fi - this only takes a moment."
         }
       />
       {scanning && !hasDevices ? (
@@ -491,7 +483,6 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
   };
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={lockedReachyUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline title="Prove it's yours" caption="Type the 5-character code printed under your Reachy's base." />
       <TextField
         value={pin}
@@ -538,7 +529,6 @@ function WifiPickView({
 }) {
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={reachySpeakerUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline title="Pick a home network" caption="Choose the Wi-Fi your Reachy will live on." />
       {networks.length > 0 ? (
         <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -582,9 +572,6 @@ function PasswordView({ ssid, onSubmit }: { ssid: string; onSubmit: (psk: string
   const [show, setShow] = useState(false);
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <IconHero>
-        <WifiIcon sx={{ fontSize: 48 }} />
-      </IconHero>
       <Headline title="The secret handshake" caption={`Enter the password for "${ssid}".`} />
       <TextField
         value={psk}
@@ -637,7 +624,6 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
       : 'Registering with Hugging Face…';
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline title={title} caption={caption} />
       <CircularProgress size={26} sx={{ color: 'primary.main' }} />
     </Stack>
@@ -649,7 +635,6 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
 function LinkAccountView({ onLink }: { onLink: () => void }) {
   return (
     <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box component="img" src={connectionUrl} alt="" aria-hidden sx={{ width: HERO_ILLO, height: HERO_ILLO }} />
       <Headline
         title="Link your Reachy"
         caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
@@ -710,12 +695,7 @@ function SuccessView({
       />
       <Box sx={{ width: '100%', maxWidth: 320 }}>
         {robot ? (
-          <Stack spacing={1.25}>
-            <PrimaryButton onClick={() => result && onComplete(result)}>{`Open ${name}`}</PrimaryButton>
-            <Button onClick={onBackToList} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
-              Back to all Reachies
-            </Button>
-          </Stack>
+          <PrimaryButton onClick={() => result && onComplete(result)}>{`Open ${name}`}</PrimaryButton>
         ) : (
           <PrimaryButton onClick={onBackToList}>Back to all Reachies</PrimaryButton>
         )}
@@ -746,6 +726,49 @@ function ErrorView({
           <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
           <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
             Cancel setup
+          </Button>
+        </Stack>
+      </Box>
+    </Stack>
+  );
+}
+
+/* --- outdated robot ------------------------------------------------------- */
+
+/**
+ * Shown when the robot's software is too old to provision Wi-Fi over Bluetooth
+ * (pre-v1.8.2: `WIFI_SCAN` is unsupported). Unlike a transient error, there is
+ * no "Try again": fixing it means updating from the Reachy desktop app, which
+ * takes the robot offline and reboots it, tearing down this BLE session. The
+ * user must update, then start setup fresh (Cancel → back to the robot list).
+ * Mirrors the desktop-app fallback of the in-session `DaemonUpdateGate`.
+ */
+function OutdatedView({
+  message,
+  onCancel,
+}: {
+  message: string;
+  onCancel: () => void;
+}) {
+  return (
+    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
+      <Headline title="Update from the desktop app" caption={message} />
+      <Box sx={{ width: '100%', maxWidth: 320 }}>
+        <Stack spacing={1.25}>
+          <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
+            Get the desktop app ↗
+          </PrimaryButton>
+          <Button
+            onClick={() => void openExternalUrl(TROUBLESHOOTING_URL)}
+            sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.medium, color: 'text.secondary' }}
+          >
+            Open troubleshooting guide ↗
+          </Button>
+          <Button
+            onClick={onCancel}
+            sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
+          >
+            Cancel
           </Button>
         </Stack>
       </Box>
