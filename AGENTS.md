@@ -260,6 +260,14 @@ into the regenerated `pbxproj` in **both** the simulator job
 `gen/apple/project.yml` also lists `- sdk: CoreBluetooth.framework` for
 local Xcode dev (where `gen/apple` is NOT regenerated).
 
+Linking CoreBluetooth also makes Apple's static analysis flag the
+binary as Bluetooth-capable, so App Store Connect rejects the upload
+with **error 90683 ("Missing purpose string …
+NSBluetoothAlwaysUsageDescription")** unless the Info.plist carries that
+key — required even though we never actively scan. It's added via
+`plutil -replace NSBluetoothAlwaysUsageDescription` in the "Patch
+Info.plist …" step of both the simulator and release jobs.
+
 ### Android: minSdk 26
 
 `tauri-plugin-blec` 0.8.1 declares `minSdk 26` in its library manifest.

@@ -285,6 +285,15 @@ jobs:
           plutil -replace NSLocalNetworkUsageDescription -string \
             "Reachy Mini needs local network access to talk to the robot daemon on port 8000." \
             "$INFO_PLIST"
+          # Bluetooth purpose string: the BLE Wi-Fi setup flow links
+          # btleplug/CoreBluetooth, so Apple's static analysis flags the
+          # binary as accessing Bluetooth and rejects the upload with
+          # error 90683 ("Missing purpose string ...
+          # NSBluetoothAlwaysUsageDescription") unless this key is present
+          # - required even if BLE isn't actively used at runtime.
+          plutil -replace NSBluetoothAlwaysUsageDescription -string \
+            "Reachy Mini uses Bluetooth to set up your robot's Wi-Fi connection during first-time setup." \
+            "$INFO_PLIST"
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
             "$INFO_PLIST" 2>/dev/null || true
@@ -972,6 +981,9 @@ jobs:
             "$INFO_PLIST"
           plutil -replace NSLocalNetworkUsageDescription -string \
             "Reachy Mini needs local network access to talk to the robot daemon on port 8000." \
+            "$INFO_PLIST"
+          plutil -replace NSBluetoothAlwaysUsageDescription -string \
+            "Reachy Mini uses Bluetooth to set up your robot's Wi-Fi connection during first-time setup." \
             "$INFO_PLIST"
           plutil -insert NSAppTransportSecurity \
             -xml "<dict><key>NSAllowsLocalNetworking</key><true/></dict>" \
