@@ -56,8 +56,14 @@ name: Build mobile
 #   Listing applicationId: `com.pollenrobotics.reachymini` (renamed
 #   in CI from the auto-generated `com.pollen_robotics.reachy_mini`
 #   to match the manually-created Play Console listing). versionCode
-#   is pinned to ${{ github.run_number }} so each tag push gets a
-#   fresh code without manual coordination.
+#   is Tauri-derived from the marketing version
+#   (major*1_000_000 + minor*1_000 + patch), NOT github.run_number.
+#   Play rejects a duplicate versionCode, so re-tagging the SAME
+#   `vX.Y.Z` after an AAB already reached a track fails with
+#   "Version code N has already been used" - bump the patch version
+#   (re-tag `vX.Y.Z+1`) to ship again. (iOS sidesteps this via
+#   CFBundleVersion := run_number, but Android's versionCode is tied
+#   to the marketing version.)
 #
 # Voice conversation runs entirely through the Hugging Face realtime
 # backend, authenticated by the user's own HF token via an
