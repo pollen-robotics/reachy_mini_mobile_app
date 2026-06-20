@@ -259,7 +259,7 @@ function captionFor({
       // stepper: `connectionAttempt` is non-null during start(),
       // null during wakeUp().
       if (slowHintVisible) {
-        return 'Waking up your Reachy - taking a moment to settle in…';
+        return 'Waking up your Reachy - just a moment…';
       }
       return inWakePhase
         ? 'Enabling motors and waking up your Reachy'
