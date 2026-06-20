@@ -1,4 +1,5 @@
 import { openUrl as tauriOpenUrl } from '@tauri-apps/plugin-opener';
+import { getPlatform } from '@/shared/platform';
 
 /**
  * Open a URL in the device's default browser.
@@ -40,4 +41,31 @@ export async function openExternalUrl(url: string): Promise<void> {
   // navigate this one via `window.opener`, matching the security
   // posture of the Tauri-side flow.
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Best-effort deep-link to the OS settings screen where the user can flip
+ * a permission they previously denied (e.g. Bluetooth after a hard "Don't
+ * allow").
+ *
+ * - iOS: `app-settings:` is routed by `UIApplication.open` straight to
+ *   this app's Settings pane.
+ * - Android: there is no stable URL scheme for the per-app settings
+ *   screen (it needs an `ACTION_APPLICATION_DETAILS_SETTINGS` intent the
+ *   opener plugin can't fire), so we no-op and rely on in-UI copy that
+ *   walks the user to Settings › Apps › Reachy Mini › Permissions.
+ *
+ * Returns `true` when a settings page was actually opened, so callers can
+ * tailor their copy / button layout.
+ */
+export async function openAppSettings(): Promise<boolean> {
+  if (getPlatform() === 'ios') {
+    try {
+      await openExternalUrl('app-settings:');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }

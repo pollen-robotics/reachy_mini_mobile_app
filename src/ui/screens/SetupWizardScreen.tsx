@@ -31,6 +31,7 @@ import {
   alpha,
 } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
+import BluetoothIcon from '@mui/icons-material/Bluetooth';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
@@ -43,7 +44,8 @@ import WifiLockIcon from '@mui/icons-material/WifiLock';
 import type { BleDevice } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
-import { openExternalUrl } from '@/shared/tauri/openUrl';
+import { openAppSettings, openExternalUrl } from '@/shared/tauri/openUrl';
+import { getPlatform } from '@/shared/platform';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
@@ -204,6 +206,14 @@ function StepView({
     // generic "Something went wrong / Try again" error.
     if (m.error.code === 'robot-outdated') {
       return <OutdatedView message={m.error.message} onCancel={onCancel} />;
+    }
+    // A denied Bluetooth permission can't be recovered by retrying the scan
+    // (iOS never re-prompts after a refusal; Android won't either once the
+    // user picked "Don't allow again"). Route it to a dedicated gate that
+    // explains why and deep-links to Settings instead of the generic
+    // "Something went wrong / Try again" error.
+    if (m.error.code === 'permission-denied') {
+      return <PermissionDeniedView onRetry={m.retry} onCancel={onCancel} />;
     }
     return <ErrorView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
   }
@@ -755,6 +765,57 @@ function ErrorView({
       <Box sx={{ width: '100%', maxWidth: 320 }}>
         <Stack spacing={1.25}>
           <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
+          <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
+            Cancel setup
+          </Button>
+        </Stack>
+      </Box>
+    </Stack>
+  );
+}
+
+/* --- bluetooth permission gate -------------------------------------------- */
+
+/**
+ * Shown when the OS reports the Bluetooth permission as denied. This is a
+ * dead-end for a plain "Try again": iOS only ever raises its CoreBluetooth
+ * prompt once, and Android stops prompting after "Don't allow again" - so
+ * the real recovery path is the system Settings.
+ *
+ * Copy + actions are platform-tailored:
+ *  - iOS: a one-tap "Open Settings" (`app-settings:`) deep-link is the
+ *    primary action; "Try again" re-runs the scan after the user flips it.
+ *  - Android: "Try again" is primary (a soft denial re-raises the "Nearby
+ *    devices" dialog); the copy walks a hard denial to Settings manually,
+ *    since there's no reliable per-app settings URL to deep-link to.
+ */
+function PermissionDeniedView({
+  onRetry,
+  onCancel,
+}: {
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const isIos = getPlatform() === 'ios';
+  const caption = isIos
+    ? 'Reachy Mini needs Bluetooth to set up your robot. Open Settings to allow it, then come back and tap Try again.'
+    : 'Reachy Mini needs the Nearby devices permission to find your robot. Tap Try again and allow it - if you dismissed it, enable it in Settings › Apps › Reachy Mini › Permissions.';
+  return (
+    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
+      <IconHero>
+        <BluetoothIcon sx={{ fontSize: 48 }} />
+      </IconHero>
+      <Headline title="Allow Bluetooth access" caption={caption} />
+      <Box sx={{ width: '100%', maxWidth: 320 }}>
+        <Stack spacing={1.25}>
+          {isIos ? (
+            <>
+              <PrimaryButton onClick={() => void openAppSettings()}>Open Settings</PrimaryButton>
+              <SecondaryButton onClick={onRetry}>Try again</SecondaryButton>
+            </>
+          ) : (
+            <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
+          )}
           <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
             Cancel setup
           </Button>
