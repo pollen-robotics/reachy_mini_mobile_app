@@ -19,6 +19,7 @@ import {
   HF_REALTIME_SESSION_PROXY_URL,
   HF_REALTIME_WS_URL,
 } from "@/shared/env";
+import { getPlatform } from "@/shared/platform";
 
 import { readHfTokenFromStorage } from "./hf-token";
 
@@ -773,6 +774,9 @@ class PcmInputStreamer {
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
   private mute: GainNode | null = null;
+  // Android-only: WebView feeds a remote WebRTC track into Web Audio only
+  // if it's also attached to a playing element (crbug.com/121673). Muted pump.
+  private pump: HTMLAudioElement | null = null;
 
   constructor(options: {
     track: MediaStreamTrack;
@@ -801,6 +805,15 @@ class PcmInputStreamer {
     processor.connect(mute);
     mute.connect(ctx.destination);
 
+    if (getPlatform() === "android") {
+      const pump = document.createElement("audio");
+      pump.autoplay = true;
+      pump.muted = true;
+      pump.srcObject = new MediaStream([this.track]);
+      document.body.appendChild(pump);
+      this.pump = pump;
+    }
+
     if (ctx.state === "suspended") {
       ctx.resume().catch((err) => {
         console.warn("[hf-realtime] input AudioContext resume failed:", err);
@@ -818,6 +831,10 @@ class PcmInputStreamer {
       this.processor?.disconnect();
       this.source?.disconnect();
       this.mute?.disconnect();
+      if (this.pump) {
+        this.pump.srcObject = null;
+        this.pump.remove();
+      }
       this.ctx?.close();
     } catch {
       // ignored
@@ -826,6 +843,7 @@ class PcmInputStreamer {
     this.source = null;
     this.processor = null;
     this.mute = null;
+    this.pump = null;
   }
 }
 
