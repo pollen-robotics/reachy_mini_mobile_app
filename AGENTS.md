@@ -213,6 +213,17 @@ yarn ios:dev            # iOS simulator + Xcode
 yarn android:dev        # Android emulator
 ```
 
+**Android: patch the manifest after `tauri android init`.** `init`
+regenerates `src-tauri/gen/android/.../AndroidManifest.xml` without the
+app-specific bits (RECORD_AUDIO/CAMERA perms, portrait lock, and the
+`reachymini://` OAuth intent-filter), so a local Android build dead-ends
+on HF sign-in until they're re-applied. CI does this in
+`.github/workflows/build-mobile.yml`; locally run the same patch:
+
+```bash
+python3 scripts/patch-android-manifest.py   # idempotent; run after init, before build
+```
+
 ### Robot SSH access
 
 The user has SSH on the Reachy Wi-Fi at `pollen@reachy-mini.local`
