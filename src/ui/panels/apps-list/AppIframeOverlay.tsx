@@ -894,6 +894,7 @@ export default function AppIframeOverlay({
             //                   Without this token the Gamepad API returns
             //                   an empty list inside the iframe even when a
             //                   controller is paired to the phone.
+            //   - web-share   : `navigator.share({ files })` (clip export); not delegated to cross-origin iframes by default. iOS-solid, Android version-dependent.
             //
             // Each token needs a matching OS-side authorisation:
             //   - iOS  : `NSMicrophoneUsageDescription` and
@@ -916,7 +917,7 @@ export default function AppIframeOverlay({
             // `ACCESS_FINE_LOCATION`) is an App Review red flag for a
             // capability we don't actually use. Re-add when a Space
             // genuinely needs `navigator.geolocation`.
-            allow="microphone 'src'; camera 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'; gamepad 'src'"
+            allow="microphone 'src'; camera 'src'; autoplay 'src'; clipboard-read 'src'; clipboard-write 'src'; gamepad 'src'; web-share 'src'"
             onLoad={() => {
               // Iframe done parsing the bundle - move to
               // `connecting`. The overlay stays up; we'll only
