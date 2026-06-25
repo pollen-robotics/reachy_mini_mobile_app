@@ -13,6 +13,8 @@
     "keep-screen-on:default",
     "blec:default",
     "blec:allow-check-permissions",
+    "sharekit:allow-share-file",
+    "fs:allow-appcache-write-recursive",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

@@ -69,6 +69,19 @@ tauri-plugin-auth-session = "0.2"
 # conversation or open iframe app) - see `useKeepScreenOn` consumers.
 tauri-plugin-keep-screen-on = "0.1"
 
+# Native share sheet (Android Sharesheet / iOS Share Pane). Used as the
+# Android fallback for embedded apps that export a file: the Android
+# WebView has no `navigator.share`, so a Space (e.g. reachy-cameraman)
+# posts its clip bytes to us and we stage + share them natively. iOS
+# never hits this — `navigator.share` already works in WKWebView via the
+# iframe's `web-share 'src'` delegation. JS: `@choochmeque/tauri-plugin-sharekit-api`.
+tauri-plugin-sharekit = "0.3"
+
+# Filesystem access, used only to stage embed-shared file bytes in the
+# app cache before handing the path to `sharekit` (which shares a
+# `file://` path, not bytes). JS: `@tauri-apps/plugin-fs`.
+tauri-plugin-fs = "2"
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
