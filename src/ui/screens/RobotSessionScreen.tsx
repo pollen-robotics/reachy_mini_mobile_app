@@ -84,7 +84,7 @@ import {
   extractRobotTransport,
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
-import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
+import { ConvAppControlPanel } from '@/ui/panels/conv-app/ConvAppControlPanel';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
@@ -674,11 +674,10 @@ function ConnectedSession({
               }}
             >
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <ConversationPanel
-                  session={session}
-                  orbRef={orbRef}
-                  active={tab === 'conv'}
-                />
+                {/* Conversation runs on the robot now; this panel is its
+                    remote control over the data channel. The phone-side
+                    pipeline (orb + HF realtime) is left unmounted (dormant). */}
+                <ConvAppControlPanel session={session} active={tab === 'conv'} />
               </Box>
             </Box>
           )}
