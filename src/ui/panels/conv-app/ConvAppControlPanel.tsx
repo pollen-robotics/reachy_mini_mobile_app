@@ -6,6 +6,7 @@
  * (`useConvApp`). Replaces the phone-side `ConversationPanel` (orb + local
  * pipeline) in `RobotSessionScreen`.
  */
+import { useEffect, useRef } from 'react';
 import { Box, Button, CircularProgress, MenuItem, Select, Stack, Typography } from '@mui/material';
 
 import { useConvApp } from '@/features/conv-app/useConvApp';
@@ -77,6 +78,46 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function ConvAppControlPanel({ session, active }: Props) {
   const enabled = session.hasReachedReady && active;
   const conv = useConvApp(session, enabled);
+  const running = conv.running;
+
+  // Audio-reactive orb: feed the orb's CSS vars from conversation.level (RMS)
+  // events pushed by the robot. A rAF loop decays each level so it pulses with
+  // speech and settles in silence, matching the old phone-side orb — but driven
+  // by the robot's audio instead of a local mic. Written straight to the DOM
+  // node (no React re-render at ~15-60 Hz).
+  const orbRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!enabled || !running) return;
+    const robot = session.getRobot();
+    if (!robot) return;
+
+    let user = 0;
+    let ai = 0;
+    const off = robot.onNotification('conversation.level', p => {
+      const rms = typeof p.rms === 'number' ? p.rms : 0;
+      if (p.role === 'assistant') ai = Math.max(ai, rms);
+      else user = Math.max(user, rms);
+    });
+
+    let raf = 0;
+    const tick = () => {
+      user *= 0.9;
+      ai *= 0.9;
+      const el = orbRef.current;
+      if (el) {
+        el.style.setProperty('--audio-level', user.toFixed(3));
+        el.style.setProperty('--ai-audio-level', ai.toFixed(3));
+        for (let i = 0; i < 5; i++) el.style.setProperty(`--bar${i}`, user.toFixed(3));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      off();
+      cancelAnimationFrame(raf);
+    };
+  }, [enabled, running, session]);
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2, width: '100%' }}>
@@ -117,6 +158,7 @@ export function ConvAppControlPanel({ session, active }: Props) {
                 disabled={conv.micMuted === null || conv.setMic.isPending}
                 ariaLabel="Conversation status (tap to mute)"
                 onClick={() => conv.setMic.mutate(conv.micMuted === false)}
+                audioRef={orbRef}
               />
               <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
                 {orbCaption(conv.turnState, conv.micMuted, conv.status)}
