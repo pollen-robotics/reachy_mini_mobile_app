@@ -56,6 +56,48 @@ export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
 export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
 export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
 
+/** Connection mode reported by the daemon's NETWORK_STATUS characteristic. */
+export type RobotNetMode = 'connected' | 'hotspot' | 'offline' | 'unknown';
+
+/** Parsed NETWORK_STATUS read: the daemon's mode plus the LAN IPv4 (when on
+ *  a real network). `ip` is non-null only in `connected` mode. */
+export interface RobotNetInfo {
+  mode: RobotNetMode;
+  /** LAN IPv4 (prefers wlan0), or null in hotspot/offline/unparseable states. */
+  ip: string | null;
+  /** The raw characteristic value, kept for diagnostics / UI. */
+  raw: string;
+}
+
+/**
+ * Parse the daemon's NETWORK_STATUS value (cdef4).
+ *
+ * Wire format (see `get_network_status()` in the daemon's bluetooth_service.py):
+ *   "OFFLINE"
+ *   "HOTSPOT [wlan0] 10.42.0.1"
+ *   "CONNECTED [wlan0] 192.168.1.50 ; [eth0] 10.0.0.1"
+ *
+ * The leading mode word is authoritative — we trust it rather than sniffing the
+ * subnet. An IP is returned only in CONNECTED mode (the hotspot address is never
+ * a useful LAN target), preferring wlan0 over other interfaces.
+ */
+export function parseNetworkStatus(status: string | null): RobotNetInfo {
+  const raw = (status ?? '').trim();
+  let mode: RobotNetMode = 'unknown';
+  if (raw.startsWith('CONNECTED')) mode = 'connected';
+  else if (raw.startsWith('HOTSPOT')) mode = 'hotspot';
+  else if (raw.startsWith('OFFLINE')) mode = 'offline';
+
+  if (mode !== 'connected') return { mode, ip: null, raw };
+
+  const ifaces: Record<string, string> = {};
+  for (const m of raw.matchAll(/\[([^\]]+)\]\s+(\d+\.\d+\.\d+\.\d+)/g)) {
+    ifaces[m[1]] = m[2];
+  }
+  const ip = ifaces['wlan0'] ?? Object.values(ifaces)[0] ?? null;
+  return { mode, ip, raw };
+}
+
 // HKDF domain-separation label — identical literal on the daemon.
 const HKDF_INFO = new TextEncoder().encode('reachy-mini-wifi-psk-v1');
 const WORKING_ACK = 'OK: working';
