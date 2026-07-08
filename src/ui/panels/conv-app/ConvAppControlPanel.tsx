@@ -165,18 +165,6 @@ export function ConvAppControlPanel({ session, active }: Props) {
               </Typography>
             </Stack>
 
-            <Section label="Status">
-              <Row label="Backend">
-                <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
-                  {conv.status
-                    ? conv.status.backend_connected
-                      ? (conv.status.backend ?? 'connected')
-                      : (conv.status.backend_connection_state ?? 'connecting…')
-                    : '…'}
-                </Typography>
-              </Row>
-            </Section>
-
             {conv.personalities && (
               <Section label="Personality">
                 <Row label="Active">
