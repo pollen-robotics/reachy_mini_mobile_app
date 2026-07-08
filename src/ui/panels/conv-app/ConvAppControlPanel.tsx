@@ -9,14 +9,51 @@
 import { Box, Button, CircularProgress, MenuItem, Select, Stack, Typography } from '@mui/material';
 
 import { useConvApp } from '@/features/conv-app/useConvApp';
+import type { ConvAppStatus } from '@/features/conv-app/client';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import Section from '@/ui/design/Section';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
+import { ConversationOrb, type OrbState } from '@/ui/panels/conversation/orb/ConversationOrb';
 
 interface Props {
   session: RobotSessionHandle;
   active: boolean;
+}
+
+/** Map the on-robot turn state (+ backend status) to an orb visual state. */
+function toOrbState(turn: string | null, status: ConvAppStatus | null): OrbState {
+  if (status && !status.backend_connected) return 'connecting';
+  switch (turn) {
+    case 'listening':
+      return 'listening';
+    case 'thinking':
+      return 'processing';
+    case 'speaking':
+      return 'ai-speaking';
+    default:
+      return 'ready';
+  }
+}
+
+/** One-line caption under the orb. */
+function orbCaption(
+  turn: string | null,
+  micMuted: boolean | null,
+  status: ConvAppStatus | null
+): string {
+  if (micMuted) return 'Muted';
+  if (status && !status.backend_connected) return 'Connecting…';
+  switch (turn) {
+    case 'listening':
+      return 'Listening';
+    case 'thinking':
+      return 'Thinking';
+    case 'speaking':
+      return 'Speaking';
+    default:
+      return 'Ready';
+  }
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -73,6 +110,20 @@ export function ConvAppControlPanel({ session, active }: Props) {
           </Stack>
         ) : (
           <>
+            {/* Orb reflects the on-robot turn state (conversation.turn events);
+                tapping it toggles the robot's mic, like the old phone orb. */}
+            <Stack spacing={1} sx={{ alignItems: 'center', py: 1 }}>
+              <ConversationOrb
+                state={toOrbState(conv.turnState, conv.status)}
+                disabled={conv.micMuted === null || conv.setMic.isPending}
+                ariaLabel="Conversation status (tap to mute)"
+                onClick={() => conv.setMic.mutate(conv.micMuted === false)}
+              />
+              <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
+                {orbCaption(conv.turnState, conv.micMuted, conv.status)}
+              </Typography>
+            </Stack>
+
             <Section label="Status">
               <Row label="Backend">
                 <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
@@ -83,13 +134,6 @@ export function ConvAppControlPanel({ session, active }: Props) {
                     : '…'}
                 </Typography>
               </Row>
-              {conv.turnState && (
-                <Row label="Activity">
-                  <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
-                    {conv.turnState}
-                  </Typography>
-                </Row>
-              )}
               <Row label="Microphone">
                 <OutlinedSwitch
                   checked={conv.micMuted === false}
