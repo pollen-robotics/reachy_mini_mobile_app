@@ -125,6 +125,9 @@ import { Box, CircularProgress, IconButton, Stack, Typography, useTheme } from '
 import CloseIcon from '@mui/icons-material/Close';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appCacheDir, join } from '@tauri-apps/api/path';
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { shareFile } from '@choochmeque/tauri-plugin-sharekit-api';
 
 import {
   buildAppEmbedUrl,
@@ -590,6 +593,65 @@ export default function AppIframeOverlay({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
+  }, [targetOrigin]);
+
+  /**
+   * Native save/share bridge for embedded apps (Android path).
+   *
+   * `navigator.share({ files })` works in iOS WKWebView - we delegate
+   * `web-share 'src'` on the iframe `allow` list - but the Android
+   * System WebView ships no Web Share API at all (`navigator.share`
+   * is `undefined`). So an app that needs to get a file off the phone
+   * (e.g. the cameraman Space's clip export) feature-detects and, on
+   * Android, posts the raw bytes out to us instead:
+   *
+   *     window.top.postMessage(
+   *       { source: 'reachy-cameraman', type: 'save-file',
+   *         name, mime, bytes: ArrayBuffer },
+   *       '*',
+   *     );
+   *
+   * `sharekit` shares a `file://` *path*, not bytes, so we stage the
+   * payload in the app cache (`fs`) and open the native share sheet on
+   * it. Fire-and-forget: the embed shows no ack today, so a failure
+   * here is logged, not surfaced back across the frame.
+   *
+   * Origin is the trust anchor (same `targetOrigin` as every other
+   * handover); we accept whatever `source` the embed declares. This is
+   * a separate listener rather than a branch in the protocol-v1
+   * `onMessage` above, which hard-filters `source === 'reachy-mini'`
+   * and would drop the app's own envelope.
+   */
+  useEffect(() => {
+    const onSaveFile = (event: MessageEvent): void => {
+      if (event.origin !== targetOrigin) return;
+      const data = event.data as
+        | { type?: unknown; name?: unknown; mime?: unknown; bytes?: unknown }
+        | null
+        | undefined;
+      if (!data || data.type !== 'save-file') return;
+      if (!(data.bytes instanceof ArrayBuffer)) return;
+
+      // The name crosses an origin boundary and becomes a filesystem
+      // path, so strip anything that isn't a plain name - blocks `../`
+      // traversal and absolute paths.
+      const name = String(data.name ?? 'clip').replace(/[^\w.-]/g, '_') || 'clip';
+      const mime =
+        typeof data.mime === 'string' && data.mime ? data.mime : 'application/octet-stream';
+      const bytes = new Uint8Array(data.bytes);
+
+      void (async () => {
+        try {
+          const path = await join(await appCacheDir(), name);
+          await writeFile(path, bytes);
+          await shareFile(`file://${path}`, { mimeType: mime, title: name });
+        } catch (err) {
+          console.warn('[apps] save-file bridge failed:', err);
+        }
+      })();
+    };
+    window.addEventListener('message', onSaveFile);
+    return () => window.removeEventListener('message', onSaveFile);
   }, [targetOrigin]);
 
   /**

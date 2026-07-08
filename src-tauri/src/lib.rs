@@ -56,6 +56,13 @@ pub fn run() {
         // robot's GATT command service). Handles the Android BLE runtime +
         // permission plumbing; the JS side lives in `features/ble/bleWifi.ts`.
         .plugin(tauri_plugin_blec::init())
+        // Native share sheet + filesystem. Together they back the
+        // Android save/share bridge for embedded apps: the embed posts
+        // file bytes, we write them to the app cache (`fs`) and open the
+        // OS share sheet on that path (`sharekit`). See the `save-file`
+        // listener in `AppIframeOverlay.tsx`.
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_sharekit::init())
         .setup(|app| {
             info!("reachy_mini_mobile_app starting");
             // In debug builds, auto-open the WebView devtools so the
