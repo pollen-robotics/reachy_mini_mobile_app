@@ -12,7 +12,6 @@ import { useConvApp } from '@/features/conv-app/useConvApp';
 import type { ConvAppStatus } from '@/features/conv-app/client';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import Section from '@/ui/design/Section';
-import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 import { ConversationOrb, type OrbState } from '@/ui/panels/conversation/orb/ConversationOrb';
 
@@ -133,13 +132,6 @@ export function ConvAppControlPanel({ session, active }: Props) {
                       : (conv.status.backend_connection_state ?? 'connecting…')
                     : '…'}
                 </Typography>
-              </Row>
-              <Row label="Microphone">
-                <OutlinedSwitch
-                  checked={conv.micMuted === false}
-                  disabled={conv.micMuted === null || conv.setMic.isPending}
-                  onChange={e => conv.setMic.mutate(!e.target.checked)}
-                />
               </Row>
             </Section>
 
