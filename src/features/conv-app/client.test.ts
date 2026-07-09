@@ -47,6 +47,16 @@ describe('createConvAppClient', () => {
     });
   });
 
+  it('installs via apps.install with a long timeout', async () => {
+    const { robot, rpcCall } = robotReturning({ installed: true });
+    await createConvAppClient(robot).installConvApp();
+    expect(rpcCall).toHaveBeenCalledWith(
+      'apps.install',
+      { name: 'reachy_mini_conversation_app' },
+      { timeoutMs: 300_000 }
+    );
+  });
+
   it('subscribes to conversation events through onNotification', () => {
     const { robot, onNotification } = robotReturning(null);
     const cb = vi.fn();

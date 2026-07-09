@@ -4,13 +4,20 @@
  * App lifecycle is polled (no event for it); the live turn state is driven by
  * `conversation.turn` notifications instead of polling, and turn changes
  * refresh the backend status.
+ *
+ * Auto-start: the first time the panel sees the robot with NO app running,
+ * it starts the conversation app by itself (installing it first when the
+ * robot doesn't have it yet). One attempt per mount — a user who then taps
+ * Stop is not fought by a restart loop, and another running app (telepresence,
+ * cameraman, …) is never hijacked: taking over goes through the explicit
+ * start button, which stops the other app first.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 
-import { createConvAppClient, type ConvAppClient } from './client';
+import { CONV_APP_NAME, createConvAppClient, type ConvAppClient } from './client';
 
 const KEY = ['conv-app'] as const;
 const APP_STATUS_POLL_MS = 5000;
@@ -25,6 +32,7 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: KEY });
   const [turnState, setTurnState] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   const appStatus = useQuery({
     queryKey: [...KEY, 'app-status'],
@@ -32,7 +40,10 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
     enabled,
     refetchInterval: APP_STATUS_POLL_MS,
   });
-  const running = appStatus.data?.state === 'running';
+  const runningAppName =
+    appStatus.data?.state === 'running' ? (appStatus.data.info?.name ?? null) : null;
+  const running = runningAppName === CONV_APP_NAME;
+  const otherAppRunning = runningAppName !== null && !running;
 
   const status = useQuery({
     queryKey: [...KEY, 'status'],
@@ -77,13 +88,51 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
   }, [enabled, running, session, qc]);
 
   const start = useMutation({
-    mutationFn: () => clientFor(session).startConvApp(),
+    mutationFn: async () => {
+      const client = clientFor(session);
+      // Taking over from another app is explicit (start-button path):
+      // free the robot's app slot before launching the conversation.
+      if (otherAppRunning) {
+        await client.stopConvApp();
+      }
+      try {
+        await client.startConvApp();
+      } catch (err) {
+        // Another app raced us for the slot: surface it, don't install.
+        if ((err as { reason?: string }).reason === 'already_running') throw err;
+        // Most likely the app isn't installed on this robot yet (fresh
+        // robot / factory reset). Install-if-missing (no-op when it was
+        // some other failure and the app IS installed), then retry once —
+        // the second failure carries the real error.
+        setInstalling(true);
+        try {
+          await client.installConvApp();
+        } finally {
+          setInstalling(false);
+        }
+        await client.startConvApp();
+      }
+    },
     onSuccess: invalidate,
   });
   const stop = useMutation({
     mutationFn: () => clientFor(session).stopConvApp(),
     onSuccess: invalidate,
   });
+
+  // Auto-start: one attempt per mount, only when the robot has no app at
+  // all (never hijack a running app), once the first status readout is in.
+  const autoStartAttemptedRef = useRef(false);
+  const startMutate = start.mutate;
+  useEffect(() => {
+    if (!enabled || autoStartAttemptedRef.current) return;
+    if (appStatus.data === undefined) return; // first readout not in yet
+    autoStartAttemptedRef.current = true;
+    if (runningAppName === null) {
+      startMutate();
+    }
+  }, [enabled, appStatus.data, runningAppName, startMutate]);
+
   const setMic = useMutation({
     mutationFn: (muted: boolean) => clientFor(session).setMicMuted(muted),
     onSuccess: () => qc.invalidateQueries({ queryKey: [...KEY, 'mic'] }),
@@ -99,6 +148,9 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
 
   return {
     running,
+    otherAppRunning,
+    runningAppName,
+    installing,
     appStatusLoading: appStatus.isLoading,
     status: status.data ?? null,
     micMuted: mic.data ?? null,

@@ -132,20 +132,33 @@ export function ConvAppControlPanel({ session, active }: Props) {
           </Stack>
         ) : !conv.running ? (
           <Stack spacing={2} sx={{ py: 4, alignItems: 'center' }}>
-            <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
-              The conversation app is not running on the robot.
-            </Typography>
-            <Button
-              variant="contained"
-              disabled={conv.start.isPending || conv.appStatusLoading}
-              onClick={() => conv.start.mutate()}
-            >
-              {conv.start.isPending ? 'Starting…' : 'Start conversation'}
-            </Button>
-            {conv.start.isError && (
-              <Typography sx={{ fontSize: TYPO.xs, color: 'error.main' }}>
-                {(conv.start.error as Error).message}
-              </Typography>
+            {conv.start.isPending || conv.appStatusLoading ? (
+              // Auto-start is (about to be) in flight: show progress, not a
+              // button. A first-time install can take a few minutes.
+              <>
+                <CircularProgress size={24} sx={{ color: 'grey.500' }} />
+                <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
+                  {conv.installing
+                    ? 'Installing the conversation app… (first time can take a few minutes)'
+                    : 'Starting the conversation…'}
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Typography sx={{ fontSize: TYPO.body, color: 'text.secondary' }}>
+                  {conv.otherAppRunning
+                    ? `Another app is running on the robot (${conv.runningAppName}).`
+                    : 'The conversation app is not running on the robot.'}
+                </Typography>
+                <Button variant="contained" onClick={() => conv.start.mutate()}>
+                  {conv.otherAppRunning ? 'Switch to conversation' : 'Start conversation'}
+                </Button>
+                {conv.start.isError && (
+                  <Typography sx={{ fontSize: TYPO.xs, color: 'error.main' }}>
+                    {(conv.start.error as Error).message}
+                  </Typography>
+                )}
+              </>
             )}
           </Stack>
         ) : (

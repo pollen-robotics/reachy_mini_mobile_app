@@ -47,6 +47,9 @@ export interface ConvAppClient {
   getCurrentAppStatus(): Promise<CurrentAppStatus>;
   startConvApp(): Promise<void>;
   stopConvApp(): Promise<void>;
+  /** Install the conversation app on the robot if missing (no-op when
+   *  already installed). A first install can take minutes. */
+  installConvApp(): Promise<void>;
   /** Subscribe to a conversation.* event; returns an unsubscribe fn. */
   on(event: string, handler: RpcNotificationHandler): () => void;
 }
@@ -86,6 +89,9 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     },
     async stopConvApp() {
       await robot.rpcCall('apps.stop');
+    },
+    async installConvApp() {
+      await robot.rpcCall('apps.install', { name: CONV_APP_NAME }, { timeoutMs: 300_000 });
     },
     on(event, handler) {
       return robot.onNotification(event, handler);
