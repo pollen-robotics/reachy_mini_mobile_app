@@ -106,6 +106,27 @@ async function readDaemonVersionDuringBringUp(
   }
 }
 
+/**
+ * Ask the daemon (JSON-RPC `apps.status` over the DataChannel) whether an
+ * app already holds the robot. Used by `doStart` to skip the bring-up
+ * wake-up: a running app means the robot is already awake and owns the
+ * motors, so replaying the wake trajectory would only fight its motion.
+ *
+ * Fail-open: any error / timeout / pre-JSON-RPC daemon resolves `false`
+ * and the bring-up wakes the robot as usual. Short timeout so an old
+ * daemon can't stall the connecting overlay.
+ */
+async function isAppAlreadyRunning(robot: ReachyMiniInstance): Promise<boolean> {
+  if (typeof robot.rpcCall !== 'function') return false;
+  try {
+    const status = await robot.rpcCall<{ state?: string }>('apps.status', {}, { timeoutMs: 2_000 });
+    return status?.state === 'running';
+  } catch (err) {
+    console.debug('[shell-webrtc] apps.status during bring-up failed:', err);
+    return false;
+  }
+}
+
 export function createConnectionController(deps: ConnectionControllerDeps): ConnectionController {
   const {
     core,
@@ -279,14 +300,26 @@ export function createConnectionController(deps: ConnectionControllerDeps): Conn
     // flip to `live` until motors are actually enabled and the head /
     // antennas have settled into their wake pose.
     //
-    // EXCEPTION: when the host signals a pending first-wake-up wizard
-    // (`shouldDeferInitialWakeUp()` → true), we deliberately SKIP the
-    // bring-up wake and reach `live` with the robot still asleep. The
-    // wizard's motor step then owns the very first `wakeUp()`.
+    // EXCEPTIONS:
+    //   - when the host signals a pending first-wake-up wizard
+    //     (`shouldDeferInitialWakeUp()` → true), we deliberately SKIP
+    //     the bring-up wake and reach `live` with the robot still
+    //     asleep. The wizard's motor step then owns the very first
+    //     `wakeUp()`.
+    //   - when an app (e.g. the conversation app) is already running
+    //     on the robot, the robot is already awake and the app owns
+    //     the motors — replaying the wake trajectory would just fight
+    //     its motion. We connect as a control session and leave the
+    //     posture alone.
     if (shouldDeferInitialWakeUp?.()) {
       console.log(
         `[DIAG] doStart: deferring initial wake-up to host (first-wake-up ` +
           `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`
+      );
+    } else if (await isAppAlreadyRunning(robot)) {
+      console.log(
+        `[DIAG] doStart: an app is already running on the robot; skipping ` +
+          `wake-up at t+${Math.round(performance.now() - tDoStart0)}ms`
       );
     } else {
       const tBeforeWake = performance.now();
