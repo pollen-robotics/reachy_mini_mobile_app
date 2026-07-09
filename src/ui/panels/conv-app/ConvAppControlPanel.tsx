@@ -204,15 +204,6 @@ export function ConvAppControlPanel({ session, active }: Props) {
                 </Row>
               </Section>
             )}
-
-            <Button
-              variant="outlined"
-              color="inherit"
-              disabled={conv.stop.isPending}
-              onClick={() => conv.stop.mutate()}
-            >
-              {conv.stop.isPending ? 'Stopping…' : 'Stop conversation'}
-            </Button>
           </>
         )}
       </Stack>
