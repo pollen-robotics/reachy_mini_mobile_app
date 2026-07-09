@@ -311,6 +311,20 @@ function ConnectedSession({
     if (!leaving) return;
     let cancelled = false;
     void (async () => {
+      // Power-off means power-off: stop any app running on the robot
+      // (e.g. the conversation app) FIRST, so the teardown's
+      // app-running probe sees a free robot and actually plays the
+      // goto-sleep (and the sleep isn't fought by the app's motion).
+      // Best-effort + time-bounded: a wedged app must not trap the
+      // user on the leaving screen.
+      const robot = session.getRobot();
+      if (robot && typeof robot.rpcCall === 'function') {
+        try {
+          await robot.rpcCall('apps.stop', {}, { timeoutMs: 15_000 });
+        } catch (err) {
+          console.warn('[power-off] apps.stop failed (continuing):', err);
+        }
+      }
       await session.tearDown();
       if (cancelled) return;
       onBack();
@@ -349,12 +363,24 @@ function ConnectedSession({
     previousOpenedAppRef.current = openedApp;
     if (previous === null && openedApp !== null) {
       console.log(`[shell-webrtc] iframe-open: releasing session for app ${openedApp.id}`);
-      // Just opened an app: release the session so the iframe can
-      // dial in. The overlay itself shows a "Releasing…" hint while
-      // the promise is in flight; we don't await here so React
-      // commits the iframe mount immediately and the overlay's own
-      // effects can drive its phase indicator.
-      void session.releaseForHandoff();
+      // Just opened an app: stop any on-robot app first (a running
+      // conversation app would otherwise keep the robot's app slot and
+      // fight the incoming iframe app), then release the session so
+      // the iframe can dial in. The overlay itself shows a
+      // "Releasing…" hint while this is in flight; we don't await here
+      // so React commits the iframe mount immediately and the
+      // overlay's own effects can drive its phase indicator.
+      void (async () => {
+        const robot = session.getRobot();
+        if (robot && typeof robot.rpcCall === 'function') {
+          try {
+            await robot.rpcCall('apps.stop', {}, { timeoutMs: 15_000 });
+          } catch (err) {
+            console.warn('[handoff] apps.stop failed (continuing):', err);
+          }
+        }
+        await session.releaseForHandoff();
+      })();
     } else if (previous !== null && openedApp === null && !leaving) {
       console.log(`[shell-webrtc] iframe-close: reacquiring session after app ${previous.id}`);
       // Just closed an app: bring the session back up so the
