@@ -376,20 +376,33 @@ export function createConnectionController(deps: ConnectionControllerDeps): Conn
     // Self-contained: play the goto-sleep trajectory + release motors
     // BEFORE we tear the WebRTC session. Sending the command after
     // `stopSession()` would race the data channel close.
+    //
+    // EXCEPTION: when an app (e.g. the conversation app) is running on
+    // the robot, the phone is just a remote control — leaving the
+    // screen must not power the robot down mid-app. We drop our
+    // session and leave the robot to the app (stopping the app itself
+    // goes through `apps.stop`, after which the daemon parks the robot
+    // at neutral).
     if (wasSessionEstablished && robot) {
-      // `session.sleepAndDisable()` plays the goto-sleep trajectory,
-      // hard-bounded by a JS timeout, then forces motor mode to
-      // `'disabled'` deterministically. Both steps run BEFORE
-      // `stopSession()` below so they land while the WebRTC
-      // DataChannel is still up.
-      const tSleep0 = performance.now();
-      console.log(`[DIAG] teardown: about to await session.sleepAndDisable()`);
-      await session.sleepAndDisable();
-      console.log(
-        `[DIAG] teardown: session.sleepAndDisable() resolved in ${Math.round(
-          performance.now() - tSleep0
-        )}ms — about to stopSession`
-      );
+      if (await isAppAlreadyRunning(robot)) {
+        console.log(
+          `[DIAG] teardown: an app is running on the robot; leaving it awake (skipping sleepAndDisable)`
+        );
+      } else {
+        // `session.sleepAndDisable()` plays the goto-sleep trajectory,
+        // hard-bounded by a JS timeout, then forces motor mode to
+        // `'disabled'` deterministically. Both steps run BEFORE
+        // `stopSession()` below so they land while the WebRTC
+        // DataChannel is still up.
+        const tSleep0 = performance.now();
+        console.log(`[DIAG] teardown: about to await session.sleepAndDisable()`);
+        await session.sleepAndDisable();
+        console.log(
+          `[DIAG] teardown: session.sleepAndDisable() resolved in ${Math.round(
+            performance.now() - tSleep0
+          )}ms — about to stopSession`
+        );
+      }
     }
 
     if (robot) {
