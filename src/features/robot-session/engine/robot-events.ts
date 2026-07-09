@@ -1,7 +1,7 @@
 /**
- * SDK event wiring for the conversation engine.
+ * SDK event wiring for the session engine.
  *
- * Lifted out of `conversation-engine.ts` so the engine's main file
+ * Lifted out of `session-engine.ts` so the engine's main file
  * stays focused on the FSM + orchestration. Listens to every SDK
  * event the engine cares about and translates them into:
  *
@@ -24,12 +24,9 @@
  * naturally die with it.
  */
 
-import type { RobotSession } from "@/features/robot-session/RobotSession";
-import type {
-  ReachyMiniInstance,
-  RobotInfo,
-} from "@/features/robot-session/sdk-types";
-import type { ConnectionState } from "./types";
+import type { RobotSession } from '@/features/robot-session/RobotSession';
+import type { ReachyMiniInstance, RobotInfo } from '@/features/robot-session/sdk-types';
+import type { ConnectionState } from './types';
 
 export interface WireRobotEventsDeps {
   /** SDK ref to wire. We require a non-null value here because the
@@ -44,9 +41,6 @@ export interface WireRobotEventsDeps {
   isUnmounted: () => boolean;
   /** Auto-pick + auto-start hook called from `robotsChanged`. */
   renderRobotList: (robots: RobotInfo[]) => void;
-  /** Forwarded to the unsolicited-drop path so the host's mute
-   *  side-button re-syncs to "unmuted" before we hand back. */
-  applyMicMuted: (muted: boolean) => void;
   /** Drive the connection FSM directly for the `disconnected` event. */
   setConnectionState: (state: ConnectionState) => void;
   /** Fatal-error sink for the unsolicited-drop path. Awaited so the
@@ -55,15 +49,7 @@ export interface WireRobotEventsDeps {
 }
 
 export function wireRobotEvents(deps: WireRobotEventsDeps): void {
-  const {
-    robot,
-    session,
-    isUnmounted,
-    renderRobotList,
-    applyMicMuted,
-    setConnectionState,
-    onFatalError,
-  } = deps;
+  const { robot, session, isUnmounted, renderRobotList, setConnectionState, onFatalError } = deps;
 
   const videoCache = session.videoCache;
   const sessionGuard = session.guard;
@@ -75,25 +61,25 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
   // [doStart][probe] block - using the same vocabulary so a single
   // grep across both consoles shows the full handoff trace.
   for (const name of [
-    "stateChanged",
-    "sessionStarted",
-    "sessionStopped",
-    "sessionRejected",
-    "peerStatusChanged",
-    "error",
+    'stateChanged',
+    'sessionStarted',
+    'sessionStopped',
+    'sessionRejected',
+    'peerStatusChanged',
+    'error',
   ] as const) {
-    robot.addEventListener(name, (event) => {
+    robot.addEventListener(name, event => {
       const detail = (event as CustomEvent<unknown>).detail;
       console.log(`[shell-webrtc][probe] event=${name} detail=`, detail);
     });
   }
 
-  robot.addEventListener("robotsChanged", (event) => {
+  robot.addEventListener('robotsChanged', event => {
     const list = (event as CustomEvent<{ robots: RobotInfo[] }>).detail.robots;
     renderRobotList(list);
   });
 
-  robot.addEventListener("sessionStopped", async () => {
+  robot.addEventListener('sessionStopped', async () => {
     // Drop the cached video stream regardless of the source: a late
     // `attachVideo()` after a session ends should never replay a
     // dead track. The SDK's own `attachVideo` listener already nulls
@@ -133,14 +119,13 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // also keeps the cleanup deterministic: the next time the user
     // picks the same robot from the scan view, the engine remounts on
     // a fresh slate (motors disabled, no stale session reference, no
-    // half-running realtime client).
+    // stale session reference).
     session.setSelectedRobotId(null);
-    applyMicMuted(false);
     await onFatalError(
       new Error(
-        "The session ended unexpectedly. The robot may have been " +
-          "disconnected, or its daemon was stopped.",
-      ),
+        'The session ended unexpectedly. The robot may have been ' +
+          'disconnected, or its daemon was stopped.'
+      )
     );
   });
 
@@ -150,10 +135,8 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
   // so without this cache, anyone calling `attachVideo()` past the
   // negotiation window would never get a frame. Re-fires on every
   // reacquire too, so the cache always points at the live track.
-  robot.addEventListener("videoTrack", (event) => {
-    const detail = (
-      event as CustomEvent<{ track: MediaStreamTrack; stream: MediaStream }>
-    ).detail;
+  robot.addEventListener('videoTrack', event => {
+    const detail = (event as CustomEvent<{ track: MediaStreamTrack; stream: MediaStream }>).detail;
     videoCache.set(detail.stream);
     // Diagnostic line: surfaces in the mobile webview console so we
     // can tell whether the daemon is actually publishing video and
@@ -163,11 +146,11 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
       `[conversation-engine] videoTrack received: ` +
         `kind=${detail.track.kind} id=${detail.track.id} ` +
         `enabled=${detail.track.enabled} muted=${detail.track.muted} ` +
-        `streamId=${detail.stream.id}`,
+        `streamId=${detail.stream.id}`
     );
   });
 
-  robot.addEventListener("disconnected", () => {
+  robot.addEventListener('disconnected', () => {
     // Skip during teardown: `unmount()` calls `robot.disconnect()`
     // and immediately nulls the local handle, so a state transition
     // here would just churn React state on a tree the host is already
@@ -175,16 +158,14 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // any of its cleanup.
     if (isUnmounted()) return;
     if (robot.isAuthenticated) {
-      setConnectionState("authenticated");
+      setConnectionState('authenticated');
     } else {
-      setConnectionState("signed-out");
+      setConnectionState('signed-out');
     }
   });
 
-  robot.addEventListener("error", (event) => {
-    const detail = (
-      event as CustomEvent<{ source: string; error: Error | string }>
-    ).detail;
+  robot.addEventListener('error', event => {
+    const detail = (event as CustomEvent<{ source: string; error: Error | string }>).detail;
     console.error(`[robot:${detail.source}]`, detail.error);
   });
 }

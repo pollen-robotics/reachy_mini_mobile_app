@@ -185,8 +185,6 @@ function ConnectedSession({
   username,
   onBack,
 }: ConnectedSessionProps) {
-  const orbRef = useRef<HTMLButtonElement | null>(null);
-
   // First wake-up wizard. TEMPORARY: gated behind
   // `FIRST_WAKE_UP_WIZARD_ENABLED` (currently OFF). When disabled we seed
   // `wakeUpDone` to `true` so the wizard never mounts - on the first
@@ -204,7 +202,6 @@ function ConnectedSession({
   const session = useRobotSession({
     robotId,
     token,
-    audioLevelsTargetRef: orbRef,
     shouldDeferInitialWakeUp: () => !wakeUpDone,
   });
 
@@ -228,13 +225,12 @@ function ConnectedSession({
   }, [robotMemoryKey, activePersona.id]);
 
   // Play a short choreography on the robot whenever the user switches
-  // personality. Gated on a live transport with NO conversation running
-  // (persona switching only happens from the idle picker), so the move
-  // never fights the conversation's live motion stack.
+  // personality. Gated on a live transport. The conversation runs on
+  // the robot now, so there is no phone-side pipeline to fight with.
   useChangePersonaAnimation({
     getRobot: session.getRobot,
     isLive: session.connectionState === 'live',
-    isIdle: session.conversationState === 'idle',
+    isIdle: true,
   });
 
   const [tab, setTab] = useState<Tab>('conv');
@@ -377,23 +373,6 @@ function ConnectedSession({
   // SSE alive) so re-entering the tab is instant - the user just
   // sees the orb in `ready`, taps once, and they're back in a fresh
   // conversation.
-  //
-  // Why stop on tab switch (not on iframe-open): going to the apps
-  // surface signals "I'm browsing, not talking". Having the AI
-  // listen / speak in the background while the user picks an app
-  // wastes API tokens and is confusing audio-wise (the robot still
-  // narrates while the apps tab is shown). Stopping here is the
-  // minimal-surprise default.
-  //
-  // `stopConversation` is idempotent (no-op if no conversation is
-  // running), so this effect is safe to fire on every non-`conv`
-  // render including initial mounts and rapid tab oscillations.
-  const { stopConversation } = session;
-  useEffect(() => {
-    if (tab === 'conv') return;
-    void stopConversation();
-  }, [tab, stopConversation]);
-
   const isError = session.phase === 'error' && !leaving;
   // Connecting overlay: only fires for the INITIAL bring-up. After
   // `hasReachedReady` flips, subsequent transient states (a
@@ -432,17 +411,12 @@ function ConnectedSession({
   // system idle timer behave normally. The hook is refcounted at
   // the module level, so other screens can opt into the same lock
   // without coordination.
-  const isConversing =
-    session.conversationState === 'listening' ||
-    session.conversationState === 'user-speaking' ||
-    session.conversationState === 'processing' ||
-    session.conversationState === 'ai-speaking';
   const isBringingUp =
     session.connectionState === 'connecting' ||
     session.connectionState === 'selecting' ||
     session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
-  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
+  useKeepScreenOn(isBringingUp || isAppOpen);
 
   return (
     /* `DaemonStateProvider` is the single source of truth for
@@ -953,7 +927,7 @@ function ConnectedSession({
               <ConversationSettingsPanel
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
-                conversationLive={session.conversationState !== 'idle'}
+                conversationLive={false}
               />
             )}
           </Box>

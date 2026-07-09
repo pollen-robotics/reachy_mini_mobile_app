@@ -34,7 +34,7 @@
  *   - the conversation pipeline (no backend / motion concerns)
  */
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
-import type { ConversationConnectionAttempt } from '@/features/conversation/engine/types';
+import type { ConnectionAttempt } from './engine/types';
 import { SESSION_TIMINGS } from './timings';
 
 /**
@@ -63,7 +63,7 @@ export interface StartRobotSessionOptions {
   /** Optional progress callback fired on each attempt (1-indexed)
    *  and once with `null` at the end (success or final failure).
    *  Lets the host show "Reconnecting… (2 of 2)" in the UI. */
-  onAttempt?: (attempt: ConversationConnectionAttempt | null) => void;
+  onAttempt?: (attempt: ConnectionAttempt | null) => void;
   /** Override the per-attempt timeout. Defaults to 8 s. */
   attemptTimeoutMs?: number;
   /** Override the gap between retries. Defaults to 12 s. */
@@ -97,7 +97,7 @@ export async function startRobotSession(
     isCancelled,
   } = opts;
 
-  const emit = (info: ConversationConnectionAttempt | null): void => {
+  const emit = (info: ConnectionAttempt | null): void => {
     if (!onAttempt) return;
     try {
       onAttempt(info);

@@ -1,54 +1,36 @@
 /**
  * Connection controller — the TRANSPORT layer of the Reachy session.
  *
- * Owns everything about WHEN a robot is live and nothing about the AI
- * conversation that runs on top. Extracted out of
- * `conversation-engine.ts` so the connection bring-up and the
- * conversation pipeline are two independent units that talk through a
- * narrow seam:
- *
- *   connection ──onConnectionLive()──▶ conversation  (maybe auto-start)
- *   connection ──onConnectionLost()──▶ conversation  (tear pipeline)
- *   conversation ──recordSend()─────▶ connection      (dc-health feed)
- *   conversation ◀──getRobot()────── connection       (LiveSession seam)
+ * Owns everything about WHEN a robot is live. The AI conversation runs
+ * on the robot itself (driven over JSON-RPC on the DataChannel, see
+ * `features/conv-app`), so this layer has no conversation seam anymore.
  *
  * What it owns
  * ────────────
  *   - the SDK `robot` ref (created in `boot()`, handed to the session);
  *   - the connection FSM transitions (`boot` → `doConnect` → `doStart`
  *     → `live`, plus `renderRobotList`, `teardown`, `onFatalError`);
- *   - the data-channel health monitor (`recordSend` / `probeRobotLink`);
- *   - the daemon-side motor-mode sync (reads BOTH FSMs);
+ *   - the data-channel health monitor (`probeRobotLink` on resume);
+ *   - the daemon-side motor-mode sync;
  *   - the SDK event wiring (`robot-events.ts`);
- *   - the background-tab resilience (visibility re-arm + audio resume).
- *
- * What it deliberately does NOT own
- * ─────────────────────────────────
- *   - the conversation pipeline (HF realtime, motion, tools, audio):
- *     it only signals lifecycle via the injected `onConnectionLive` /
- *     `onConnectionLost` hooks;
- *   - the host-facing controls (`handleOrbClick`, `handleHostStop`):
- *     those coordinate both layers and stay in the engine orchestrator,
- *     delegating transport bits here.
+ *   - the background-tab resilience (visibility re-arm + link probe).
  */
 
-import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
-import { CENTRAL_SIGNALING_URL } from "@/shared/env";
-import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
-import { applyAudioStartupConfig } from "./audio-startup-config";
-import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
-import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
-import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
-import type { RobotSession } from "@/features/robot-session/RobotSession";
-import { wireRobotEvents } from "./robot-events";
-import { formatConversationError } from "./conversation-error";
-import type { EngineCore } from "./engine-core";
-import type { ConversationConnectionAttempt } from "./types";
+import type { ReachyMiniInstance, RobotInfo } from '@/features/robot-session/sdk-types';
+import { CENTRAL_SIGNALING_URL } from '@/shared/env';
+import { unlockIosMicForWebRtc } from '../iosMicUnlock';
+import { applyAudioStartupConfig } from './audio-startup-config';
+import { consumeTokenFromHash, whenReachyReady } from '@/features/robot-session/token-hash';
+import { createDcHealthMonitor } from '@/features/robot-session/dc-health';
+import { installBackgroundResilience } from '@/features/robot-session/background-resilience';
+import type { RobotSession } from '@/features/robot-session/RobotSession';
+import { wireRobotEvents } from './robot-events';
+import { formatConnectionError } from './connection-error';
+import type { EngineCore } from './engine-core';
+import type { ConnectionAttempt } from './types';
 
 export interface ConnectionControllerDeps {
-  /** Shared engine state (connection + conversation FSMs + gates). The
-   *  controller drives `core.connection` and reads `core.conversation`
-   *  for the motor-mode sync. */
+  /** Shared engine state (connection FSM + gates). */
   core: EngineCore;
   /** Session layer (SDK boot, WebRTC handshake, wake/sleep, release). */
   session: RobotSession;
@@ -66,34 +48,16 @@ export interface ConnectionControllerDeps {
 
   // ─── Observer plumbing ────────────────────────────────────────────
   /** Per-attempt progress for the host's "Connecting…" view. */
-  emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
-  /** Push a user-facing caption under the orb (null clears it). */
+  emitConnectionAttempt: (info: ConnectionAttempt | null) => void;
+  /** Push a user-facing error caption (null clears it). */
   emitErrorMessage: (message: string | null) => void;
   /** Surface the daemon version resolved during bring-up (just before
    *  `live`). `null` on a timed-out / unsupported read. */
   emitDaemonVersion: (version: string | null) => void;
-
-  // ─── Conversation seam ────────────────────────────────────────────
-  /** Connection reached `live`: the conversation layer decides whether
-   *  to auto-start the AI pipeline. */
-  onConnectionLive: () => Promise<void>;
-  /** Connection going down: the conversation layer tears its pipeline
-   *  (glide:false on the power-off path) and parks its FSM on `idle`. */
-  onConnectionLost: (opts: { glide: boolean }) => Promise<void>;
-  /** Resume the conversation's private AudioContexts on visibility
-   *  return (wobbler + mic/ai level monitors). */
-  resumeAudioContexts: () => void;
-  /** Gate the robot mic forwarded to the backend. Used by the
-   *  unsolicited-drop recovery path to re-sync the host's mute button. */
-  applyMicMuted: (muted: boolean) => void;
 }
 
 export interface ConnectionController {
-  /** Record the outcome of a motion send for the data-channel health
-   *  monitor. The conversation's motion stack feeds this. */
-  readonly recordSend: (ok: boolean, where: string) => void;
-  /** Live SDK ref, or null in any pre-connect / torn-down state. The
-   *  transport seam (`LiveSession`) wraps this. */
+  /** Live SDK ref, or null in any pre-connect / torn-down state. */
   getRobot(): ReachyMiniInstance | null;
   /** Null the SDK ref on unmount. */
   clearRobot(): void;
@@ -103,15 +67,15 @@ export interface ConnectionController {
   /** Open the SDK connection + drive straight through to a live
    *  session (the `authenticated → live` bring-up). */
   connect(): Promise<void>;
-  /** Full transport teardown: stop pipeline (no glide) + goto-sleep +
+  /** Full transport teardown: goto-sleep + motors disabled +
    *  stopSession. */
   teardown(): Promise<void>;
   /** Classify + surface a fatal error, flip the connection FSM to
    *  `error`, and tear the session down. */
   onFatalError(err: unknown): Promise<void>;
   /** Kick the boot chain and install background-tab resilience. Call
-   *  once, after the conversation pipeline is wired. Returns the boot
-   *  promise (for the unmount guard) + the resilience disposer. */
+   *  once. Returns the boot promise (for the unmount guard) + the
+   *  resilience disposer. */
   start(): { bootChain: Promise<void>; disposeBackgroundResilience: () => void };
 }
 
@@ -126,25 +90,23 @@ const VERSION_BRINGUP_RETRY_MS = 250;
 
 async function readDaemonVersionDuringBringUp(
   robot: ReachyMiniInstance,
-  timeoutMs: number,
+  timeoutMs: number
 ): Promise<string | null> {
-  if (typeof robot.getVersion !== "function") return null;
+  if (typeof robot.getVersion !== 'function') return null;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
       const v = await robot.getVersion();
-      if (typeof v === "string" && v.length > 0) return v;
+      if (typeof v === 'string' && v.length > 0) return v;
     } catch (err) {
-      console.warn("[shell-webrtc] getVersion during bring-up failed:", err);
+      console.warn('[shell-webrtc] getVersion during bring-up failed:', err);
     }
     if (Date.now() + VERSION_BRINGUP_RETRY_MS >= deadline) return null;
-    await new Promise((r) => setTimeout(r, VERSION_BRINGUP_RETRY_MS));
+    await new Promise(r => setTimeout(r, VERSION_BRINGUP_RETRY_MS));
   }
 }
 
-export function createConnectionController(
-  deps: ConnectionControllerDeps,
-): ConnectionController {
+export function createConnectionController(deps: ConnectionControllerDeps): ConnectionController {
   const {
     core,
     session,
@@ -153,13 +115,9 @@ export function createConnectionController(
     emitConnectionAttempt,
     emitErrorMessage,
     emitDaemonVersion,
-    onConnectionLive,
-    onConnectionLost,
-    resumeAudioContexts,
-    applyMicMuted,
   } = deps;
 
-  const { connection, conversation } = core;
+  const { connection } = core;
   const { unmounted } = core.gates;
   const setConnectionState = connection.set;
   const expectedStop = session.guard.expectedStop;
@@ -172,65 +130,37 @@ export function createConnectionController(
   // ─── Data-channel health ────────────────────────────────────────
   const dcHealth = createDcHealthMonitor({
     getRobot: () => robot,
-    onFatalLink: (err) => {
+    onFatalLink: err => {
       void onFatalError(err);
     },
   });
-  const recordSend = dcHealth.recordSend;
   const probeRobotLink = dcHealth.probeRobotLink;
 
   // ─── Motor-mode sync ────────────────────────────────────────────
   /**
-   * Sync the daemon-side motor mode to the current state of both FSMs,
-   * with a dedup layer so we don't flood the data channel with redundant
-   * `setMotorMode` calls (every conversation turn boundary would
-   * otherwise fire one).
+   * Sync the daemon-side motor mode to the connection FSM, with a
+   * dedup layer so we don't flood the data channel with redundant
+   * `setMotorMode` calls.
    *
-   * Two regimes:
-   *   - connection `starting` (WebRTC bring-up + wake-up) OR an active
-   *     conversation (`starting`, `listening`, `user-speaking`,
-   *     `processing`, `ai-speaking`) → `enabled`.
-   *   - everything else (connection `live` between conversations,
-   *     `released`, `error`, pre-session) → no-op.
-   *
-   * The teardown path drives `setMotorMode('disabled')` directly
-   * after `gotoSleep` resolves; this helper deliberately stays out
-   * of its way.
+   * Motors are enabled during connection `starting` (WebRTC bring-up +
+   * wake-up); everything else is a no-op. The teardown path drives
+   * `setMotorMode('disabled')` directly after `gotoSleep` resolves;
+   * this helper deliberately stays out of its way.
    */
   function syncMotorMode(): void {
     if (!robot || !session.isEstablished()) return;
-    const conv = conversation.current();
-    const motorsActive =
-      connection.current() === "starting" ||
-      conv === "starting" ||
-      conv === "listening" ||
-      conv === "user-speaking" ||
-      conv === "processing" ||
-      conv === "ai-speaking";
-    if (!motorsActive) return;
-    const mode = "enabled" as const;
-    // Dedup: most conversation transitions all map to the same
-    // `enabled` mode. Without this guard the engine would emit a
-    // setMotorMode message on every turn boundary - redundant DC
-    // writes that can interrupt the pose stream.
+    if (connection.current() !== 'starting') return;
+    const mode = 'enabled' as const;
     if (mode === session.getLastMotorMode()) return;
     try {
       robot.setMotorMode(mode);
       session.recordMotorMode(mode);
     } catch (err) {
-      console.warn(
-        `[engine] setMotorMode(${JSON.stringify(mode)}) failed (ignored):`,
-        err,
-      );
+      console.warn(`[engine] setMotorMode(${JSON.stringify(mode)}) failed (ignored):`, err);
     }
   }
 
-  // Driven by BOTH FSMs (connection bring-up needs motors, and so does
-  // an active conversation). Registered after the orchestrator's
-  // host-facing observers so the user-visible transition is already
-  // fanned out by the time we hit the DataChannel.
   connection.subscribe(() => syncMotorMode());
-  conversation.subscribe(() => syncMotorMode());
 
   // ─── robotsChanged → auto-pick + auto-start ─────────────────────
   /**
@@ -244,21 +174,21 @@ export function createConnectionController(
   function renderRobotList(robots: RobotInfo[]): void {
     session.setKnownRobots(robots);
 
-    if (connection.current() !== "connected") return;
+    if (connection.current() !== 'connected') return;
     if (!robots.length) return;
     const picked = session.pickFirstIfNone();
     if (!picked) return;
-    setConnectionState("selecting");
+    setConnectionState('selecting');
     window.setTimeout(() => {
-      if (connection.current() === "selecting") void doStart();
+      if (connection.current() === 'selecting') void doStart();
     }, 300);
   }
 
   // ─── High-level flow steps ──────────────────────────────────────
   async function doConnect(): Promise<void> {
     if (!robot) return;
-    console.log("[shell-webrtc] doConnect: entering, robot.state =", robot.state);
-    setConnectionState("connecting");
+    console.log('[shell-webrtc] doConnect: entering, robot.state =', robot.state);
+    setConnectionState('connecting');
     try {
       // WebKit privacy quirk on iOS: get the LAN host candidates
       // flowing *before* the SDK's `connect()` (which immediately
@@ -270,30 +200,26 @@ export function createConnectionController(
       // streaming. Our stop button only tears the *session* down, so
       // the daemon WebRTC is still up afterwards and we must skip
       // `connect()` to avoid the "Already connected" throw.
-      if (robot.state === "disconnected") {
+      if (robot.state === 'disconnected') {
         const t0 = performance.now();
-        console.log("[shell-webrtc] doConnect: calling robot.connect()...");
+        console.log('[shell-webrtc] doConnect: calling robot.connect()...');
         await robot.connect();
         console.log(
           `[shell-webrtc] doConnect: connect resolved in ${Math.round(
-            performance.now() - t0,
-          )}ms, robot.state = ${robot.state}, robots = [${robot.robots
-            .map((r) => r.id)
-            .join(",")}]`,
+            performance.now() - t0
+          )}ms, robot.state = ${robot.state}, robots = [${robot.robots.map(r => r.id).join(',')}]`
         );
       } else {
-        console.log(
-          "[shell-webrtc] doConnect: already connected, skipping connect()",
-        );
+        console.log('[shell-webrtc] doConnect: already connected, skipping connect()');
       }
-      setConnectionState("connected");
+      setConnectionState('connected');
 
       // Fast path (mobile): we already know which robot to talk to
       // from the scan selection, so skip the robotsChanged wait and
       // drive straight into startSession.
       if (preselectedRobotId) {
         session.setSelectedRobotId(preselectedRobotId);
-        setConnectionState("selecting");
+        setConnectionState('selecting');
         await doStart();
         return;
       }
@@ -309,17 +235,10 @@ export function createConnectionController(
   async function doStart(): Promise<void> {
     if (!robot || !session.getSelectedRobotId()) return;
     console.log(
-      `[shell-webrtc] doStart: entering, selectedRobotId = ${session.getSelectedRobotId()}, robot.state = ${robot.state}`,
+      `[shell-webrtc] doStart: entering, selectedRobotId = ${session.getSelectedRobotId()}, robot.state = ${robot.state}`
     );
 
-    // Backend connection is deliberately not part of `startSession()`:
-    // that call opens the WebRTC DataChannel used by the daemon proxy
-    // (`http_proxy` over DC), needed for daemon-status, wake / sleep
-    // choreography, and bring-up watchdogs even before the user starts
-    // talking. The HF websocket is opened lazily in the conversation
-    // pipeline after the user starts the conversation.
-
-    setConnectionState("starting");
+    setConnectionState('starting');
 
     // NB: we deliberately do NOT call robot.stopSession() here as a
     // preemptive cleanup. The SDK plumbs stopSession into the SAME
@@ -333,10 +252,10 @@ export function createConnectionController(
     const tDoStart0 = performance.now();
     console.log(`[DIAG] doStart: calling session.start() at t=0`);
     const result = await session.start({
-      onAttempt: (info) => {
+      onAttempt: info => {
         console.log(
           `[DIAG] doStart: emitConnectionAttempt(${JSON.stringify(info)}) at ` +
-            `t+${Math.round(performance.now() - tDoStart0)}ms`,
+            `t+${Math.round(performance.now() - tDoStart0)}ms`
         );
         emitConnectionAttempt(info);
       },
@@ -344,8 +263,8 @@ export function createConnectionController(
     });
     console.log(
       `[DIAG] doStart: session.start() resolved ok=${result.ok} at t+${Math.round(
-        performance.now() - tDoStart0,
-      )}ms`,
+        performance.now() - tDoStart0
+      )}ms`
     );
 
     if (!result.ok) {
@@ -363,24 +282,22 @@ export function createConnectionController(
     // EXCEPTION: when the host signals a pending first-wake-up wizard
     // (`shouldDeferInitialWakeUp()` → true), we deliberately SKIP the
     // bring-up wake and reach `live` with the robot still asleep. The
-    // wizard's motor step then owns the very first `wakeUp()`, so the
-    // user actually sees the head + antennas play their trajectory
-    // (waking an already-awake robot is a daemon no-op, which is why the
-    // motor test looked dead when bring-up had already woken it). The
-    // wizard guarantees the robot ends up awake on finish / skip.
+    // wizard's motor step then owns the very first `wakeUp()`.
     if (shouldDeferInitialWakeUp?.()) {
       console.log(
         `[DIAG] doStart: deferring initial wake-up to host (first-wake-up ` +
-          `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`,
+          `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`
       );
     } else {
       const tBeforeWake = performance.now();
-      console.log(`[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`);
+      console.log(
+        `[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`
+      );
       await session.wakeUp();
       console.log(
         `[DIAG] doStart: session.wakeUp() resolved in ${Math.round(
-          performance.now() - tBeforeWake,
-        )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`,
+          performance.now() - tBeforeWake
+        )}ms (total t+${Math.round(performance.now() - tDoStart0)}ms)`
       );
     }
 
@@ -391,10 +308,7 @@ export function createConnectionController(
       await applyAudioStartupConfig(robot);
     }
 
-    // Mark the SDK / DataChannel as ready. The mobile app gates the
-    // conversation pipeline behind a "user clicked Start" UI flag, so
-    // we may park here with a live DC and no antennas / backend -
-    // that's the desired state during the wake-up animation.
+    // Mark the SDK / DataChannel as ready.
     session.setEstablished(true);
 
     // Resolve the daemon version as the LAST bring-up step, before we
@@ -404,43 +318,26 @@ export function createConnectionController(
     // read is hard-bounded + fail-open so a slow / unsupported daemon
     // can't trap the user on the connecting screen.
     if (robot) {
-      const version = await readDaemonVersionDuringBringUp(
-        robot,
-        VERSION_BRINGUP_TIMEOUT_MS,
-      );
+      const version = await readDaemonVersionDuringBringUp(robot, VERSION_BRINGUP_TIMEOUT_MS);
       emitDaemonVersion(version);
     }
 
     // SDK + DataChannel are up, wake-up was fired, motors are enabled:
-    // the transport is `live`. Whether the AI side runs on top is a
-    // separate (conversation) decision behind the seam.
+    // the transport is `live`. The conversation (if any) runs on the
+    // robot and is driven separately over JSON-RPC.
     console.log(
-      `[DIAG] doStart: setConnectionState("live") at t+${Math.round(performance.now() - tDoStart0)}ms`,
+      `[DIAG] doStart: setConnectionState("live") at t+${Math.round(performance.now() - tDoStart0)}ms`
     );
-    setConnectionState("live");
-
-    // Connection reached `live`. Hand off to the conversation layer,
-    // which owns the decision to auto-start the AI pipeline. The
-    // connection bring-up no longer reaches into conversation
-    // internals - it just announces that the transport is live.
-    await onConnectionLive();
+    setConnectionState('live');
   }
 
   async function teardown(): Promise<void> {
-    // Announce the connection is going down. The conversation seam
-    // tears its pipeline WITHOUT glide here - `gotoSleep` below is
-    // about to play its own head + antennas trajectory and a 700ms
-    // ease-out would fight it on the bus - and parks the conversation
-    // FSM on `idle` so every teardown caller inherits a clean
-    // conversation cursor and only has to re-park the connection FSM.
-    await onConnectionLost({ glide: false });
-
     // Capture the session flag BEFORE resetting it - we need it to
     // decide whether to run the goto-sleep dance below.
     const wasSessionEstablished = session.isEstablished();
 
-    // Flip the session flag here so the next connect → startSession →
-    // startConversation cycle starts from a clean slate.
+    // Flip the session flag here so the next connect → startSession
+    // cycle starts from a clean slate.
     session.setEstablished(false);
 
     // Self-contained: play the goto-sleep trajectory + release motors
@@ -457,8 +354,8 @@ export function createConnectionController(
       await session.sleepAndDisable();
       console.log(
         `[DIAG] teardown: session.sleepAndDisable() resolved in ${Math.round(
-          performance.now() - tSleep0,
-        )}ms — about to stopSession`,
+          performance.now() - tSleep0
+        )}ms — about to stopSession`
       );
     }
 
@@ -472,10 +369,10 @@ export function createConnectionController(
   async function onFatalError(err: unknown): Promise<void> {
     const detail = err instanceof Error ? err.message : String(err);
     // Log the raw detail for diagnosis, but surface only the honest,
-    // classified copy to the orb caption - never the raw engine string.
-    console.error("[main] error:", detail);
-    setConnectionState("error");
-    emitErrorMessage(formatConversationError(detail));
+    // classified copy to the UI - never the raw engine string.
+    console.error('[main] error:', detail);
+    setConnectionState('error');
+    emitErrorMessage(formatConnectionError(detail));
     await teardown();
   }
 
@@ -488,12 +385,13 @@ export function createConnectionController(
     consumeTokenFromHash();
 
     robot = new window.ReachyMini({
-      appName: "Reachy Mini Mobile App",
+      appName: 'Reachy Mini Mobile App',
       // No `clientId`: the SDK uses its own default, and the mobile
       // app handles HF OAuth itself.
       signalingUrl: CENTRAL_SIGNALING_URL,
-      // Negotiate the audio tracks up front so the HF realtime bridge
-      // has them ready when the user taps the orb to start.
+      // Negotiate the audio tracks up front: the robot's offer carries
+      // audio sendrecv and the daemon's pipeline expects the answer to
+      // match.
       enableMicrophone: true,
     });
     // Hand the SDK ref to the session so its lifecycle methods can use
@@ -505,7 +403,6 @@ export function createConnectionController(
       session,
       isUnmounted: unmounted.get,
       renderRobotList,
-      applyMicMuted,
       setConnectionState,
       onFatalError,
     });
@@ -517,15 +414,15 @@ export function createConnectionController(
       // The HF hub SDK throws when it tries to read a cached token but
       // cannot resolve a clientId. Treat as "not signed in" rather
       // than crashing, and surface a helpful hint.
-      console.warn("[main] authenticate() failed:", err);
+      console.warn('[main] authenticate() failed:', err);
       const message = err instanceof Error ? err.message : String(err);
       if (/clientId/i.test(message)) {
-        emitErrorMessage("Add HF client ID in settings");
+        emitErrorMessage('Add HF client ID in settings');
       }
     }
 
     if (authenticated) {
-      setConnectionState("authenticated");
+      setConnectionState('authenticated');
 
       // Mobile fast path: if the host pre-fetched the robot's central
       // peer id, drive the flow forward without a single tap. The
@@ -540,7 +437,7 @@ export function createConnectionController(
         await doConnect();
       }
     } else {
-      setConnectionState("signed-out");
+      setConnectionState('signed-out');
     }
   }
 
@@ -559,7 +456,7 @@ export function createConnectionController(
         if (unmounted.get()) return;
         await boot();
       })
-      .catch((err) => {
+      .catch(err => {
         if (unmounted.get()) return;
         void onFatalError(err);
       });
@@ -567,18 +464,15 @@ export function createConnectionController(
     // Background-tab + page-hide resilience. The module owns the
     // listener install / dispose contract and the sendBeacon endSession
     // path; we wire up the `onResume` callback with whatever the live
-    // session needs (resume audio analysers, probe the data channel).
+    // session needs.
     const disposeBackgroundResilience = installBackgroundResilience({
       getRobot: () => robot,
       centralSendUrl: `${CENTRAL_SIGNALING_URL}/send`,
       onResume: () => {
-        if (
-          conversation.current() === "listening" ||
-          conversation.current() === "user-speaking" ||
-          conversation.current() === "processing" ||
-          conversation.current() === "ai-speaking"
-        ) {
-          resumeAudioContexts();
+        // Live session: check the data channel actually survived the
+        // background stint (the WebRTC stack is native and usually
+        // does, but a device sleep can kill it silently).
+        if (connection.current() === 'live' && session.isEstablished()) {
           void probeRobotLink();
           return;
         }
@@ -587,21 +481,21 @@ export function createConnectionController(
         // dies while we were backgrounded the SDK's `disconnected`
         // listener parks the FSM in `authenticated`. With a preselected
         // robot that resting state means "we lost a session we were
-        // supposed to have": silently re-drive the bring-up so the orb
+        // supposed to have": silently re-drive the bring-up so the UI
         // genuinely returns to `live`.
         //
         // Guards keep this from firing in any other situation:
         //   - `preselectedRobotId`        only the single-robot flow;
         //   - `connection === authenticated`  the post-drop resting
         //                                 state (NOT released/handoff,
-        //                                 NOT bring-up, NOT a live convo);
+        //                                 NOT bring-up);
         //   - `robot?.isAuthenticated`    we still hold a valid HF token;
         //   - `!session.isEstablished()`  the session really is gone, so
         //                                 `doConnect()` does a clean
         //                                 fresh connect.
         if (
           preselectedRobotId &&
-          connection.current() === "authenticated" &&
+          connection.current() === 'authenticated' &&
           robot?.isAuthenticated &&
           !session.isEstablished()
         ) {
@@ -614,7 +508,6 @@ export function createConnectionController(
   }
 
   return {
-    recordSend,
     getRobot: () => robot,
     clearRobot: () => {
       robot = null;

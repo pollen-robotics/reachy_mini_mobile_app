@@ -91,7 +91,7 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 
 import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
-import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
+import type { TransportInfo } from '@/features/robot-session/transport-monitor';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
@@ -868,7 +868,7 @@ function MetadataRow({
  * an empty string when the row has nothing meaningful to show
  * (caller checks truthiness to drop the row entirely).
  */
-function formatRemoteIp(webrtc: ConversationTransportInfo | null | undefined): string {
+function formatRemoteIp(webrtc: TransportInfo | null | undefined): string {
   if (!webrtc || !webrtc.remoteIp) return '';
   const normalised = webrtc.remoteIp.toLowerCase();
   const isMdns = normalised.endsWith('.local') || normalised.endsWith('.local.');

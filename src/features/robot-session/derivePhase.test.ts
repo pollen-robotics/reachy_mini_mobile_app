@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { ConnectionState } from '@/features/conversation/engine/types';
+import type { ConnectionState } from '@/features/robot-session/engine/types';
 
 import { derivePhase, type SessionPhase } from './phase';
 

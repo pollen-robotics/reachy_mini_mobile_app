@@ -16,7 +16,7 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 
-import { memoryStore, type MemoryFact } from '../engine/memory';
+import { memoryStore, type MemoryFact } from './memory';
 
 const EMPTY: readonly MemoryFact[] = [];
 

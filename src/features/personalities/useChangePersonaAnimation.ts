@@ -18,7 +18,7 @@
  */
 import { useEffect, useRef } from "react";
 
-import { MovePlayer } from "@/features/conversation/motion/move-player";
+import { MovePlayer } from "./move-player";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import { useActivePersonality } from "./store";
 

@@ -25,62 +25,11 @@
  *
  * Consumers:
  *   - `features/auth/fetchRobotsFromCentral.ts` (HF central /api/robot-status)
- *   - `features/conversation/engine/conversation-engine.ts` (SDK signaling URL)
+ *   - `features/robot-session/engine/session-engine.ts` (SDK signaling URL)
  */
 export const CENTRAL_SIGNALING_URL: string =
   (import.meta.env.VITE_REACHY_CENTRAL_URL as string | undefined) ??
   'https://pollen-robotics-reachy-mini-central.hf.space';
-
-/**
- * Hugging Face realtime backend selector.
- *
- * `deployed` uses the app-managed session allocator Space and is the
- * production default. `local` bypasses the allocator and connects to
- * `VITE_HF_REALTIME_WS_URL`, useful when running a local
- * speech-to-speech backend on a laptop or LAN host.
- *
- * Consumers:
- *   - `features/conversation/engine/huggingface-realtime.ts`
- */
-export const HF_REALTIME_CONNECTION_MODE: 'deployed' | 'local' = (() => {
-  const raw = (
-    import.meta.env.VITE_HF_REALTIME_CONNECTION_MODE as string | undefined
-  )
-    ?.trim()
-    .toLowerCase();
-  if (raw === 'local' || raw === 'deployed') return raw;
-  if (raw) {
-    console.warn(
-      `[env] invalid VITE_HF_REALTIME_CONNECTION_MODE=${JSON.stringify(
-        raw,
-      )}; using "deployed"`,
-    );
-  }
-  return 'deployed';
-})();
-
-/**
- * App-managed HF session allocator.
- *
- * The allocator returns a short-lived `connect_url` for the current
- * deployed realtime backend. Keeping this behind a stable Space proxy
- * lets backend routing change without shipping a new mobile build.
- */
-export const HF_REALTIME_SESSION_PROXY_URL: string =
-  (import.meta.env.VITE_HF_REALTIME_SESSION_PROXY_URL as string | undefined) ??
-  'https://pollen-robotics-reachy-mini-realtime-url.hf.space/session';
-
-/**
- * Direct HF realtime websocket endpoint for local / LAN development.
- *
- * Accepts either a base URL such as `ws://127.0.0.1:8765/v1` or the
- * full websocket URL `ws://127.0.0.1:8765/v1/realtime`.
- */
-export const HF_REALTIME_WS_URL: string | null = (() => {
-  const raw = import.meta.env.VITE_HF_REALTIME_WS_URL as string | undefined;
-  const trimmed = raw?.trim() ?? '';
-  return trimmed.length > 0 ? trimmed : null;
-})();
 
 /**
  * Reachy Mini backend API host.
@@ -185,8 +134,7 @@ export const DEV_HF_USERNAME: string | null = (() => {
  *   - `features/personalities/generate.ts`
  */
 export const PERSONALITY_HF_MODEL: string =
-  (import.meta.env.VITE_PERSONALITY_HF_MODEL as string | undefined) ??
-  'Qwen/Qwen2.5-72B-Instruct';
+  (import.meta.env.VITE_PERSONALITY_HF_MODEL as string | undefined) ?? 'Qwen/Qwen2.5-72B-Instruct';
 
 /**
  * Text model that turns a persona into a short VISUAL theme for the
@@ -201,26 +149,6 @@ export const STICKER_THEME_MODEL: string =
   'Qwen/Qwen2.5-7B-Instruct';
 
 /**
- * Vision-language model used to describe what the robot sees. Override
- * via `VITE_VISION_HF_MODEL` (e.g. `Qwen/Qwen2.5-VL-72B-Instruct`,
- * `zai-org/GLM-4.5V`). Append `:fastest` / `:cheapest` / `:<provider>`
- * to pin a routing policy.
- *
- * Default is `google/gemma-3-27b-it`: a NON-reasoning multimodal model.
- * We moved off `zai-org/GLM-4.5V` because, as a reasoning VLM, it
- * routinely spent the whole token budget in `reasoning_content` and
- * returned an empty `content` ("HF VLM returned empty description").
- * Gemma emits its answer directly, and it's served by two providers
- * (featherless-ai + scaleway) so the router keeps meaningful failover.
- *
- * Consumers:
- *   - `features/conversation/vision/config.ts`
- */
-export const VISION_HF_MODEL: string =
-  (import.meta.env.VITE_VISION_HF_MODEL as string | undefined) ??
-  'google/gemma-3-27b-it';
-
-/**
  * Default routing policy suffix for the HF Inference Providers router.
  * `preferred` honours the order set in the user's HF Inference Provider
  * settings. Override via `VITE_HF_ROUTER_POLICY`; an unrecognised value
@@ -230,21 +158,13 @@ export const VISION_HF_MODEL: string =
  * Consumers:
  *   - `features/hf/router.ts`
  */
-export const HF_ROUTER_POLICY: 'auto' | 'fastest' | 'cheapest' | 'preferred' =
-  (() => {
-    const raw = (
-      import.meta.env.VITE_HF_ROUTER_POLICY as string | undefined
-    )?.trim();
-    if (
-      raw === 'auto' ||
-      raw === 'fastest' ||
-      raw === 'cheapest' ||
-      raw === 'preferred'
-    ) {
-      return raw;
-    }
-    return 'preferred';
-  })();
+export const HF_ROUTER_POLICY: 'auto' | 'fastest' | 'cheapest' | 'preferred' = (() => {
+  const raw = (import.meta.env.VITE_HF_ROUTER_POLICY as string | undefined)?.trim();
+  if (raw === 'auto' || raw === 'fastest' || raw === 'cheapest' || raw === 'preferred') {
+    return raw;
+  }
+  return 'preferred';
+})();
 
 /**
  * Model fallback chain the router rotates through when the caller's

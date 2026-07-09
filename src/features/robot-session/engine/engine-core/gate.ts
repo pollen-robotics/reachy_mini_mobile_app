@@ -34,7 +34,7 @@ export function makeGate(initial: boolean): Gate {
   let value = initial;
   return {
     get: () => value,
-    set: (v) => {
+    set: v => {
       value = v;
     },
     on: () => {

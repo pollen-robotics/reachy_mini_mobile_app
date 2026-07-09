@@ -10,7 +10,7 @@
  * surfaced as a warning and the conversation continues as before.
  */
 
-import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
+import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 export type AudioStartupParameter = { name: string; values: number[] };
 
@@ -35,17 +35,17 @@ export const AUDIO_STARTUP_CONFIG: ReadonlyArray<AudioStartupParameter> = [
   // (`PP_MGSCALE`) because the AGC only boosts when the signal is low,
   // and the non-linear echo suppressor below stays ON to keep the
   // robot's own TTS from being amplified into a false barge-in.
-  { name: "PP_AGCMAXGAIN", values: [16.0] },
-  { name: "PP_MIN_NS", values: [0.8] },
-  { name: "PP_MIN_NN", values: [0.8] },
-  { name: "PP_GAMMA_E", values: [0.5] },
-  { name: "PP_GAMMA_ETAIL", values: [0.5] },
+  { name: 'PP_AGCMAXGAIN', values: [16.0] },
+  { name: 'PP_MIN_NS', values: [0.8] },
+  { name: 'PP_MIN_NN', values: [0.8] },
+  { name: 'PP_GAMMA_E', values: [0.5] },
+  { name: 'PP_GAMMA_ETAIL', values: [0.5] },
   // Non-linear echo suppressor ON: without it the robot hears its own
   // TTS through the in-shell speaker and barges in on itself.
-  { name: "PP_NLATTENONOFF", values: [1] },
+  { name: 'PP_NLATTENONOFF', values: [1] },
   // Unity mic gain. A 4x boost on the first channel amplified the
   // residual echo straight into the realtime VAD.
-  { name: "PP_MGSCALE", values: [1.0, 1.0, 1.0] },
+  { name: 'PP_MGSCALE', values: [1.0, 1.0, 1.0] },
 ];
 
 /**
@@ -53,21 +53,19 @@ export const AUDIO_STARTUP_CONFIG: ReadonlyArray<AudioStartupParameter> = [
  * audio board is the common case on Lite robots and must not break
  * the conversation flow.
  */
-export async function applyAudioStartupConfig(
-  robot: ReachyMiniInstance,
-): Promise<boolean> {
+export async function applyAudioStartupConfig(robot: ReachyMiniInstance): Promise<boolean> {
   try {
     const applied = await robot.applyAudioConfig(AUDIO_STARTUP_CONFIG, {
       verify: true,
     });
     if (!applied) {
       console.warn(
-        "[audio-startup-config] not applied (no XVF3800 board, or a write/verify failed)",
+        '[audio-startup-config] not applied (no XVF3800 board, or a write/verify failed)'
       );
     }
     return applied;
   } catch (err) {
-    console.warn("[audio-startup-config] apply failed:", err);
+    console.warn('[audio-startup-config] apply failed:', err);
     return false;
   }
 }

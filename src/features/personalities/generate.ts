@@ -41,7 +41,7 @@
  * id so the picker always lands on a selectable chip.
  */
 
-import { readHfTokenFromStorage } from "@/features/conversation/engine/hf-token";
+import { readHfTokenFromStorage } from "@/features/auth/hf-token";
 import { PERSONALITY_HF_MODEL } from "@/shared/env";
 import { AVAILABLE_VOICES } from "./builtin";
 import { HfRouterError, routerChatCompletion } from "@/features/hf";

@@ -52,17 +52,14 @@ export interface CreateFsmOptions {
   label?: string | null;
 }
 
-export function createFsm<T>(
-  initial: T,
-  options: CreateFsmOptions = {},
-): Fsm<T> {
-  const label = options.label === undefined ? "fsm" : options.label;
+export function createFsm<T>(initial: T, options: CreateFsmOptions = {}): Fsm<T> {
+  const label = options.label === undefined ? 'fsm' : options.label;
   let cursor: T = initial;
   const listeners = new Set<(next: T, prev: T) => void>();
 
   return {
     current: () => cursor,
-    set: (next) => {
+    set: next => {
       const prev = cursor;
       if (label !== null) {
         console.log(`[${label}] ${String(prev)} -> ${String(next)}`);
@@ -73,13 +70,13 @@ export function createFsm<T>(
           listener(next, prev);
         } catch (err) {
           console.warn(
-            `[${label ?? "fsm"}] subscriber threw on ${String(prev)} -> ${String(next)}:`,
-            err,
+            `[${label ?? 'fsm'}] subscriber threw on ${String(prev)} -> ${String(next)}:`,
+            err
           );
         }
       }
     },
-    subscribe: (listener) => {
+    subscribe: listener => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);

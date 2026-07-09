@@ -35,7 +35,7 @@ import {
   useMemoryEnabled,
   useVisionEnabled,
 } from '@/features/conversation-settings';
-import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
+import { useMemoryStore } from '@/features/conversation-settings/useMemoryStore';
 import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
