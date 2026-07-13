@@ -158,6 +158,15 @@ export function ConvAppControlPanel({ session, active }: Props) {
                     {(conv.start.error as Error).message}
                   </Typography>
                 )}
+                {/* Diagnostic: what the daemon actually reports, so a
+                    disagreement with reality is visible. */}
+                <Typography sx={{ fontSize: TYPO.xs, color: 'text.disabled' }}>
+                  {conv.appStatusError
+                    ? `apps.status failed: ${conv.appStatusError.message}`
+                    : `daemon reports: ${conv.appState ?? 'unknown'}${
+                        conv.runningAppName ? ` (${conv.runningAppName})` : ''
+                      }`}
+                </Typography>
               </>
             )}
           </Stack>
