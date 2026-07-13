@@ -14,7 +14,7 @@ import type { ConvAppStatus } from '@/features/conv-app/client';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import Section from '@/ui/design/Section';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
-import { ConversationOrb, type OrbState } from '@/ui/panels/conversation/orb/ConversationOrb';
+import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 
 interface Props {
   session: RobotSessionHandle;

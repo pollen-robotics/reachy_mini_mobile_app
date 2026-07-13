@@ -58,29 +58,6 @@ export const WEBSITE_API_URL: string =
   'https://pollen-robotics-reachy-mini-api.hf.space';
 
 /**
- * Reachy Sticker Generator Space.
- *
- * FastAPI Space that turns a short visual theme into a transparent
- * Reachy sticker (PNG + vectorised SVG). Used by the personality
- * authoring flow to give custom personas a generated avatar.
- *
- * Endpoints (see `features/personalities/sticker-avatar.ts`):
- *   - `POST /api/generate` `{ prompt, kind }` -> `{ png_url, svg_url, ... }`
- *     (synchronous, ~1 min, 2 concurrent slots server-side).
- *   - `GET  /api/queue` -> `{ queue_size }` (waiting-position hint).
- *   - `GET  /api/community/<file>` -> the generated image bytes.
- *
- * Calls are routed through `@tauri-apps/plugin-http` (the Space serves
- * no `Access-Control-Allow-Origin`), so the host must also be allowed
- * in `src-tauri/capabilities/default.json`.
- *
- * Override at build time via `VITE_REACHY_STICKER_URL`.
- */
-export const STICKER_API_URL: string =
-  (import.meta.env.VITE_REACHY_STICKER_URL as string | undefined) ??
-  'https://pollen-robotics-reachy-sticker-generator.hf.space';
-
-/**
  * Dev-only Hugging Face token used to skip the OAuth sign-in screen
  * when running `tauri:dev` on a desktop WebView.
  *
@@ -115,79 +92,4 @@ export const DEV_HF_USERNAME: string | null = (() => {
   const raw = import.meta.env.VITE_DEV_HF_USERNAME as string | undefined;
   const trimmed = raw?.trim() ?? '';
   return trimmed.length > 0 ? trimmed : null;
-})();
-
-/* --- HF model & routing overrides ------------------------------------- *
- *
- * Advanced knobs for A/B testing model choices without a code change.
- * All default to broadly-served models; override in `.env.local` when
- * tuning. Funnelled here (rather than read inline in each feature) so
- * the full set of model overrides is discoverable in one grep.
- */
-
-/**
- * Text model that authors custom personalities (name + tagline +
- * instructions -> system prompt). Override via `VITE_PERSONALITY_HF_MODEL`.
- * Append `:<provider>` / `:fastest` / `:cheapest` to pin a routing policy.
- *
- * Consumers:
- *   - `features/personalities/generate.ts`
- */
-export const PERSONALITY_HF_MODEL: string =
-  (import.meta.env.VITE_PERSONALITY_HF_MODEL as string | undefined) ?? 'Qwen/Qwen2.5-72B-Instruct';
-
-/**
- * Text model that turns a persona into a short VISUAL theme for the
- * sticker generator. Small + widely served on the HF router. Override
- * via `VITE_REACHY_STICKER_THEME_MODEL`.
- *
- * Consumers:
- *   - `features/personalities/sticker-avatar.ts`
- */
-export const STICKER_THEME_MODEL: string =
-  (import.meta.env.VITE_REACHY_STICKER_THEME_MODEL as string | undefined) ??
-  'Qwen/Qwen2.5-7B-Instruct';
-
-/**
- * Default routing policy suffix for the HF Inference Providers router.
- * `preferred` honours the order set in the user's HF Inference Provider
- * settings. Override via `VITE_HF_ROUTER_POLICY`; an unrecognised value
- * falls back to `preferred`. Typed as the same union as `RouterPolicy`
- * in `features/hf/router.ts` (kept structurally compatible there).
- *
- * Consumers:
- *   - `features/hf/router.ts`
- */
-export const HF_ROUTER_POLICY: 'auto' | 'fastest' | 'cheapest' | 'preferred' = (() => {
-  const raw = (import.meta.env.VITE_HF_ROUTER_POLICY as string | undefined)?.trim();
-  if (raw === 'auto' || raw === 'fastest' || raw === 'cheapest' || raw === 'preferred') {
-    return raw;
-  }
-  return 'preferred';
-})();
-
-/**
- * Model fallback chain the router rotates through when the caller's
- * preferred model is overloaded or unsupported. Ordered large -> small
- * so quality is kept when possible but a minimal account can still land
- * a request. Override via `VITE_HF_MODEL_CHAIN` (comma-separated ids).
- *
- * Consumers:
- *   - `features/hf/router.ts`
- */
-export const HF_MODEL_CHAIN: string[] = (() => {
-  const raw = import.meta.env.VITE_HF_MODEL_CHAIN as string | undefined;
-  if (raw && raw.trim()) {
-    return raw
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-  }
-  return [
-    'meta-llama/Llama-3.3-70B-Instruct',
-    'Qwen/Qwen2.5-72B-Instruct',
-    'meta-llama/Llama-3.1-8B-Instruct',
-    'Qwen/Qwen2.5-7B-Instruct',
-    'mistralai/Mistral-7B-Instruct-v0.3',
-  ];
 })();

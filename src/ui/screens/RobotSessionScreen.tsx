@@ -85,10 +85,8 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConvAppControlPanel } from '@/ui/panels/conv-app/ConvAppControlPanel';
-import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
+import { SettingsPanel } from '@/ui/panels/settings/SettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
-import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
-import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
@@ -208,30 +206,6 @@ function ConnectedSession({
   // Latest published daemon version (GitHub). Fail-open: `null` until it
   // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
   const latestDaemonVersion = useLatestDaemonVersion();
-
-  // Remember which personality this robot is wearing, keyed by its
-  // stable hardware id, so the discovery list ("Your Reachies") can
-  // show each robot with the face it was last paired with rather than
-  // the generic Reachy silhouette. Records the current persona on mount
-  // and on every mid-session switch. No-op when the daemon doesn't
-  // expose a hardware id (older daemons / no Reachy attached).
-  const activePersona = useActivePersonality();
-  // Prefer the stable hardware id; fall back to the routable peer id
-  // when the daemon doesn't expose one (older daemons / no Reachy
-  // attached) so the memory still works within a session round-trip.
-  const robotMemoryKey = robotHardwareId ?? robotId;
-  useEffect(() => {
-    rememberRobotPersona(robotMemoryKey, activePersona.id);
-  }, [robotMemoryKey, activePersona.id]);
-
-  // Play a short choreography on the robot whenever the user switches
-  // personality. Gated on a live transport. The conversation runs on
-  // the robot now, so there is no phone-side pipeline to fight with.
-  useChangePersonaAnimation({
-    getRobot: session.getRobot,
-    isLive: session.connectionState === 'live',
-    isIdle: true,
-  });
 
   const [tab, setTab] = useState<Tab>('conv');
   // The conv tab is kept mounted (just `display: none`d) so its orb
@@ -950,10 +924,9 @@ function ConnectedSession({
                 isLive={session.hasReachedReady}
               />
             ) : (
-              <ConversationSettingsPanel
+              <SettingsPanel
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
-                conversationLive={false}
               />
             )}
           </Box>
