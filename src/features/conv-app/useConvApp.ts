@@ -150,12 +150,6 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
     running,
     otherAppRunning,
     runningAppName,
-    // Raw daemon-reported app state ('idle' | 'running' | ...) and any
-    // apps.status error — surfaced in the panel so a "not running" that
-    // disagrees with reality (app launched outside the daemon, wrong
-    // daemon, status RPC failing) is diagnosable instead of a flat message.
-    appState: appStatus.data?.state ?? null,
-    appStatusError: appStatus.error as Error | null,
     installing,
     appStatusLoading: appStatus.isLoading,
     status: status.data ?? null,
