@@ -155,6 +155,8 @@ export function useConvApp(session: RobotSessionHandle, enabled: boolean) {
     status: status.data ?? null,
     micMuted: mic.data ?? null,
     personalities: personalities.data ?? null,
+    personalitiesLoading: personalities.isLoading,
+    personalitiesError: personalities.error as Error | null,
     voices: voices.data ?? null,
     turnState,
     start,

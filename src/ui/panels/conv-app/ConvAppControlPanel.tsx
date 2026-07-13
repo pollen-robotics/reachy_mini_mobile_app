@@ -178,9 +178,11 @@ export function ConvAppControlPanel({ session, active }: Props) {
               </Typography>
             </Stack>
 
-            {conv.personalities && (
-              <Section label="Personality">
-                <Row label="Active">
+            {/* Always render the section while running so a failed
+                personalities.list is diagnosable, not a silent no-show. */}
+            <Section label="Personality">
+              <Row label="Active">
+                {conv.personalities ? (
                   <Select
                     size="small"
                     value={conv.personalities.current}
@@ -194,8 +196,19 @@ export function ConvAppControlPanel({ session, active }: Props) {
                       </MenuItem>
                     ))}
                   </Select>
-                </Row>
-              </Section>
+                ) : conv.personalitiesError ? (
+                  <Typography sx={{ fontSize: TYPO.xs, color: 'error.main' }}>
+                    {conv.personalitiesError.message}
+                  </Typography>
+                ) : (
+                  <CircularProgress size={18} sx={{ color: 'grey.500' }} />
+                )}
+              </Row>
+            </Section>
+            {conv.personalities?.locked && (
+              <Typography sx={{ px: 2, fontSize: TYPO.xs, color: 'text.disabled' }}>
+                Personality is locked to {conv.personalities.locked_to} on this robot.
+              </Typography>
             )}
 
             {conv.voices && conv.voices.list.length > 0 && (
