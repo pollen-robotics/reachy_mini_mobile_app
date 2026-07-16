@@ -1,90 +1,72 @@
-import { useCallback, useState } from 'react';
 import { CircularProgress, Stack } from '@mui/material';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 
-import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { TROUBLE_TIPS } from '../constants';
-import { Headline, LinkDivider, PrimaryButton, SubtleLink, TroubleLink, TroubleshootView } from '../shared';
+import { useTroubleshoot } from '../hooks';
+import { LinkDivider, PrimaryButton, StepScaffold, SubtleLink, TroubleLink, TroubleshootView } from '../shared';
 
+/**
+ * "Meet Me" step. Presentational: the wizard shell fires the wake emote as a
+ * navigation event (on entry, and on "Move again" via `onReplay`) - this step
+ * only reflects that state. See `useStepEmotes` for why the trigger lives in
+ * the shell rather than a mount effect here.
+ */
 export default function MotorStep({
-  session,
   onNext,
-  onWoke,
+  onStageVisible,
+  playing,
+  played,
+  onReplay,
 }: {
-  session: RobotSessionHandle;
   onNext: () => void;
-  /** Signals the wizard that the robot has been woken here, so it won't
-   *  replay the wake move on finish. */
-  onWoke: () => void;
+  onStageVisible: (visible: boolean) => void;
+  /** True while the shell-fired wake emote is playing (button shows "Moving…"). */
+  playing: boolean;
+  /** True once the wake emote finished (reveal the confirm controls). */
+  played: boolean;
+  /** Replay the wake emote ("Make Reachy move" / "Move again"). */
+  onReplay: () => void;
 }) {
-  const [trouble, setTrouble] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [played, setPlayed] = useState(false);
-
-  const play = useCallback(async () => {
-    const robot = session.getRobot();
-    if (!robot) return;
-    setPlaying(true);
-    try {
-      await robot.wakeUp({ timeoutMs: 6000 });
-      onWoke();
-      setPlayed(true);
-    } catch {
-      // wakeUp can reject on a slow ack; still let the user move on.
-      // Treat it as woken anyway: the command was sent, and we don't
-      // want the wizard to replay the move on finish.
-      onWoke();
-      setPlayed(true);
-    } finally {
-      setPlaying(false);
-    }
-  }, [session, onWoke]);
+  const { trouble, openTrouble, closeTrouble } = useTroubleshoot(onStageVisible);
 
   if (trouble) {
     return (
       <TroubleshootView
         title={TROUBLE_TIPS.motor.title}
         tips={TROUBLE_TIPS.motor.tips}
-        onBack={() => setTrouble(false)}
+        onBack={closeTrouble}
       />
     );
   }
 
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline
-        title="Can it move?"
-        caption="Tap below and watch Reachy stretch - its head should tilt and the antennas should wiggle."
-      />
-      <Stack spacing={1.5} sx={{ width: '100%', maxWidth: 320, alignItems: 'center' }}>
-        {!played ? (
-          <PrimaryButton onClick={() => void play()} disabled={playing}>
-            {playing ? (
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                <CircularProgress size={16} sx={{ color: 'primary.main' }} />
-                <span>Moving…</span>
-              </Stack>
-            ) : (
-              'Make Reachy move'
-            )}
+    <StepScaffold
+      // No overlay: the shared persistent viz behind the stage mirrors the live
+      // wake-up animation the user should see.
+      title="Meet Me"
+      caption="I'll perform my first animation. Make sure my movements match what you see on screen so every motor is working properly."
+      actions={
+        // Order matters: test `playing` FIRST so a replay ("Move again" from the
+        // confirmed state) puts the spinner back on the primary button.
+        playing ? (
+          <PrimaryButton disabled startIcon={<CircularProgress size={16} sx={{ color: 'primary.main' }} />}>
+            Moving…
           </PrimaryButton>
+        ) : !played ? (
+          <PrimaryButton onClick={onReplay}>Make Reachy move</PrimaryButton>
         ) : (
           <>
             <PrimaryButton startIcon={<CheckRoundedIcon />} onClick={onNext}>
               Yes, it moved
             </PrimaryButton>
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <SubtleLink
-                label={playing ? 'Moving…' : 'Move again'}
-                onClick={() => void play()}
-                disabled={playing}
-              />
+              <SubtleLink label="Move again" onClick={onReplay} />
               <LinkDivider />
-              <TroubleLink label="It didn't move" onClick={() => setTrouble(true)} />
+              <TroubleLink label="It didn't move" onClick={openTrouble} />
             </Stack>
           </>
-        )}
-      </Stack>
-    </Stack>
+        )
+      }
+    />
   );
 }

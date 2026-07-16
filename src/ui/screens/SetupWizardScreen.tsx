@@ -16,11 +16,12 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
   CircularProgress,
+  Collapse,
   IconButton,
   InputAdornment,
   List,
@@ -39,6 +40,7 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import type { BleDevice } from '@/features/ble/bleWifi';
@@ -67,21 +69,20 @@ const TOTAL_STEPS = 4;
 
 /**
  * Fine-grained 0→1 fill for the top progress bar. The *step number* comes from
- * {@link stageForPhase} (4 perceived stages); this map just lets the bar creep
- * forward smoothly within a stage so it always feels alive.
+ * {@link stepFromFraction} (4 perceived stages); this map just lets the bar
+ * creep forward smoothly within a stage so it always feels alive.
  */
 const PHASE_FRACTION: Record<SetupPhase, number> = {
-  permission: 0.05,
   scanning: 0.12,
   connecting: 0.2,
   pin: 0.27,
   authenticating: 0.34,
   'wifi-scanning': 0.46,
   'wifi-pick': 0.56,
-  'wifi-password': 0.66,
   'wifi-connecting': 0.76,
-  'linking-account': 0.84,
-  'central-waiting': 0.93,
+  'linking-account': 0.82,
+  'central-waiting': 0.88,
+  naming: 0.94,
   done: 1,
   error: 0,
 };
@@ -100,6 +101,21 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
   const fraction = useClampedProgress(m.phase);
   const showProgress = m.phase !== 'error';
   const step = stepFromFraction(fraction);
+
+  // Name greeted by the closing "meet" celebration. Owned HERE (not in
+  // NamingView) so the overlay outlives the naming→done phase swap and stays on
+  // top of it the whole time. If it lived in NamingView, the phase change would
+  // unmount it and the naming form would flash back through. Committing the name
+  // + advancing to `done` happen up front, so the swap runs hidden behind the
+  // opaque overlay. The overlay is the single, self-advancing end view (no
+  // button) - it fires completion while still opaque, so the App-level screen
+  // transition takes over without ever revealing an intermediate view.
+  const [namedCelebration, setNamedCelebration] = useState<string | null>(null);
+  const handleNamed = (name: string) => {
+    m.commitName(name);
+    setNamedCelebration(name);
+    m.finishNaming();
+  };
 
   return (
     <Stack
@@ -124,8 +140,10 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         />
       </Box>
 
-      {/* Top bar: back/close on the left, step counter on the right. Back always
-          exits the wizard - BLE teardown is handled on unmount by the FSM. */}
+      {/* Top bar: back/close on the left, step counter on the right. Back
+          rewinds one step when the flow has a previous step (see FSM `goBack`);
+          on the first step (and terminal phases) it exits the wizard - BLE
+          teardown is handled on unmount by the FSM. */}
       <Stack
         direction="row"
         sx={{
@@ -137,8 +155,8 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         }}
       >
         <Button
-          aria-label="Cancel setup"
-          onClick={onCancel}
+          aria-label={m.canGoBack ? 'Go back one step' : 'Cancel setup'}
+          onClick={m.canGoBack ? m.goBack : onCancel}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
           sx={{
             color: 'text.secondary',
@@ -157,33 +175,52 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         ) : null}
       </Stack>
 
-      {/* Scrollable content column. Each phase cross-fades + lifts in/out so the
-          flow feels like turning pages rather than hard cuts. */}
-      <Stack sx={{ flex: 1, minHeight: 0, width: '100%', overflowY: 'auto' }}>
-        <Stack
-          sx={{
-            m: 'auto',
-            width: '100%',
-            maxWidth: LAYOUT.contentMaxWidth,
-            px: 3,
-            py: 3,
-            alignItems: 'center',
-          }}
-        >
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={m.phase}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.26, ease: [0.4, 0, 0.2, 1] }}
-              style={{ width: '100%' }}
+      {/* Content column: each phase fills the height so the scaffold can center
+          its content group while docking the actions at the bottom (and scroll
+          the content internally when a list is too tall). Phases cross-fade +
+          lift in/out so the flow feels like turning pages. */}
+      <Stack sx={{ flex: 1, minHeight: 0, width: '100%' }}>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={m.phase}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.26, ease: [0.4, 0, 0.2, 1] }}
+            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+          >
+            <Box
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                width: '100%',
+                maxWidth: LAYOUT.contentMaxWidth,
+                mx: 'auto',
+                px: 3,
+                py: 3,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
             >
-              <StepView m={m} onCancel={onCancel} onComplete={onComplete} />
-            </motion.div>
-          </AnimatePresence>
-        </Stack>
+              <StepView m={m} onCancel={onCancel} onComplete={onComplete} onNamed={handleNamed} />
+            </Box>
+          </motion.div>
+        </AnimatePresence>
       </Stack>
+
+      {/* Single, self-advancing end view. Mounted above the phase-keyed content
+          so it fully covers the naming→done swap (see `namedCelebration`) and
+          auto-completes on a timer - merging what used to be two screens (the
+          "Nice to meet you" beat + the "Meet {name}" success view with an Open
+          button) into one animated moment. */}
+      {namedCelebration !== null ? (
+        <MeetCelebration
+          name={namedCelebration}
+          result={m.result}
+          onComplete={onComplete}
+          onCancel={onCancel}
+        />
+      ) : null}
     </Stack>
   );
 }
@@ -194,10 +231,14 @@ function StepView({
   m,
   onCancel,
   onComplete,
+  onNamed,
 }: {
   m: SetupMachine;
   onCancel: () => void;
   onComplete: (result: SetupResult) => void;
+  /** Commit the chosen name + advance out of naming, driving the top-level
+   *  celebration overlay (see `SetupWizardScreen`). */
+  onNamed: (name: string) => void;
 }) {
   if (m.phase === 'error' && m.error) {
     // An outdated robot can't be fixed by retrying the BLE flow - it needs a
@@ -229,17 +270,29 @@ function StepView({
     case 'wifi-scanning':
       return <BusyView title="Finding networks" caption="Scanning nearby Wi-Fi (~10 s)…" />;
     case 'wifi-pick':
-      return <WifiPickView networks={m.networks} onPick={m.selectNetwork} onRescan={m.rescanWifi} />;
-    case 'wifi-password':
-      return <PasswordView ssid={m.selectedSsid ?? ''} onSubmit={m.submitPassword} />;
+      // Network pick + password live in a single step: tapping a network
+      // expands an inline accordion with the password field.
+      return (
+        <WifiPickView
+          networks={m.networks}
+          onSelect={m.selectNetwork}
+          onConnect={m.submitPassword}
+          onRescan={m.rescanWifi}
+        />
+      );
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
+    case 'naming':
+      return <NamingView onNamed={onNamed} />;
     case 'linking-account':
       return <LinkAccountView onLink={m.linkAccount} lanIp={m.robotLanIp} />;
     case 'central-waiting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="registering" />;
     case 'done':
-      return <SuccessView result={m.result} onComplete={onComplete} onBackToList={onCancel} />;
+      // Terminal phase: the visible end view is the top-level `MeetCelebration`
+      // overlay (see `SetupWizardScreen`), which auto-advances. Nothing to draw
+      // underneath - it's fully covered and the flow completes on its own.
+      return null;
     default:
       return null;
   }
@@ -250,12 +303,12 @@ function StepView({
 /**
  * Monotonic 0→1 progress for the header bar. A sub-step retry (wrong PIN, Wi-Fi
  * rescan) never makes it jump backward; it only resets when the flow genuinely
- * restarts pairing (permission/scanning) or hits an error.
+ * restarts pairing (scanning) or hits an error.
  */
 function useClampedProgress(phase: SetupPhase): number {
   const maxRef = useRef(0);
   const target = PHASE_FRACTION[phase] ?? 0;
-  if (phase === 'permission' || phase === 'scanning' || phase === 'error') {
+  if (phase === 'scanning' || phase === 'error') {
     maxRef.current = target;
   } else {
     maxRef.current = Math.max(maxRef.current, target);
@@ -340,7 +393,56 @@ function IconHero({ children, tint }: { children: React.ReactNode; tint?: string
   );
 }
 
-/* --- 1. permission primer ------------------------------------------------- */
+/**
+ * Shared skeleton for every setup phase - mirrors the first-wake-up layout:
+ * the content group (optional per-phase `hero` - PIN photo, avatar, status
+ * icon, spinner… - the headline, and an optional `body` list/input) is
+ * vertically centered, while the `actions` (CTA, "still searching" indicator…)
+ * are docked at the bottom of the viewport.
+ *
+ * The content region centers its group (`my: auto`) as long as it fits and
+ * gracefully top-aligns + scrolls when it's too tall (a long device / Wi-Fi
+ * list) instead of clipping; the actions stay pinned at the bottom throughout.
+ */
+function SetupScaffold({
+  hero,
+  title,
+  caption,
+  body,
+  actions,
+}: {
+  hero?: React.ReactNode;
+  title: string;
+  caption?: string;
+  body?: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <Stack sx={{ flex: 1, minHeight: 0, width: '100%' }}>
+      {/* Centered, scrollable content region. */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <Stack spacing={3} sx={{ width: '100%', alignItems: 'center', my: 'auto' }}>
+          {hero ? (
+            <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center' }}>{hero}</Box>
+          ) : null}
+
+          <Headline title={title} caption={caption} />
+
+          {body ? (
+            <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              {body}
+            </Box>
+          ) : null}
+        </Stack>
+      </Box>
+
+      {/* Actions docked at the bottom (CTA / live indicators). */}
+      {actions ? (
+        <Box sx={{ width: '100%', maxWidth: 320, mx: 'auto', pt: 2, flexShrink: 0 }}>{actions}</Box>
+      ) : null}
+    </Stack>
+  );
+}
 
 /* --- 1. BLE scan ---------------------------------------------------------- */
 
@@ -357,57 +459,58 @@ function ScanView({
 }) {
   const hasDevices = devices.length > 0;
   return (
-    <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline
-        title="Let's wake up your Reachy"
-        caption={
-          hasDevices
-            ? "Found it. Tap your Reachy and we'll set it up over Bluetooth - no Wi-Fi needed yet."
-            : "Power your Reachy on and hold it close. We'll reach it over Bluetooth to hand over your Wi-Fi - this only takes a moment."
-        }
-      />
-      {scanning && !hasDevices ? (
-        <CircularProgress size={28} sx={{ color: 'text.secondary' }} />
-      ) : null}
-
-      {hasDevices ? (
-        <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-          {devices.map((d, i) => (
-            <DeviceRow
-              key={d.address}
-              device={d}
-              isClosest={devices.length > 1 && i === 0 && typeof d.rssi === 'number'}
-              onTap={() => onPick(d)}
-            />
-          ))}
-        </List>
-      ) : !scanning ? (
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
-          No Reachy found. Make sure it is powered on and held close to the phone, then scan again.
-        </Typography>
-      ) : null}
-
-      {/* The scan runs continuously while this view is open, so there is no
-          "Scan again" button in the normal case — a live indicator conveys
-          that the list keeps refreshing. The manual restart only appears when
-          the loop has actually stopped (e.g. permission denied / error). */}
-      {scanning ? (
+    <SetupScaffold
+      title="Find me"
+      caption={
+        hasDevices
+          ? "Found it. Tap your Reachy and we'll set it up over Bluetooth - no Wi-Fi needed yet."
+          : "I'm looking for a Bluetooth connection. Make sure I'm nearby and powered on."
+      }
+      body={
         hasDevices ? (
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+            {devices.map((d, i) => (
+              <DeviceRow
+                key={d.address}
+                device={d}
+                isClosest={devices.length > 1 && i === 0 && typeof d.rssi === 'number'}
+                onTap={() => onPick(d)}
+              />
+            ))}
+          </List>
+        ) : scanning ? null : (
+          <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
+            No Reachy found. Make sure it is powered on and held close to the phone, then scan again.
+          </Typography>
+        )
+      }
+      actions={
+        // The scan runs continuously while this view is open, so there is no
+        // "Scan again" button in the normal case — a live indicator conveys
+        // that the list keeps refreshing (wording depends on whether we're
+        // still hunting for the first Reachy or for additional ones). The
+        // manual restart only appears when the loop has actually stopped
+        // (e.g. permission denied / error).
+        scanning ? (
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'center' }}>
             <CircularProgress size={14} sx={{ color: 'text.secondary' }} />
-            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>Still searching nearby…</Typography>
+            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+              {hasDevices ? 'Still searching nearby…' : 'Searching for your Reachy…'}
+            </Typography>
           </Stack>
-        ) : null
-      ) : (
-        <Button
-          onClick={onRescan}
-          startIcon={<RefreshIcon />}
-          sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
-        >
-          Scan again
-        </Button>
-      )}
-    </Stack>
+        ) : (
+          <Stack sx={{ alignItems: 'center' }}>
+            <Button
+              onClick={onRescan}
+              startIcon={<RefreshIcon />}
+              sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
+            >
+              Scan again
+            </Button>
+          </Stack>
+        )
+      }
+    />
   );
 }
 
@@ -493,67 +596,72 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
     if (ready) onSubmit(pin);
   };
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      {/* Slight 3D-tilted photo card: a soft drop shadow + a couple
-          degrees of perspective rotation give the serial-number shot a
-          gentle "held in hand" feel without reading as a gimmick. */}
-      <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', perspective: '1000px' }}>
-        <Box
-          sx={{
-            width: '100%',
-            maxWidth: 280,
-            bgcolor: 'background.paper',
-            borderRadius: `${RADIUS.lg}px`,
-            border: theme => `1px solid ${alpha(theme.palette.text.primary, 0.22)}`,
-            boxShadow: '0 3px 10px rgba(0, 0, 0, 0.12)',
-            overflow: 'hidden',
-            transform: 'rotateX(2deg) rotateY(-2deg)',
-            transformStyle: 'preserve-3d',
-          }}
-        >
+    <SetupScaffold
+      title="Unlock Me"
+      caption="Enter the PIN printed underneath my base so I know it's really you."
+      hero={
+        // Slight 3D-tilted photo card: a soft drop shadow + a couple degrees of
+        // perspective rotation give the serial-number shot a gentle "held in
+        // hand" feel without reading as a gimmick.
+        <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', perspective: '1000px' }}>
           <Box
-            component="img"
-            src={serialNumberImg}
-            alt="The 5-character code is printed on a label under your Reachy's base"
             sx={{
               width: '100%',
-              display: 'block',
-              userSelect: 'none',
-              pointerEvents: 'none',
+              maxWidth: 280,
+              bgcolor: 'background.paper',
+              borderRadius: `${RADIUS.lg}px`,
+              border: theme => `1px solid ${alpha(theme.palette.text.primary, 0.22)}`,
+              boxShadow: '0 3px 10px rgba(0, 0, 0, 0.12)',
+              overflow: 'hidden',
+              transform: 'rotateX(2deg) rotateY(-2deg)',
+              transformStyle: 'preserve-3d',
             }}
-          />
+          >
+            <Box
+              component="img"
+              src={serialNumberImg}
+              alt="The 5-character code is printed on a label under your Reachy's base"
+              sx={{
+                width: '100%',
+                display: 'block',
+                userSelect: 'none',
+                pointerEvents: 'none',
+              }}
+            />
+          </Box>
         </Box>
-      </Box>
-      <Headline title="Prove it's yours" caption="Type the 5-character code printed under your Reachy's base." />
-      <TextField
-        value={pin}
-        onChange={e => setPin(e.target.value.replace(/\s/g, '').slice(0, PIN_LENGTH))}
-        onKeyDown={e => {
-          if (e.key === 'Enter') submit();
-        }}
-        autoFocus
-        slotProps={{
-          htmlInput: {
-            inputMode: 'text',
-            autoCapitalize: 'characters',
-            'aria-label': 'Setup code',
-            style: {
-              textAlign: 'center',
-              fontFamily: 'monospace',
-              fontSize: '1.8rem',
-              letterSpacing: '0.5rem',
-              fontWeight: 600,
+      }
+      body={
+        <TextField
+          value={pin}
+          onChange={e => setPin(e.target.value.replace(/\s/g, '').slice(0, PIN_LENGTH))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') submit();
+          }}
+          autoFocus
+          slotProps={{
+            htmlInput: {
+              inputMode: 'text',
+              autoCapitalize: 'characters',
+              'aria-label': 'Setup code',
+              style: {
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                fontSize: '1.8rem',
+                letterSpacing: '0.5rem',
+                fontWeight: 600,
+              },
             },
-          },
-        }}
-        sx={{ width: 240 }}
-      />
-      <Box sx={{ width: 240 }}>
+          }}
+          sx={{ width: 240 }}
+        />
+      }
+      actions={
         <SecondaryButton onClick={submit} disabled={!ready}>
           Verify
         </SecondaryButton>
-      </Box>
-    </Stack>
+      }
+    />
   );
 }
 
@@ -561,97 +669,171 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
 
 function WifiPickView({
   networks,
-  onPick,
+  onSelect,
+  onConnect,
   onRescan,
 }: {
   networks: string[];
-  onPick: (ssid: string) => void;
+  onSelect: (ssid: string) => void;
+  onConnect: (password: string, ssid: string) => void;
   onRescan: () => void;
 }) {
+  // The currently expanded network (accordion). Only one row is open at a
+  // time; opening a row records the SSID on the FSM via `onSelect` so the
+  // wrong-password recovery still knows which network to retry.
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const toggle = (ssid: string) => {
+    setExpanded(prev => {
+      const next = prev === ssid ? null : ssid;
+      if (next) onSelect(next);
+      return next;
+    });
+  };
+
   return (
-    <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline title="Pick a home network" caption="Choose the Wi-Fi your Reachy will live on." />
-      {networks.length > 0 ? (
-        <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {networks.map(ssid => (
-            <ListItemButton
-              key={ssid}
-              onClick={() => onPick(ssid)}
-              sx={{
-                p: 1.5,
-                borderRadius: '12px',
-                bgcolor: 'background.paper',
-                border: theme => `1px solid ${theme.palette.divider}`,
-              }}
-            >
-              <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', width: '100%' }}>
-                <WifiLockIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-                <Typography sx={{ flex: 1, minWidth: 0, fontSize: TYPO.md }} noWrap>
-                  {ssid}
-                </Typography>
-                <ChevronRightIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
-              </Stack>
-            </ListItemButton>
-          ))}
-        </List>
-      ) : (
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
-          No networks found nearby. Move the robot closer to your router and rescan.
-        </Typography>
-      )}
-      <Button onClick={onRescan} startIcon={<RefreshIcon />} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
-        Rescan
-      </Button>
-    </Stack>
+    <SetupScaffold
+      title="Get Me Online"
+      caption="Connect me to Wi-Fi so I can access all my features and stay up to date."
+      body={
+        networks.length > 0 ? (
+          <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {networks.map(ssid => (
+              <WifiNetworkRow
+                key={ssid}
+                ssid={ssid}
+                expanded={expanded === ssid}
+                onToggle={() => toggle(ssid)}
+                onConnect={password => onConnect(password, ssid)}
+              />
+            ))}
+          </List>
+        ) : (
+          <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
+            No networks found nearby. Move the robot closer to your router and rescan.
+          </Typography>
+        )
+      }
+      actions={
+        <Stack sx={{ alignItems: 'center' }}>
+          <Button onClick={onRescan} startIcon={<RefreshIcon />} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
+            Rescan
+          </Button>
+        </Stack>
+      }
+    />
   );
 }
 
-/* --- 5. password ---------------------------------------------------------- */
-
-function PasswordView({ ssid, onSubmit }: { ssid: string; onSubmit: (psk: string) => void }) {
+/**
+ * A single Wi-Fi network in the pick list. Collapsed it's a tappable row;
+ * expanded it reveals an inline password field + Connect button so the whole
+ * "choose network → enter password" flow stays in one step. The password state
+ * is local and remounts on each expand (`unmountOnExit`) so autofocus fires and
+ * the field starts empty every time.
+ */
+function WifiNetworkRow({
+  ssid,
+  expanded,
+  onToggle,
+  onConnect,
+}: {
+  ssid: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onConnect: (password: string) => void;
+}) {
   const [psk, setPsk] = useState('');
   const [show, setShow] = useState(false);
+
   return (
-    <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline title="The secret handshake" caption={`Enter the password for "${ssid}".`} />
-      <TextField
-        value={psk}
-        onChange={e => setPsk(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Enter' && psk.length > 0) onSubmit(psk);
-        }}
-        type={show ? 'text' : 'password'}
-        label="Wi-Fi password"
-        autoFocus
-        fullWidth
-        sx={{ maxWidth: 320 }}
-        slotProps={{
-          input: {
-            endAdornment: (
-              <InputAdornment position="end">
-                <IconButton
-                  aria-label={show ? 'Hide password' : 'Show password'}
-                  onClick={() => setShow(s => !s)}
-                  edge="end"
-                  size="small"
-                >
-                  {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                </IconButton>
-              </InputAdornment>
-            ),
-          },
-        }}
-      />
-      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', color: 'text.secondary' }}>
-        <LockOutlinedIcon sx={{ fontSize: 14 }} />
-        <Typography sx={{ fontSize: TYPO.xs }}>Encrypted on this phone before it's sent</Typography>
-      </Stack>
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <SecondaryButton onClick={() => onSubmit(psk)} disabled={psk.length === 0}>
-          Connect
-        </SecondaryButton>
-      </Box>
-    </Stack>
+    <Box
+      sx={{
+        borderRadius: `${RADIUS.lg}px`,
+        bgcolor: 'background.paper',
+        border: theme =>
+          `1px solid ${expanded ? alpha(theme.palette.primary.main, 0.55) : theme.palette.divider}`,
+        overflow: 'hidden',
+        transition: 'border-color 200ms ease, box-shadow 200ms ease',
+        boxShadow: theme =>
+          expanded ? `0 2px 12px ${alpha(theme.palette.primary.main, 0.12)}` : 'none',
+      }}
+    >
+      <ListItemButton
+        onClick={onToggle}
+        sx={{ px: 2, py: 1.75, borderRadius: `${RADIUS.lg}px` }}
+      >
+        <Stack direction="row" spacing={1.75} sx={{ alignItems: 'center', width: '100%' }}>
+          <WifiLockIcon
+            sx={{ color: expanded ? 'primary.main' : 'text.secondary', fontSize: 22, transition: 'color 200ms ease' }}
+          />
+          <Typography
+            sx={{ flex: 1, minWidth: 0, fontSize: TYPO.md, fontWeight: expanded ? FONT_WEIGHT.semibold : FONT_WEIGHT.regular }}
+            noWrap
+          >
+            {ssid}
+          </Typography>
+          <ChevronRightIcon
+            sx={{
+              color: 'primary.main',
+              flexShrink: 0,
+              transform: expanded ? 'rotate(90deg)' : 'none',
+              transition: 'transform 220ms cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+          />
+        </Stack>
+      </ListItemButton>
+      <Collapse in={expanded} unmountOnExit>
+        <Stack
+          spacing={2}
+          sx={{
+            px: 2,
+            pb: 2.25,
+            pt: 2,
+            borderTop: theme => `1px solid ${theme.palette.divider}`,
+            bgcolor: theme => alpha(theme.palette.text.primary, 0.015),
+          }}
+        >
+          <TextField
+            value={psk}
+            onChange={e => setPsk(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && psk.length > 0) onConnect(psk);
+            }}
+            type={show ? 'text' : 'password'}
+            label="Wi-Fi password"
+            placeholder={`Password for ${ssid}`}
+            autoFocus
+            fullWidth
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label={show ? 'Hide password' : 'Show password'}
+                      onClick={() => setShow(s => !s)}
+                      edge="end"
+                      size="small"
+                    >
+                      {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', color: 'text.secondary', px: 0.25 }}>
+            <LockOutlinedIcon sx={{ fontSize: 15 }} />
+            <Typography sx={{ fontSize: TYPO.xs, lineHeight: 1.4 }}>
+              Encrypted on this phone before it's sent
+            </Typography>
+          </Stack>
+          <SecondaryButton onClick={() => onConnect(psk)} disabled={psk.length === 0} sx={{ mt: 0.5 }}>
+            Connect
+          </SecondaryButton>
+        </Stack>
+      </Collapse>
+    </Box>
   );
 }
 
@@ -663,28 +845,19 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
     stage === 'joining'
       ? `Joining ${ssid || 'the network'}…`
       : 'Registering with Hugging Face…';
-  return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline title={title} caption={caption} />
-      <CircularProgress size={26} sx={{ color: 'primary.main' }} />
-    </Stack>
-  );
+  return <SetupScaffold hero={<CircularProgress size={26} sx={{ color: 'primary.main' }} />} title={title} caption={caption} />;
 }
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
 
 function LinkAccountView({ onLink, lanIp }: { onLink: () => void; lanIp: string | null }) {
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline
-        title="Link your Reachy"
-        caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
-      />
-      <RobotAddressNote lanIp={lanIp} />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
-        <PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>
-      </Box>
-    </Stack>
+    <SetupScaffold
+      title="Link your Reachy"
+      caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
+      body={<RobotAddressNote lanIp={lanIp} />}
+      actions={<PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>}
+    />
   );
 }
 
@@ -727,61 +900,181 @@ function RobotAddressNote({ lanIp }: { lanIp: string | null }) {
   );
 }
 
-/* --- 7. success ----------------------------------------------------------- */
+/* --- 6c. naming (robot display name over BLE) ----------------------------- */
 
-function SuccessView({
+const MAX_ROBOT_NAME_LENGTH = 64;
+
+/**
+ * Last human step (account linking already ran): give the robot a display name
+ * while the BLE PIN session is still live. Best-effort - "Save" commits the BLE
+ * rename and finishes setup (the FSM swallows a failed rename), so the flow
+ * never dead-ends here. The "settle to sleep" end cue plays on the way out.
+ *
+ * The "Nice to meet you" celebration is owned by the parent (see
+ * `SetupWizardScreen`), so it can cover the naming→done swap without the form
+ * flashing back through. Here we just lock the form once submitted.
+ */
+function NamingView({ onNamed }: { onNamed: (name: string) => void }) {
+  const [name, setName] = useState('');
+  // Latch so a double-tap / Enter-then-tap can't fire the rename twice.
+  const [submitted, setSubmitted] = useState(false);
+  const trimmed = name.trim();
+  const save = () => {
+    if (submitted || trimmed.length === 0) return;
+    setSubmitted(true);
+    onNamed(trimmed);
+  };
+  return (
+    <SetupScaffold
+      hero={<RobotAvatar size={72} />}
+      title="Give Me a Name"
+      caption="Pick a name for me! If you can't decide, Reachy Mini is a great choice."
+      body={
+        <TextField
+          value={name}
+          onChange={e => setName(e.target.value.slice(0, MAX_ROBOT_NAME_LENGTH))}
+          onKeyDown={e => {
+            if (e.key === 'Enter') save();
+          }}
+          placeholder="Reachy Mini"
+          autoFocus
+          fullWidth
+          disabled={submitted}
+          slotProps={{ htmlInput: { maxLength: MAX_ROBOT_NAME_LENGTH, 'aria-label': 'Robot name' } }}
+          sx={{ maxWidth: 320 }}
+        />
+      }
+      actions={
+        <PrimaryButton onClick={save} disabled={submitted || trimmed.length === 0}>
+          Save name
+        </PrimaryButton>
+      }
+    />
+  );
+}
+
+/* --- 7. meet / done (single self-advancing end view) ---------------------- */
+
+/** How long the "meet" view sits before auto-advancing (ms). Long enough for
+ *  the pop-in to settle and the greeting to register, short enough not to
+ *  feel like a dead-end - there's no button, the flow moves on by itself. */
+const MEET_HOLD_MS = 1900;
+
+/**
+ * The single closing view of setup. Merges the old "Nice to meet you" beat and
+ * the "Meet {name}" success screen (which needed an Open button) into one
+ * animated moment that advances on its own:
+ *
+ *  - robot registered in time → jump into a session (`onComplete`);
+ *  - not yet on central → back to the list (`onCancel`), which keeps polling.
+ *
+ * Completion fires while the overlay is still fully opaque, so the App-level
+ * screen transition cross-fades straight from here to the next screen - the
+ * phase swap underneath is never seen.
+ */
+function MeetCelebration({
+  name,
   result,
   onComplete,
-  onBackToList,
+  onCancel,
 }: {
+  name: string;
   result: SetupResult | null;
   onComplete: (result: SetupResult) => void;
-  onBackToList: () => void;
+  onCancel: () => void;
 }) {
   const robot = result?.robot ?? null;
-  const name = robot?.meta?.name ?? robot?.name ?? 'Your Reachy';
+  // Keep latest callbacks in refs so the auto-advance timer arms exactly once
+  // (on mount) regardless of parent re-renders handing us new closures.
+  const onCompleteRef = useRef(onComplete);
+  const onCancelRef = useRef(onCancel);
+  onCompleteRef.current = onComplete;
+  onCancelRef.current = onCancel;
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (robot && result) onCompleteRef.current(result);
+      else onCancelRef.current();
+    }, MEET_HOLD_MS);
+    return () => window.clearTimeout(t);
+  }, [robot, result]);
+
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Box sx={{ position: 'relative' }}>
+    <Box
+      sx={{
+        position: 'fixed',
+        inset: 0,
+        // Above both wizards (setup screen + first-wake-up at 1380) so the
+        // celebration always covers the flow it closes.
+        zIndex: 1600,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        bgcolor: 'background.default',
+        color: 'text.primary',
+        px: 3,
+        // Swallow taps while the celebration is on screen.
+        touchAction: 'none',
+      }}
+    >
+      <Box sx={{ position: 'relative', mb: 3, display: 'flex' }}>
         <motion.div
           initial={{ scale: 0.7, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+          style={{ display: 'flex' }}
         >
           <RobotAvatar size={96} />
         </motion.div>
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ type: 'spring', stiffness: 520, damping: 18, delay: 0.18 }}
-          style={{ position: 'absolute', right: -4, bottom: -4, display: 'flex' }}
-        >
-          <CheckCircleIcon
-            sx={{
-              fontSize: 32,
-              color: STATUS.success,
-              bgcolor: 'background.default',
-              borderRadius: RADIUS.circle,
-            }}
-          />
-        </motion.div>
-      </Box>
-      <Headline
-        title={robot ? `Meet ${name}` : 'Wi-Fi set up!'}
-        caption={
-          robot
-            ? "It's online and ready to chat."
-            : 'Your Reachy joined the network. It will show up in your list in a few moments.'
-        }
-      />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
         {robot ? (
-          <PrimaryButton onClick={() => result && onComplete(result)}>{`Open ${name}`}</PrimaryButton>
-        ) : (
-          <PrimaryButton onClick={onBackToList}>Back to all Reachies</PrimaryButton>
-        )}
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: 'spring', stiffness: 520, damping: 18, delay: 0.18 }}
+            style={{ position: 'absolute', right: -4, bottom: -4, display: 'flex' }}
+          >
+            <CheckCircleIcon
+              sx={{
+                fontSize: 32,
+                color: STATUS.success,
+                bgcolor: 'background.default',
+                borderRadius: RADIUS.circle,
+              }}
+            />
+          </motion.div>
+        ) : null}
       </Box>
-    </Stack>
+      <Stack spacing={0.5} sx={{ alignItems: 'center' }}>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8, y: 6 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1], delay: 0.12 }}
+        >
+          <Typography
+            component="h1"
+            sx={{
+              fontSize: TYPO.hero,
+              fontWeight: FONT_WEIGHT.bold,
+              letterSpacing: '-0.3px',
+              textAlign: 'center',
+              m: 0,
+            }}
+          >
+            {robot ? `Nice to meet you, ${name}` : 'Wi-Fi set up!'}
+          </Typography>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.4, delay: 0.28 }}
+        >
+          <Typography sx={{ fontSize: TYPO.md, color: 'text.secondary', textAlign: 'center', maxWidth: 320 }}>
+            {robot ? "It's online and ready to chat." : "It'll show up in your list shortly."}
+          </Typography>
+        </motion.div>
+      </Stack>
+    </Box>
   );
 }
 
@@ -797,20 +1090,23 @@ function ErrorView({
   onCancel: () => void;
 }) {
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <IconHero tint={STATUS.error}>
-        <ErrorOutlineIcon sx={{ fontSize: 48 }} />
-      </IconHero>
-      <Headline title="Something went wrong" caption={message} />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
+    <SetupScaffold
+      hero={
+        <IconHero tint={STATUS.error}>
+          <ErrorOutlineIcon sx={{ fontSize: 48 }} />
+        </IconHero>
+      }
+      title="Something went wrong"
+      caption={message}
+      actions={
         <Stack spacing={1.25}>
           <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
           <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
             Cancel setup
           </Button>
         </Stack>
-      </Box>
-    </Stack>
+      }
+    />
   );
 }
 
@@ -841,12 +1137,15 @@ function PermissionDeniedView({
     ? 'Reachy Mini needs Bluetooth to set up your robot. Open Settings to allow it, then come back and tap Try again.'
     : 'Reachy Mini needs the Nearby devices permission to find your robot. Tap Try again and allow it - if you dismissed it, enable it in Settings › Apps › Reachy Mini › Permissions.';
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <IconHero>
-        <BluetoothIcon sx={{ fontSize: 48 }} />
-      </IconHero>
-      <Headline title="Allow Bluetooth access" caption={caption} />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
+    <SetupScaffold
+      hero={
+        <IconHero>
+          <BluetoothIcon sx={{ fontSize: 48 }} />
+        </IconHero>
+      }
+      title="Allow Bluetooth access"
+      caption={caption}
+      actions={
         <Stack spacing={1.25}>
           {isIos ? (
             <>
@@ -860,8 +1159,8 @@ function PermissionDeniedView({
             Cancel setup
           </Button>
         </Stack>
-      </Box>
-    </Stack>
+      }
+    />
   );
 }
 
@@ -883,9 +1182,10 @@ function OutdatedView({
   onCancel: () => void;
 }) {
   return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <Headline title="Update from the desktop app" caption={message} />
-      <Box sx={{ width: '100%', maxWidth: 320 }}>
+    <SetupScaffold
+      title="Update from the desktop app"
+      caption={message}
+      actions={
         <Stack spacing={1.25}>
           <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
             Get the desktop app ↗
@@ -896,25 +1196,17 @@ function OutdatedView({
           >
             Open troubleshooting guide ↗
           </Button>
-          <Button
-            onClick={onCancel}
-            sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
-          >
+          <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
             Cancel
           </Button>
         </Stack>
-      </Box>
-    </Stack>
+      }
+    />
   );
 }
 
 /* --- generic busy --------------------------------------------------------- */
 
 function BusyView({ title, caption }: { title: string; caption?: string }) {
-  return (
-    <Stack spacing={3} sx={{ alignItems: 'center', width: '100%' }}>
-      <CircularProgress size={32} sx={{ color: 'primary.main' }} />
-      <Headline title={title} caption={caption} />
-    </Stack>
-  );
+  return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'primary.main' }} />} title={title} caption={caption} />;
 }

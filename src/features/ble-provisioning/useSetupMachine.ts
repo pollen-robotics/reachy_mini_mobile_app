@@ -3,9 +3,12 @@
  *
  * Drives the BLE Wi-Fi provisioning wizard end to end:
  *
- *   permission → scanning → connecting → pin → authenticating
- *     → wifi-scanning → wifi-pick → wifi-password
- *     → wifi-connecting → central-waiting → done
+ *   scanning → connecting → pin → authenticating → wifi-scanning → wifi-pick
+ *     → wifi-connecting → linking-account → central-waiting → naming → done
+ *
+ * Account linking (robot-side HF OAuth) runs BEFORE naming so the robot is
+ * fully online first; naming is the last human step, and the "settle to sleep"
+ * end cue plays right after it, on the way to `done`.
  *
  * Any step can fail into `error` with a `recoverPhase` so "Try again" bounces
  * the user to the right step instead of restarting the whole flow.
@@ -37,14 +40,19 @@ import {
   fetchRobotsFromCentral,
 } from '@/features/auth/fetchRobotsFromCentral';
 import {
+  IDENTIFY_MOVE,
   MIN_WIFI_SETUP_VERSION,
   RobotOutdatedError,
+  SLEEP_MOVE,
+  WAITING_MOVE,
   authenticate,
   connectSealed,
   keyExchange,
+  play,
   readIdentity,
   readNetworkInfo,
   scanWifi,
+  setRobotName,
   toSetupError,
   wifiStatus,
 } from './protocol';
@@ -105,10 +113,17 @@ export interface SetupMachine {
   submitPin: (pin: string) => void;
   rescanWifi: () => void;
   selectNetwork: (ssid: string) => void;
-  submitPassword: (password: string) => void;
+  submitPassword: (password: string, ssid?: string) => void;
+  commitName: (name: string) => void;
+  finishNaming: () => void;
   linkAccount: () => void;
   retry: () => void;
   reset: () => void;
+  /** Rewind one logical step (see `goBack`). */
+  goBack: () => void;
+  /** Whether an in-flow previous step exists; when false the header's Back
+   *  button should exit the wizard instead. */
+  canGoBack: boolean;
 }
 
 export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine {
@@ -163,8 +178,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     void watchConnection((connected) => {
       if (connected) return;
       const p = phaseRef.current;
-      const midFlow =
-        p !== 'permission' && p !== 'scanning' && p !== 'done' && p !== 'error';
+      const midFlow = p !== 'scanning' && p !== 'done' && p !== 'error';
       if (midFlow && mountedRef.current) {
         runIdRef.current += 1; // abort any in-flight chain
         setError({
@@ -274,6 +288,14 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           await stopScanLoop();
           await bleConnect(device.address);
           if (runId !== runIdRef.current || !mountedRef.current) return;
+          // Play the identify move (motion + sound) so the user sees/hears
+          // which physical Reachy they just tapped. Public BLE command (no
+          // PIN). Kept SEQUENTIAL on the shared command/response channel (a
+          // concurrent sendCommand would flush the notification backlog and
+          // could collide with the PIN step); best-effort so a failed cue
+          // never blocks setup.
+          await play(IDENTIFY_MOVE);
+          if (runId !== runIdRef.current || !mountedRef.current) return;
           const id = await readIdentity();
           if (runId !== runIdRef.current || !mountedRef.current) return;
           identityRef.current = id;
@@ -379,21 +401,34 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     })();
   }, [fail, failOutdated, scanWifiResilient]);
 
+  // Selecting a network no longer advances to a separate password phase:
+  // the pick view expands the chosen SSID inline (accordion) and owns the
+  // password entry, so both live in the single `wifi-pick` step. We still
+  // record the SSID so `submitPassword` (and the wrong-password recovery)
+  // has it even without an explicit argument.
   const selectNetwork = useCallback((ssid: string) => {
     setSelectedSsid(ssid);
-    setPhase('wifi-password');
   }, []);
 
   const submitPassword = useCallback(
-    (password: string) => {
-      const ssid = selectedSsid;
+    (password: string, ssidArg?: string) => {
+      const ssid = ssidArg ?? selectedSsid;
       if (!ssid) return;
+      if (ssidArg && ssidArg !== selectedSsid) setSelectedSsid(ssidArg);
       const runId = (runIdRef.current += 1);
       setError(null);
       setPhase('wifi-connecting');
       void (async () => {
         try {
           await connectSealed(ssid, password, pinRef.current, keyexRef.current);
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+
+          // Cue the "waiting" idle (motion + sound) while the join runs. Fired
+          // SEQUENTIALLY (awaited) BEFORE the poll loop: the BLE command/
+          // response channel is shared, so a concurrent PLAY would collide with
+          // the WIFI_STATUS / NETWORK_STATUS reads below. `play` is fire-and-
+          // forget daemon-side and best-effort, so this returns fast.
+          await play(WAITING_MOVE);
           if (runId !== runIdRef.current || !mountedRef.current) return;
 
           // Poll WIFI_STATUS until the robot reports it joined `ssid`, or the
@@ -409,7 +444,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
               setError({
                 code: 'wrong-password',
                 message: 'Could not join the network. The password may be wrong.',
-                recoverPhase: 'wifi-password',
+                recoverPhase: 'wifi-pick',
               });
               setPhase('error');
               return;
@@ -418,7 +453,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
               setError({
                 code: 'timeout',
                 message: "The robot didn't join the network in time. Try again.",
-                recoverPhase: 'wifi-password',
+                recoverPhase: 'wifi-pick',
               });
               setPhase('error');
               return;
@@ -450,19 +485,52 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
             if (runId !== runIdRef.current || !mountedRef.current) return;
           }
 
-          // Stop here and let the user link the robot to their Hugging Face
-          // account via robot-side OAuth (see `linkAccount`): a token-less robot
-          // boots with the central relay disabled and never appears in the list.
-          // The user drives the next step with a tap.
+          // Cue the "waiting" idle again while the account-link step is up
+          // (sequential: the IP poll above has finished, nothing else holds the
+          // BLE channel).
+          await play(WAITING_MOVE);
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+
+          // Joined Wi-Fi → hand off to robot-side HF OAuth first, so the robot
+          // comes fully online before we ask the user to name it. Naming (the
+          // last human step) runs after central registration.
           setPhase('linking-account');
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
-          fail((e as Error).message ?? String(e), 'wifi-password');
+          fail((e as Error).message ?? String(e), 'wifi-pick');
         }
       })();
     },
     [selectedSsid, fail],
   );
+
+  // ── NAMING (robot display name over BLE) ─────────────────────────────────────
+
+  // Fire the rename over BLE, best-effort. Deliberately does NOT change the
+  // phase or bump runId: the naming view plays a short celebration and calls
+  // `finishNaming` when it's done, so the BLE write runs during that beat. A
+  // failed rename (old daemon, expired session, transport hiccup) is swallowed
+  // - naming is non-critical and must never trap the user on setup.
+  const commitName = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    void setRobotName(trimmed).catch(() => {
+      // non-critical: ignore, the user proceeds regardless
+    });
+  }, []);
+
+  // Finish setup out of the naming step (the last human step, now that OAuth
+  // already ran). Plays the "settle to sleep" end cue (mini-deep-sleep) - the
+  // final Bluetooth-setup animation, right after naming - so the first wake-up
+  // wizard, which opens on "Tuck Me In", starts from a robot that's actually
+  // asleep. BLE is still connected here (dropped until unmount), so the cue
+  // lands; best-effort and fire-and-forget, so it never blocks the finish.
+  const finishNaming = useCallback(() => {
+    void play(SLEEP_MOVE);
+    runIdRef.current += 1;
+    setError(null);
+    setPhase('done');
+  }, []);
 
   // ── ACCOUNT LINK (robot-side OAuth) ──────────────────────────────────────────
 
@@ -470,7 +538,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   // we have one, else mDNS). The robot redirects to Hugging Face, handles the
   // callback, stores its OWN durable token, and starts the central relay. We
   // then just wait for it to appear on central — the same poll the wizard
-  // already uses.
+  // already uses. Once it's online we advance to naming (the last human step),
+  // NOT straight to `done`: `finishNaming` closes the flow after the name.
   const linkAccount = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
@@ -486,7 +555,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
         if (runId !== runIdRef.current || !mountedRef.current) return;
         setResult({ hardwareId: hwid, robot: matched });
-        setPhase('done');
+        setPhase('naming');
       } catch (e) {
         if (runId !== runIdRef.current || !mountedRef.current) return;
         fail((e as Error).message ?? String(e), 'linking-account');
@@ -508,6 +577,44 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       setPhase(target);
     }
   }, [error, startScanning]);
+
+  // Step back one logical stage instead of bailing out of the whole wizard.
+  // Any in-flight async chain is aborted first (runId bump). Returning to the
+  // device list is the only destructive hop - it drops the half-open BLE link
+  // and restarts the scan; the intra-session hops keep the GATT link and just
+  // re-show an earlier step (the user re-performs its action to move forward).
+  const goBack = useCallback(() => {
+    const p = phaseRef.current;
+    runIdRef.current += 1;
+    setError(null);
+    switch (p) {
+      case 'connecting':
+      case 'pin':
+        void bleDisconnect();
+        startScanning();
+        return;
+      case 'authenticating':
+      case 'wifi-scanning':
+      case 'wifi-pick':
+        // Still authenticated over BLE - rewind to the PIN step (re-entering it
+        // re-runs key-exchange + Wi-Fi scan).
+        setPhase('pin');
+        return;
+      case 'wifi-connecting':
+      case 'linking-account':
+        setPhase('wifi-pick');
+        return;
+      case 'central-waiting':
+      case 'naming':
+        setPhase('linking-account');
+        return;
+      default:
+        // scanning / done / error: no in-flow previous step.
+        return;
+    }
+  }, [startScanning]);
+
+  const canGoBack = phase !== 'scanning' && phase !== 'done' && phase !== 'error';
 
   const reset = useCallback(() => {
     runIdRef.current += 1;
@@ -545,9 +652,13 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     rescanWifi,
     selectNetwork,
     submitPassword,
+    commitName,
+    finishNaming,
     linkAccount,
     retry,
     reset,
+    goBack,
+    canGoBack,
   };
 }
 

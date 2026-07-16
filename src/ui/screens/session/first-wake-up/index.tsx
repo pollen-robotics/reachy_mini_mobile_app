@@ -6,10 +6,11 @@
  * actuators - microphone, motors, speaker, camera - using the live
  * WebRTC session, then hands back to the normal conversation UI.
  *
- * TEMPORARY behaviour: this gate currently triggers on EVERY connection
- * (no persistence). Once the daemon/SDK `get/set_first_wake_up` flag
- * lands (see `docs/FIRST_WAKE_UP_WIZARD_PLAN.md`), the mount condition in
- * `RobotSessionScreen` will gate this on "not completed yet" instead.
+ * Gating: shown only once per robot. `RobotSessionScreen` reads the robot's
+ * persisted `get_first_wake_up` flag when the session goes live and mounts
+ * this only when it's not completed yet; `onFinish` persists the flag via
+ * `set_first_wake_up`. In dev, `FORCE_FIRST_WAKE_UP_IN_DEV` bypasses the flag
+ * so the flow runs on every connection while iterating.
  *
  * Presentation mirrors `SetupWizardScreen`: a top progress bar, a
  * back/skip header, and one cross-fading step per page. This file is the
@@ -19,19 +20,54 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useRef, useState } from 'react';
-import { Box, Button, Stack, alpha } from '@mui/material';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Box, Button, Stack, Typography, alpha, useTheme } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
-import { STEPS, type Step } from './constants';
+import ReachyViz from '@/ui/widgets/reachy-viz/ReachyViz';
+import FinishConfetti from './FinishConfetti';
+import WakeUpIntro from './WakeUpIntro';
+import { useRobotPose, useStaticPose } from '@/ui/widgets/reachy-viz/useRobotPose';
+import { useSleepPositionCheck, type SleepPositionCheck } from '@/ui/widgets/reachy-viz/useSleepPositionCheck';
+import { SLEEP_POSE } from '@/ui/widgets/reachy-viz/poses';
+import { FINISH_MOVE, FINISH_MOVE_MS, STEPS, type Step } from './constants';
+import { RESET_AFTER_MOVE_MS, resetToDefaultPose } from './motion';
+import { useStepEmotes } from './useStepEmotes';
+import { COLUMN_PX, SCAFFOLD_MIN_HEIGHT, STAGE_HEIGHT, STAGE_MAX_WIDTH } from './shared';
 import WelcomeStep from './steps/WelcomeStep';
 import MicrophoneStep from './steps/MicrophoneStep';
 import MotorStep from './steps/MotorStep';
 import SpeakerStep from './steps/SpeakerStep';
 import CameraStep from './steps/CameraStep';
-import SuccessStep from './steps/SuccessStep';
+
+// Welcome-step layout: how far apart (scene units) the live robot and its
+// target ghost sit while unaligned, and the ghost's fill opacity before it
+// fades out on match.
+const GHOST_SPLIT_OFFSET = 0.11;
+// Re-orient the robot(s) to a 3/4 view (radians) so a bit of the back reads,
+// without moving the (front-on, symmetric) camera. Applies to every wake-up
+// step via the shared viz.
+const WAKE_UP_YAW = Math.PI / 6;
+
+// Closing sequence timing. `FINISH_MOVE` (welcoming2) is fired the instant the
+// last step is confirmed. The robot is then sent back to its neutral
+// (end-of-wake-up) pose - but only AFTER the move fully ends: while a recorded
+// move is playing the daemon drives the motors itself and drops/overrides
+// pose commands, so resetting mid-move did nothing. We wait a small buffer past
+// the move's end, then hold the celebration overlay for RESET_SETTLE_MS so the
+// robot reaches the standard pose under cover before we hand off.
+// `RESET_AFTER_MOVE_MS` + `resetToDefaultPose` now live in `./motion` so every
+// step's emotion can share the same return-to-base behaviour.
+const RESET_SETTLE_MS = 1000;
+const FINISH_CELEBRATION_MS = FINISH_MOVE_MS + RESET_AFTER_MOVE_MS + RESET_SETTLE_MS;
+
+// Let the closing greeting breathe before the confetti bursts: the step UI
+// takes ~0.4 s to fade out and the "all set" line rises in just after, so
+// popping the confetti on the very frame `finishing` flips reads as abrupt.
+// Holding it back a beat makes the pop punctuate the robot's move instead.
+const CONFETTI_DELAY_MS = 2600;
 
 interface FirstWakeUpWizardProps {
   /** Live session handle (hardware access + SDK pass-throughs). */
@@ -44,8 +80,74 @@ interface FirstWakeUpWizardProps {
 
 export default function FirstWakeUpWizard({ session, robotName, onFinish }: FirstWakeUpWizardProps) {
   const [step, setStep] = useState<Step>('welcome');
+  // While true, the closing celebration overlay is on screen (last step
+  // confirmed). Its onDone hands back to the conversation UI.
+  const [finishing, setFinishing] = useState(false);
+  // Confetti is held back a beat after `finishing` (see CONFETTI_DELAY_MS) so
+  // the burst punctuates the greeting rather than firing on the same frame.
+  const [confettiOn, setConfettiOn] = useState(false);
+  // The persistent 3D stage is visible for every step except when a step opens
+  // its troubleshooting view (which replaces the whole column). Reset to true on
+  // each step change; steps flip it off/on via `onStageVisible`.
+  const [stageVisible, setStageVisible] = useState(true);
   const index = STEPS.indexOf(step);
   const fraction = index / (STEPS.length - 1);
+
+  const theme = useTheme();
+
+  // One live pose subscription for the whole wizard, feeding the single
+  // persistent viz. Steps no longer own their own viz, so the canvas/model
+  // never reload between steps.
+  const livePoseRef = useRobotPose(session);
+
+  // Sleep-pose target for the "Tuck Me In" (welcome) step: rendered as a
+  // translucent ghost silhouette in the shared viz, and compared motor-by-motor
+  // against the live pose. Lives in the shell (not the step) because the ghost
+  // must share the persistent canvas with the live robot. The tint goes green
+  // the instant the robot is in position. Cheap to keep mounted; only wired
+  // into the viz while on the welcome step.
+  const sleepPoseRef = useStaticPose(SLEEP_POSE);
+  const sleepCheck = useSleepPositionCheck(session);
+  const sleepBlocked = sleepCheck.hasData && !sleepCheck.inPosition;
+
+  // Ghost/live layout for the welcome step. Until the robot matches the target,
+  // the live robot slides left and the ghost sits right (side-by-side = far
+  // more readable than overlapping). Once matched, the live robot recentres and
+  // the ghost fades out (opacity 0), and its tint goes orange -> green.
+  const onWelcome = step === 'welcome';
+  const matched = sleepCheck.inPosition;
+  const ghostColor = matched ? theme.palette.success.main : theme.palette.primary.main;
+  const liveOffsetX = onWelcome && !matched ? -GHOST_SPLIT_OFFSET : 0;
+  // Dissolve the ghost away (shader discard) once the pose matches.
+  const ghostDissolve = matched ? 1 : 0;
+
+  // Hold the whole wizard behind the animated wake-up intro until the
+  // persistent viz has loaded and settled, so the first step appears in one go
+  // rather than popping in before/around the 3D model. The extra delay past
+  // viz-ready also gives the intro copy ("I'm not quite awake yet…") time to be
+  // read, so it reads as an intentional beat rather than a flash.
+  const [stepReady, setStepReady] = useState(false);
+  const revealTimer = useRef<number | null>(null);
+  const onVizReady = useCallback(() => {
+    if (revealTimer.current !== null) return;
+    revealTimer.current = window.setTimeout(() => setStepReady(true), 2400);
+  }, []);
+  // Safety net: never trap the user on the intro if the viz never signals
+  // ready (e.g. the model fails to load or no pose ever streams).
+  useEffect(() => {
+    const t = window.setTimeout(() => setStepReady(true), 7000);
+    return () => window.clearTimeout(t);
+  }, []);
+  useEffect(
+    () => () => {
+      if (revealTimer.current !== null) window.clearTimeout(revealTimer.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    setStageVisible(true);
+  }, [step]);
 
   // The bring-up wake was deferred to this wizard: the motor step plays
   // the very first wake-up. Track it so we don't replay the move on
@@ -53,6 +155,20 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
   // BEFORE the motor step do we wake on the way out, so the conversation
   // UI always starts from an awake robot.
   const wokenRef = useRef(false);
+  const markWoken = useCallback(() => {
+    wokenRef.current = true;
+  }, []);
+
+  // Shell-owned emote controller: each step's entry emote is fired here as a
+  // navigation EVENT (see `goNext` / `goBack`), never from a step's mount
+  // effect - so StrictMode can't double-fire it and no lifecycle race can start
+  // two overlapping moves. Steps render off `playingStep` / `playedStep`.
+  const { playingStep, playedStep, play: playStepEmote } = useStepEmotes(session, markWoken);
+
+  // A blocking emote is playing => lock BOTH header actions (Back + Skip) so the
+  // user can't rewind or bail mid-move. Only motor/camera/speaker set a playing
+  // step, so this clears automatically on every other step.
+  const navLocked = playingStep !== null;
 
   const handleFinish = useCallback(() => {
     if (!wokenRef.current) {
@@ -62,24 +178,97 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
     onFinish();
   }, [session, onFinish]);
 
+  // Confirming the last step plays the closing emotion IN PLACE: instead of a
+  // full-screen overlay hiding the robot, we keep the live 3D viz on screen,
+  // fade the step UI away, and dress the robot (a light halo + a revealed
+  // "all set" line). The robot performing `FINISH_MOVE` is the reward; the
+  // ambience only frames it. A timer hands back to the conversation after the
+  // move + reset settle. "Skip" bypasses this via handleFinish.
+  //
+  // We mark the robot woken here: on the completion path it's already awake
+  // (the motor step enabled it) and `FINISH_MOVE` is the closing "congrats"
+  // animation, so `handleFinish` must NOT also fire the daemon's wake-up emote
+  // (`wake_up.wav` + trajectory) - that's the "reachy connects" animation from
+  // the no-wizard path and would double up with the celebration.
+  const resetTimer = useRef<number | null>(null);
+  const finishTimer = useRef<number | null>(null);
+  // Cancels the pending neutral-pose retries (see `resetToDefaultPose`), so
+  // none bleed into the conversation UI after handoff.
+  const cancelResetRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+      if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
+      cancelResetRef.current?.();
+    },
+    [],
+  );
+
+  // Hold the confetti back a beat once the finale starts (and drop it again if
+  // we somehow leave the finishing state), so the burst lands after the step UI
+  // has cleared and the "all set" line has risen in.
+  useEffect(() => {
+    if (!finishing) {
+      setConfettiOn(false);
+      return;
+    }
+    const t = window.setTimeout(() => setConfettiOn(true), CONFETTI_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [finishing]);
+
+  const finishWithCelebration = useCallback(() => {
+    wokenRef.current = true;
+    // Fire the closing greeting immediately, then reset to the neutral pose
+    // once the move has finished (see RESET_AFTER_MOVE_MS - resetting mid-move
+    // is a no-op). The robot stays on screen throughout, so the reset reads as
+    // a smooth settle into the neutral pose rather than happening under cover.
+    session.getRobot()?.playRecordedMove(FINISH_MOVE);
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+    resetTimer.current = window.setTimeout(() => {
+      cancelResetRef.current = resetToDefaultPose(session);
+    }, FINISH_MOVE_MS + RESET_AFTER_MOVE_MS);
+    // Hand back once the move + settle have played out (was the celebration
+    // overlay's onDone; now an explicit timer since the staging has no overlay).
+    if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
+    finishTimer.current = window.setTimeout(handleFinish, FINISH_CELEBRATION_MS);
+    setFinishing(true);
+  }, [session, handleFinish]);
+
   const goNext = useCallback(() => {
-    setStep(prev => {
-      const i = STEPS.indexOf(prev);
-      return STEPS[Math.min(i + 1, STEPS.length - 1)];
-    });
-  }, []);
+    const i = STEPS.indexOf(step);
+    if (i >= STEPS.length - 1) {
+      finishWithCelebration();
+      return;
+    }
+    const next = STEPS[i + 1];
+    setStep(next);
+    // Fire the next step's entry emote as part of the transition event (no-op
+    // for steps without one). This is the whole point of the event-driven
+    // wizard: the move is tied to the navigation, not to the step's mount.
+    playStepEmote(next);
+  }, [step, finishWithCelebration, playStepEmote]);
 
   const goBack = useCallback(() => {
-    setStep(prev => {
-      const i = STEPS.indexOf(prev);
-      return STEPS[Math.max(i - 1, 0)];
-    });
-  }, []);
+    const i = STEPS.indexOf(step);
+    const prev = STEPS[Math.max(i - 1, 0)];
+    setStep(prev);
+    // Re-fire the previous step's entry emote (matches the old behaviour where
+    // navigating back remounted the step and auto-played it).
+    playStepEmote(prev);
+  }, [step, playStepEmote]);
 
-  const canGoBack = index > 0 && step !== 'success';
+  const canGoBack = index > 0;
 
   return (
+    // motion.div root so the wizard plays an exit fade when it unmounts (on
+    // finish/skip): the parent `AnimatePresence` (see RobotSessionScreen) keeps
+    // it mounted through the fade, revealing the conversation UI already mounted
+    // behind it instead of hard-cutting on the last frame.
     <Box
+      component={motion.div}
+      initial={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
       sx={{
         position: 'fixed',
         inset: 0,
@@ -103,7 +292,8 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
         />
       </Box>
 
-      {/* Top bar: back on the left, skip on the right (skip hidden on success). */}
+      {/* Top bar: back on the left, skip on the right. Fades away during the
+          closing staging so only the robot + its line remain on screen. */}
       <Stack
         direction="row"
         sx={{
@@ -113,12 +303,16 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
           pb: 1,
           px: 1,
           minHeight: 48,
+          opacity: finishing ? 0 : 1,
+          pointerEvents: finishing ? 'none' : 'auto',
+          transition: 'opacity 0.4s ease',
         }}
       >
         {canGoBack ? (
           <Button
             aria-label="Previous step"
             onClick={goBack}
+            disabled={navLocked}
             startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
             sx={{
               color: 'primary.main',
@@ -133,59 +327,196 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
         ) : (
           <Box />
         )}
-        {step !== 'success' ? (
-          <Button
-            onClick={handleFinish}
-            sx={{
-              color: 'primary.main',
-              textTransform: 'none',
-              fontWeight: FONT_WEIGHT.semibold,
-              fontSize: TYPO.sm,
-              borderRadius: 999,
-            }}
-          >
-            Skip
-          </Button>
-        ) : (
-          <Box />
-        )}
-      </Stack>
-
-      {/* Step content column. */}
-      <Stack sx={{ flex: 1, minHeight: 0, width: '100%', overflowY: 'auto' }}>
-        <Stack
+        <Button
+          onClick={handleFinish}
+          disabled={navLocked}
           sx={{
-            m: 'auto',
-            width: '100%',
-            maxWidth: LAYOUT.contentMaxWidth,
-            px: 3,
-            py: 3,
-            alignItems: 'center',
+            color: 'primary.main',
+            textTransform: 'none',
+            fontWeight: FONT_WEIGHT.semibold,
+            fontSize: TYPO.sm,
+            borderRadius: 999,
           }}
         >
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={step}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.26, ease: [0.4, 0, 0.2, 1] }}
-              style={{ width: '100%' }}
-            >
-              <StepView
-                step={step}
-                session={session}
-                robotName={robotName}
-                onNext={goNext}
-                onFinish={handleFinish}
-                onWoke={() => {
-                  wokenRef.current = true;
-                }}
-              />
-            </motion.div>
-          </AnimatePresence>
-        </Stack>
+          Skip
+        </Button>
       </Stack>
+
+      {/* Step content column: a fixed, full-height frame so every step shares
+          the same skeleton (top-anchored 3D stage, bottom-anchored actions).
+          Only the reserved middle zones vary, so nothing jumps between steps or
+          between a step's internal states. */}
+      <Box sx={{ flex: 1, minHeight: 0, width: '100%', display: 'flex', justifyContent: 'center', overflowY: 'auto' }}>
+        <Box
+          sx={{
+            width: '100%',
+            maxWidth: STAGE_MAX_WIDTH,
+            px: COLUMN_PX,
+            py: 3,
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          {/* Relative anchor that fills the column. The persistent viz is pinned
+              to its top stage region; each step is absolutely stacked over it so
+              its <StageSlot> lines up exactly with the viz behind. */}
+          <Box sx={{ position: 'relative', flex: 1, minHeight: SCAFFOLD_MIN_HEIGHT, width: '100%' }}>
+            {/* Persistent viz: mounted once, pinned to the top region, behind
+                every step. Hidden (but kept mounted) during troubleshooting. */}
+            <Box
+              aria-hidden
+              sx={{
+                position: 'absolute',
+                top: 0,
+                // Full-bleed: cancel the column padding so the canvas reaches
+                // the screen edges. Must match StageSlot's break-out exactly so
+                // step overlays stay aligned with the robot behind them.
+                left: theme => theme.spacing(-COLUMN_PX),
+                right: theme => theme.spacing(-COLUMN_PX),
+                height: STAGE_HEIGHT,
+                zIndex: 0,
+                pointerEvents: 'none',
+                opacity: stageVisible ? 1 : 0,
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              {/* Front-on camera (x=0) so the welcome step's live/ghost split
+                  reads as a clean, symmetric left/right. The robot is angled to
+                  3/4 via `yawOffset` on the welcome step, then eases to face the
+                  user (yaw 0) once past it (reverses on Back). Pulled back so
+                  raised antennas never clip the taller canvas. */}
+              <ReachyViz
+                poseRef={livePoseRef}
+                height={STAGE_HEIGHT}
+                onReady={onVizReady}
+                cameraPosition={[0, 0.4, 0.65]}
+                yawOffset={onWelcome ? WAKE_UP_YAW : 0}
+                offsetX={liveOffsetX}
+                ghostPoseRef={onWelcome ? sleepPoseRef : undefined}
+                ghostColor={ghostColor}
+                ghostDissolve={ghostDissolve}
+                ghostOffsetX={GHOST_SPLIT_OFFSET}
+              />
+            </Box>
+
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={step}
+                initial={{ opacity: 0 }}
+                // Fade the step UI away during the closing staging, leaving the
+                // robot alone on screen.
+                animate={{ opacity: finishing ? 0 : 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: finishing ? 0.4 : 0.24, ease: [0.4, 0, 0.2, 1] }}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  pointerEvents: finishing ? 'none' : undefined,
+                }}
+              >
+                <StepView
+                  step={step}
+                  session={session}
+                  onNext={goNext}
+                  onStageVisible={setStageVisible}
+                  playing={playingStep === step}
+                  played={playedStep === step}
+                  onReplay={() => playStepEmote(step)}
+                  sleepCheck={sleepCheck}
+                  sleepBlocked={sleepBlocked}
+                />
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Closing line, revealed under the robot once the step UI has
+                faded. Sits just below the stage region so it reads as a caption
+                to the robot's greeting. */}
+            {finishing ? (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: STAGE_HEIGHT,
+                  left: 0,
+                  right: 0,
+                  zIndex: 2,
+                  pt: 4,
+                  px: 2,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  pointerEvents: 'none',
+                }}
+              >
+                {/* Same fade + rise-in as the tutorial hints (see e.g. the mic
+                    step): initial y:8, snappy 0.32 s ease. The two lines are
+                    staggered and land just before the confetti pops. */}
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.32, ease: [0.4, 0, 0.2, 1], delay: 0.35 }}
+                >
+                  <Typography
+                    component="h1"
+                    sx={{
+                      fontSize: TYPO.hero,
+                      fontWeight: FONT_WEIGHT.bold,
+                      letterSpacing: '-0.3px',
+                      textAlign: 'center',
+                      m: 0,
+                    }}
+                  >
+                    {robotName ? `${robotName} is all set` : 'All set'}
+                  </Typography>
+                </motion.div>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.32, ease: [0.4, 0, 0.2, 1], delay: 0.5 }}
+                >
+                  <Typography sx={{ mt: 0.5, fontSize: TYPO.md, color: 'text.secondary', textAlign: 'center' }}>
+                    Let&apos;s chat
+                  </Typography>
+                </motion.div>
+              </Box>
+            ) : null}
+          </Box>
+        </Box>
+      </Box>
+
+      {/* Full-view intro gate: covers everything (incl. the top bar) until the
+          persistent viz is ready, so the first step reveals all at once. Instead
+          of a bare spinner it plays the animated "still asleep" intro, then
+          cross-fades away to reveal the first step behind it. */}
+      <AnimatePresence>
+        {!stepReady ? (
+          <motion.div
+            key="wake-up-intro"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 10,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: theme.palette.background.default,
+            }}
+          >
+            <WakeUpIntro />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Closing confetti burst (R3F), rendered BEHIND the robot (see the
+          component's zIndex). Held back a beat after `finishing` (see
+          CONFETTI_DELAY_MS) and mounted only for the finale so it costs nothing
+          otherwise. */}
+      {confettiOn ? <FinishConfetti /> : null}
     </Box>
   );
 }
@@ -193,33 +524,62 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
 function StepView({
   step,
   session,
-  robotName,
   onNext,
-  onFinish,
-  onWoke,
+  onStageVisible,
+  playing,
+  played,
+  onReplay,
+  sleepCheck,
+  sleepBlocked,
 }: {
   step: Step;
   session: RobotSessionHandle;
-  robotName?: string;
   onNext: () => void;
-  onFinish: () => void;
-  /** The motor step calls this once it has woken the robot, so the
-   *  wizard knows the wake already happened and skips it on finish. */
-  onWoke: () => void;
+  /** Steps call this to hide/show the shared persistent viz (e.g. hide it while
+   *  a troubleshooting view owns the whole column). Reset to visible by the
+   *  shell on every step change. */
+  onStageVisible: (visible: boolean) => void;
+  /** True while THIS step's entry emote (fired by the shell) is playing. */
+  playing: boolean;
+  /** True once THIS step's entry emote has finished (reveal confirm controls). */
+  played: boolean;
+  /** Replay THIS step's entry emote (manual "play again"). */
+  onReplay: () => void;
+  /** Sleep-pose comparison (owned by the shell, drives the welcome ghost). */
+  sleepCheck: SleepPositionCheck;
+  /** True when the robot isn't yet in sleep position (welcome step gate). */
+  sleepBlocked: boolean;
 }) {
   switch (step) {
     case 'welcome':
-      return <WelcomeStep robotName={robotName} onNext={onNext} />;
+      return <WelcomeStep session={session} onNext={onNext} check={sleepCheck} blocked={sleepBlocked} />;
     case 'microphone':
-      return <MicrophoneStep session={session} onNext={onNext} />;
+      return <MicrophoneStep session={session} onNext={onNext} onStageVisible={onStageVisible} />;
     case 'motor':
-      return <MotorStep session={session} onNext={onNext} onWoke={onWoke} />;
+      return (
+        <MotorStep
+          onNext={onNext}
+          onStageVisible={onStageVisible}
+          playing={playing}
+          played={played}
+          onReplay={onReplay}
+        />
+      );
     case 'speaker':
-      return <SpeakerStep session={session} onNext={onNext} />;
+      return (
+        <SpeakerStep
+          session={session}
+          onNext={onNext}
+          onStageVisible={onStageVisible}
+          playing={playing}
+          played={played}
+          onReplay={onReplay}
+        />
+      );
     case 'camera':
-      return <CameraStep session={session} onNext={onNext} />;
-    case 'success':
-      return <SuccessStep robotName={robotName} onFinish={onFinish} />;
+      return (
+        <CameraStep session={session} onNext={onNext} onStageVisible={onStageVisible} playing={playing} />
+      );
     default:
       return null;
   }

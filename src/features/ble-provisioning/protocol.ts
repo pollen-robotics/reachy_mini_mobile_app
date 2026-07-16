@@ -135,12 +135,6 @@ export async function readNetworkInfo(): Promise<RobotNetInfo> {
   return parseNetworkStatus(await readCharacteristic(NETWORK_STATUS_CHAR));
 }
 
-/** `PING` → true if the robot answers `PONG`. */
-export async function ping(): Promise<boolean> {
-  const r = await sendCommand('PING', 6000);
-  return r.trim().toUpperCase() === 'PONG';
-}
-
 /** `PIN_<pin>` → true on `OK: Connected`. Opens the 300 s session. */
 export async function authenticate(pin: string): Promise<boolean> {
   const r = await sendCommand(`PIN_${pin}`, 8000);
@@ -169,6 +163,43 @@ export async function scanWifi(): Promise<string[]> {
     return parsed.filter((s): s is string => typeof s === 'string' && s.length > 0);
   } catch {
     return [];
+  }
+}
+
+/**
+ * `SET_NAME <name>` → "OK: Named …" on success. Sets the robot's display name
+ * over BLE at the end of setup. Requires the live PIN session (mutating). The
+ * name may contain spaces. Throws `RobotOutdatedError` on a daemon too old to
+ * know the command; callers treat naming as best-effort and continue anyway.
+ */
+export async function setRobotName(name: string): Promise<void> {
+  const r = await sendCommand(`SET_NAME ${name}`, 10000);
+  if (isUnsupported(r)) throw new RobotOutdatedError();
+  if (isError(r)) throw new Error(r);
+}
+
+// Emotions-library move names played as onboarding cues over BLE. All ship in
+// the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
+// library`), hyphenated-lowercase by convention.
+/** Identify move (motion + sound) played when a robot is picked from the scan list. */
+export const IDENTIFY_MOVE = 'toc-toc-toc';
+/** Idle "I'm busy" cue played while the robot joins Wi-Fi and during naming. */
+export const WAITING_MOVE = 'waiting';
+/** Deep-sleep move that settles the robot into its sleep pose at the end of setup. */
+export const SLEEP_MOVE = 'mini-deep-sleep';
+
+/**
+ * `PLAY <move>` → plays a named recorded move (motion + bundled sound) from the
+ * robot's emotions library. Public BLE command (no PIN), used for onboarding
+ * cues (identify chirp, waiting/sleep). Best-effort: swallow everything, a
+ * failed cue must never block setup. Kept SEQUENTIAL on the shared
+ * command/response channel by callers.
+ */
+export async function play(moveName: string): Promise<void> {
+  try {
+    await sendCommand(`PLAY ${moveName}`, 6000);
+  } catch {
+    // non-critical: ignore
   }
 }
 

@@ -21,7 +21,10 @@
         { "url": "https://huggingface.co/*" },
         { "url": "https://*.hf.space/*" },
         { "url": "https://*.huggingface.co/*" },
-        { "url": "http://reachy-mini.local:8000/*" }
+        { "url": "http://reachy-mini.local:8000/*" },
+        { "url": "http://192.168.*:8000/*" },
+        { "url": "http://10.*:8000/*" },
+        { "url": "http://172.*:8000/*" }
       ]
     },
     {

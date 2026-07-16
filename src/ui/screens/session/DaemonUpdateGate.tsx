@@ -62,6 +62,24 @@ const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshoo
  *  grab the desktop app that can update a daemon too old for OTA. */
 const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
 
+/**
+ * Dev-only escape hatch for the blocking update prompt.
+ *
+ * When testing a daemon built from a feature branch (e.g. one based on
+ * v1.8.3 while the latest public release is v1.8.4), `isDaemonOutdated`
+ * trips and the prompt offers no skip - so a developer connected to a
+ * branch build would be forced through "Update now", which pip-installs
+ * the released wheel and wipes the branch under test. This flag surfaces a
+ * discreet "Skip" button that dismisses the gate for the session without
+ * touching the daemon.
+ *
+ * `import.meta.env.DEV` is statically `false` in any production build
+ * (`vite build`), so both the flag and the button are tree-shaken away:
+ * release users always hit the hard gate. Matches the dev-only gating of
+ * `VITE_DEV_HF_TOKEN` & friends in `shared/env.ts`.
+ */
+const DEV_BYPASS = import.meta.env.DEV;
+
 /** True only when the daemon version is known AND new enough to self-update
  *  over the WebRTC data channel. Unknown / unparseable → false (→ desktop
  *  app fallback). */
@@ -265,6 +283,9 @@ export default function DaemonUpdateGate({
           )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) ||
             effectivePhase === 'failed') && <TroubleshootingLink />}
+          {effectivePhase === 'prompt' && DEV_BYPASS && (
+            <DevSkipButton onClick={handleContinue} />
+          )}
         </Stack>
       </Stack>
     </Box>
@@ -376,6 +397,27 @@ function UpdateLogDisclosure({
         </Box>
       </Collapse>
     </Stack>
+  );
+}
+
+/** Dev-only "skip the gate" button. Rendered only in dev builds (see
+ *  {@link DEV_BYPASS}); dismisses the prompt for the session so a branch
+ *  daemon can be tested without being force-updated to the latest wheel. */
+function DevSkipButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      onClick={onClick}
+      size="small"
+      sx={{
+        textTransform: 'none',
+        fontSize: TYPO.xs,
+        fontWeight: FONT_WEIGHT.medium,
+        color: 'text.secondary',
+        opacity: 0.7,
+      }}
+    >
+      Skip for now (dev build)
+    </Button>
   );
 }
 
