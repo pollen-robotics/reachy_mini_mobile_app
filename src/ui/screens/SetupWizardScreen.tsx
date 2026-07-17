@@ -210,9 +210,8 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
 
       {/* Single, self-advancing end view. Mounted above the phase-keyed content
           so it fully covers the naming→done swap (see `namedCelebration`) and
-          auto-completes on a timer - merging what used to be two screens (the
-          "Nice to meet you" beat + the "Meet {name}" success view with an Open
-          button) into one animated moment. */}
+          auto-completes on a timer - one animated moment that plays the "Nice to
+          meet you" beat and the "Meet {name}" success line back to back. */}
       {namedCelebration !== null ? (
         <MeetCelebration
           name={namedCelebration}

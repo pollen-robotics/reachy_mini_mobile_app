@@ -1,8 +1,7 @@
 /**
  * Intro / loading gate for the first wake-up wizard.
  *
- * Replaces the bare spinner that used to cover the wizard while the persistent
- * 3D viz loads. Instead of a neutral progress ring, it frames the wait in the
+ * Covers the wizard while the persistent 3D viz loads, framing the wait in the
  * wizard's own voice: the robot is "still asleep" and we're about to wake it up
  * together. Purely presentational and self-contained - the shell keeps it on
  * screen until the viz is ready (see `stepReady` in `index.tsx`), then
@@ -15,8 +14,8 @@ import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 // Scale pop-in with a slight overshoot, staggered line by line - the same
 // "earned entrance" as the post-OAuth welcome screen (WelcomeBackScreen), so
-// the intro copy visibly animates in instead of a fade that's too subtle to
-// notice. The `1.56` control-point overshoots past scale 1 before settling.
+// the intro copy visibly animates in (a plain fade is too subtle to notice).
+// The `1.56` control-point overshoots past scale 1 before settling.
 const POP_IN_EASE: [number, number, number, number] = [0.34, 1.56, 0.64, 1];
 const POP_IN_DURATION = 0.6;
 

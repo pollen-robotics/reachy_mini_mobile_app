@@ -34,9 +34,9 @@ export const STEP_MOVES = {
 
 /**
  * Closing emotion played IN PLACE when the wizard's last step is confirmed
- * (there's no dedicated success screen or overlay anymore - the live 3D viz
- * stays on screen while the robot plays it). Lives in the default emotions
- * library, so no dataset override.
+ * (there's no dedicated success screen or overlay - the live 3D viz stays on
+ * screen while the robot plays it). Lives in the default emotions library, so
+ * no dataset override.
  */
 export const FINISH_MOVE = 'welcoming2';
 
@@ -71,7 +71,7 @@ export const MEET_ME_REVEAL_MS = 16200;
 
 /**
  * How long the speaker check keeps its button disabled (spinner, "Playing…")
- * after a tap, covering the `proud2` move + its (now untrimmed) sound.
+ * after a tap, covering the `proud2` move + its (untrimmed) sound.
  * `playRecordedMove` is fire-and-forget (no completion ack), so this is a timer.
  * Measured from the HF dataset: motion ~3.18 s, sound ~3.52 s → size to the
  * longer (sound) plus a small dispatch buffer so the button never re-enables

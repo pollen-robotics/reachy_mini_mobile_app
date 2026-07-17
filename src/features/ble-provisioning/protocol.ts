@@ -205,9 +205,8 @@ export async function play(moveName: string): Promise<void> {
  * `SLEEP` → plays the daemon's canonical goto-sleep trajectory: interpolate to
  * the EXACT sleep pose (+ go_sleep sound), then release torque. Public BLE
  * command (no PIN), used as the end-of-setup "settle to sleep" cue so the
- * first-wake-up wizard opens on a robot placed precisely in its sleep pose.
- * Preferred over `play('mini-deep-sleep')`, whose recorded end frame lands a
- * few degrees off the canonical pose the wizard's ghost compares against.
+ * first-wake-up wizard opens on a robot placed precisely in its sleep pose -
+ * the exact canonical pose the wizard's ghost compares against.
  * Best-effort like `play`: a failed cue must never block the finish.
  */
 export async function gotoSleep(): Promise<void> {

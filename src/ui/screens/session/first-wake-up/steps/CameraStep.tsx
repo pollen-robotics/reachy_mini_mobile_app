@@ -68,8 +68,8 @@ export default function CameraStep({
       setHasFrame(false);
       const detach = attachVideo(el);
       const onPlaying = () => setHasFrame(true);
-      // Cover several events: on a late mount (this step now comes AFTER the
-      // motor step, so the WebRTC stream is usually already live) the first
+      // Cover several events: on a late mount (this step comes AFTER the motor
+      // step, so the WebRTC stream is usually already live) the first
       // frame can land before/around the attach, and different webviews fire
       // different events.
       const events = ['loadeddata', 'loadedmetadata', 'canplay', 'playing'] as const;

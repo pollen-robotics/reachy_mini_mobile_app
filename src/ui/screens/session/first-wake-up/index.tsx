@@ -97,8 +97,8 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
   const theme = useTheme();
 
   // One live pose subscription for the whole wizard, feeding the single
-  // persistent viz. Steps no longer own their own viz, so the canvas/model
-  // never reload between steps.
+  // persistent viz. Steps don't own their own viz, so the canvas/model never
+  // reload between steps.
   const livePoseRef = useRobotPose(session);
 
   // Sleep-pose target for the "Tuck Me In" (welcome) step: rendered as a
@@ -179,12 +179,11 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
     onFinish();
   }, [session, onFinish]);
 
-  // Confirming the last step plays the closing emotion IN PLACE: instead of a
-  // full-screen overlay hiding the robot, we keep the live 3D viz on screen,
-  // fade the step UI away, and dress the robot (a light halo + a revealed
-  // "all set" line). The robot performing `FINISH_MOVE` is the reward; the
-  // ambience only frames it. A timer hands back to the conversation after the
-  // move + reset settle. "Skip" bypasses this via handleFinish.
+  // Confirming the last step plays the closing emotion IN PLACE: the live 3D viz
+  // stays on screen, the step UI fades away, and the robot is dressed (a light
+  // halo + a revealed "all set" line). The robot performing `FINISH_MOVE` is the
+  // reward; the ambience only frames it. A timer hands back to the conversation
+  // after the move + reset settle. "Skip" bypasses this via handleFinish.
   //
   // We mark the robot woken here: on the completion path it's already awake
   // (the motor step enabled it) and `FINISH_MOVE` is the closing "congrats"
@@ -228,8 +227,8 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
     resetTimer.current = window.setTimeout(() => {
       cancelResetRef.current = resetToDefaultPose(session);
     }, FINISH_MOVE_MS + RESET_AFTER_MOVE_MS);
-    // Hand back once the move + settle have played out (was the celebration
-    // overlay's onDone; now an explicit timer since the staging has no overlay).
+    // Hand back once the move + settle have played out, via an explicit timer
+    // (the staging keeps the live viz, there's no overlay with an onDone).
     if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
     finishTimer.current = window.setTimeout(handleFinish, FINISH_CELEBRATION_MS);
     setFinishing(true);
@@ -253,8 +252,8 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
     const i = STEPS.indexOf(step);
     const prev = STEPS[Math.max(i - 1, 0)];
     setStep(prev);
-    // Re-fire the previous step's entry emote (matches the old behaviour where
-    // navigating back remounted the step and auto-played it).
+    // Re-fire the previous step's entry emote so navigating back replays it
+    // (the shell owns emote playback; steps don't auto-play on mount).
     playStepEmote(prev);
   }, [step, playStepEmote]);
 

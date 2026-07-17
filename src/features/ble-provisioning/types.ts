@@ -32,10 +32,9 @@ export type SetupPhase =
   | 'error'; // recoverable failure (see SetupError.recoverPhase)
 
 /**
- * What we learn about the robot once connected over BLE. The advert carries
- * a human-readable per-robot label ("Reachy Mini #XXXX", from the hardware-id
- * hash) for scan-time disambiguation, but the canonical identity below is
- * read post-connect from the GATT characteristics.
+ * What we learn about the robot once connected over BLE. The advert carries no
+ * per-robot identity (all robots advertise "ReachyMini"); the canonical
+ * identity below is read post-connect from the GATT characteristics.
  */
 export interface RobotIdentity {
   /** SHA-256 prefix of the audio serial, read from the HARDWARE_ID GATT char.

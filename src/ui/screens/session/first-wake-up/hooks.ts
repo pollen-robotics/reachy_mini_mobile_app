@@ -5,8 +5,8 @@
  * troubleshooting toggle plumbing (a local view that hides the shared viz).
  * Factoring it here keeps the steps focused on their own hardware logic.
  *
- * Nav-locking while an emote plays is no longer a step concern: the wizard
- * shell owns the emote lifecycle (see `useStepEmotes`) and derives the lock
+ * Nav-locking while an emote plays is a wizard-shell concern, not a step one:
+ * the shell owns the emote lifecycle (see `useStepEmotes`) and derives the lock
  * from `playingStep` directly.
  */
 import { useCallback, useState } from 'react';

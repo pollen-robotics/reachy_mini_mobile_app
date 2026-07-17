@@ -15,8 +15,8 @@
  * the race at the source, matching how the conversation engine only plays moves
  * from events (LLM tool calls, FSM transitions), never from React mounts.
  *
- * Steps become presentational: they render off `playingStep` / `playedStep` and
- * replay via `play(step)`; they no longer own the move, the reveal timer, or the
+ * Steps are presentational: they render off `playingStep` / `playedStep` and
+ * replay via `play(step)`; they don't own the move, the reveal timer, or the
  * return-to-neutral.
  *
  * Reveal timing is event-driven, not fixed: instead of guessing the move length

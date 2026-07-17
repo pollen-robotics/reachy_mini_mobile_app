@@ -127,9 +127,9 @@ export interface SetupMachine {
 }
 
 export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine {
-  // The wizard opens straight on the scan step. The old intro/permission
-  // screen was pure wording - the OS Bluetooth permission prompt is raised
-  // by the scan attempt itself (see `startScanning`'s error handling).
+  // The wizard opens straight on the scan step: there's no separate intro or
+  // permission screen - the OS Bluetooth permission prompt is raised by the
+  // scan attempt itself (see `startScanning`'s error handling).
   const [phase, setPhase] = useState<SetupPhase>('scanning');
   const [error, setError] = useState<SetupError | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -401,11 +401,11 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     })();
   }, [fail, failOutdated, scanWifiResilient]);
 
-  // Selecting a network no longer advances to a separate password phase:
-  // the pick view expands the chosen SSID inline (accordion) and owns the
-  // password entry, so both live in the single `wifi-pick` step. We still
-  // record the SSID so `submitPassword` (and the wrong-password recovery)
-  // has it even without an explicit argument.
+  // Selecting a network doesn't advance to a separate password phase: the pick
+  // view expands the chosen SSID inline (accordion) and owns the password entry,
+  // so both live in the single `wifi-pick` step. We still record the SSID so
+  // `submitPassword` (and the wrong-password recovery) has it even without an
+  // explicit argument.
   const selectNetwork = useCallback((ssid: string) => {
     setSelectedSsid(ssid);
   }, []);
@@ -519,15 +519,14 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     });
   }, []);
 
-  // Finish setup out of the naming step (the last human step, now that OAuth
-  // already ran). Fires the canonical goto-sleep trajectory (SLEEP command) -
-  // the final Bluetooth-setup cue, right after naming - so the first wake-up
-  // wizard, which opens on "Tuck Me In", starts from a robot placed EXACTLY in
-  // its sleep pose. `gotoSleep` interpolates to the exact pose + releases
-  // torque, unlike the old `mini-deep-sleep` recorded anim whose end frame
-  // landed a few degrees off the wizard's ghost. BLE is still connected here
-  // (dropped until unmount), so the cue lands; best-effort and fire-and-forget,
-  // so it never blocks the finish.
+  // Finish setup out of the naming step (the last human step, after OAuth).
+  // Fires the canonical goto-sleep trajectory (SLEEP command) - the final
+  // Bluetooth-setup cue, right after naming - so the first wake-up wizard, which
+  // opens on "Tuck Me In", starts from a robot placed EXACTLY in its sleep pose.
+  // `gotoSleep` interpolates to the exact pose + releases torque, which the
+  // wizard's ghost compares against. BLE is still connected here (dropped until
+  // unmount), so the cue lands; best-effort and fire-and-forget, so it never
+  // blocks the finish.
   const finishNaming = useCallback(() => {
     void gotoSleep();
     runIdRef.current += 1;

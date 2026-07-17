@@ -50,11 +50,9 @@ import {
 export const CMD_CHAR = '12345678-1234-5678-1234-56789abcdef1';
 export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
 // Read-only status characteristics exposed by the daemon's GATT app. Reading
-// these (post-connect) is how we learn the robot's canonical identity +
-// Wi-Fi state. The advert now carries a human-readable per-robot label
-// ("Reachy Mini #XXXX", derived from the hardware-id hash) to disambiguate
-// units in a scan, but the authoritative hardware id still comes from the
-// GATT characteristic below.
+// these (post-connect) is how we learn the robot's identity + Wi-Fi state; the
+// advert carries no per-robot identity (all robots advertise "ReachyMini"), so
+// the hardware id comes from the GATT characteristic below.
 export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
 export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
 
