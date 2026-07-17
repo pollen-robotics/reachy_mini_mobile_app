@@ -32,7 +32,7 @@ export default function WelcomeStep({
 }) {
   // Release motor torque on entry so the user can physically place the robot in
   // its sleep position by hand. Without this the robot may still be holding
-  // (torque on) after the setup's mini-deep-sleep cue or a previously-awake
+  // (torque on) after the setup's go-to-sleep cue (SLEEP) or a previously-awake
   // session, and it wouldn't budge. Limp mode also makes the live joint stream
   // reflect exactly where the user puts it, which is what the position check
   // reads. Fire-and-forget; guarded so it runs once.

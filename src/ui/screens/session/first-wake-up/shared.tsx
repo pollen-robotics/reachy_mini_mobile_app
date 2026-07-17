@@ -88,7 +88,7 @@ export function Headline({ title, caption }: { title: string; caption?: string }
  * heights so the layout never jumps between steps or between a step's internal
  * states:
  *
- *   [ STAGE ]     top-anchored, fixed 300px  -> the persistent 3D viz sits here
+ *   [ STAGE ]     top-anchored, fixed STAGE_HEIGHT  -> the persistent 3D viz sits here
  *   [ HEADLINE ]  title + caption, min height
  *   [ FEEDBACK ]  the variable middle slot (status, bars, slider…), reserved
  *   [ spacer ]    flex-grow, absorbs the leftover height

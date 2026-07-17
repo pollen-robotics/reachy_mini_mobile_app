@@ -202,7 +202,7 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
                 flexDirection: 'column',
               }}
             >
-              <StepView m={m} onCancel={onCancel} onComplete={onComplete} onNamed={handleNamed} />
+              <StepView m={m} onCancel={onCancel} onNamed={handleNamed} />
             </Box>
           </motion.div>
         </AnimatePresence>
@@ -230,14 +230,12 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
 function StepView({
   m,
   onCancel,
-  onComplete,
   onNamed,
 }: {
   m: SetupMachine;
   onCancel: () => void;
-  onComplete: (result: SetupResult) => void;
   /** Commit the chosen name + advance out of naming, driving the top-level
-   *  celebration overlay (see `SetupWizardScreen`). */
+   *  celebration view (see `SetupWizardScreen`). */
   onNamed: (name: string) => void;
 }) {
   if (m.phase === 'error' && m.error) {

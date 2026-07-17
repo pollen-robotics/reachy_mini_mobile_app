@@ -56,8 +56,8 @@ const WAKE_UP_YAW = Math.PI / 6;
 // (end-of-wake-up) pose - but only AFTER the move fully ends: while a recorded
 // move is playing the daemon drives the motors itself and drops/overrides
 // pose commands, so resetting mid-move did nothing. We wait a small buffer past
-// the move's end, then hold the celebration overlay for RESET_SETTLE_MS so the
-// robot reaches the standard pose under cover before we hand off.
+// the move's end, then keep the step UI faded out for RESET_SETTLE_MS so the
+// robot reaches the standard pose in place before we hand off.
 // `RESET_AFTER_MOVE_MS` + `resetToDefaultPose` now live in `./motion` so every
 // step's emotion can share the same return-to-base behaviour.
 const RESET_SETTLE_MS = 1000;
@@ -80,8 +80,9 @@ interface FirstWakeUpWizardProps {
 
 export default function FirstWakeUpWizard({ session, robotName, onFinish }: FirstWakeUpWizardProps) {
   const [step, setStep] = useState<Step>('welcome');
-  // While true, the closing celebration overlay is on screen (last step
-  // confirmed). Its onDone hands back to the conversation UI.
+  // While true, the closing finale is on screen (last step confirmed): the step
+  // UI fades out and the robot plays the closing move in place. A timer then
+  // hands back to the conversation UI.
   const [finishing, setFinishing] = useState(false);
   // Confetti is held back a beat after `finishing` (see CONFETTI_DELAY_MS) so
   // the burst punctuates the greeting rather than firing on the same frame.

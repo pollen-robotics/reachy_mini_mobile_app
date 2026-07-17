@@ -33,17 +33,18 @@ export const STEP_MOVES = {
 } as const;
 
 /**
- * Closing emotion played when the wizard's last step is confirmed (there's no
- * dedicated success screen anymore). Lives in the default emotions library, so
- * no dataset override. Runs in parallel with the celebration overlay handoff.
+ * Closing emotion played IN PLACE when the wizard's last step is confirmed
+ * (there's no dedicated success screen or overlay anymore - the live 3D viz
+ * stays on screen while the robot plays it). Lives in the default emotions
+ * library, so no dataset override.
  */
 export const FINISH_MOVE = 'welcoming2';
 
 /**
  * Duration of the `FINISH_MOVE` animation (~4.33 s measured from its recorded
- * timestamps). The closing celebration overlay stays up for this long so it
- * covers the robot for the full move instead of cutting away mid-animation.
- * Keep in sync if `FINISH_MOVE` changes.
+ * timestamps). The finale keeps the step UI faded out for this long so the
+ * robot plays the full move before we hand back, instead of cutting away
+ * mid-animation. Keep in sync if `FINISH_MOVE` changes.
  */
 export const FINISH_MOVE_MS = 4300;
 
@@ -80,10 +81,10 @@ export const SPEAKER_PLAY_MS = 4000;
 
 /**
  * How long the camera step keeps its confirm button disabled (spinner) for the
- * `curious1` move it plays on entry. The button also waits for the first video
- * frame, so it enables only once BOTH the move finished AND the feed is live.
- * Measured from the HF dataset: motion ~11.78 s, sound ~9.94 s → size to the
- * longer (motion) plus a small dispatch buffer.
+ * `curious1` move it plays on entry. `playRecordedMove` is fire-and-forget (no
+ * completion ack), so this is a timer sized to the move duration. Measured from
+ * the HF dataset: motion ~11.78 s, sound ~9.94 s → size to the longer (motion)
+ * plus a small dispatch buffer.
  */
 export const CAMERA_PLAY_MS = 12000;
 
