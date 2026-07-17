@@ -43,10 +43,10 @@ import {
   IDENTIFY_MOVE,
   MIN_WIFI_SETUP_VERSION,
   RobotOutdatedError,
-  SLEEP_MOVE,
   WAITING_MOVE,
   authenticate,
   connectSealed,
+  gotoSleep,
   keyExchange,
   play,
   readIdentity,
@@ -520,13 +520,16 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   }, []);
 
   // Finish setup out of the naming step (the last human step, now that OAuth
-  // already ran). Plays the "settle to sleep" end cue (mini-deep-sleep) - the
-  // final Bluetooth-setup animation, right after naming - so the first wake-up
-  // wizard, which opens on "Tuck Me In", starts from a robot that's actually
-  // asleep. BLE is still connected here (dropped until unmount), so the cue
-  // lands; best-effort and fire-and-forget, so it never blocks the finish.
+  // already ran). Fires the canonical goto-sleep trajectory (SLEEP command) -
+  // the final Bluetooth-setup cue, right after naming - so the first wake-up
+  // wizard, which opens on "Tuck Me In", starts from a robot placed EXACTLY in
+  // its sleep pose. `gotoSleep` interpolates to the exact pose + releases
+  // torque, unlike the old `mini-deep-sleep` recorded anim whose end frame
+  // landed a few degrees off the wizard's ghost. BLE is still connected here
+  // (dropped until unmount), so the cue lands; best-effort and fire-and-forget,
+  // so it never blocks the finish.
   const finishNaming = useCallback(() => {
-    void play(SLEEP_MOVE);
+    void gotoSleep();
     runIdRef.current += 1;
     setError(null);
     setPhase('done');

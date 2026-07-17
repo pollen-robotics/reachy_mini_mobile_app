@@ -185,8 +185,6 @@ export async function setRobotName(name: string): Promise<void> {
 export const IDENTIFY_MOVE = 'toc-toc-toc';
 /** Idle "I'm busy" cue played while the robot joins Wi-Fi and during naming. */
 export const WAITING_MOVE = 'waiting';
-/** Deep-sleep move that settles the robot into its sleep pose at the end of setup. */
-export const SLEEP_MOVE = 'mini-deep-sleep';
 
 /**
  * `PLAY <move>` → plays a named recorded move (motion + bundled sound) from the
@@ -198,6 +196,23 @@ export const SLEEP_MOVE = 'mini-deep-sleep';
 export async function play(moveName: string): Promise<void> {
   try {
     await sendCommand(`PLAY ${moveName}`, 6000);
+  } catch {
+    // non-critical: ignore
+  }
+}
+
+/**
+ * `SLEEP` → plays the daemon's canonical goto-sleep trajectory: interpolate to
+ * the EXACT sleep pose (+ go_sleep sound), then release torque. Public BLE
+ * command (no PIN), used as the end-of-setup "settle to sleep" cue so the
+ * first-wake-up wizard opens on a robot placed precisely in its sleep pose.
+ * Preferred over `play('mini-deep-sleep')`, whose recorded end frame lands a
+ * few degrees off the canonical pose the wizard's ghost compares against.
+ * Best-effort like `play`: a failed cue must never block the finish.
+ */
+export async function gotoSleep(): Promise<void> {
+  try {
+    await sendCommand('SLEEP', 6000);
   } catch {
     // non-critical: ignore
   }
