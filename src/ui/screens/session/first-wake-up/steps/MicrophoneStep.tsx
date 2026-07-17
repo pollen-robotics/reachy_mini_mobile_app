@@ -29,15 +29,26 @@ const tap = keyframes`
   100% { transform: translateY(-14px); }
 `;
 
-/** Live smoothed level above which we count the mic as "hearing" you. Set so a
- *  deliberate scratch/voice registers but ambient room noise doesn't trip it -
- *  the check is a "does the mic work" confidence beat, not a hair-trigger. */
-const DETECTION_THRESHOLD = 0.32;
-/** Seconds of sustained sound required to pass the mic check. */
-const DETECTION_DURATION_REQUIRED = 2;
-/** A quiet gap tolerated before the progress resets. Generous so a natural
- *  pause between scratches doesn't wipe the user's progress. */
+// Detection runs on the hook's `activity` signal (onset strength), NOT raw
+// amplitude. Steady ambient noise reads ~0 there, so none of this trips on a
+// quiet-but-humming room. Hysteresis (two thresholds) stops the gate from
+// chattering when activity hovers near the edge.
+/** Cross this to count as "input happening" (gate opens). */
+const ACTIVITY_ON = 0.28;
+/** Drop below this before the gate closes again (must be < ACTIVITY_ON). */
+const ACTIVITY_OFF = 0.14;
+/** Credits needed to pass. Roughly: a handful of taps, or ~1.5 s of scratch. */
+const DETECTION_REQUIRED = 1.6;
+/** Each fresh onset (rising edge) is worth this much credit - this is what
+ *  makes short taps count for something instead of barely nudging the bar. */
+const TAP_CREDIT = 0.32;
+/** Credit per second of sustained activity at full strength (covers scratching). */
+const SUSTAIN_GAIN = 1;
+/** A quiet gap tolerated before progress resets. Generous so a natural pause
+ *  between taps doesn't wipe the user's progress. */
 const DETECTION_GRACE_PERIOD = 1.5;
+/** Clamp on per-frame dt so a stalled tab can't dump a huge chunk of credit. */
+const MAX_DT = 0.2;
 
 export default function MicrophoneStep({
   session,
@@ -49,40 +60,52 @@ export default function MicrophoneStep({
   onStageVisible: (visible: boolean) => void;
 }) {
   const { trouble, openTrouble, closeTrouble } = useTroubleshoot(onStageVisible);
-  const { level, isActive } = useRobotMicLevel(session);
+  const { level, activity, isActive } = useRobotMicLevel(session);
   const [progress, setProgress] = useState(0);
   const [complete, setComplete] = useState(false);
 
   const accumulatedRef = useRef(0);
   const lastTickRef = useRef<number | null>(null);
+  const lastLoudRef = useRef<number | null>(null);
+  const gateOpenRef = useRef(false);
   const doneRef = useRef(false);
 
-  const detected = isActive && level > DETECTION_THRESHOLD;
-
-  // Accumulate sustained sound. Rubbing Reachy's head (or talking near
-  // it) feeds its mic; a few seconds of that fills the bar and advances.
+  // Turn the onset `activity` into progress. Two ways to earn credit:
+  //   1. a discrete tap  -> a chunk (TAP_CREDIT) on each rising edge
+  //   2. sustained scratch -> dt * activity while the gate stays open
+  // Ambient noise -> activity ~0 -> gate never opens -> zero accumulation, so
+  // neither the bar nor the progress climbs "for nothing".
   useEffect(() => {
     if (complete) return;
     const now = Date.now() / 1000;
-    if (detected) {
-      if (lastTickRef.current != null) accumulatedRef.current += now - lastTickRef.current;
-      lastTickRef.current = now;
-      setProgress(Math.min(accumulatedRef.current / DETECTION_DURATION_REQUIRED, 1));
-      if (accumulatedRef.current >= DETECTION_DURATION_REQUIRED && !doneRef.current) {
-        doneRef.current = true;
-        setComplete(true);
-        setProgress(1);
-        window.setTimeout(onNext, 900);
-      }
-    } else if (lastTickRef.current != null) {
-      const gap = now - lastTickRef.current;
-      if (gap > DETECTION_GRACE_PERIOD) {
+    const dt = lastTickRef.current == null ? 0 : Math.min(now - lastTickRef.current, MAX_DT);
+    lastTickRef.current = now;
+
+    // Hysteresis: once open, tolerate a lower level before closing.
+    const open = gateOpenRef.current ? activity > ACTIVITY_OFF : activity > ACTIVITY_ON;
+
+    if (open) {
+      if (!gateOpenRef.current) accumulatedRef.current += TAP_CREDIT; // rising edge = a tap
+      accumulatedRef.current += dt * activity * SUSTAIN_GAIN; // scratch
+      gateOpenRef.current = true;
+      lastLoudRef.current = now;
+    } else {
+      gateOpenRef.current = false;
+      if (lastLoudRef.current != null && now - lastLoudRef.current > DETECTION_GRACE_PERIOD) {
         accumulatedRef.current = 0;
-        lastTickRef.current = null;
-        setProgress(0);
+        lastLoudRef.current = null;
       }
     }
-  }, [level, detected, complete, onNext]);
+
+    const next = Math.min(accumulatedRef.current / DETECTION_REQUIRED, 1);
+    setProgress(next);
+    if (accumulatedRef.current >= DETECTION_REQUIRED && !doneRef.current) {
+      doneRef.current = true;
+      setComplete(true);
+      setProgress(1);
+      window.setTimeout(onNext, 900);
+    }
+  }, [activity, complete, onNext]);
 
   // Calm, low-churn copy: keyed off progress (not the instantaneous `detected`
   // flag, which flickers around the threshold) so each phrase change is a
@@ -133,7 +156,7 @@ export default function MicrophoneStep({
       feedback={
         <Stack spacing={1.5} sx={{ width: '100%', maxWidth: 320, alignItems: 'center' }}>
           <Box sx={{ width: '100%' }}>
-            <FrequencyBars level={level} isActive={isActive} height={56} />
+            <FrequencyBars level={Math.max(level, activity)} isActive={isActive} height={56} />
           </Box>
           <Box sx={{ width: '100%' }}>
             <LinearProgress
@@ -153,7 +176,10 @@ export default function MicrophoneStep({
           {/* Tutorial-style hint: each new phrase fades + rises in as the old
               one fades + rises out. `mode="wait"` sequences them so they never
               overlap; the reserved height keeps the layout from jumping. */}
-          <Box sx={{ position: 'relative', width: '100%', minHeight: 40, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <Box
+            aria-live="polite"
+            sx={{ position: 'relative', width: '100%', minHeight: 40, display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+          >
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={status}

@@ -16,7 +16,7 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -30,6 +30,7 @@ import {
   TextField,
   Typography,
   alpha,
+  type Theme,
 } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
@@ -81,8 +82,7 @@ const PHASE_FRACTION: Record<SetupPhase, number> = {
   'wifi-pick': 0.56,
   'wifi-connecting': 0.76,
   'linking-account': 0.82,
-  'central-waiting': 0.88,
-  naming: 0.94,
+  'central-waiting': 0.92,
   done: 1,
   error: 0,
 };
@@ -101,21 +101,6 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
   const fraction = useClampedProgress(m.phase);
   const showProgress = m.phase !== 'error';
   const step = stepFromFraction(fraction);
-
-  // Name greeted by the closing "meet" celebration. Owned HERE (not in
-  // NamingView) so the overlay outlives the naming→done phase swap and stays on
-  // top of it the whole time. If it lived in NamingView, the phase change would
-  // unmount it and the naming form would flash back through. Committing the name
-  // + advancing to `done` happen up front, so the swap runs hidden behind the
-  // opaque overlay. The overlay is the single, self-advancing end view (no
-  // button) - it fires completion while still opaque, so the App-level screen
-  // transition takes over without ever revealing an intermediate view.
-  const [namedCelebration, setNamedCelebration] = useState<string | null>(null);
-  const handleNamed = (name: string) => {
-    m.commitName(name);
-    setNamedCelebration(name);
-    m.finishNaming();
-  };
 
   return (
     <Stack
@@ -202,23 +187,20 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
                 flexDirection: 'column',
               }}
             >
-              <StepView m={m} onCancel={onCancel} onNamed={handleNamed} />
+              <StepView m={m} onCancel={onCancel} />
             </Box>
           </motion.div>
         </AnimatePresence>
       </Stack>
 
       {/* Single, self-advancing end view. Mounted above the phase-keyed content
-          so it fully covers the naming→done swap (see `namedCelebration`) and
-          auto-completes on a timer - one animated moment that plays the "Nice to
-          meet you" beat and the "Meet {name}" success line back to back. */}
-      {namedCelebration !== null ? (
-        <MeetCelebration
-          name={namedCelebration}
-          result={m.result}
-          onComplete={onComplete}
-          onCancel={onCancel}
-        />
+          so it fully covers the terminal `done` phase (which renders nothing
+          underneath) and auto-completes on a timer - one animated "you're all
+          set" moment before the App-level screen transition takes over. Naming
+          the robot now happens in the first wake-up wizard, so this is a neutral
+          success beat, not a "meet {name}" screen. */}
+      {m.phase === 'done' ? (
+        <MeetCelebration result={m.result} onComplete={onComplete} onCancel={onCancel} />
       ) : null}
     </Stack>
   );
@@ -229,13 +211,9 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
 function StepView({
   m,
   onCancel,
-  onNamed,
 }: {
   m: SetupMachine;
   onCancel: () => void;
-  /** Commit the chosen name + advance out of naming, driving the top-level
-   *  celebration view (see `SetupWizardScreen`). */
-  onNamed: (name: string) => void;
 }) {
   if (m.phase === 'error' && m.error) {
     // An outdated robot can't be fixed by retrying the BLE flow - it needs a
@@ -279,8 +257,6 @@ function StepView({
       );
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
-    case 'naming':
-      return <NamingView onNamed={onNamed} />;
     case 'linking-account':
       return <LinkAccountView onLink={m.linkAccount} lanIp={m.robotLanIp} />;
     case 'central-waiting':
@@ -317,14 +293,19 @@ function useClampedProgress(phase: SetupPhase): number {
 function stepFromFraction(f: number): number {
   if (f < 0.42) return 1;
   if (f < 0.72) return 2;
-  if (f < 0.97) return 3;
+  // Account linking + central registration (fractions 0.82 / 0.92) are the
+  // final perceived step, so users actually see "Step 4 of 4" during that wait
+  // (the terminal `done` phase is instantly covered by the celebration).
+  if (f < 0.8) return 3;
   return TOTAL_STEPS;
 }
 
 function Headline({ title, caption }: { title: string; caption?: string }) {
   return (
     <Stack spacing={0.75} sx={{ alignItems: 'center', textAlign: 'center' }}>
-      <Typography sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold }}>{title}</Typography>
+      <Typography component="h1" sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold, m: 0 }}>
+        {title}
+      </Typography>
       {caption ? (
         <Typography sx={{ fontSize: TYPO.md, color: 'text.secondary', maxWidth: 320, lineHeight: 1.5 }}>
           {caption}
@@ -367,6 +348,32 @@ function SecondaryButton(props: React.ComponentProps<typeof Button>) {
         py: 1.25,
         ...props.sx,
       }}
+    />
+  );
+}
+
+/**
+ * Shared "paper card" surface for the selectable rows (device list, Wi-Fi list):
+ * an elevated `background.paper` fill + a divider border that emphasises to
+ * primary when the row is active (closest / expanded). Dark-mode ready via theme
+ * tokens. Returns an `sx` fragment to spread into the row's own `sx`.
+ */
+function paperCardSx(active: boolean, radius: number = RADIUS.lg) {
+  return {
+    bgcolor: 'background.paper',
+    borderRadius: `${radius}px`,
+    border: (theme: Theme) =>
+      `1px solid ${active ? alpha(theme.palette.primary.main, 0.5) : theme.palette.divider}`,
+  };
+}
+
+/** Text-only button with the wizard's shared "secondary action" styling (used
+ *  for the Cancel actions across the error views). */
+function TextButton(props: React.ComponentProps<typeof Button>) {
+  return (
+    <Button
+      {...props}
+      sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold, ...props.sx }}
     />
   );
 }
@@ -540,10 +547,7 @@ function DeviceRow({
       onClick={onTap}
       sx={{
         p: 1.5,
-        borderRadius: '14px',
-        bgcolor: 'background.paper',
-        border: theme =>
-          `1px solid ${isClosest ? alpha(theme.palette.primary.main, 0.5) : theme.palette.divider}`,
+        ...paperCardSx(isClosest, 14),
       }}
     >
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center', width: '100%' }}>
@@ -608,7 +612,8 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
               bgcolor: 'background.paper',
               borderRadius: `${RADIUS.lg}px`,
               border: theme => `1px solid ${alpha(theme.palette.text.primary, 0.22)}`,
-              boxShadow: '0 3px 10px rgba(0, 0, 0, 0.12)',
+              boxShadow: theme =>
+                `0 3px 10px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.5 : 0.12)}`,
               overflow: 'hidden',
               transform: 'rotateX(2deg) rotateY(-2deg)',
               transformStyle: 'preserve-3d',
@@ -742,14 +747,13 @@ function WifiNetworkRow({
 }) {
   const [psk, setPsk] = useState('');
   const [show, setShow] = useState(false);
+  // Ties the toggle button to the collapsible password panel for assistive tech.
+  const panelId = useId();
 
   return (
     <Box
       sx={{
-        borderRadius: `${RADIUS.lg}px`,
-        bgcolor: 'background.paper',
-        border: theme =>
-          `1px solid ${expanded ? alpha(theme.palette.primary.main, 0.55) : theme.palette.divider}`,
+        ...paperCardSx(expanded),
         overflow: 'hidden',
         transition: 'border-color 200ms ease, box-shadow 200ms ease',
         boxShadow: theme =>
@@ -758,6 +762,8 @@ function WifiNetworkRow({
     >
       <ListItemButton
         onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
         sx={{ px: 2, py: 1.75, borderRadius: `${RADIUS.lg}px` }}
       >
         <Stack direction="row" spacing={1.75} sx={{ alignItems: 'center', width: '100%' }}>
@@ -780,7 +786,7 @@ function WifiNetworkRow({
           />
         </Stack>
       </ListItemButton>
-      <Collapse in={expanded} unmountOnExit>
+      <Collapse in={expanded} unmountOnExit id={panelId}>
         <Stack
           spacing={2}
           sx={{
@@ -897,60 +903,7 @@ function RobotAddressNote({ lanIp }: { lanIp: string | null }) {
   );
 }
 
-/* --- 6c. naming (robot display name over BLE) ----------------------------- */
-
-const MAX_ROBOT_NAME_LENGTH = 64;
-
-/**
- * Last human step (account linking already ran): give the robot a display name
- * while the BLE PIN session is still live. Best-effort - "Save" commits the BLE
- * rename and finishes setup (the FSM swallows a failed rename), so the flow
- * never dead-ends here. The "settle to sleep" end cue plays on the way out.
- *
- * The "Nice to meet you" celebration is owned by the parent (see
- * `SetupWizardScreen`), so it can cover the naming→done swap without the form
- * flashing back through. Here we just lock the form once submitted.
- */
-function NamingView({ onNamed }: { onNamed: (name: string) => void }) {
-  const [name, setName] = useState('');
-  // Latch so a double-tap / Enter-then-tap can't fire the rename twice.
-  const [submitted, setSubmitted] = useState(false);
-  const trimmed = name.trim();
-  const save = () => {
-    if (submitted || trimmed.length === 0) return;
-    setSubmitted(true);
-    onNamed(trimmed);
-  };
-  return (
-    <SetupScaffold
-      hero={<RobotAvatar size={72} />}
-      title="Give Me a Name"
-      caption="Pick a name for me! If you can't decide, Reachy Mini is a great choice."
-      body={
-        <TextField
-          value={name}
-          onChange={e => setName(e.target.value.slice(0, MAX_ROBOT_NAME_LENGTH))}
-          onKeyDown={e => {
-            if (e.key === 'Enter') save();
-          }}
-          placeholder="Reachy Mini"
-          autoFocus
-          fullWidth
-          disabled={submitted}
-          slotProps={{ htmlInput: { maxLength: MAX_ROBOT_NAME_LENGTH, 'aria-label': 'Robot name' } }}
-          sx={{ maxWidth: 320 }}
-        />
-      }
-      actions={
-        <PrimaryButton onClick={save} disabled={submitted || trimmed.length === 0}>
-          Save name
-        </PrimaryButton>
-      }
-    />
-  );
-}
-
-/* --- 7. meet / done (single self-advancing end view) ---------------------- */
+/* --- 7. done (single self-advancing end view) ----------------------------- */
 
 /** How long the "meet" view sits before auto-advancing (ms). Long enough for
  *  the pop-in to settle and the greeting to register, short enough not to
@@ -958,24 +911,22 @@ function NamingView({ onNamed }: { onNamed: (name: string) => void }) {
 const MEET_HOLD_MS = 1900;
 
 /**
- * The single closing view of setup. Merges the old "Nice to meet you" beat and
- * the "Meet {name}" success screen (which needed an Open button) into one
- * animated moment that advances on its own:
+ * The single closing view of setup: one animated "you're all set" moment that
+ * advances on its own (no button):
  *
- *  - robot registered in time → jump into a session (`onComplete`);
+ *  - robot registered in time → jump into a session (`onComplete`), where the
+ *    first wake-up wizard runs and the user names the robot;
  *  - not yet on central → back to the list (`onCancel`), which keeps polling.
  *
  * Completion fires while the overlay is still fully opaque, so the App-level
  * screen transition cross-fades straight from here to the next screen - the
- * phase swap underneath is never seen.
+ * terminal `done` phase underneath (which renders nothing) is never seen.
  */
 function MeetCelebration({
-  name,
   result,
   onComplete,
   onCancel,
 }: {
-  name: string;
   result: SetupResult | null;
   onComplete: (result: SetupResult) => void;
   onCancel: () => void;
@@ -1058,7 +1009,7 @@ function MeetCelebration({
               m: 0,
             }}
           >
-            {robot ? `Nice to meet you, ${name}` : 'Wi-Fi set up!'}
+            {robot ? "You're all set!" : 'Wi-Fi set up!'}
           </Typography>
         </motion.div>
         <motion.div
@@ -1098,9 +1049,7 @@ function ErrorView({
       actions={
         <Stack spacing={1.25}>
           <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
-          <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
-            Cancel setup
-          </Button>
+          <TextButton onClick={onCancel}>Cancel setup</TextButton>
         </Stack>
       }
     />
@@ -1152,9 +1101,7 @@ function PermissionDeniedView({
           ) : (
             <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
           )}
-          <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
-            Cancel setup
-          </Button>
+          <TextButton onClick={onCancel}>Cancel setup</TextButton>
         </Stack>
       }
     />
@@ -1193,9 +1140,7 @@ function OutdatedView({
           >
             Open troubleshooting guide ↗
           </Button>
-          <Button onClick={onCancel} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
-            Cancel
-          </Button>
+          <TextButton onClick={onCancel}>Cancel</TextButton>
         </Stack>
       }
     />

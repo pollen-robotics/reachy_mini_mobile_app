@@ -103,23 +103,17 @@ export function toSetupError(reply: string, fallbackPhase: SetupPhase): SetupErr
   return { code: 'unknown', message: msg || 'Something went wrong.', recoverPhase: fallbackPhase };
 }
 
-/** Read the robot's identity (hardware id + current network status). */
+/** Read the robot's identity (hardware id). */
 export async function readIdentity(): Promise<RobotIdentity> {
-  // Both reads are best-effort: an older daemon may not expose them, and we
-  // don't want a missing characteristic to abort the whole setup.
+  // Best-effort: an older daemon may not expose the characteristic, and we
+  // don't want a missing read to abort the whole setup.
   let hardwareId: string | null = null;
-  let networkStatus: string | null = null;
   try {
     hardwareId = await readCharacteristic(HARDWARE_ID_CHAR);
   } catch {
     hardwareId = null;
   }
-  try {
-    networkStatus = await readCharacteristic(NETWORK_STATUS_CHAR);
-  } catch {
-    networkStatus = null;
-  }
-  return { hardwareId: hardwareId || null, networkStatus: networkStatus || null };
+  return { hardwareId: hardwareId || null };
 }
 
 /**
@@ -166,24 +160,12 @@ export async function scanWifi(): Promise<string[]> {
   }
 }
 
-/**
- * `SET_NAME <name>` → "OK: Named …" on success. Sets the robot's display name
- * over BLE at the end of setup. Requires the live PIN session (mutating). The
- * name may contain spaces. Throws `RobotOutdatedError` on a daemon too old to
- * know the command; callers treat naming as best-effort and continue anyway.
- */
-export async function setRobotName(name: string): Promise<void> {
-  const r = await sendCommand(`SET_NAME ${name}`, 10000);
-  if (isUnsupported(r)) throw new RobotOutdatedError();
-  if (isError(r)) throw new Error(r);
-}
-
 // Emotions-library move names played as onboarding cues over BLE. All ship in
 // the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
 // library`), hyphenated-lowercase by convention.
 /** Identify move (motion + sound) played when a robot is picked from the scan list. */
 export const IDENTIFY_MOVE = 'toc-toc-toc';
-/** Idle "I'm busy" cue played while the robot joins Wi-Fi and during naming. */
+/** Idle "I'm busy" cue played while the robot joins Wi-Fi and links its account. */
 export const WAITING_MOVE = 'waiting';
 
 /**

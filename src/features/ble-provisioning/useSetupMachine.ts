@@ -4,11 +4,14 @@
  * Drives the BLE Wi-Fi provisioning wizard end to end:
  *
  *   scanning → connecting → pin → authenticating → wifi-scanning → wifi-pick
- *     → wifi-connecting → linking-account → central-waiting → naming → done
+ *     → wifi-connecting → linking-account → central-waiting → done
  *
- * Account linking (robot-side HF OAuth) runs BEFORE naming so the robot is
- * fully online first; naming is the last human step, and the "settle to sleep"
- * end cue plays right after it, on the way to `done`.
+ * Account linking (robot-side HF OAuth) is the last human step: once the robot
+ * registers on central the flow settles to sleep and finishes. Naming the robot
+ * now happens in the first wake-up wizard (over the live session), not here, so
+ * the BLE flow ends the moment the robot is online. The "settle to sleep" end
+ * cue still plays on the way to `done` so the wake-up wizard's "Tuck Me In"
+ * step starts from a robot placed exactly in its sleep pose.
  *
  * Any step can fail into `error` with a `recoverPhase` so "Try again" bounces
  * the user to the right step instead of restarting the whole flow.
@@ -52,7 +55,6 @@ import {
   readIdentity,
   readNetworkInfo,
   scanWifi,
-  setRobotName,
   toSetupError,
   wifiStatus,
 } from './protocol';
@@ -98,7 +100,6 @@ export interface SetupMachine {
   error: SetupError | null;
   scanning: boolean;
   devices: BleDevice[];
-  identity: RobotIdentity | null;
   networks: string[];
   selectedSsid: string | null;
   result: SetupResult | null;
@@ -114,8 +115,6 @@ export interface SetupMachine {
   rescanWifi: () => void;
   selectNetwork: (ssid: string) => void;
   submitPassword: (password: string, ssid?: string) => void;
-  commitName: (name: string) => void;
-  finishNaming: () => void;
   linkAccount: () => void;
   retry: () => void;
   reset: () => void;
@@ -134,7 +133,6 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const [error, setError] = useState<SetupError | null>(null);
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<BleDevice[]>([]);
-  const [identity, setIdentity] = useState<RobotIdentity | null>(null);
   const [networks, setNetworks] = useState<string[]>([]);
   const [selectedSsid, setSelectedSsid] = useState<string | null>(null);
   const [result, setResult] = useState<SetupResult | null>(null);
@@ -298,9 +296,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           if (runId !== runIdRef.current || !mountedRef.current) return;
           const id = await readIdentity();
           if (runId !== runIdRef.current || !mountedRef.current) return;
+          // Keep only in a ref: the hardware id is read later by `linkAccount`
+          // to match the robot on central. Nothing in the UI renders it.
           identityRef.current = id;
-          setIdentity(id);
-          // Name guess for display: prefer the advertised name, else generic.
           setPhase('pin');
         } catch {
           if (runId !== runIdRef.current || !mountedRef.current) return;
@@ -491,9 +489,10 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           await play(WAITING_MOVE);
           if (runId !== runIdRef.current || !mountedRef.current) return;
 
-          // Joined Wi-Fi → hand off to robot-side HF OAuth first, so the robot
-          // comes fully online before we ask the user to name it. Naming (the
-          // last human step) runs after central registration.
+          // Joined Wi-Fi → hand off to robot-side HF OAuth, the last human step
+          // of setup, so the robot comes fully online and registers on central
+          // before we finish. (Naming now happens later, in the first wake-up
+          // wizard over the live session.)
           setPhase('linking-account');
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
@@ -504,44 +503,22 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     [selectedSsid, fail],
   );
 
-  // ── NAMING (robot display name over BLE) ─────────────────────────────────────
-
-  // Fire the rename over BLE, best-effort. Deliberately does NOT change the
-  // phase or bump runId: the naming view plays a short celebration and calls
-  // `finishNaming` when it's done, so the BLE write runs during that beat. A
-  // failed rename (old daemon, expired session, transport hiccup) is swallowed
-  // - naming is non-critical and must never trap the user on setup.
-  const commitName = useCallback((name: string) => {
-    const trimmed = name.trim();
-    if (trimmed.length === 0) return;
-    void setRobotName(trimmed).catch(() => {
-      // non-critical: ignore, the user proceeds regardless
-    });
-  }, []);
-
-  // Finish setup out of the naming step (the last human step, after OAuth).
-  // Fires the canonical goto-sleep trajectory (SLEEP command) - the final
-  // Bluetooth-setup cue, right after naming - so the first wake-up wizard, which
-  // opens on "Tuck Me In", starts from a robot placed EXACTLY in its sleep pose.
-  // `gotoSleep` interpolates to the exact pose + releases torque, which the
-  // wizard's ghost compares against. BLE is still connected here (dropped until
-  // unmount), so the cue lands; best-effort and fire-and-forget, so it never
-  // blocks the finish.
-  const finishNaming = useCallback(() => {
-    void gotoSleep();
-    runIdRef.current += 1;
-    setError(null);
-    setPhase('done');
-  }, []);
-
-  // ── ACCOUNT LINK (robot-side OAuth) ──────────────────────────────────────────
+  // ── ACCOUNT LINK (robot-side OAuth) - the last human step ────────────────────
 
   // Open the robot's OAuth entry point in the system browser (by LAN IP when
   // we have one, else mDNS). The robot redirects to Hugging Face, handles the
   // callback, stores its OWN durable token, and starts the central relay. We
   // then just wait for it to appear on central — the same poll the wizard
-  // already uses. Once it's online we advance to naming (the last human step),
-  // NOT straight to `done`: `finishNaming` closes the flow after the name.
+  // already uses. Once it's online we finish setup: naming is no longer a BLE
+  // step (it now lives in the first wake-up wizard over the live session).
+  //
+  // Right before `done` we fire the canonical goto-sleep trajectory (SLEEP
+  // command) - the final Bluetooth-setup cue - so the first wake-up wizard,
+  // which opens on "Tuck Me In", starts from a robot placed EXACTLY in its
+  // sleep pose. `gotoSleep` interpolates to the exact pose + releases torque,
+  // which the wizard's ghost compares against. BLE is still connected here
+  // (dropped on unmount), so we AWAIT the ack to guarantee the write lands
+  // before `done`; still best-effort (errors swallowed) so it never blocks.
   const linkAccount = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
@@ -557,7 +534,15 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
         if (runId !== runIdRef.current || !mountedRef.current) return;
         setResult({ hardwareId: hwid, robot: matched });
-        setPhase('naming');
+        // Settle to the exact sleep pose and AWAIT the ack before finishing.
+        // The first wake-up wizard opens on "Tuck Me In" and compares the live
+        // pose against this canonical sleep pose, and BLE is torn down on
+        // unmount - so the SLEEP write MUST land before `done` lets the finale
+        // auto-advance and drop the link. `gotoSleep` swallows its own errors,
+        // so a failed cue still never blocks the finish.
+        await gotoSleep();
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+        setPhase('done');
       } catch (e) {
         if (runId !== runIdRef.current || !mountedRef.current) return;
         fail((e as Error).message ?? String(e), 'linking-account');
@@ -572,13 +557,21 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setError(null);
     if (target === 'scanning') {
       startScanning();
-    } else {
-      // Re-enter the relevant step; the user re-performs the action (pin,
-      // password, …). Bumping runId invalidates any stale chain.
-      runIdRef.current += 1;
-      setPhase(target);
+      return;
     }
-  }, [error, startScanning]);
+    if (target === 'wifi-scanning') {
+      // `wifi-scanning` is a transient busy state with no view of its own (its
+      // BusyView just spins), so parking on it would strand the user on a dead
+      // spinner. Re-run the actual scan instead - it re-sets the phase AND
+      // fires `scanWifiResilient`, landing back on `wifi-pick`.
+      rescanWifi();
+      return;
+    }
+    // Re-enter the relevant step; the user re-performs the action (pin,
+    // password, …). Bumping runId invalidates any stale chain.
+    runIdRef.current += 1;
+    setPhase(target);
+  }, [error, startScanning, rescanWifi]);
 
   // Step back one logical stage instead of bailing out of the whole wizard.
   // Any in-flight async chain is aborted first (runId bump). Returning to the
@@ -607,7 +600,6 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         setPhase('wifi-pick');
         return;
       case 'central-waiting':
-      case 'naming':
         setPhase('linking-account');
         return;
       default:
@@ -630,7 +622,6 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setError(null);
     setScanning(false);
     setDevices([]);
-    setIdentity(null);
     setNetworks([]);
     setSelectedSsid(null);
     setResult(null);
@@ -642,7 +633,6 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     error,
     scanning,
     devices,
-    identity,
     networks,
     selectedSsid,
     result,
@@ -654,8 +644,6 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     rescanWifi,
     selectNetwork,
     submitPassword,
-    commitName,
-    finishNaming,
     linkAccount,
     retry,
     reset,

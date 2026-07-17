@@ -48,13 +48,10 @@ import {
 } from '@/features/conversation-settings';
 import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
 import { useDaemonState } from '@/features/daemon-state';
+import { MAX_ROBOT_NAME_LENGTH } from '@/features/robot-session/sdk-types';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { FONT_WEIGHT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
-
-/** Mirrors the setup wizard's naming cap so a rename here can't exceed
- *  what the daemon accepts (it trims/caps server-side anyway). */
-const MAX_ROBOT_NAME_LENGTH = 64;
 
 /** How long after the last keystroke to auto-commit the rename. Long
  *  enough not to fire mid-word, short enough to feel immediate. Enter
@@ -494,12 +491,18 @@ export function ConversationSettingsPanel({
                   onBlur={() => void handleRename()}
                   placeholder={robotName}
                   fullWidth
-                  size="small"
+                  size="medium"
                   slotProps={{
                     htmlInput: { maxLength: MAX_ROBOT_NAME_LENGTH, 'aria-label': 'Robot name' },
                     input: {
                       endAdornment: <RenameStatus step={renameStep} hasError={Boolean(renameError)} />,
                     },
+                  }}
+                  sx={{
+                    // Card-like surface: `background.paper` reads white in light
+                    // mode and the elevated dark surface in dark mode, so the
+                    // field stands out from the panel background like the cards.
+                    '& .MuiOutlinedInput-root': { bgcolor: 'background.paper' },
                   }}
                 />
                 {renameError && (

@@ -89,8 +89,9 @@ export const SPEAKER_PLAY_MS = 4000;
 export const CAMERA_PLAY_MS = 12000;
 
 /** Ordered steps. Drives both the router and the progress bar. The last step
- *  finishes the wizard (no dedicated success screen). */
-export const STEPS = ['welcome', 'microphone', 'motor', 'camera', 'speaker'] as const;
+ *  (naming) finishes the wizard: saving the name plays the closing celebration
+ *  (no dedicated success screen). */
+export const STEPS = ['welcome', 'microphone', 'motor', 'camera', 'speaker', 'name'] as const;
 export type Step = (typeof STEPS)[number];
 
 /**

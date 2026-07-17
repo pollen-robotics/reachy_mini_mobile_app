@@ -5,8 +5,9 @@
  */
 
 import type { ReactNode } from 'react';
-import { Box, Button, Stack, Typography, alpha } from '@mui/material';
+import { Box, Button, CircularProgress, Stack, Typography, alpha } from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
@@ -73,7 +74,9 @@ export function StageSlot({ children, height = STAGE_HEIGHT }: { children?: Reac
 export function Headline({ title, caption }: { title: string; caption?: string }) {
   return (
     <Stack spacing={0.75} sx={{ alignItems: 'center', textAlign: 'center' }}>
-      <Typography sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold }}>{title}</Typography>
+      <Typography component="h1" sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold, m: 0 }}>
+        {title}
+      </Typography>
       {caption ? (
         <Typography sx={{ fontSize: TYPO.md, color: 'text.secondary', maxWidth: 320, lineHeight: 1.5, px: 2 }}>
           {caption}
@@ -250,6 +253,70 @@ export function TroubleLink({ label, onClick }: { label: string; onClick: () => 
 /** Thin separator between two inline links. */
 export function LinkDivider() {
   return <Box sx={{ width: '1px', height: 14, bgcolor: 'divider' }} />;
+}
+
+/** 16px inline spinner tinted to match the outlined primary button, for the
+ *  "action in flight" state used as a PrimaryButton `startIcon`. */
+export function ButtonSpinner() {
+  return <CircularProgress size={16} sx={{ color: 'primary.main' }} />;
+}
+
+/**
+ * Shared actions block for the "fire an emote, then confirm it worked" steps
+ * (Motor, Speaker). Three states, tested in this order:
+ *   - `playing`  -> disabled primary with a spinner. Checked FIRST so a replay
+ *                   from the confirmed state puts the spinner back on the button.
+ *   - `!played`  -> primary that fires the emote for the first time.
+ *   - confirmed  -> primary "yes it worked" + a replay / troubleshoot links row.
+ */
+export function EmoteStepActions({
+  playing,
+  played,
+  onConfirm,
+  onReplay,
+  onTrouble,
+  labels,
+}: {
+  playing: boolean;
+  played: boolean;
+  onConfirm: () => void;
+  onReplay: () => void;
+  onTrouble: () => void;
+  labels: {
+    /** Primary label while the emote plays, e.g. "Moving…". */
+    playing: string;
+    /** Primary label that fires the emote the first time, e.g. "Make Reachy move". */
+    start: string;
+    /** Primary label that confirms success, e.g. "Yes, it moved". */
+    confirm: string;
+    /** Replay link label, e.g. "Move again". */
+    replay: string;
+    /** Troubleshoot link label, e.g. "It didn't move". */
+    trouble: string;
+  };
+}) {
+  if (playing) {
+    return (
+      <PrimaryButton disabled startIcon={<ButtonSpinner />}>
+        {labels.playing}
+      </PrimaryButton>
+    );
+  }
+  if (!played) {
+    return <PrimaryButton onClick={onReplay}>{labels.start}</PrimaryButton>;
+  }
+  return (
+    <>
+      <PrimaryButton startIcon={<CheckRoundedIcon />} onClick={onConfirm}>
+        {labels.confirm}
+      </PrimaryButton>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+        <SubtleLink label={labels.replay} onClick={onReplay} />
+        <LinkDivider />
+        <TroubleLink label={labels.trouble} onClick={onTrouble} />
+      </Stack>
+    </>
+  );
 }
 
 function FooterLink({ label, onClick }: { label: string; onClick: () => void }) {

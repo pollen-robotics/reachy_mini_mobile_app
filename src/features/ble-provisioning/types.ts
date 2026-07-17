@@ -19,16 +19,15 @@ import type { CentralRobotEntry } from '@/features/auth/fetchRobotsFromCentral';
  */
 export type SetupPhase =
   | 'scanning' // BLE scan for advertising robots
-  | 'connecting' // GATT connect + read identity (hwid, net status)
+  | 'connecting' // GATT connect + read identity (hwid)
   | 'pin' // user enters the 5-char setup code
   | 'authenticating' // PIN_ + WIFI_KEYEX in flight
   | 'wifi-scanning' // WIFI_SCAN in flight (~10 s)
   | 'wifi-pick' // choose an SSID + enter its password inline
   | 'wifi-connecting' // sealed connect + poll WIFI_STATUS
   | 'linking-account' // robot-side HF OAuth (open browser) so it can register
-  | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central
-  | 'naming' // give the robot a display name over BLE (last human step)
-  | 'done' // success - robot reachable
+  | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central (last step)
+  | 'done' // success - robot reachable; naming happens in the first wake-up wizard
   | 'error'; // recoverable failure (see SetupError.recoverPhase)
 
 /**
@@ -42,8 +41,6 @@ export interface RobotIdentity {
    *  the BLE world and the central world. `null` when the daemon doesn't
    *  expose it. */
   hardwareId: string | null;
-  /** Raw NETWORK_STATUS read ("OFFLINE" / "HOTSPOT …" / "CONNECTED …"). */
-  networkStatus: string | null;
 }
 
 /**
@@ -54,7 +51,6 @@ export interface RobotIdentity {
 export interface SetupError {
   code:
     | 'permission-denied'
-    | 'no-devices'
     | 'connect-failed'
     | 'wrong-pin'
     | 'wifi-scan-failed'

@@ -1,9 +1,6 @@
-import { CircularProgress, Stack } from '@mui/material';
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
-
 import { TROUBLE_TIPS } from '../constants';
 import { useTroubleshoot } from '../hooks';
-import { LinkDivider, PrimaryButton, StepScaffold, SubtleLink, TroubleLink, TroubleshootView } from '../shared';
+import { EmoteStepActions, StepScaffold, TroubleshootView } from '../shared';
 
 /**
  * "Meet Me" step. Presentational: the wizard shell fires the wake emote as a
@@ -46,26 +43,20 @@ export default function MotorStep({
       title="Meet Me"
       caption="I'll perform my first animation. Make sure my movements match what you see on screen so every motor is working properly."
       actions={
-        // Order matters: test `playing` FIRST so a replay ("Move again" from the
-        // confirmed state) puts the spinner back on the primary button.
-        playing ? (
-          <PrimaryButton disabled startIcon={<CircularProgress size={16} sx={{ color: 'primary.main' }} />}>
-            Moving…
-          </PrimaryButton>
-        ) : !played ? (
-          <PrimaryButton onClick={onReplay}>Make Reachy move</PrimaryButton>
-        ) : (
-          <>
-            <PrimaryButton startIcon={<CheckRoundedIcon />} onClick={onNext}>
-              Yes, it moved
-            </PrimaryButton>
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <SubtleLink label="Move again" onClick={onReplay} />
-              <LinkDivider />
-              <TroubleLink label="It didn't move" onClick={openTrouble} />
-            </Stack>
-          </>
-        )
+        <EmoteStepActions
+          playing={playing}
+          played={played}
+          onConfirm={onNext}
+          onReplay={onReplay}
+          onTrouble={openTrouble}
+          labels={{
+            playing: 'Moving…',
+            start: 'Make Reachy move',
+            confirm: 'Yes, it moved',
+            replay: 'Move again',
+            trouble: "It didn't move",
+          }}
+        />
       }
     />
   );

@@ -10,6 +10,14 @@
  * (`_pc`, `attachVideo`, `setMicMuted`, `sendRaw`, ...).
  */
 
+/**
+ * Max robot display-name length enforced by the UI. Single source of truth for
+ * both naming surfaces - the first wake-up wizard's name step and the
+ * conversation settings rename field - so the two can't drift. The daemon also
+ * trims/caps server-side, so this is a UX guard, not the authority.
+ */
+export const MAX_ROBOT_NAME_LENGTH = 64;
+
 export interface RobotInfo {
   id: string;
   meta?: { name?: string };

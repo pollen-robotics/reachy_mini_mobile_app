@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Box, CircularProgress, Typography, keyframes } from '@mui/material';
+import { Box, Typography, keyframes } from '@mui/material';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import { TROUBLE_TIPS } from '../constants';
 import { useTroubleshoot } from '../hooks';
-import { PrimaryButton, StepScaffold, TroubleLink, TroubleshootView } from '../shared';
+import { ButtonSpinner, PrimaryButton, StepScaffold, TroubleLink, TroubleshootView } from '../shared';
 import StaticNoise from '../StaticNoise';
 
 /** Camera reveal: the feed "opens" like an eye (clip-path ellipse from a
@@ -166,10 +166,16 @@ export default function CameraStep({
       }
       actions={
         <>
+          {/* Confirm as soon as a frame is visible, even while the `curious1`
+              intro emote is still playing - waiting out the full ~12 s move when
+              the feed is already up front just blocks the user. Keep the spinner
+              only while there's nothing to see yet AND the emote is still going,
+              so a camera that never yields a frame still re-enables when the
+              emote timer elapses (the trouble link / header Skip remain too). */}
           <PrimaryButton
             onClick={onNext}
-            disabled={playing}
-            startIcon={playing ? <CircularProgress size={16} sx={{ color: 'primary.main' }} /> : undefined}
+            disabled={!hasFrame && playing}
+            startIcon={!hasFrame && playing ? <ButtonSpinner /> : undefined}
           >
             I can see it
           </PrimaryButton>

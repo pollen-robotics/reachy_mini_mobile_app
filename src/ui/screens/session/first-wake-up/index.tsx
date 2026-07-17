@@ -3,8 +3,10 @@
  *
  * A short "let's make sure everything works" flow shown right after a
  * session goes `live`. It walks the user through the robot's senses and
- * actuators - microphone, motors, speaker, camera - using the live
- * WebRTC session, then hands back to the normal conversation UI.
+ * actuators - microphone, motors, camera, speaker - over the live WebRTC
+ * session, then lets them name the robot, and hands back to the normal
+ * conversation UI. Step order: welcome, microphone, motor, camera, speaker,
+ * name (see `STEPS` in `./constants`).
  *
  * Gating: shown only once per robot. `RobotSessionScreen` reads the robot's
  * persisted `get_first_wake_up` flag when the session goes live and mounts
@@ -41,6 +43,7 @@ import MicrophoneStep from './steps/MicrophoneStep';
 import MotorStep from './steps/MotorStep';
 import SpeakerStep from './steps/SpeakerStep';
 import CameraStep from './steps/CameraStep';
+import NameStep from './steps/NameStep';
 
 // Welcome-step layout: how far apart (scene units) the live robot and its
 // target ghost sit while unaligned, and the ghost's fill opacity before it
@@ -72,14 +75,23 @@ const CONFETTI_DELAY_MS = 2600;
 interface FirstWakeUpWizardProps {
   /** Live session handle (hardware access + SDK pass-throughs). */
   session: RobotSessionHandle;
-  /** Friendly robot name for the copy. */
+  /** Friendly robot name for the copy. Updated live once the naming step saves,
+   *  so the closing "meet" line reflects the chosen name. */
   robotName?: string;
+  /** Persist a new display name over the session (naming step). Resolves the
+   *  saved name, or `null` on failure. Updating the parent's optimistic name is
+   *  the caller's job (so `robotName` here reflects it for the finale). */
+  onRename: (name: string) => Promise<string | null>;
   /** Wizard cleared - hand back to the normal session UI. */
   onFinish: () => void;
 }
 
-export default function FirstWakeUpWizard({ session, robotName, onFinish }: FirstWakeUpWizardProps) {
+export default function FirstWakeUpWizard({ session, robotName, onRename, onFinish }: FirstWakeUpWizardProps) {
   const [step, setStep] = useState<Step>('welcome');
+  // Draft for the naming step, lifted here so it survives the step's remount on
+  // Back/forward (each step is keyed in AnimatePresence, so a local field would
+  // reset). See `NameStep`.
+  const [nameDraft, setNameDraft] = useState('');
   // While true, the closing finale is on screen (last step confirmed): the step
   // UI fades out and the robot plays the closing move in place. A timer then
   // hands back to the conversation UI.
@@ -427,6 +439,9 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
                   onReplay={() => playStepEmote(step)}
                   sleepCheck={sleepCheck}
                   sleepBlocked={sleepBlocked}
+                  onRename={onRename}
+                  nameDraft={nameDraft}
+                  onNameDraftChange={setNameDraft}
                 />
               </motion.div>
             </AnimatePresence>
@@ -468,7 +483,7 @@ export default function FirstWakeUpWizard({ session, robotName, onFinish }: Firs
                       m: 0,
                     }}
                   >
-                    {robotName ? `${robotName} is all set` : 'All set'}
+                    {robotName ? `Nice to meet you, ${robotName}` : 'All set'}
                   </Typography>
                 </motion.div>
                 <motion.div
@@ -531,6 +546,9 @@ function StepView({
   onReplay,
   sleepCheck,
   sleepBlocked,
+  onRename,
+  nameDraft,
+  onNameDraftChange,
 }: {
   step: Step;
   session: RobotSessionHandle;
@@ -549,6 +567,11 @@ function StepView({
   sleepCheck: SleepPositionCheck;
   /** True when the robot isn't yet in sleep position (welcome step gate). */
   sleepBlocked: boolean;
+  /** Persist a new display name over the session (naming step). */
+  onRename: (name: string) => Promise<string | null>;
+  /** Controlled naming-step draft (lifted to the shell to survive remounts). */
+  nameDraft: string;
+  onNameDraftChange: (name: string) => void;
 }) {
   switch (step) {
     case 'welcome':
@@ -579,6 +602,10 @@ function StepView({
     case 'camera':
       return (
         <CameraStep session={session} onNext={onNext} onStageVisible={onStageVisible} playing={playing} />
+      );
+    case 'name':
+      return (
+        <NameStep value={nameDraft} onChange={onNameDraftChange} onRename={onRename} onNext={onNext} />
       );
     default:
       return null;

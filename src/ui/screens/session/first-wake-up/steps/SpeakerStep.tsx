@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CircularProgress, Slider, Stack, Typography } from '@mui/material';
+import { Slider, Stack, Typography } from '@mui/material';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { TYPO } from '@/ui/design/tokens';
 import { TROUBLE_TIPS } from '../constants';
 import { useTroubleshoot } from '../hooks';
-import { LinkDivider, PrimaryButton, StepScaffold, SubtleLink, TroubleLink, TroubleshootView } from '../shared';
+import { EmoteStepActions, StepScaffold, TroubleshootView } from '../shared';
 
 /**
  * "Hear My Voice" step. The proud2 emote (motion + sound) is fired by the wizard
@@ -91,24 +90,20 @@ export default function SpeakerStep({
         </Stack>
       }
       actions={
-        playing ? (
-          <PrimaryButton disabled startIcon={<CircularProgress size={16} sx={{ color: 'primary.main' }} />}>
-            Playing…
-          </PrimaryButton>
-        ) : !played ? (
-          <PrimaryButton onClick={onReplay}>Play test sound</PrimaryButton>
-        ) : (
-          <>
-            <PrimaryButton startIcon={<CheckRoundedIcon />} onClick={onNext}>
-              Yes, I hear it
-            </PrimaryButton>
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <SubtleLink label="Play again" onClick={onReplay} />
-              <LinkDivider />
-              <TroubleLink label="I don't hear it" onClick={openTrouble} />
-            </Stack>
-          </>
-        )
+        <EmoteStepActions
+          playing={playing}
+          played={played}
+          onConfirm={onNext}
+          onReplay={onReplay}
+          onTrouble={openTrouble}
+          labels={{
+            playing: 'Playing…',
+            start: 'Play test sound',
+            confirm: 'Yes, I hear it',
+            replay: 'Play again',
+            trouble: "I don't hear it",
+          }}
+        />
       }
     />
   );

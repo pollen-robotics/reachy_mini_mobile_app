@@ -54,7 +54,11 @@ export default function FrequencyBars({
     const draw = () => {
       ctx.clearRect(0, 0, width, height);
       const barWidth = (width - (FREQ_BAR_COUNT - 1) * FREQ_BAR_GAP) / FREQ_BAR_COUNT;
-      const smoothing = 0.25;
+      // Asymmetric smoothing: snap UP almost instantly so every tap punches the
+      // bars to full even mid-decay (no "canned envelope that waits to finish"),
+      // then fall gently so it still reads as audio rather than a strobe.
+      const smoothingUp = 0.7;
+      const smoothingDown = 0.16;
       const baseLevel = isActive ? Math.min(level, 1) : 0;
       for (let i = 0; i < FREQ_BAR_COUNT; i += 1) {
         const position = i / (FREQ_BAR_COUNT - 1);
@@ -62,7 +66,8 @@ export default function FrequencyBars({
         const envelope = 1 - centerDistance * centerDistance;
         const randomness = Math.random() * 0.4 + 0.8;
         const target = baseLevel * envelope * randomness;
-        smoothedRef.current[i] += (target - smoothedRef.current[i]) * smoothing;
+        const cur = smoothedRef.current[i];
+        smoothedRef.current[i] += (target - cur) * (target > cur ? smoothingUp : smoothingDown);
         const val = smoothedRef.current[i];
         const barH = Math.max(FREQ_MIN_BAR_HEIGHT, val * (height - 8));
         const x = i * (barWidth + FREQ_BAR_GAP);

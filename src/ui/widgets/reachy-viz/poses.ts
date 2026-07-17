@@ -39,18 +39,30 @@ export const SLEEP_POSE: LivePose = {
 };
 
 // --- Per-motor sleep targets (for the "is it tucked in?" check) ------------
-// Ported from the daemon (`SLEEP_HEAD_JOINT_POSITIONS` /
-// `SLEEP_ANTENNAS_JOINT_POSITIONS`). Head joints: body yaw at [0], the 6 neck
-// (Stewart) motors at [1..6]. Antennas: [right, left].
-
+// Head joints: body yaw at [0], the 6 neck (Stewart) motors at [1..6].
+// Antennas: [right, left].
+//
+// IMPORTANT: these are `IK(SLEEP_HEAD_POSE)`, i.e. the joint solution for the
+// SAME head matrix the daemon's `goto_sleep` drives to (`goto_target(
+// SLEEP_HEAD_POSE)`) and that the welcome-step ghost renders (`SLEEP_POSE.head`
+// = `SLEEP_HEAD_POSE`). So the wizard's EXAMPLE (ghost) and its EXPECTATION
+// (this check) both reference the exact pose `goto_sleep` targets.
+//
+// They are deliberately NOT the daemon's `SLEEP_HEAD_JOINT_POSITIONS` constant:
+// that one is a different, more forward-tilted pose (the limp/at-rest joints,
+// ~47deg off on two neck motors) and does NOT match the `goto_sleep` command
+// nor the ghost - matching the ghost would then never satisfy the check. Do NOT
+// "re-sync" these to the daemon's joint constant. Recompute via the daemon
+// kinematics if `SLEEP_HEAD_POSE` ever changes:
+//   AnalyticalKinematics().ik(SLEEP_HEAD_POSE)
 export const SLEEP_HEAD_JOINT_POSITIONS = [
   0,
-  -0.9848156658225817,
-  1.2624661884298831,
-  -0.24390294527381684,
-  0.20555342557667577,
-  -1.2363885150358267,
-  1.0032234352772091,
+  -0.17062380590244164,
+  0.83648773098012,
+  -0.12343185781944577,
+  0.08757153985787802,
+  -0.8121685549523017,
+  0.178508447104627,
 ];
 
 export const SLEEP_ANTENNAS_JOINT_POSITIONS = [-3.05, 3.05];

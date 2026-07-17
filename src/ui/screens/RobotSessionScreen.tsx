@@ -101,7 +101,7 @@ import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
-import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
+import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -237,6 +237,17 @@ function ConnectedSession({
     shouldDeferInitialWakeUp: () => wizardGate !== 'done',
   });
 
+  // Latest published daemon version (GitHub). Fail-open: `null` until it
+  // resolves / when offline, which keeps `DaemonUpdateGate` dormant and
+  // `daemonOutdated` false.
+  const latestDaemonVersion = useLatestDaemonVersion();
+
+  // Same verdict the mandatory update gate renders on: is the connected
+  // daemon behind the latest public release? Used below to hold the wizard
+  // gate closed until an outdated daemon has been updated. Unknown versions
+  // (offline / pre-update) read as not-outdated (fail-open).
+  const daemonOutdated = isDaemonOutdated(session.daemonVersion, latestDaemonVersion);
+
   // Resolve the gate once the session is live: query the robot's persisted
   // first-wake-up flag and either show the wizard or skip it. On skip we
   // wake the robot ourselves, since we deferred the bring-up wake while the
@@ -246,6 +257,15 @@ function ConnectedSession({
   useEffect(() => {
     if (wizardGate !== 'pending') return;
     if (session.phase !== 'live') return;
+    // Wait out the blocking daemon-update gate first. An outdated daemon
+    // predates `get_first_wake_up`, so querying it now would just time out
+    // (fail-open null) and we'd wrongly skip the wizard + wake the robot
+    // before the user even updates. Once they update and the session
+    // reacquires, `session.daemonVersion` changes, `daemonOutdated` flips
+    // false and this re-runs against a current daemon. Dev branch builds can
+    // read "outdated" vs the public release yet still support the command,
+    // so we never block them (mirrors the update gate's own DEV bypass).
+    if (!import.meta.env.DEV && daemonOutdated) return;
     let cancelled = false;
     void (async () => {
       const robot = session.getRobot();
@@ -261,7 +281,7 @@ function ConnectedSession({
     return () => {
       cancelled = true;
     };
-  }, [wizardGate, session]);
+  }, [wizardGate, session, daemonOutdated]);
 
   // Optimistic display name. `robotName` comes from the central listing we
   // booted the session from, which is fixed for the session's lifetime. The
@@ -289,10 +309,6 @@ function ConnectedSession({
     setWizardGate('done');
     void session.getRobot()?.setFirstWakeUp(true);
   }, [session]);
-
-  // Latest published daemon version (GitHub). Fail-open: `null` until it
-  // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
-  const latestDaemonVersion = useLatestDaemonVersion();
 
   // Remember which personality this robot is wearing, keyed by its
   // stable hardware id, so the discovery list ("Your Reachies") can
@@ -1112,11 +1128,11 @@ function ConnectedSession({
           />
         )}
 
-        {/* First wake-up wizard. Shown once the session is live, on top of
-            the conversation UI but BELOW the daemon update gate (zIndex
-            1380 vs 1400) so a mandatory update still wins. TEMPORARY: it
-            re-triggers on every connection until the persisted
-            first-wake-up flag is wired in. */}
+        {/* First wake-up wizard. Shown once per robot: the gate resolves from
+            the daemon's persisted `get_first_wake_up` flag (see the wizard-gate
+            effect above), and `set_first_wake_up` is written on finish. Sits on
+            top of the conversation UI but BELOW the daemon update gate (zIndex
+            1380 vs 1400) so a mandatory update still wins. */}
         {/* AnimatePresence lets the wizard play its exit fade on finish so the
             conversation UI (already mounted behind it) cross-fades in instead
             of hard-cutting when `wakeUpDone` flips true. */}
@@ -1126,6 +1142,7 @@ function ConnectedSession({
               key="first-wake-up"
               session={session}
               robotName={displayName}
+              onRename={handleRenameRobot}
               onFinish={handleWizardFinish}
             />
           )}
