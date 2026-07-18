@@ -1150,5 +1150,7 @@ function OutdatedView({
 /* --- generic busy --------------------------------------------------------- */
 
 function BusyView({ title, caption }: { title: string; caption?: string }) {
-  return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'primary.main' }} />} title={title} caption={caption} />;
+  // Neutral grey spinner (not brand primary): these are passive "please wait"
+  // beats, so a coloured spinner would over-emphasise them. Theme-aware.
+  return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />} title={title} caption={caption} />;
 }

@@ -92,6 +92,21 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
   // Back/forward (each step is keyed in AnimatePresence, so a local field would
   // reset). See `NameStep`.
   const [nameDraft, setNameDraft] = useState('');
+  // Speaker volume, PREFETCHED here on mount (not on the speaker step's own
+  // mount) so that by the time the user reaches "Hear My Voice" - four steps in
+  // - the slider is already at the real value instead of showing a default then
+  // jumping once the async read lands. `null` only during the initial fetch.
+  const [speakerVolume, setSpeakerVolume] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void session.getSpeakerVolume().then(v => {
+      if (cancelled) return;
+      setSpeakerVolume(typeof v === 'number' ? v : 50);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
   // While true, the closing finale is on screen (last step confirmed): the step
   // UI fades out and the robot plays the closing move in place. A timer then
   // hands back to the conversation UI.
@@ -442,6 +457,8 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
                   onRename={onRename}
                   nameDraft={nameDraft}
                   onNameDraftChange={setNameDraft}
+                  speakerVolume={speakerVolume}
+                  onSpeakerVolumeChange={setSpeakerVolume}
                 />
               </motion.div>
             </AnimatePresence>
@@ -473,18 +490,50 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.32, ease: [0.4, 0, 0.2, 1], delay: 0.35 }}
                 >
-                  <Typography
-                    component="h1"
-                    sx={{
-                      fontSize: TYPO.hero,
-                      fontWeight: FONT_WEIGHT.bold,
-                      letterSpacing: '-0.3px',
-                      textAlign: 'center',
-                      m: 0,
-                    }}
-                  >
-                    {robotName ? `Nice to meet you, ${robotName}` : 'All set'}
-                  </Typography>
+                  {robotName ? (
+                    <>
+                      <Typography
+                        component="h1"
+                        sx={{
+                          fontSize: TYPO.hero,
+                          fontWeight: FONT_WEIGHT.semibold,
+                          letterSpacing: '-0.3px',
+                          textAlign: 'center',
+                          lineHeight: 1.2,
+                          m: 0,
+                        }}
+                      >
+                        Nice to meet you
+                      </Typography>
+                      {/* The name gets its own line, a notch larger, so it reads
+                          as the headline of the greeting rather than a suffix. */}
+                      <Typography
+                        sx={{
+                          fontSize: TYPO.display,
+                          fontWeight: FONT_WEIGHT.bold,
+                          letterSpacing: '-0.3px',
+                          textAlign: 'center',
+                          lineHeight: 1.2,
+                          mt: 0.25,
+                        }}
+                      >
+                        {robotName}
+                      </Typography>
+                    </>
+                  ) : (
+                    <Typography
+                      component="h1"
+                      sx={{
+                        fontSize: TYPO.hero,
+                        fontWeight: FONT_WEIGHT.bold,
+                        letterSpacing: '-0.3px',
+                        textAlign: 'center',
+                        m: 0,
+                      }}
+                    >
+                      All set
+                    </Typography>
+                  )}
                 </motion.div>
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
@@ -549,6 +598,8 @@ function StepView({
   onRename,
   nameDraft,
   onNameDraftChange,
+  speakerVolume,
+  onSpeakerVolumeChange,
 }: {
   step: Step;
   session: RobotSessionHandle;
@@ -572,6 +623,10 @@ function StepView({
   /** Controlled naming-step draft (lifted to the shell to survive remounts). */
   nameDraft: string;
   onNameDraftChange: (name: string) => void;
+  /** Prefetched speaker volume (0-100), or `null` while the initial read is in
+   *  flight, so the speaker step's slider starts at the right value. */
+  speakerVolume: number | null;
+  onSpeakerVolumeChange: (v: number) => void;
 }) {
   switch (step) {
     case 'welcome':
@@ -597,6 +652,8 @@ function StepView({
           playing={playing}
           played={played}
           onReplay={onReplay}
+          volume={speakerVolume}
+          onVolumeChange={onSpeakerVolumeChange}
         />
       );
     case 'camera':

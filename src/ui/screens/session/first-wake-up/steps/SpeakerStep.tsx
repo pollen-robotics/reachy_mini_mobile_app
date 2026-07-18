@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import { Slider, Stack, Typography } from '@mui/material';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
@@ -13,6 +13,10 @@ import { EmoteStepActions, StepScaffold, TroubleshootView } from '../shared';
  * shell as a navigation event (on entry, and on "Play again" via `onReplay`);
  * this step owns only the volume slider and reflects the play state. See
  * `useStepEmotes` for why the trigger lives in the shell, not a mount effect.
+ *
+ * The volume is CONTROLLED by the shell, which prefetches it on wizard mount so
+ * the slider is already at the real value here rather than showing a default and
+ * jumping once an on-mount read lands. See `speakerVolume` in the shell.
  */
 export default function SpeakerStep({
   session,
@@ -21,6 +25,8 @@ export default function SpeakerStep({
   playing,
   played,
   onReplay,
+  volume,
+  onVolumeChange,
 }: {
   session: RobotSessionHandle;
   onNext: () => void;
@@ -31,22 +37,14 @@ export default function SpeakerStep({
   played: boolean;
   /** Replay the sound emote ("Play test sound" / "Play again"). */
   onReplay: () => void;
+  /** Current volume (0-100), prefetched by the shell so the slider starts at the
+   *  right value. `null` only during the initial read (rare by the time this
+   *  step is reached), which disables the slider until it resolves. */
+  volume: number | null;
+  /** Update the shell's volume (drag). The daemon write happens on release. */
+  onVolumeChange: (v: number) => void;
 }) {
   const { trouble, openTrouble, closeTrouble } = useTroubleshoot(onStageVisible);
-  const [volume, setVolume] = useState<number>(60);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void session.getSpeakerVolume().then(v => {
-      if (cancelled) return;
-      if (typeof v === 'number') setVolume(v);
-      setReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [session]);
 
   const commitVolume = useCallback(
     (v: number) => {
@@ -75,17 +73,17 @@ export default function SpeakerStep({
         <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', width: '100%', maxWidth: 320 }}>
           <VolumeUpRoundedIcon sx={{ color: 'text.secondary' }} />
           <Slider
-            value={volume}
-            onChange={(_, v) => setVolume(v as number)}
+            value={volume ?? 50}
+            onChange={(_, v) => onVolumeChange(v as number)}
             onChangeCommitted={(_, v) => commitVolume(v as number)}
             min={0}
             max={100}
-            disabled={!ready}
+            disabled={volume === null}
             aria-label="Speaker volume"
             sx={{ flex: 1 }}
           />
           <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', width: 36, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-            {Math.round(volume)}
+            {Math.round(volume ?? 50)}
           </Typography>
         </Stack>
       }

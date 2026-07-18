@@ -166,16 +166,14 @@ export default function CameraStep({
       }
       actions={
         <>
-          {/* Confirm as soon as a frame is visible, even while the `curious1`
-              intro emote is still playing - waiting out the full ~12 s move when
-              the feed is already up front just blocks the user. Keep the spinner
-              only while there's nothing to see yet AND the emote is still going,
-              so a camera that never yields a frame still re-enables when the
-              emote timer elapses (the trouble link / header Skip remain too). */}
+          {/* Spinner for the whole duration of the `curious1` intro emote: the
+              confirm stays disabled + spinning until the move finishes, so the
+              user waits out the eye-opening animation before confirming. The
+              trouble link / header Skip remain available throughout. */}
           <PrimaryButton
             onClick={onNext}
-            disabled={!hasFrame && playing}
-            startIcon={!hasFrame && playing ? <ButtonSpinner /> : undefined}
+            disabled={playing}
+            startIcon={playing ? <ButtonSpinner /> : undefined}
           >
             I can see it
           </PrimaryButton>
