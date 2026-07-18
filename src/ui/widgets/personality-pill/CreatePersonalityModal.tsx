@@ -168,6 +168,15 @@ export function CreatePersonalityModal({
       setGenError('Sign in to Hugging Face first to generate a personality.');
     } else if (
       err instanceof GeneratePersonalityError &&
+      err.reason === 'hf_token_invalid'
+    ) {
+      // Hard 401: HF rejected the token (expired / signature no longer
+      // verifies). The app shell reacts to the same signal by evicting the
+      // token and surfacing the sign-in gate, so keep the copy short and
+      // point the user at the re-auth that's about to appear.
+      setGenError('Your Hugging Face session expired - sign in again to continue.');
+    } else if (
+      err instanceof GeneratePersonalityError &&
       err.reason === 'overloaded'
     ) {
       // Transient provider overload (429/503): not the user's fault and

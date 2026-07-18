@@ -110,6 +110,10 @@ const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
 
 export type GeneratePersonalityReason =
   | "hf_token_missing"
+  // Hugging Face rejected the token itself (HTTP 401): expired OAuth token or
+  // a signature that no longer verifies. Actionable by re-signing-in; the app
+  // shell also evicts the token and surfaces the sign-in gate on this signal.
+  | "hf_token_invalid"
   | "empty_description"
   | "request_failed"
   // The model provider is temporarily overloaded (HTTP 429/503 or a
@@ -126,16 +130,20 @@ export type GeneratePersonalityReason =
 /** Map a low-level router failure to the modal-facing error vocabulary. */
 function fromRouterError(err: unknown): GeneratePersonalityError {
   if (err instanceof HfRouterError) {
-    const reason: GeneratePersonalityReason = err.overloaded
-      ? "overloaded"
-      : err.modelUnsupported
-        ? "model_unavailable"
-        : "request_failed";
-    const message = err.overloaded
-      ? "the model provider is overloaded right now"
-      : err.modelUnsupported
-        ? "no enabled HF Inference Provider serves the generation models"
-        : err.message;
+    const reason: GeneratePersonalityReason = err.authInvalid
+      ? "hf_token_invalid"
+      : err.overloaded
+        ? "overloaded"
+        : err.modelUnsupported
+          ? "model_unavailable"
+          : "request_failed";
+    const message = err.authInvalid
+      ? "Hugging Face rejected your token (it may have expired)"
+      : err.overloaded
+        ? "the model provider is overloaded right now"
+        : err.modelUnsupported
+          ? "no enabled HF Inference Provider serves the generation models"
+          : err.message;
     return new GeneratePersonalityError(reason, message, err.status || undefined);
   }
   return new GeneratePersonalityError(
