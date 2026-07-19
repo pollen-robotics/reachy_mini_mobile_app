@@ -27,6 +27,9 @@ export interface ReachyMiniOptions {
   appName?: string;
 }
 
+/** Handler for a one-way JSON-RPC notification (event) pushed by the robot/app. */
+export type RpcNotificationHandler = (params: Record<string, unknown>) => void;
+
 export interface ReachyMiniInstance extends EventTarget {
   readonly state: "disconnected" | "connected" | "streaming";
   readonly robots: RobotInfo[];
@@ -140,6 +143,25 @@ export interface ReachyMiniInstance extends EventTarget {
    * daemon predates the `get_version` Cmd.
    */
   getVersion(): Promise<string | null>;
+
+  /**
+   * Call a JSON-RPC method on the robot/app over the data channel and await
+   * its result. The daemon relays `apps.*` (app lifecycle) locally and any
+   * other namespace (e.g. `conversation.*`) to the running app's `/rpc`.
+   * Rejects on the JSON-RPC error, a closed channel, or timeout.
+   */
+  rpcCall<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
+
+  /**
+   * Subscribe to a one-way JSON-RPC notification (event) pushed by the
+   * robot/app, e.g. `conversation.turn` / `conversation.transcript`. Returns
+   * an unsubscribe function.
+   */
+  onNotification(method: string, handler: RpcNotificationHandler): () => void;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`

@@ -64,14 +64,14 @@ import { createVideoStreamCache, type VideoStreamCache } from './video-cache';
 import { startRobotSession, type StartRobotSessionResult } from './start-session';
 import { wakeRobot, sleepAndDisableRobot } from './physical';
 import { TransportMonitor, type TransportInfo } from './transport-monitor';
-import type { ConversationConnectionAttempt } from '@/features/conversation/engine/types';
+import type { ConnectionAttempt } from './engine/types';
 
 export type MotorMode = 'enabled' | 'disabled' | 'gravity_compensation';
 
 export interface SessionStartOptions {
   /** Forwarded to the retry loop's progress callback so the host can
    *  show "Reconnecting… (2 of 2)" during the inter-attempt gap. */
-  onAttempt?: (info: ConversationConnectionAttempt | null) => void;
+  onAttempt?: (info: ConnectionAttempt | null) => void;
   /** Bail mid-loop if this returns `true`. The host wires it to its
    *  own unmount / leaving signal. */
   isCancelled?: () => boolean;

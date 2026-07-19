@@ -84,11 +84,9 @@ import {
   extractRobotTransport,
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
-import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
-import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
+import { ConvAppControlPanel } from '@/ui/panels/conv-app/ConvAppControlPanel';
+import { SettingsPanel } from '@/ui/panels/settings/SettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
-import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
-import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
@@ -185,8 +183,6 @@ function ConnectedSession({
   username,
   onBack,
 }: ConnectedSessionProps) {
-  const orbRef = useRef<HTMLButtonElement | null>(null);
-
   // First wake-up wizard. TEMPORARY: gated behind
   // `FIRST_WAKE_UP_WIZARD_ENABLED` (currently OFF). When disabled we seed
   // `wakeUpDone` to `true` so the wizard never mounts - on the first
@@ -204,38 +200,12 @@ function ConnectedSession({
   const session = useRobotSession({
     robotId,
     token,
-    audioLevelsTargetRef: orbRef,
     shouldDeferInitialWakeUp: () => !wakeUpDone,
   });
 
   // Latest published daemon version (GitHub). Fail-open: `null` until it
   // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
   const latestDaemonVersion = useLatestDaemonVersion();
-
-  // Remember which personality this robot is wearing, keyed by its
-  // stable hardware id, so the discovery list ("Your Reachies") can
-  // show each robot with the face it was last paired with rather than
-  // the generic Reachy silhouette. Records the current persona on mount
-  // and on every mid-session switch. No-op when the daemon doesn't
-  // expose a hardware id (older daemons / no Reachy attached).
-  const activePersona = useActivePersonality();
-  // Prefer the stable hardware id; fall back to the routable peer id
-  // when the daemon doesn't expose one (older daemons / no Reachy
-  // attached) so the memory still works within a session round-trip.
-  const robotMemoryKey = robotHardwareId ?? robotId;
-  useEffect(() => {
-    rememberRobotPersona(robotMemoryKey, activePersona.id);
-  }, [robotMemoryKey, activePersona.id]);
-
-  // Play a short choreography on the robot whenever the user switches
-  // personality. Gated on a live transport with NO conversation running
-  // (persona switching only happens from the idle picker), so the move
-  // never fights the conversation's live motion stack.
-  useChangePersonaAnimation({
-    getRobot: session.getRobot,
-    isLive: session.connectionState === 'live',
-    isIdle: session.conversationState === 'idle',
-  });
 
   const [tab, setTab] = useState<Tab>('conv');
   // The conv tab is kept mounted (just `display: none`d) so its orb
@@ -315,6 +285,20 @@ function ConnectedSession({
     if (!leaving) return;
     let cancelled = false;
     void (async () => {
+      // Power-off means power-off: stop any app running on the robot
+      // (e.g. the conversation app) FIRST, so the teardown's
+      // app-running probe sees a free robot and actually plays the
+      // goto-sleep (and the sleep isn't fought by the app's motion).
+      // Best-effort + time-bounded: a wedged app must not trap the
+      // user on the leaving screen.
+      const robot = session.getRobot();
+      if (robot && typeof robot.rpcCall === 'function') {
+        try {
+          await robot.rpcCall('apps.stop', {}, { timeoutMs: 15_000 });
+        } catch (err) {
+          console.warn('[power-off] apps.stop failed (continuing):', err);
+        }
+      }
       await session.tearDown();
       if (cancelled) return;
       onBack();
@@ -353,12 +337,24 @@ function ConnectedSession({
     previousOpenedAppRef.current = openedApp;
     if (previous === null && openedApp !== null) {
       console.log(`[shell-webrtc] iframe-open: releasing session for app ${openedApp.id}`);
-      // Just opened an app: release the session so the iframe can
-      // dial in. The overlay itself shows a "Releasing…" hint while
-      // the promise is in flight; we don't await here so React
-      // commits the iframe mount immediately and the overlay's own
-      // effects can drive its phase indicator.
-      void session.releaseForHandoff();
+      // Just opened an app: stop any on-robot app first (a running
+      // conversation app would otherwise keep the robot's app slot and
+      // fight the incoming iframe app), then release the session so
+      // the iframe can dial in. The overlay itself shows a
+      // "Releasing…" hint while this is in flight; we don't await here
+      // so React commits the iframe mount immediately and the
+      // overlay's own effects can drive its phase indicator.
+      void (async () => {
+        const robot = session.getRobot();
+        if (robot && typeof robot.rpcCall === 'function') {
+          try {
+            await robot.rpcCall('apps.stop', {}, { timeoutMs: 15_000 });
+          } catch (err) {
+            console.warn('[handoff] apps.stop failed (continuing):', err);
+          }
+        }
+        await session.releaseForHandoff();
+      })();
     } else if (previous !== null && openedApp === null && !leaving) {
       console.log(`[shell-webrtc] iframe-close: reacquiring session after app ${previous.id}`);
       // Just closed an app: bring the session back up so the
@@ -377,23 +373,6 @@ function ConnectedSession({
   // SSE alive) so re-entering the tab is instant - the user just
   // sees the orb in `ready`, taps once, and they're back in a fresh
   // conversation.
-  //
-  // Why stop on tab switch (not on iframe-open): going to the apps
-  // surface signals "I'm browsing, not talking". Having the AI
-  // listen / speak in the background while the user picks an app
-  // wastes API tokens and is confusing audio-wise (the robot still
-  // narrates while the apps tab is shown). Stopping here is the
-  // minimal-surprise default.
-  //
-  // `stopConversation` is idempotent (no-op if no conversation is
-  // running), so this effect is safe to fire on every non-`conv`
-  // render including initial mounts and rapid tab oscillations.
-  const { stopConversation } = session;
-  useEffect(() => {
-    if (tab === 'conv') return;
-    void stopConversation();
-  }, [tab, stopConversation]);
-
   const isError = session.phase === 'error' && !leaving;
   // Connecting overlay: only fires for the INITIAL bring-up. After
   // `hasReachedReady` flips, subsequent transient states (a
@@ -432,17 +411,12 @@ function ConnectedSession({
   // system idle timer behave normally. The hook is refcounted at
   // the module level, so other screens can opt into the same lock
   // without coordination.
-  const isConversing =
-    session.conversationState === 'listening' ||
-    session.conversationState === 'user-speaking' ||
-    session.conversationState === 'processing' ||
-    session.conversationState === 'ai-speaking';
   const isBringingUp =
     session.connectionState === 'connecting' ||
     session.connectionState === 'selecting' ||
     session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
-  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
+  useKeepScreenOn(isBringingUp || isAppOpen);
 
   return (
     /* `DaemonStateProvider` is the single source of truth for
@@ -674,11 +648,10 @@ function ConnectedSession({
               }}
             >
               <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <ConversationPanel
-                  session={session}
-                  orbRef={orbRef}
-                  active={tab === 'conv'}
-                />
+                {/* Conversation runs on the robot now; this panel is its
+                    remote control over the data channel. The phone-side
+                    pipeline (orb + HF realtime) is left unmounted (dormant). */}
+                <ConvAppControlPanel session={session} active={tab === 'conv'} />
               </Box>
             </Box>
           )}
@@ -951,10 +924,9 @@ function ConnectedSession({
                 isLive={session.hasReachedReady}
               />
             ) : (
-              <ConversationSettingsPanel
+              <SettingsPanel
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
-                conversationLive={session.conversationState !== 'idle'}
               />
             )}
           </Box>
