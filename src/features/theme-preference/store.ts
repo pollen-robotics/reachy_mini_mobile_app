@@ -1,7 +1,7 @@
 /**
  * Theme-preference runtime store.
  *
- * Tiny pub/sub mirroring `features/conversation-language/store.ts`
+ * Tiny pub/sub mirroring the app pub/sub store convention
  * on purpose - both expose a single user-controlled choice that
  * needs to:
  *
@@ -20,16 +20,8 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import {
-  readThemeModeRaw,
-  resolveStoredMode,
-  writeThemeMode,
-} from './storage';
-import {
-  DEFAULT_THEME_MODE,
-  type ResolvedThemeMode,
-  type ThemeMode,
-} from './types';
+import { readThemeModeRaw, resolveStoredMode, writeThemeMode } from './storage';
+import { DEFAULT_THEME_MODE, type ResolvedThemeMode, type ThemeMode } from './types';
 
 type Listener = () => void;
 
