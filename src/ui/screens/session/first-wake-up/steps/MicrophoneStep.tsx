@@ -156,7 +156,10 @@ export default function MicrophoneStep({
       feedback={
         <Stack spacing={1.5} sx={{ width: '100%', maxWidth: 320, alignItems: 'center' }}>
           <Box sx={{ width: '100%' }}>
-            <FrequencyBars level={Math.max(level, activity)} isActive={isActive} height={56} />
+            {/* Bars reflect the captured loudness only (`level`), decoupled
+                from the onset/tap detector (`activity`) so the visual isn't a
+                self-fulfilling echo of the detection logic. */}
+            <FrequencyBars level={level} isActive={isActive} height={56} />
           </Box>
           <Box sx={{ width: '100%' }}>
             <LinearProgress
