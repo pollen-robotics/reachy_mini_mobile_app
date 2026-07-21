@@ -1,7 +1,7 @@
 /**
  * "About & diagnostics" panel - the drilled-in sub-page of the robot
  * Settings sheet. The user reaches it by tapping the "About &
- * diagnostics" row in `<SettingsPanel>` (the Settings root);
+ * diagnostics" row in `<ConversationSettingsPanel>` (the Settings root);
  * the host (`RobotSessionScreen`) swaps this panel in for the root list.
  * It paints its OWN back header (`←  About & diagnostics`) to pop back
  * to the root list, while the topbar cog's `✕` dismisses the whole
@@ -91,7 +91,7 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 
 import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
-import type { TransportInfo } from '@/features/robot-session/transport-monitor';
+import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
@@ -378,12 +378,7 @@ export default function RobotInfoPanel({
             {/* Negative inset cancels the small IconButton's internal
                 padding so the arrow glyph lands exactly on the `px: 3`
                 gutter, where the root header's cog/settings icon sits. */}
-            <IconButton
-              aria-label="Back to settings"
-              onClick={onBack}
-              size="small"
-              sx={{ ml: -0.625 }}
-            >
+            <IconButton aria-label="Back to settings" onClick={onBack} size="small" sx={{ ml: -0.625 }}>
               <ArrowBackRoundedIcon sx={{ fontSize: 22 }} />
             </IconButton>
             <Typography
@@ -407,39 +402,39 @@ export default function RobotInfoPanel({
               minHeight: …` to eat the leftover vertical space and
               scrolls internally. */}
           <Box
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              // Match the standard `px: 3` settings gutter so the
-              // sections line up with the root Settings list content.
-              px: 3,
-              pt: 2,
-              // Bottom safe-area padding so the LOGS panel's bottom
-              // edge isn't hidden under the iOS home indicator (we
-              // cover the BottomNavigation, which normally provided
-              // its own safe-area inset).
-              pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
-              overflowY: 'auto',
-            }}
-          >
-            {/* Robot section. Carries the full, copyable hardware id -
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            // Match the standard `px: 3` settings gutter so the
+            // sections line up with the root Settings list content.
+            px: 3,
+            pt: 2,
+            // Bottom safe-area padding so the LOGS panel's bottom
+            // edge isn't hidden under the iOS home indicator (we
+            // cover the BottomNavigation, which normally provided
+            // its own safe-area inset).
+            pb: `calc(${LAYOUT.safeAreaBottom} + 16px)`,
+            overflowY: 'auto',
+          }}
+        >
+          {/* Robot section. Carries the full, copyable hardware id -
             the immutable per-machine fingerprint. The topbar's
             identity bar now shows only the robot name + transport
             icon, so the complete identifier lives here where there's
             room to read and copy it into a bug report. */}
-            <Section label="Robot">
-              <MetadataRow
-                label="Identifier"
-                value={fullHardwareId ?? '—'}
-                mono={Boolean(fullHardwareId)}
-                copyable={Boolean(fullHardwareId)}
-              />
-            </Section>
-            <Section label="Connection">
-              {/* Physical `Transport` (Wi-Fi / USB) used to live here
+          <Section label="Robot">
+            <MetadataRow
+              label="Identifier"
+              value={fullHardwareId ?? '—'}
+              mono={Boolean(fullHardwareId)}
+              copyable={Boolean(fullHardwareId)}
+            />
+          </Section>
+          <Section label="Connection">
+            {/* Physical `Transport` (Wi-Fi / USB) used to live here
               as its own row, but it's already surfaced by the
               chip in the hero card above; the section is now
               focused on the WebRTC-level signals (kind / IP /
@@ -455,88 +450,88 @@ export default function RobotInfoPanel({
               its own `MetadataRow` because it carries the copy
               affordance and a value (an IPv4 string) that needs
               room. */}
-              <Stack
-                direction="row"
-                sx={[
-                  {
-                    alignItems: 'stretch',
+            <Stack
+              direction="row"
+              sx={[
+                {
+                  alignItems: 'stretch',
+                },
+                theme => ({
+                  px: 1.5,
+                  py: 1,
+                  minHeight: 40,
+                  '&:not(:last-of-type)': {
+                    borderBottom: `1px solid ${theme.palette.divider}`,
                   },
-                  theme => ({
-                    px: 1.5,
-                    py: 1,
-                    minHeight: 40,
-                    '&:not(:last-of-type)': {
-                      borderBottom: `1px solid ${theme.palette.divider}`,
-                    },
-                  }),
-                ]}
+                }),
+              ]}
+            >
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
               >
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                  }}
-                >
-                  {webrtcMeta ? (
-                    <StatusDotLabel color={webrtcMeta.color} label={webrtcMeta.label} />
-                  ) : (
-                    <Typography component="span" sx={{ fontSize: TYPO.sm, color: 'text.disabled' }}>
-                      —
-                    </Typography>
-                  )}
-                </Box>
-                <Box
-                  sx={theme => ({
-                    width: '1px',
-                    alignSelf: 'stretch',
-                    mx: 1.5,
-                    my: 0.25,
-                    bgcolor: theme.palette.divider,
-                  })}
-                />
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                  }}
-                >
-                  <Typography
-                    component="span"
-                    sx={{
-                      fontSize: TYPO.sm,
-                      fontFamily:
-                        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                      color: bitrate ? 'text.primary' : 'text.disabled',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {bitrate ?? '—'}
+                {webrtcMeta ? (
+                  <StatusDotLabel color={webrtcMeta.color} label={webrtcMeta.label} />
+                ) : (
+                  <Typography component="span" sx={{ fontSize: TYPO.sm, color: 'text.disabled' }}>
+                    —
                   </Typography>
-                </Box>
-              </Stack>
-              {latency && (
-                <MetadataRow
-                  label="Latency"
-                  info={
-                    'Round-trip time on the live link, measured on the ' +
-                    'WebRTC candidate pair. This is what drives the ' +
-                    'signal bars in the topbar - lower is better (a LAN ' +
-                    'link is a few ms, an internet hop tens of ms).'
-                  }
-                  value={latency}
-                  mono
-                />
-              )}
-              {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
-            </Section>
-            {/* Software section. Both version numbers (daemon firmware
+                )}
+              </Box>
+              <Box
+                sx={theme => ({
+                  width: '1px',
+                  alignSelf: 'stretch',
+                  mx: 1.5,
+                  my: 0.25,
+                  bgcolor: theme.palette.divider,
+                })}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                }}
+              >
+                <Typography
+                  component="span"
+                  sx={{
+                    fontSize: TYPO.sm,
+                    fontFamily:
+                      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                    color: bitrate ? 'text.primary' : 'text.disabled',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {bitrate ?? '—'}
+                </Typography>
+              </Box>
+            </Stack>
+            {latency && (
+              <MetadataRow
+                label="Latency"
+                info={
+                  'Round-trip time on the live link, measured on the ' +
+                  'WebRTC candidate pair. This is what drives the ' +
+                  'signal bars in the topbar - lower is better (a LAN ' +
+                  'link is a few ms, an internet hop tens of ms).'
+                }
+                value={latency}
+                mono
+              />
+            )}
+            {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
+          </Section>
+          {/* Software section. Both version numbers (daemon firmware
             + this mobile app) are surfaced together on ONE row,
             split into two equal cells by a hairline divider. The
             section header ("SOFTWARE") already names the group,
@@ -545,42 +540,42 @@ export default function RobotInfoPanel({
             visual weight - which is what the user actually copies
             into a bug report ("daemon X, app Y"). The version
             strings stay monospaced for legibility / line-up. */}
-            <Section label="Software">
-              <Stack
-                direction="row"
-                sx={{
-                  alignItems: 'center',
-                  px: 1.5,
-                  py: 1,
-                  minHeight: 40,
-                }}
-              >
-                <VersionCell label="Daemon" value={versionLabel} />
-                <Box
-                  sx={theme => ({
-                    width: '1px',
-                    alignSelf: 'stretch',
-                    mx: 1.5,
-                    my: 0.25,
-                    bgcolor: theme.palette.divider,
-                  })}
-                />
-                <VersionCell label="App" value={`v${__APP_VERSION__}`} />
-              </Stack>
-            </Section>
-            {/* Account section. Reassurance about which HF account is
+          <Section label="Software">
+            <Stack
+              direction="row"
+              sx={{
+                alignItems: 'center',
+                px: 1.5,
+                py: 1,
+                minHeight: 40,
+              }}
+            >
+              <VersionCell label="Daemon" value={versionLabel} />
+              <Box
+                sx={theme => ({
+                  width: '1px',
+                  alignSelf: 'stretch',
+                  mx: 1.5,
+                  my: 0.25,
+                  bgcolor: theme.palette.divider,
+                })}
+              />
+              <VersionCell label="App" value={`v${__APP_VERSION__}`} />
+            </Stack>
+          </Section>
+          {/* Account section. Reassurance about which HF account is
             signed in (and what the support team will see attached to
             a bug report). The session-phase row that used to sit here
             was dropped: it's debug-grade jargon, and the WebRTC kind +
             latency above already answer "is the link healthy". */}
-            <Section label="Account">
-              <MetadataRow
-                label="Signed in"
-                value={username ? `@${username}` : '—'}
-                mono={Boolean(username)}
-              />
-            </Section>
-            {/* LOGS panel. Eats the leftover vertical space via
+          <Section label="Account">
+            <MetadataRow
+              label="Signed in"
+              value={username ? `@${username}` : '—'}
+              mono={Boolean(username)}
+            />
+          </Section>
+          {/* LOGS panel. Eats the leftover vertical space via
             `flex: 1, minHeight: …` so the user gets a generous live
             tail. Body has no padding so the terminal-style console
             paints its own dim bg edge-to-edge; the actions slot
@@ -588,42 +583,42 @@ export default function RobotInfoPanel({
             either lift the logs to a dedicated full-screen view
             (`OpenInFullIcon`) or copy the buffer to the clipboard
             in one tap. */}
-            <RobotPanel
-              title="Logs"
-              subtitle="Live daemon journal"
-              actions={
-                <>
-                  {/* Same rationale as the fullscreen header: mobile
+          <RobotPanel
+            title="Logs"
+            subtitle="Live daemon journal"
+            actions={
+              <>
+                {/* Same rationale as the fullscreen header: mobile
                   surface, no Tooltip, `aria-label` for AT. */}
-                  <IconButton
-                    aria-label="Expand logs"
-                    onClick={() => setLogsFullscreen(true)}
-                    size="small"
-                    sx={{ width: 24, height: 24, p: 0.25 }}
-                  >
-                    <OpenInFullIcon sx={{ fontSize: 12 }} />
-                  </IconButton>
-                  <IconButton
-                    aria-label="Copy logs"
-                    onClick={handleCopyLogs}
-                    disabled={logs.entries.length === 0}
-                    size="small"
-                    sx={{ width: 24, height: 24, p: 0.25 }}
-                  >
-                    <ContentCopyIcon sx={{ fontSize: 12 }} />
-                  </IconButton>
-                </>
-              }
-              noBodyChrome
-              sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
-            >
-              <DaemonLogConsole
-                entries={logs.entries}
-                status={logs.status}
-                errorMessage={logs.errorMessage}
-                enabled={isLive}
-              />
-            </RobotPanel>
+                <IconButton
+                  aria-label="Expand logs"
+                  onClick={() => setLogsFullscreen(true)}
+                  size="small"
+                  sx={{ width: 24, height: 24, p: 0.25 }}
+                >
+                  <OpenInFullIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+                <IconButton
+                  aria-label="Copy logs"
+                  onClick={handleCopyLogs}
+                  disabled={logs.entries.length === 0}
+                  size="small"
+                  sx={{ width: 24, height: 24, p: 0.25 }}
+                >
+                  <ContentCopyIcon sx={{ fontSize: 12 }} />
+                </IconButton>
+              </>
+            }
+            noBodyChrome
+            sx={{ flex: 1, minHeight: LOGS_MIN_HEIGHT_PX }}
+          >
+            <DaemonLogConsole
+              entries={logs.entries}
+              status={logs.status}
+              errorMessage={logs.errorMessage}
+              enabled={isLive}
+            />
+          </RobotPanel>
           </Box>
         </>
       )}
@@ -873,7 +868,7 @@ function MetadataRow({
  * an empty string when the row has nothing meaningful to show
  * (caller checks truthiness to drop the row entirely).
  */
-function formatRemoteIp(webrtc: TransportInfo | null | undefined): string {
+function formatRemoteIp(webrtc: ConversationTransportInfo | null | undefined): string {
   if (!webrtc || !webrtc.remoteIp) return '';
   const normalised = webrtc.remoteIp.toLowerCase();
   const isMdns = normalised.endsWith('.local') || normalised.endsWith('.local.');

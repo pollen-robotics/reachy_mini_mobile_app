@@ -54,7 +54,7 @@ import { useEffect, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 
 import connectionUrl from '@/assets/connection.svg';
-import type { ConnectionAttempt, ConnectionState } from '@/features/robot-session/engine/types';
+import type { ConversationConnectionAttempt, ConnectionState } from '@/features/conversation';
 import StepsProgressIndicator from '@/ui/design/StepsProgressIndicator';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
@@ -65,7 +65,7 @@ interface ConnectingViewProps {
   /** In-flight retry info from `useRobotSession`. Non-null while the
    *  engine is on its second (or further) attempt at `startSession`.
    *  `null` on the first attempt, on success, or on fatal error. */
-  connectionAttempt?: ConnectionAttempt | null;
+  connectionAttempt?: ConversationConnectionAttempt | null;
 }
 
 /**
@@ -222,7 +222,7 @@ function stepIndexFor(state: ConnectionState, inWakePhase: boolean): 0 | 1 | 2 {
 
 interface CaptionInputs {
   state: ConnectionState;
-  connectionAttempt: ConnectionAttempt | null;
+  connectionAttempt: ConversationConnectionAttempt | null;
   inWakePhase: boolean;
   slowHintVisible: boolean;
 }
@@ -288,7 +288,7 @@ function captionFor({
  */
 function useReachedWakePhase(
   state: ConnectionState,
-  connectionAttempt: ConnectionAttempt | null
+  connectionAttempt: ConversationConnectionAttempt | null
 ): boolean {
   const [reached, setReached] = useState(false);
 

@@ -38,7 +38,7 @@
  */
 import { CircularProgress, Stack, Typography } from '@mui/material';
 
-import type { TransportKind } from '@/features/robot-session/transport-monitor';
+import type { ConversationTransportKind } from '@/features/conversation/engine/conversation-engine';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
 import { linkQualityLevel } from '@/features/robot-session/transport-monitor';
 import { LinkQualityBars } from '@/ui/design/LinkQualityBars';
@@ -89,7 +89,7 @@ interface IdentityChipBarProps {
   /** Live WebRTC candidate-pair classification. Drives the link-type
    *  tag (LAN / Direct / Relay) and the quality bars. `null` (no
    *  transport info yet) hides them. */
-  linkKind: TransportKind | null;
+  linkKind: ConversationTransportKind | null;
   /** Rolling-min RTT (ms) on the selected pair, or `null` when the
    *  platform doesn't expose it. Drives the quality bars + the
    *  latency tag value. */

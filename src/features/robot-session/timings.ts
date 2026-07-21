@@ -19,7 +19,7 @@
  * Read also
  * ─────────
  *   - `features/robot-session/start-session.ts`     uses SESSION_TIMINGS.start*
- *   - `features/robot-session/engine/session-engine.ts`
+ *   - `features/conversation/engine/conversation-engine.ts`
  *                                                   uses SESSION_TIMINGS.glide* / bootChainUnmount*
  *   - `ui/panels/apps-list/AppIframeOverlay.tsx`    uses APP_HANDOFF_TIMINGS.*
  */

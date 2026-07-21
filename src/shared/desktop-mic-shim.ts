@@ -6,7 +6,7 @@
  * Two code paths request `navigator.mediaDevices.getUserMedia({audio:true})`
  * during a WebRTC session bring-up:
  *
- *   1. `features/robot-session/iosMicUnlock.ts` — kicks
+ *   1. `features/conversation/permissions/iosMicUnlock.ts` — kicks
  *      iOS WKWebView's privacy gate that hides LAN host ICE candidates
  *      until any media permission is granted, and triggers Android
  *      wry's `RECORD_AUDIO` prompt as a side effect.

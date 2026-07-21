@@ -10,7 +10,7 @@
  * and `derivePhase` from here so existing imports keep working.
  */
 
-import type { ConnectionState } from '@/features/robot-session/engine/types';
+import type { ConnectionState } from '@/features/conversation/engine/types';
 
 /**
  * High-level session phase observed by the host. Derived from the

@@ -14,7 +14,7 @@
  *
  * Validation against the allowed values happens in the store
  * (`resolveStoredMode`), not here - storage is the dumb key/value
- * boundary, mirroring the app storage-key convention.
+ * boundary, mirroring `features/conversation-language/storage.ts`.
  */
 import { DEFAULT_THEME_MODE, type ThemeMode } from './types';
 
@@ -64,5 +64,7 @@ const VALID_MODES: readonly ThemeMode[] = ['system', 'light', 'dark'];
  * same validation logic.
  */
 export function resolveStoredMode(raw: string): ThemeMode {
-  return (VALID_MODES as readonly string[]).includes(raw) ? (raw as ThemeMode) : DEFAULT_THEME_MODE;
+  return (VALID_MODES as readonly string[]).includes(raw)
+    ? (raw as ThemeMode)
+    : DEFAULT_THEME_MODE;
 }

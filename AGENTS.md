@@ -79,19 +79,25 @@ Sibling modules in `features/robot-session/` provide the helpers
 `background-resilience.ts`, `sdk-bootstrap.ts`,
 `sdk-types.ts`, `token-hash.ts`, `lifecycle-queue.ts`).
 
-The session engine (`features/robot-session/engine/session-engine.ts`)
-instantiates ONE `RobotSession` per `mountSessionEngine` and drives it
-through the connection FSM (`boot → connect → start → live`, plus
-release / reacquire / teardown).
+The conversation engine instantiates ONE `RobotSession` per
+`mountConversation` and uses it as a building block for the
+high-level conversation flow (which it owns via the FSM + the
+HF realtime / motion / tools / audio pipeline).
 
-#### The conversation runs ON THE ROBOT
+#### `features/conversation/` - CONVERSATION layer (D)
 
-The phone no longer runs an AI pipeline. The daemon launches the
-conversation app on the robot; the phone drives and observes it over
-JSON-RPC on the WebRTC DataChannel (`rpcCall` / `onNotification`, see
-`features/conv-app` + `ui/panels/conv-app/ConvAppControlPanel`).
-Events: `conversation.turn` (orb state), `conversation.level` (orb
-audio meter), `conversation.transcript`.
+`engine/conversation-engine.ts` is the orchestrator. It owns the FSM,
+the conversation pipeline (HF realtime client, motion controllers,
+tool-call handler, audio level monitors), and the host-facing handle
+(`startConversation`, `setMicMuted`, `requestStop`, …). It DRIVES the
+session for everything session-related (start, wakeUp, release, …)
+and parks the FSM around the session's transitions.
+
+**Extension point**: `tearDownConversationPipeline({ glide })` inside
+the engine is the single place every "stop the D layer" path goes
+through (`stopConversation`, `releaseSessionKeepAwake`, `teardown`).
+Adding a new pipeline actor (vision module, motion controller, audio
+helper) means wiring it there once instead of in three call-sites.
 
 **Audit point**: every timing budget that drives the session
 lifecycle and the iframe handoff lives in
@@ -157,7 +163,7 @@ Run `yarn lint` to check.
 | A new design token (color, font weight, radius) | `ui/design/tokens.ts` |
 | A new feature with its own state + hook + service | `features/<feature>/...` (mirror structure of `auth/` or `apps/`) |
 | A new robot/session lifecycle method | Add it to `RobotSession` class in `features/robot-session/RobotSession.ts` |
-| A new session orchestration step | Add it to the engine in `features/robot-session/engine/session-engine.ts` (drives the session) |
+| A new conversation orchestration step | Add it to the engine in `features/conversation/engine/conversation-engine.ts` (drives the session) |
 | A pure helper used by 2+ features (Tauri plugin wrapper, browser API, etc.) | `shared/<area>/...` |
 | A new env var reader | `shared/env.ts` (centralised so we can grep all `import.meta.env` usage in one place) |
 | Static SVG / image | `src/assets/`, import via `@/assets/<file>.svg` |
