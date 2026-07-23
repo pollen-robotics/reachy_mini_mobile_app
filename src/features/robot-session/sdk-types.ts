@@ -118,7 +118,10 @@ export interface ReachyMiniInstance extends EventTarget {
    * defaults to the robot's pre-downloaded emotions library
    * (`pollen-robotics/reachy-mini-emotions-library`).
    */
-  playRecordedMove(moveName: string, opts?: { dataset?: string }): boolean;
+  playRecordedMove(
+    moveName: string,
+    opts?: { dataset?: string; initialGotoDuration?: number },
+  ): boolean;
 
   /**
    * Play the wake-up trajectory (head + antennas, ~2 s) AND power
