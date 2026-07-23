@@ -24,8 +24,6 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Stack, Typography, alpha, useTheme } from '@mui/material';
-import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
-
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import ReachyViz from '@/ui/widgets/reachy-viz/ReachyViz';
@@ -89,8 +87,8 @@ interface FirstWakeUpWizardProps {
 export default function FirstWakeUpWizard({ session, robotName, onRename, onFinish }: FirstWakeUpWizardProps) {
   const [step, setStep] = useState<Step>('welcome');
   // Draft for the naming step, lifted here so it survives the step's remount on
-  // Back/forward (each step is keyed in AnimatePresence, so a local field would
-  // reset). See `NameStep`.
+  // step transitions (each step is keyed in AnimatePresence, so a local field
+  // would reset). See `NameStep`.
   const [nameDraft, setNameDraft] = useState('');
   // Speaker volume, PREFETCHED here on mount (not on the speaker step's own
   // mount) so that by the time the user reaches "Hear My Voice" - four steps in
@@ -187,15 +185,26 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
     wokenRef.current = true;
   }, []);
 
+  // Latest "is the robot in its sleep pose?" verdict, mirrored into a ref so the
+  // emote controller can read it at play time without re-creating its callbacks
+  // on every pose frame. Drives the wake move's ease-in (see `useStepEmotes`).
+  const inSleepPoseRef = useRef(false);
+  inSleepPoseRef.current = sleepCheck.hasData && sleepCheck.inPosition;
+  const isInSleepPose = useCallback(() => inSleepPoseRef.current, []);
+
   // Shell-owned emote controller: each step's entry emote is fired here as a
-  // navigation EVENT (see `goNext` / `goBack`), never from a step's mount
+  // navigation EVENT (see `goNext`), never from a step's mount
   // effect - so StrictMode can't double-fire it and no lifecycle race can start
   // two overlapping moves. Steps render off `playingStep` / `playedStep`.
-  const { playingStep, playedStep, play: playStepEmote } = useStepEmotes(session, markWoken);
+  const { playingStep, playedStep, play: playStepEmote } = useStepEmotes(
+    session,
+    markWoken,
+    isInSleepPose,
+  );
 
-  // A blocking emote is playing => lock BOTH header actions (Back + Skip) so the
-  // user can't rewind or bail mid-move. Only motor/camera/speaker set a playing
-  // step, so this clears automatically on every other step.
+  // A blocking emote is playing => lock the Skip header action so the user
+  // can't bail mid-move. Only motor/camera/speaker set a playing step, so this
+  // clears automatically on every other step.
   const navLocked = playingStep !== null;
 
   const handleFinish = useCallback(() => {
@@ -275,17 +284,6 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
     playStepEmote(next);
   }, [step, finishWithCelebration, playStepEmote]);
 
-  const goBack = useCallback(() => {
-    const i = STEPS.indexOf(step);
-    const prev = STEPS[Math.max(i - 1, 0)];
-    setStep(prev);
-    // Re-fire the previous step's entry emote so navigating back replays it
-    // (the shell owns emote playback; steps don't auto-play on mount).
-    playStepEmote(prev);
-  }, [step, playStepEmote]);
-
-  const canGoBack = index > 0;
-
   return (
     // motion.div root so the wizard plays an exit fade when it unmounts (on
     // finish/skip): the parent `AnimatePresence` (see RobotSessionScreen) keeps
@@ -319,13 +317,14 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
         />
       </Box>
 
-      {/* Top bar: back on the left, skip on the right. Fades away during the
-          closing staging so only the robot + its line remain on screen. */}
+      {/* Top bar: just the Skip action, pinned right (there's no Back - the
+          wizard is forward-only). Fades away during the closing staging so
+          only the robot + its line remain on screen. */}
       <Stack
         direction="row"
         sx={{
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           pt: `calc(${LAYOUT.safeAreaTop} + 12px)`,
           pb: 1,
           px: 1,
@@ -335,25 +334,6 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
           transition: 'opacity 0.4s ease',
         }}
       >
-        {canGoBack ? (
-          <Button
-            aria-label="Previous step"
-            onClick={goBack}
-            disabled={navLocked}
-            startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
-            sx={{
-              color: 'primary.main',
-              textTransform: 'none',
-              fontWeight: FONT_WEIGHT.semibold,
-              fontSize: TYPO.sm,
-              borderRadius: 999,
-            }}
-          >
-            Back
-          </Button>
-        ) : (
-          <Box />
-        )}
         <Button
           onClick={handleFinish}
           disabled={navLocked}
@@ -410,8 +390,8 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
               {/* Front-on camera (x=0) so the welcome step's live/ghost split
                   reads as a clean, symmetric left/right. The robot is angled to
                   3/4 via `yawOffset` on the welcome step, then eases to face the
-                  user (yaw 0) once past it (reverses on Back). Pulled back so
-                  raised antennas never clip the taller canvas. */}
+                  user (yaw 0) once past it. Pulled back so raised antennas
+                  never clip the taller canvas. */}
               <ReachyViz
                 poseRef={livePoseRef}
                 height={STAGE_HEIGHT}

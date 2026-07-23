@@ -3,7 +3,7 @@
  *
  * The wizard shell stays mounted for the whole flow, so it - not the individual
  * steps - drives each step's entry emote. A step's emote is fired as a
- * navigation EVENT (from `goNext` / `goBack`, i.e. a user click or auto-advance),
+ * navigation EVENT (from `goNext`, i.e. a user click or auto-advance),
  * never from a step's mount `useEffect(..., [])`.
  *
  * Why this matters (Wi-Fi flicker): a mount effect is double-invoked by
@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { STEP_EMOTES, stepMoveArgs, type Step } from './constants';
+import { STEP_EMOTES, type Step } from './constants';
 import { resetToDefaultPose } from './motion';
 
 // Extra time past a move's nominal length (`spec.playMs`) before the safety
@@ -36,6 +36,12 @@ import { resetToDefaultPose } from './motion';
 // first; this only catches the pathological "we never saw the edge" case, so it
 // errs long to avoid cutting a move short.
 const MOVE_END_FALLBACK_MS = 2500;
+
+// Ease-in (seconds) for the motor step's wake move when it's replayed while the
+// robot is NOT in its sleep pose. The move starts FROM the sleep pose, so
+// without an initial goto the robot snaps there before animating (a visible
+// jump on replay). Skipped when already asleep - the snap is then a no-op.
+const WAKE_EASE_IN_S = 1.0;
 
 export interface StepEmotes {
   /** Step whose entry emote is currently playing (blocking), or null. */
@@ -54,10 +60,15 @@ export interface StepEmotes {
  * @param session Live session handle (robot access + SDK pass-throughs).
  * @param onMotorWake Called when the motor step's wake emote fires, so the shell
  *   can mark the robot woken (and skip replaying the wake on finish).
+ * @param isInSleepPose Reads whether the robot is currently in its sleep pose.
+ *   The wake move starts FROM the sleep pose, so on a replay while the robot is
+ *   already awake we ease into it (initial goto) instead of snapping; when it's
+ *   already asleep the snap is a no-op, so we skip the ease.
  */
 export function useStepEmotes(
   session: RobotSessionHandle,
   onMotorWake: () => void,
+  isInSleepPose: () => boolean,
 ): StepEmotes {
   const [playingStep, setPlayingStep] = useState<Step | null>(null);
   const [playedStep, setPlayedStep] = useState<Step | null>(null);
@@ -98,7 +109,14 @@ export function useStepEmotes(
       // even on steps without the 3D mirror. Refcounted in the SDK, so it
       // composes with the mirror's own subscription.
       robot.subscribePose();
-      robot.playRecordedMove(...stepMoveArgs(spec.move));
+      // Ease into the wake move's start (sleep) pose only when the robot isn't
+      // already there, so a replay-while-awake glides in instead of jumping.
+      const initialGotoDuration =
+        step === 'motor' && !isInSleepPose() ? WAKE_EASE_IN_S : 0;
+      robot.playRecordedMove(spec.move.name, {
+        ...(spec.move.dataset ? { dataset: spec.move.dataset } : {}),
+        ...(initialGotoDuration > 0 ? { initialGotoDuration } : {}),
+      });
       setPlayedStep(null);
       setPlayingStep(step);
 
@@ -148,7 +166,7 @@ export function useStepEmotes(
         robot.unsubscribePose();
       };
     },
-    [session, onMotorWake],
+    [session, onMotorWake, isInSleepPose],
   );
 
   useEffect(

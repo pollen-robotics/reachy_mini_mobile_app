@@ -10,7 +10,7 @@ import { ButtonSpinner, PrimaryButton, StepScaffold } from '../shared';
  * awake and on screen (shared persistent viz), so naming reads as meeting it.
  *
  * The draft is CONTROLLED by the shell (`value` / `onChange`): the step remounts
- * on every Back/forward hop (AnimatePresence keys on the step), so keeping the
+ * on every step transition (AnimatePresence keys on the step), so keeping the
  * text here would wipe it - lifting it to the shell lets it survive.
  *
  * Saving renames over the live WebRTC session (`onRename` → `setRobotName`),
@@ -26,7 +26,7 @@ export default function NameStep({
   onRename,
   onNext,
 }: {
-  /** Controlled draft, lifted to the shell so it survives Back/forward remounts. */
+  /** Controlled draft, lifted to the shell so it survives step-transition remounts. */
   value: string;
   onChange: (name: string) => void;
   /** Persist the chosen name over the session; resolves the saved name (or
