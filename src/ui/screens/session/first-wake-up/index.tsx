@@ -6,7 +6,8 @@
  * actuators - microphone, motors, camera, speaker - over the live WebRTC
  * session, then lets them name the robot, and hands back to the normal
  * conversation UI. Step order: welcome, microphone, motor, camera, speaker,
- * name (see `STEPS` in `./constants`).
+ * name (see `STEPS` in `./constants`). The naming step is skipped when the
+ * robot already carries a user-set name, so we never re-ask to rename it.
  *
  * Gating: shown only once per robot. `RobotSessionScreen` reads the robot's
  * persisted `get_first_wake_up` flag when the session goes live and mounts
@@ -22,7 +23,7 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Stack, Typography, alpha, useTheme } from '@mui/material';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
@@ -116,8 +117,31 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
   // its troubleshooting view (which replaces the whole column). Reset to true on
   // each step change; steps flip it off/on via `onStageVisible`.
   const [stageVisible, setStageVisible] = useState(true);
-  const index = STEPS.indexOf(step);
-  const fraction = index / (STEPS.length - 1);
+  // Skip the naming step when the robot already carries a user-set name.
+  // `getRobotName()` returns the PERSISTED name (a deliberate rename), or null
+  // when the robot still runs on the daemon's default (base) name - so a
+  // non-empty answer means "already named, don't ask again". Fetched on mount;
+  // it resolves long before the user reaches the end (naming is the last step),
+  // and defaults to keeping the step on a slow/failed/unsupported read.
+  const [hasCustomName, setHasCustomName] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve(session.getRobot()?.getRobotName() ?? null).then(name => {
+      if (cancelled) return;
+      setHasCustomName(typeof name === 'string' && name.trim().length > 0);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+  // Effective step list: drop `name` once we know the robot is already named,
+  // so both the router and the progress bar treat the prior step as the last.
+  const steps = useMemo<readonly Step[]>(
+    () => (hasCustomName ? STEPS.filter(s => s !== 'name') : STEPS),
+    [hasCustomName],
+  );
+  const index = steps.indexOf(step);
+  const fraction = index / (steps.length - 1);
 
   const theme = useTheme();
 
@@ -271,18 +295,18 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
   }, [session, handleFinish]);
 
   const goNext = useCallback(() => {
-    const i = STEPS.indexOf(step);
-    if (i >= STEPS.length - 1) {
+    const i = steps.indexOf(step);
+    if (i >= steps.length - 1) {
       finishWithCelebration();
       return;
     }
-    const next = STEPS[i + 1];
+    const next = steps[i + 1];
     setStep(next);
     // Fire the next step's entry emote as part of the transition event (no-op
     // for steps without one). This is the whole point of the event-driven
     // wizard: the move is tied to the navigation, not to the step's mount.
     playStepEmote(next);
-  }, [step, finishWithCelebration, playStepEmote]);
+  }, [step, steps, finishWithCelebration, playStepEmote]);
 
   return (
     // motion.div root so the wizard plays an exit fade when it unmounts (on
