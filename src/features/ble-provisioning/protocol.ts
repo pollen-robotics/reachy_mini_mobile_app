@@ -163,10 +163,12 @@ export async function scanWifi(): Promise<string[]> {
 // Emotions-library move names played as onboarding cues over BLE. All ship in
 // the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
 // library`), hyphenated-lowercase by convention.
-/** Identify move (motion + sound) played when a robot is picked from the scan list. */
-export const IDENTIFY_MOVE = 'toc-toc-toc';
 /** Idle "I'm busy" cue played while the robot joins Wi-Fi and links its account. */
 export const WAITING_MOVE = 'waiting';
+
+/** Built-in sound asset played as the scan-list identify chirp: sound only, no
+ *  motion (the robot only animates later, in the wizard steps). */
+export const IDENTIFY_SOUND = 'surprise.ogg';
 
 /**
  * `PLAY <move>` → plays a named recorded move (motion + bundled sound) from the
@@ -178,6 +180,20 @@ export const WAITING_MOVE = 'waiting';
 export async function play(moveName: string): Promise<void> {
   try {
     await sendCommand(`PLAY ${moveName}`, 6000);
+  } catch {
+    // non-critical: ignore
+  }
+}
+
+/**
+ * `PLAY_SOUND <file>` → plays a built-in sound asset (no motion) on the robot.
+ * Public BLE command (no PIN), used for the scan-list identify chirp. Sound
+ * only: the robot doesn't move here, it only animates later in the wizard.
+ * Best-effort like `play`: a failed cue must never block setup.
+ */
+export async function playSound(soundFile: string): Promise<void> {
+  try {
+    await sendCommand(`PLAY_SOUND ${soundFile}`, 6000);
   } catch {
     // non-critical: ignore
   }
