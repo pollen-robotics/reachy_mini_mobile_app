@@ -34,14 +34,14 @@ const tap = keyframes`
 // quiet-but-humming room. Hysteresis (two thresholds) stops the gate from
 // chattering when activity hovers near the edge.
 /** Cross this to count as "input happening" (gate opens). */
-const ACTIVITY_ON = 0.28;
+const ACTIVITY_ON = 0.2;
 /** Drop below this before the gate closes again (must be < ACTIVITY_ON). */
-const ACTIVITY_OFF = 0.14;
-/** Credits needed to pass. Roughly: a handful of taps, or ~1.5 s of scratch. */
-const DETECTION_REQUIRED = 1.6;
+const ACTIVITY_OFF = 0.1;
+/** Credits needed to pass. Roughly: a couple of taps, or ~1 s of scratch. */
+const DETECTION_REQUIRED = 1.0;
 /** Each fresh onset (rising edge) is worth this much credit - this is what
  *  makes short taps count for something instead of barely nudging the bar. */
-const TAP_CREDIT = 0.32;
+const TAP_CREDIT = 0.45;
 /** Credit per second of sustained activity at full strength (covers scratching). */
 const SUSTAIN_GAIN = 1;
 /** A quiet gap tolerated before progress resets. Generous so a natural pause
