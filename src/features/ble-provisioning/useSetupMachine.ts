@@ -43,7 +43,7 @@ import {
   fetchRobotsFromCentral,
 } from '@/features/auth/fetchRobotsFromCentral';
 import {
-  IDENTIFY_MOVE,
+  IDENTIFY_SOUND,
   MIN_WIFI_SETUP_VERSION,
   RobotOutdatedError,
   WAITING_MOVE,
@@ -52,6 +52,7 @@ import {
   gotoSleep,
   keyExchange,
   play,
+  playSound,
   readIdentity,
   readNetworkInfo,
   scanWifi,
@@ -286,13 +287,13 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           await stopScanLoop();
           await bleConnect(device.address);
           if (runId !== runIdRef.current || !mountedRef.current) return;
-          // Play the identify move (motion + sound) so the user sees/hears
+          // Play the identify chirp (sound only, no motion) so the user hears
           // which physical Reachy they just tapped. Public BLE command (no
           // PIN). Kept SEQUENTIAL on the shared command/response channel (a
           // concurrent sendCommand would flush the notification backlog and
           // could collide with the PIN step); best-effort so a failed cue
           // never blocks setup.
-          await play(IDENTIFY_MOVE);
+          await playSound(IDENTIFY_SOUND);
           if (runId !== runIdRef.current || !mountedRef.current) return;
           const id = await readIdentity();
           if (runId !== runIdRef.current || !mountedRef.current) return;
