@@ -226,6 +226,11 @@ function ConnectedSession({
     return forceWizard ? 'show' : 'pending';
   });
 
+  // True while the on-connect wake-up animation is playing (wizard skipped):
+  // greys out the End-session button so the user can't tear the session down
+  // mid-wake. Cleared when `wakeUp()` resolves (motion done) or times out.
+  const [waking, setWaking] = useState(false);
+
   const session = useRobotSession({
     robotId,
     token,
@@ -270,7 +275,17 @@ function ConnectedSession({
         setWizardGate('show');
       } else {
         setWizardGate('done');
-        void robot?.wakeUp();
+        if (robot) {
+          // Grey out End-session for the duration of the wake animation.
+          // Bounded by timeoutMs so a missed motion-done edge can't trap it.
+          setWaking(true);
+          void robot
+            .wakeUp({ timeoutMs: 8000 })
+            .catch(() => {})
+            .finally(() => {
+              if (!cancelled) setWaking(false);
+            });
+        }
       }
     })();
     return () => {
@@ -682,7 +697,7 @@ function ConnectedSession({
               aria-label="End session"
               onClick={handleLeave}
               color="primary"
-              disabled={leaving}
+              disabled={leaving || waking}
               // Pull the glyph toward the screen edge with a negative
               // MARGIN (not `edge="end"`, which uses -12px, nor a padding
               // override which would oval the hover). `mr: -1` (-8px)
