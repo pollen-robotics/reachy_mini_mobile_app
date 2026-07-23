@@ -177,7 +177,14 @@ export default function CameraStep({
           >
             I can see it
           </PrimaryButton>
-          <TroubleLink label="Camera doesn't work" onClick={openTrouble} />
+          {/* Hold the "doesn't work" escape hatch until the intro emote +
+              eye-opening animation have finished: showing it up front (while
+              the feed hasn't even had a chance to appear) reads as an
+              immediate failure. Once `playing` clears the feed has had its
+              moment, so a genuine "can't see it" is meaningful. */}
+          {!playing ? (
+            <TroubleLink label="Camera doesn't work" onClick={openTrouble} />
+          ) : null}
         </>
       }
     />
