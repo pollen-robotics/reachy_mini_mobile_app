@@ -8,9 +8,10 @@
  * We expose two derived signals, both throttled to ~25 Hz so the React
  * tree doesn't churn on every audio frame:
  *
- *  - `level`    : a noise-gated loudness for the bars. Ambient noise is
- *                 folded into a running statistical model, so the bars stay
- *                 flat until something rises clearly above that baseline.
+ *  - `level`    : the raw microphone loudness (time-domain RMS) for the bars,
+ *                 lightly smoothed for display only. Deliberately NOT noise-
+ *                 gated - the bars just show what the mic produces so they
+ *                 react to any sound directly, independent of the tap detector.
  *  - `activity` : an onset score (spectral flux) that spikes on taps and
  *                 stays high during scratching, but reads ~0 on any steady
  *                 sound. This is what the step uses to detect real input
@@ -39,17 +40,20 @@ const HIGHPASS_HZ = 120;
 // slowly inflate the baseline and desensitise the gate. This adapts to any
 // mic / room level on its own - no magic numbers tied to a specific device.
 const LEVEL_SIGMA = 3; // rms must beat the noise mean by this many std devs
-const FLUX_SIGMA = 3; // flux must beat its noise mean by this many std devs
+const FLUX_SIGMA = 2.5; // flux must beat its noise mean by this many std devs
 const NOISE_ADAPT = 0.03; // EMA rate of the noise model (quiet frames only)
 const WARMUP_FRAMES = 15; // ~0.6 s seeding the model at mount (assumed quiet)
 // Floors on the estimated std so a near-constant signal (variance -> 0) can't
 // make the z-score explode and fire on microscopic wiggles.
 const MIN_LEVEL_STD = 0.01;
 const MIN_FLUX_STD = 0.001;
-// How many sigmas ABOVE the threshold map to a full-scale (1.0) output. Small
-// spans = the output ramps up fast once past the threshold (more responsive).
-const LEVEL_SPAN = 4;
+// How many sigmas ABOVE the flux threshold map to a full-scale (1.0) activity
+// output. Small span = ramps up fast once past the threshold (more responsive).
 const FLUX_SPAN = 4;
+// Raw-loudness gain for the bars: scales the time-domain RMS amplitude into the
+// 0..1 bar range. The bars show what the mic produces directly (no noise gate),
+// so this is a pure display scale - bump it if the bars read low.
+const LEVEL_GAIN = 4;
 const LEVEL_SMOOTHING = 0.4; // display-only smoothing so the bars aren't jittery
 
 export function useRobotMicLevel(
@@ -95,6 +99,8 @@ export function useRobotMicLevel(
     const bins = analyser.frequencyBinCount;
     const data = new Uint8Array(bins);
     const prev = new Float32Array(bins);
+    // Time-domain buffer for the raw waveform RMS that drives the bars.
+    const timeData = new Uint8Array(analyser.fftSize);
     void ctx.resume().catch(() => {});
     setIsActive(true);
 
@@ -114,6 +120,17 @@ export function useRobotMicLevel(
       last = t;
 
       analyser.getByteFrequencyData(data);
+
+      // Raw waveform loudness for the bars: time-domain RMS around the 128
+      // midpoint, ~0 in silence and rising with any sound. Independent of the
+      // z-score noise gate below (which only drives the tap detector).
+      analyser.getByteTimeDomainData(timeData);
+      let ampSum = 0;
+      for (let i = 0; i < timeData.length; i += 1) {
+        const d = (timeData[i] - 128) / 128;
+        ampSum += d * d;
+      }
+      const amp = Math.sqrt(ampSum / timeData.length);
 
       // Single pass: RMS energy (loudness) + spectral flux (onset strength).
       let sum = 0;
@@ -148,9 +165,11 @@ export function useRobotMicLevel(
       }
       frame += 1;
 
-      // Output = how far past the sigma threshold we are, mapped to 0..1.
-      // Fast attack / slow release so a tap jumps immediately then eases down.
-      const targetLevel = warming ? 0 : Math.min(1, Math.max(0, zLevel - LEVEL_SIGMA) / LEVEL_SPAN);
+      // Bars = raw mic loudness, scaled to 0..1. No noise gate / z-score: they
+      // just track what the mic produces. Fast attack / slower release so a
+      // sound jumps in immediately then eases down; the smoothing is
+      // display-only (keeps the bars from strobing frame to frame).
+      const targetLevel = Math.min(1, amp * LEVEL_GAIN);
       dispLevel += (targetLevel - dispLevel) * (targetLevel > dispLevel ? 0.8 : LEVEL_SMOOTHING);
       setLevel(dispLevel);
 
