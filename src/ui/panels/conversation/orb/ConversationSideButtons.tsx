@@ -105,19 +105,34 @@ function SideSlot({
   children: React.ReactNode;
 }) {
   return (
+    // Two layers so the collapse never clips the button:
+    //   - outer slot only animates `width` (52 -> 0) to re-centre the
+    //     orb when the buttons leave. It centres its child and keeps
+    //     `overflow: visible`, so as the slot narrows the (fixed-size)
+    //     button simply overflows symmetrically toward the orb instead
+    //     of getting its right edge sliced off.
+    //   - inner box carries the fade + scale so the button shrinks into
+    //     nothing on its own timeline.
     <Box
       sx={{
         flex: 'none',
         width: live ? 52 : 0,
-        opacity: live ? 1 : 0,
-        transform: live ? 'scale(1)' : 'scale(0.55)',
-        pointerEvents: live ? 'auto' : 'none',
-        overflow: 'hidden',
-        transition:
-          'width 0.25s ease, opacity 0.25s ease, transform 0.25s ease',
+        display: 'flex',
+        justifyContent: 'center',
+        transition: 'width 0.25s ease',
       }}
     >
-      {children}
+      <Box
+        sx={{
+          flex: 'none',
+          opacity: live ? 1 : 0,
+          transform: live ? 'scale(1)' : 'scale(0.55)',
+          pointerEvents: live ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease, transform 0.25s ease',
+        }}
+      >
+        {children}
+      </Box>
     </Box>
   );
 }
