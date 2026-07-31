@@ -172,7 +172,10 @@ export default function DaemonUpdateGate({
     return () => window.clearTimeout(t);
   }, [phase]);
 
-  const logsActive = phase === 'updating' || phase === 'rebooting';
+  // Logs are only shown while actively installing. During `rebooting` the
+  // transport is gone anyway and a dead log tail just adds noise while the user
+  // waits, so we hide it (see the reboot copy below, which sets expectations).
+  const logsActive = phase === 'updating';
   const logs = useDaemonLogs({ session, enabled: logsActive });
 
   const handleUpdateNow = useCallback(() => {
@@ -294,7 +297,7 @@ export default function DaemonUpdateGate({
 
 function PhaseIcon({ phase }: { phase: Phase }) {
   if (phase === 'updating' || phase === 'rebooting') {
-    return <CircularProgress size={48} sx={{ color: 'primary.main' }} />;
+    return <CircularProgress size={32} sx={{ color: 'text.secondary' }} />;
   }
   if (phase === 'done') {
     return <CheckCircleRoundedIcon sx={{ fontSize: 56, color: 'success.main' }} />;
@@ -328,9 +331,9 @@ function bodyFor(
 ): string {
   switch (phase) {
     case 'updating':
-      return 'Installing the latest software. Keep the app open - the robot will reboot when it is done.';
+      return 'Installing the latest software. Keep the app open - the robot will reboot when it is done. This usually takes about 1-2 minutes.';
     case 'rebooting':
-      return 'Finishing the update and restarting. This can take a minute. You can wait here or reconnect from the robot list once it is back.';
+      return 'Reachy is restarting to finish the update. This usually takes a minute or two - keep the app open and stay nearby while it comes back online.';
     case 'done':
       return current ? `Now running v${current}.` : 'Your Reachy is now up to date.';
     case 'failed':
