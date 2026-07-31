@@ -8,6 +8,38 @@
  * interface below is the engine's superset — it adds the
  * runtime-only fields and aliases the engine actually consumes
  * (`_pc`, `attachVideo`, `setMicMuted`, `sendRaw`, ...).
+ *
+ * The SDK is an `EventTarget`; listeners are wired via
+ * `addEventListener`. The events the mobile shell consumes are:
+ *
+ *   - `robotsChanged`    { robots: RobotInfo[] }
+ *   - `sessionStopped`   { reason: string }
+ *   - `videoTrack`       { track: MediaStreamTrack; stream: MediaStream }
+ *   - `disconnected`     { reason: string }
+ *   - `error`            { source: 'signaling' | 'webrtc' | 'robot';
+ *                          error: Error | string }
+ *
+ * Resilience events (added in the SDK's ICE-grace + network-awareness
+ * pass, see `reachy-mini.ts` in the SDK for the full payloads):
+ *
+ *   - `iceStateChange`   { state: RTCIceConnectionState }
+ *                          Fires on every PC ICE transition.
+ *                          `disconnected` and `failed` are debounced
+ *                          internally before escalating to `error`.
+ *   - `networkOnline`    {}    forwarded from `window.online`
+ *   - `networkOffline`   {}    forwarded from `window.offline`
+ *   - `networkChange`    { effectiveType?: string; downlink?: number;
+ *                          rtt?: number; saveData?: boolean }
+ *                          forwarded from `navigator.connection.change`
+ *                          on engines that ship NetworkInformation
+ *                          (Chrome / Android WebView; absent on Safari /
+ *                          iOS WKWebView, which is why we *also* listen
+ *                          to `online`/`offline`).
+ *
+ * We intentionally don't strong-type these via `addEventListener`
+ * overloads: the payloads reach us as `CustomEvent<…>` casts at the
+ * few call sites (`robot-events.ts`), which stays readable without an
+ * extra layer of declaration merging.
  */
 
 export interface RobotInfo {

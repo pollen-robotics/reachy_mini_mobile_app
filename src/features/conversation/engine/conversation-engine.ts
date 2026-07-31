@@ -569,6 +569,10 @@ const connectionController: ConnectionController = createConnectionController({
   onConnectionLost: (opts) => onConnectionLost(opts),
   resumeAudioContexts: () => resumeAudioContexts(),
   applyMicMuted: (muted) => applyMicMuted(muted),
+  // Deferred through a closure: `motion` is created further down (the
+  // orchestrator needs `recordSend`, which the controller provides),
+  // and the gate only fires on SDK resilience events long after boot.
+  setPoseSendGate: (gated) => motion.setSendGate(gated),
 });
 
 // Motion's pose dispatcher feeds the controller's data-channel health
