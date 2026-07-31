@@ -12,8 +12,8 @@
  *     read/apply live regardless of conversation state.
  *   - Language (conversation): the language Reachy speaks/listens in.
  *     Single-select chips from the `conversation-language` catalog.
- *   - Privacy & memory (conversation): a vision toggle gating passive
- *     scene-awareness, a long-term-memory toggle, and a destructive
+ *   - Privacy & memory (conversation): a vision toggle gating the
+ *     on-demand `look` tool, a long-term-memory toggle, and a destructive
  *     "Clear memory" with a two-step confirm.
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -348,7 +348,7 @@ export function ConversationSettingsPanel({
                     Let Reachy see
                   </Typography>
                   <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
-                    Passive scene awareness: glances through the camera to react to your surroundings.
+                    On-demand sight: Reachy takes a camera snapshot when you ask it to look at something.
                   </Typography>
                 </Stack>
                 <OutlinedSwitch
