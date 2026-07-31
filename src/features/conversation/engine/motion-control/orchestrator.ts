@@ -152,6 +152,16 @@ export interface MotionOrchestrator {
    *  no audio context to resume. Safe to call when no wobbler is
    *  active. */
   resumeAudio(): void;
+
+  /** Gate / ungate the pose dispatcher's network writes while the
+   *  transport is degraded (`iceStateChange === 'disconnected' |
+   *  'failed'`, `networkOffline`). Gated writes stay staged so the
+   *  first tick after ungating resumes with the freshest pose.
+   *  Delegates to `PoseDispatcher.setSendGate`. Idempotent. */
+  setSendGate(gate: boolean): void;
+  /** Whether the pose dispatcher is currently gated via
+   *  `setSendGate(true)`. */
+  isGated(): boolean;
 }
 
 export function createMotionOrchestrator(
@@ -235,6 +245,12 @@ export function createMotionOrchestrator(
     },
     resumeAudio() {
       wobblerControl.resumeAudio();
+    },
+    setSendGate(gate) {
+      poseDispatcher.setSendGate(gate);
+    },
+    isGated() {
+      return poseDispatcher.isGated();
     },
   };
 }

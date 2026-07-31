@@ -174,6 +174,19 @@ export class RobotSession {
     this.transportMonitor.stop();
   }
 
+  /**
+   * Force the monitor's published kind back to `'checking'` without
+   * waiting for the next `getStats()` tick. Used by the engine on
+   * deterministic degradation signals (`iceStateChange ===
+   * 'disconnected' | 'failed'`, `networkOffline`): those are
+   * reliable, whereas `getStats()` during a degrading link is
+   * browser-specific. Idempotent / no-op when the monitor isn't
+   * running.
+   */
+  markTransportChecking(): void {
+    this.transportMonitor.markChecking();
+  }
+
   getRobot(): ReachyMiniInstance | null {
     return this.robot;
   }

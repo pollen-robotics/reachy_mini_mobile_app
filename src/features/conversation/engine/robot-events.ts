@@ -16,7 +16,13 @@
  *   - the video-track cache refresh on `videoTrack` (so late
  *     attachers from React don't miss the SDK's one-shot event),
  *   - state-machine transitions back to `authenticated` / `signed-out`
- *     on `disconnected`.
+ *     on `disconnected`,
+ *   - the transport-resilience side effects on the SDK's ICE +
+ *     network events (`iceStateChange`, `networkOnline`,
+ *     `networkOffline`, `networkChange`): degraded-mode enter/exit
+ *     and the data-channel probe. The POLICY (what "degraded" means)
+ *     lives behind the `deps` hooks - this file only translates
+ *     events into hook calls.
  *
  * No state of its own: every mutable thing lives behind the `deps`
  * accessors. Single-call function (no factory / `dispose()`): the
@@ -52,6 +58,26 @@ export interface WireRobotEventsDeps {
   /** Fatal-error sink for the unsolicited-drop path. Awaited so the
    *  listener returns after the user-facing teardown completes. */
   onFatalError: (err: unknown) => Promise<void>;
+
+  // ─── Transport-resilience hooks ───────────────────────────────────
+  /** True while a conversation is in flight (`listening`,
+   *  `user-speaking`, `processing`, `ai-speaking`). The resilience
+   *  listeners only probe / gate during a live conversation - outside
+   *  those states gating is either pointless or actively wrong (e.g.
+   *  it would race the boot chain). */
+  isConversationActive: () => boolean;
+  /** Ping the robot data channel with a no-op command so `dc-health`
+   *  can escalate a dead link to a fatal error. Fired on
+   *  `networkOnline` / `networkChange` - transport swaps where ICE
+   *  can stay nominally `connected` while the new path silently
+   *  blackholes packets. */
+  probeRobotLink: () => Promise<void>;
+  /** Enter degraded mode (gate pose writes + mark the transport
+   *  monitor as `checking`). Idempotence is the hook's business. */
+  onTransportDegraded: (cause: string) => void;
+  /** Exit degraded mode (ungate pose writes). No-op when we weren't
+   *  degraded - again, the hook's business. */
+  onTransportRecovered: (cause: string) => void;
 }
 
 export function wireRobotEvents(deps: WireRobotEventsDeps): void {
@@ -63,6 +89,10 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     applyMicMuted,
     setConnectionState,
     onFatalError,
+    isConversationActive,
+    probeRobotLink,
+    onTransportDegraded,
+    onTransportRecovered,
   } = deps;
 
   const videoCache = session.videoCache;
@@ -74,12 +104,21 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
   // effects. Same probe set as the embedded conversation Space's
   // [doStart][probe] block - using the same vocabulary so a single
   // grep across both consoles shows the full handoff trace.
+  //
+  // Includes the resilience-pass events (`iceStateChange`,
+  // `networkOnline`, `networkOffline`, `networkChange`) so a single
+  // grep for `[shell-webrtc][probe]` surfaces both signaling-level
+  // and transport-level transitions in causal order.
   for (const name of [
     "stateChanged",
     "sessionStarted",
     "sessionStopped",
     "sessionRejected",
     "peerStatusChanged",
+    "iceStateChange",
+    "networkOnline",
+    "networkOffline",
+    "networkChange",
     "error",
   ] as const) {
     robot.addEventListener(name, (event) => {
@@ -186,5 +225,77 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
       event as CustomEvent<{ source: string; error: Error | string }>
     ).detail;
     console.error(`[robot:${detail.source}]`, detail.error);
+  });
+
+  // ─── Resilience hooks ────────────────────────────────────────────
+  //
+  // The SDK debounces `iceConnectionState === 'disconnected'` /
+  // `'failed'` internally before surfacing an `error` event, and
+  // forwards platform network signals as scoped events. A *real*
+  // teardown still arrives as `error` / `sessionStopped`, which the
+  // listeners above already route to `onFatalError`. What we DO from
+  // these resilience signals is:
+  //
+  //   1. **Gate the pose dispatcher** while the link is degraded so
+  //      the wobbler's 30 Hz writes don't pile up in the SCTP send
+  //      buffer (which produces a jerk when the link comes back).
+  //   2. **Mark the transport monitor as `checking`** so the UI's
+  //      "we're streaming" indicator degrades immediately, without
+  //      waiting for the next `getStats()` tick (which can stay
+  //      stuck on stale, pre-degradation data for up to 1.5 s).
+  //   3. **Probe the data channel** when the transport just changed
+  //      underfoot (Wi-Fi → 4G, AP roam, network coming back) - ICE
+  //      can stay nominally "connected" while the new path silently
+  //      blackholes packets, so the probe (one neutral-antenna
+  //      write) lets `dc-health` escalate to a fatal error in ~4 s
+  //      instead of waiting for the next motion write to fail.
+  //
+  // (1) and (2) are implemented behind `onTransportDegraded` /
+  // `onTransportRecovered` in the connection controller.
+
+  // ICE transitions drive degraded mode deterministically. The SDK's
+  // grace window already absorbs the *escalation to fatal*; this
+  // listener is about the user-visible "we're not actually streaming
+  // right now" state during the grace window, not about teardown.
+  robot.addEventListener("iceStateChange", (event) => {
+    const detail = (event as CustomEvent<{ state: RTCIceConnectionState }>)
+      .detail;
+    if (detail.state === "disconnected" || detail.state === "failed") {
+      if (isConversationActive()) onTransportDegraded(`ice=${detail.state}`);
+      return;
+    }
+    if (detail.state === "connected" || detail.state === "completed") {
+      onTransportRecovered(`ice=${detail.state}`);
+    }
+  });
+
+  // `offline` is deterministic - the OS / browser just told us the
+  // network is gone. Gate writes immediately; ICE will follow within
+  // seconds and the SDK's debounce takes over for the fatal escalation.
+  robot.addEventListener("networkOffline", () => {
+    if (isConversationActive()) onTransportDegraded("network=offline");
+  });
+
+  // `online` is the cheap "are we back?" signal. Ungate writes
+  // optimistically (if the path is still dead, dc-health will catch
+  // it via the probe) and verify the DC is reachable.
+  robot.addEventListener("networkOnline", () => {
+    onTransportRecovered("network=online");
+    if (isConversationActive()) {
+      void probeRobotLink();
+    }
+  });
+
+  // `change` fires on transport-class swaps (Wi-Fi → 4G, 4G → Wi-Fi,
+  // captive-portal sign-in). `online` typically does NOT fire in those
+  // cases because the navigator never went fully offline - hence the
+  // dedicated probe. We do NOT gate writes here: the transport changed
+  // but it didn't *go away*, and gating would needlessly mute the
+  // robot during a brief roam. The probe still gives us a fast
+  // escalation if the new path is actually dead.
+  robot.addEventListener("networkChange", () => {
+    if (isConversationActive()) {
+      void probeRobotLink();
+    }
   });
 }

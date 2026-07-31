@@ -86,6 +86,12 @@ export interface ConnectionControllerDeps {
   /** Gate the robot mic forwarded to the backend. Used by the
    *  unsolicited-drop recovery path to re-sync the host's mute button. */
   applyMicMuted: (muted: boolean) => void;
+  /** Gate / ungate the conversation's 30 Hz pose writes while the
+   *  transport is degraded (SDK `iceStateChange === 'disconnected' |
+   *  'failed'`, `networkOffline`). Wired by the engine to the motion
+   *  orchestrator's send gate so degraded-link frames stay staged
+   *  instead of piling up in the SCTP send buffer. */
+  setPoseSendGate: (gated: boolean) => void;
 }
 
 export interface ConnectionController {
@@ -157,6 +163,7 @@ export function createConnectionController(
     onConnectionLost,
     resumeAudioContexts,
     applyMicMuted,
+    setPoseSendGate,
   } = deps;
 
   const { connection, conversation } = core;
@@ -178,6 +185,51 @@ export function createConnectionController(
   });
   const recordSend = dcHealth.recordSend;
   const probeRobotLink = dcHealth.probeRobotLink;
+
+  // ─── Transport-degraded mode ────────────────────────────────────
+  /**
+   * True while a conversation is in flight. Shared by the resilience
+   * listeners (probe / gate only mid-conversation) and the
+   * background-resilience `onResume` hook below.
+   */
+  const isConversationActive = (): boolean => {
+    const conv = conversation.current();
+    return (
+      conv === "listening" ||
+      conv === "user-speaking" ||
+      conv === "processing" ||
+      conv === "ai-speaking"
+    );
+  };
+
+  /**
+   * Degraded-mode policy behind the `robot-events.ts` resilience
+   * listeners. Entering gates the conversation's pose writes (so the
+   * wobbler's 30 Hz frames stay staged instead of piling up in the
+   * SCTP send buffer and jerking the robot on recovery) and snaps the
+   * transport monitor to `checking` (so the topbar's signal bars
+   * degrade immediately instead of on the next 1.5 s `getStats()`
+   * tick). Exiting ungates the writes; the monitor re-classifies
+   * itself on its next tick.
+   *
+   * The `degraded` flag is only for log hygiene / listener-storm
+   * dedup - the underlying gate + monitor calls are idempotent.
+   */
+  let transportDegraded = false;
+  const onTransportDegraded = (cause: string): void => {
+    setPoseSendGate(true);
+    session.markTransportChecking();
+    if (!transportDegraded) {
+      transportDegraded = true;
+      console.info(`[connection] transport-degraded cause=${cause}`);
+    }
+  };
+  const onTransportRecovered = (cause: string): void => {
+    if (!transportDegraded) return;
+    transportDegraded = false;
+    setPoseSendGate(false);
+    console.info(`[connection] transport-recovered cause=${cause}`);
+  };
 
   // ─── Motor-mode sync ────────────────────────────────────────────
   /**
@@ -508,6 +560,10 @@ export function createConnectionController(
       applyMicMuted,
       setConnectionState,
       onFatalError,
+      isConversationActive,
+      probeRobotLink,
+      onTransportDegraded,
+      onTransportRecovered,
     });
 
     let authenticated = false;
@@ -572,12 +628,7 @@ export function createConnectionController(
       getRobot: () => robot,
       centralSendUrl: `${CENTRAL_SIGNALING_URL}/send`,
       onResume: () => {
-        if (
-          conversation.current() === "listening" ||
-          conversation.current() === "user-speaking" ||
-          conversation.current() === "processing" ||
-          conversation.current() === "ai-speaking"
-        ) {
+        if (isConversationActive()) {
           resumeAudioContexts();
           void probeRobotLink();
           return;
