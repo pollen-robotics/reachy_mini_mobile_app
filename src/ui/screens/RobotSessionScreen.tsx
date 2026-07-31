@@ -237,6 +237,7 @@ function ConnectedSession({
 
   const session = useRobotSession({
     robotId,
+    robotHardwareId,
     token,
     audioLevelsTargetRef: orbRef,
     shouldDeferInitialWakeUp: () => wizardGate !== 'done',
@@ -1086,6 +1087,7 @@ function ConnectedSession({
             hfToken={token}
             hfUsername={username}
             robotPeerId={robotId}
+            robotHardwareId={robotHardwareId}
             robotName={displayName}
             transport={robotTransport}
             sessionPhase={session.phase}
