@@ -60,6 +60,7 @@ import {
   wifiStatus,
 } from './protocol';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import type { RobotIdentity, SetupError, SetupPhase, SetupResult } from './types';
 
 // Wi-Fi join polling: nmcli connect + DHCP can take a while; the daemon
@@ -78,13 +79,89 @@ const IP_POLL_TIMEOUT_MS = 12_000;
 
 // Robot-side OAuth entry point: opening this in the system browser makes the
 // robot's daemon redirect to Hugging Face, handle the callback, store its own
-// token, and start the central relay. We prefer the LAN IP we just read over
-// BLE — mDNS (`reachy-mini.local`) is unreliable on many networks — and fall
-// back to the hostname when no IP could be read. Either way the phone must be
-// on the robot's Wi-Fi for HF to redirect back.
-const ROBOT_OAUTH_MDNS_HOST = 'reachy-mini.local';
-function robotOAuthBeginUrl(host: string): string {
-  return `http://${host}:8000/api/hf-auth/oauth/begin`;
+// token, and start the central relay. We reach the robot STRICTLY by the LAN
+// IP read over BLE — mDNS (`reachy-mini.local`) is unreliable on mobile /
+// WKWebView and buys nothing here (setup always happens on the phone's own
+// network), so there is no hostname fallback: a missing IP is a hard error.
+// The phone must be on the robot's Wi-Fi for HF to redirect back.
+function robotOAuthBeginUrl(ip: string): string {
+  return `http://${ip}:8000/api/hf-auth/oauth/begin`;
+}
+
+// ── Device-code OAuth (RFC 8628): redirect-free, mDNS-free HF sign-in ────────
+// The robot polls Hugging Face directly, so NOTHING has to be reachable at a
+// fixed hostname (`reachy-mini.local`) and there is no HF→robot callback: the
+// phone just opens HF's device page and the robot fetches the token itself.
+// This is the preferred path. It exists only on daemons that expose
+// `/api/hf-auth/oauth/device/*` (v1.10+); on older daemons `startDeviceCode`
+// returns `null` and `linkAccount` falls back to the legacy `/oauth/begin`
+// redirect flow (whose callback still hits `reachy-mini.local` — the residual
+// mDNS dependency we can't retrofit onto already-shipped robots). Both flows
+// talk to the robot STRICTLY by the LAN IP read over BLE.
+interface DeviceCodeStart {
+  sessionId: string;
+  userCode: string;
+  /** HF page to open (`verification_uri`), used as the manual "open again" link. */
+  verificationUri: string;
+  /** Same page with `?user_code=…` pre-filled (`verification_uri_complete`). */
+  verificationUriComplete: string;
+  /** Poll cadence, floored so a tiny value can't hammer the robot. */
+  intervalMs: number;
+  /** How long the user has to authorize before the code expires. */
+  expiresInMs: number;
+}
+
+type DeviceCodeStatus = 'pending' | 'authorized' | 'error' | 'expired' | 'cancelled';
+
+const DEVICE_POLL_MIN_INTERVAL_MS = 2_000;
+// Hard ceiling on the browser-authorize wait, even if HF advertises longer.
+const DEVICE_AUTH_TIMEOUT_MS = 300_000;
+
+function robotDeviceBase(ip: string): string {
+  return `http://${ip}:8000/api/hf-auth/oauth/device`;
+}
+
+// POST the robot's device-start endpoint. Returns `null` when the route is
+// absent (older daemon → caller uses the legacy begin flow). Throws on
+// transport / server errors (robot unreachable, HF failed to issue a code) so
+// the caller surfaces an explicit failure instead of a fake success.
+async function startDeviceCode(ip: string): Promise<DeviceCodeStart | null> {
+  const resp = await tauriFetch(`${robotDeviceBase(ip)}/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+  });
+  // Route doesn't exist on daemons predating the device-code flow.
+  if (resp.status === 404 || resp.status === 405) return null;
+  if (!resp.ok) throw new Error(`device/start failed (HTTP ${resp.status})`);
+  const data = (await resp.json()) as {
+    status?: string;
+    session_id?: string;
+    user_code?: string;
+    verification_uri?: string;
+    verification_uri_complete?: string;
+    interval?: number;
+    expires_in?: number;
+    message?: string;
+  };
+  if (data.status === 'error' || !data.session_id || !data.user_code) {
+    throw new Error(data.message ?? 'The robot could not start Hugging Face sign-in.');
+  }
+  const verificationUri = data.verification_uri ?? 'https://huggingface.co/oauth/device';
+  return {
+    sessionId: data.session_id,
+    userCode: data.user_code,
+    verificationUri,
+    verificationUriComplete: data.verification_uri_complete ?? verificationUri,
+    intervalMs: Math.max((data.interval ?? 5) * 1000, DEVICE_POLL_MIN_INTERVAL_MS),
+    expiresInMs: Math.min((data.expires_in ?? 900) * 1000, DEVICE_AUTH_TIMEOUT_MS),
+  };
+}
+
+async function getDeviceStatus(ip: string, sessionId: string): Promise<DeviceCodeStatus> {
+  const resp = await tauriFetch(`${robotDeviceBase(ip)}/status/${sessionId}`, { method: 'GET' });
+  if (!resp.ok) throw new Error(`device/status failed (HTTP ${resp.status})`);
+  const data = (await resp.json()) as { status?: string };
+  return (data.status as DeviceCodeStatus) ?? 'pending';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -105,8 +182,15 @@ export interface SetupMachine {
   selectedSsid: string | null;
   result: SetupResult | null;
   /** LAN IP the robot got after joining Wi-Fi, discovered over BLE. `null`
-   *  until known (or if it couldn't be read — OAuth then falls back to mDNS). */
+   *  until known (or if it couldn't be read — account linking then errors out
+   *  with `robot-ip-unknown`, since we never fall back to mDNS). */
   robotLanIp: string | null;
+  /** Device-code shown to the user during `device-code-waiting` (redirect-free
+   *  HF sign-in). `null` outside that phase / on the legacy begin flow. */
+  deviceUserCode: string | null;
+  /** HF verification URL for the device-code flow (backup "open again" link).
+   *  `null` outside the device-code flow. */
+  deviceVerificationUri: string | null;
 
   // actions
   startScanning: () => void;
@@ -116,6 +200,8 @@ export interface SetupMachine {
   rescanWifi: () => void;
   selectNetwork: (ssid: string) => void;
   submitPassword: (password: string, ssid?: string) => void;
+  /** Robot already on Wi-Fi: skip provisioning, jump to account linking. */
+  skipWifiSetup: () => void;
   linkAccount: () => void;
   retry: () => void;
   reset: () => void;
@@ -138,6 +224,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const [selectedSsid, setSelectedSsid] = useState<string | null>(null);
   const [result, setResult] = useState<SetupResult | null>(null);
   const [robotLanIp, setRobotLanIp] = useState<string | null>(null);
+  const [deviceUserCode, setDeviceUserCode] = useState<string | null>(null);
+  const [deviceVerificationUri, setDeviceVerificationUri] = useState<string | null>(null);
 
   // Values threaded through async chains (avoid stale-closure reads).
   const pinRef = useRef<string>('');
@@ -358,7 +446,41 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           const keyex = await keyExchange();
           if (runId !== runIdRef.current || !mountedRef.current) return;
           keyexRef.current = keyex;
-          // chain straight into the Wi-Fi scan
+
+          // Fast path: if the robot is ALREADY on a Wi-Fi network there's
+          // nothing to provision. Reading its live status over BLE lets us
+          // offer to skip straight to account linking - and it's the natural
+          // path for "just re-link Hugging Face" on an already-online robot.
+          // Best-effort: any hiccup falls through to the normal Wi-Fi scan.
+          try {
+            const status = await wifiStatus();
+            if (runId !== runIdRef.current || !mountedRef.current) return;
+            if (status.connected) {
+              setSelectedSsid(status.connected);
+              // Read the LAN IP now so the skip path can hand OAuth a literal
+              // IP (same route as the post-join flow). A null IP here means
+              // `linkAccount` will fail fast with `robot-ip-unknown` (we never
+              // fall back to mDNS).
+              robotIpRef.current = null;
+              setRobotLanIp(null);
+              try {
+                const net = await readNetworkInfo();
+                if (runId !== runIdRef.current || !mountedRef.current) return;
+                if (net.mode === 'connected' && net.ip) {
+                  robotIpRef.current = net.ip;
+                  setRobotLanIp(net.ip);
+                }
+              } catch {
+                /* IP unread - linkAccount errors out (no mDNS fallback) */
+              }
+              setPhase('wifi-already-connected');
+              return;
+            }
+          } catch {
+            /* status unread - fall through to the normal Wi-Fi scan */
+          }
+
+          // Not on Wi-Fi yet: chain straight into the Wi-Fi scan.
           setPhase('wifi-scanning');
           const ssids = await scanWifiResilient(runId);
           if (runId !== runIdRef.current || !mountedRef.current) return;
@@ -461,9 +583,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
           // Joined Wi-Fi. Read the LAN IP the robot just got so we can reach its
           // OAuth endpoint directly. NETWORK_STATUS refreshes on a ~10 s tick, so
-          // poll briefly until it reports `connected` with an address. Entirely
-          // best-effort: any failure leaves the IP null and `linkAccount` falls
-          // back to mDNS.
+          // poll briefly until it reports `connected` with an address. If it
+          // never lands, the IP stays null and `linkAccount` fails fast with
+          // `robot-ip-unknown` (we never fall back to mDNS).
           robotIpRef.current = null;
           setRobotLanIp(null);
           const ipDeadline = Date.now() + IP_POLL_TIMEOUT_MS;
@@ -479,7 +601,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
             } catch {
               if (runId !== runIdRef.current || !mountedRef.current) return;
             }
-            if (Date.now() > ipDeadline) break; // give up; mDNS fallback
+            if (Date.now() > ipDeadline) break; // give up; linkAccount errors
             await sleep(IP_POLL_INTERVAL_MS);
             if (runId !== runIdRef.current || !mountedRef.current) return;
           }
@@ -504,46 +626,158 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     [selectedSsid, fail],
   );
 
+  // Robot is already on Wi-Fi (see the `wifi-already-connected` branch in
+  // `submitPin`): skip provisioning entirely and go straight to HF account
+  // linking, reusing the SSID + LAN IP already read over BLE. "Use a different
+  // network" instead routes to `rescanWifi` (the normal pick flow).
+  const skipWifiSetup = useCallback(() => {
+    runIdRef.current += 1;
+    setError(null);
+    setPhase('linking-account');
+  }, []);
+
   // ── ACCOUNT LINK (robot-side OAuth) - the last human step ────────────────────
 
-  // Open the robot's OAuth entry point in the system browser (by LAN IP when
-  // we have one, else mDNS). The robot redirects to Hugging Face, handles the
-  // callback, stores its OWN durable token, and starts the central relay. We
-  // then just wait for it to appear on central — the same poll the wizard
-  // already uses. Once it's online we finish setup: naming is no longer a BLE
-  // step (it now lives in the first wake-up wizard over the live session).
+  // Link the robot to Hugging Face so it comes online and registers on central.
+  // We reach the robot STRICTLY by the LAN IP read over BLE (no mDNS fallback);
+  // a missing IP is a hard `robot-ip-unknown` failure so we never open an
+  // unreachable `reachy-mini.local` URL and then pretend it worked.
   //
-  // Right before `done` we fire the canonical goto-sleep trajectory (SLEEP
-  // command) - the final Bluetooth-setup cue - so the first wake-up wizard,
-  // which opens on "Tuck Me In", starts from a robot placed EXACTLY in its
-  // sleep pose. `gotoSleep` interpolates to the exact pose + releases torque,
-  // which the wizard's ghost compares against. BLE is still connected here
-  // (dropped on unmount), so we AWAIT the ack to guarantee the write lands
-  // before `done`; still best-effort (errors swallowed) so it never blocks.
+  // Two flows, feature-detected on the robot:
+  //   - device-code (preferred, mDNS-free): the robot polls HF directly, so
+  //     there is no HF→robot callback and nothing depends on `reachy-mini.local`.
+  //     The phone opens HF's device page and we poll the robot for completion.
+  //   - legacy `/oauth/begin` (older daemons only): the robot redirects to HF
+  //     and HF calls back to `reachy-mini.local` — the residual mDNS dependency
+  //     we can't retrofit onto already-shipped robots. Used only when the
+  //     device-code route is absent (404).
+  //
+  // Either way, central appearance is the ONLY success signal (token stored →
+  // relay up → registered). No match ⇒ `oauth-unconfirmed` (recoverable), never
+  // a fake `done`. Right before `done` we fire the canonical goto-sleep
+  // trajectory (the final BLE cue) so the first wake-up wizard, which opens on
+  // "Tuck Me In", starts from a robot placed EXACTLY in its sleep pose. BLE is
+  // still connected here (dropped on unmount), so we AWAIT the ack to guarantee
+  // the write lands before `done`; best-effort so a failed cue never blocks.
   const linkAccount = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
+    setDeviceUserCode(null);
+    setDeviceVerificationUri(null);
+    const ip = robotIpRef.current;
+    if (!ip) {
+      setError({
+        code: 'robot-ip-unknown',
+        message:
+          "We couldn't read your Reachy's network address to finish signing in. " +
+          'Make sure your phone is on the same Wi-Fi as the robot, then try again.',
+        recoverPhase: 'linking-account',
+      });
+      setPhase('error');
+      return;
+    }
+    const hwid = identityRef.current?.hardwareId ?? null;
+
+    // Shared tail for both flows: confirm the robot registered on central, then
+    // settle to sleep and finish. A `null` match is an unconfirmed sign-in.
+    const confirmOnlineAndFinish = async (): Promise<void> => {
+      const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
+      if (runId !== runIdRef.current || !mountedRef.current) return;
+      if (!matched) {
+        setError({
+          code: 'oauth-unconfirmed',
+          message:
+            "We couldn't confirm your Reachy came online. Finish signing in " +
+            'with Hugging Face in the browser (on the same Wi-Fi as the robot), ' +
+            'then try again.',
+          recoverPhase: 'linking-account',
+        });
+        setPhase('error');
+        return;
+      }
+      setResult({ hardwareId: hwid, robot: matched });
+      await gotoSleep();
+      if (runId !== runIdRef.current || !mountedRef.current) return;
+      setPhase('done');
+    };
+
     void (async () => {
       try {
-        // Prefer the LAN IP discovered over BLE; fall back to mDNS if we never
-        // read one (older daemon / quiet GATT / robot not yet `connected`).
-        const host = robotIpRef.current ?? ROBOT_OAUTH_MDNS_HOST;
-        await openExternalUrl(robotOAuthBeginUrl(host));
+        // Prefer the redirect-free device-code flow. `null` ⇒ older daemon
+        // without the route ⇒ legacy begin flow.
+        let start: DeviceCodeStart | null = null;
+        try {
+          start = await startDeviceCode(ip);
+        } catch (e) {
+          // Couldn't probe the device-code route (blocked by the HTTP scope, a
+          // transient blip, or an old daemon that errors instead of returning a
+          // clean 404). Fall back to the legacy begin flow: it drives the robot
+          // through the browser (opener), so it still works when our direct HTTP
+          // probe can't reach the robot. Still IP-only — never `reachy-mini.local`.
+          console.warn('[setup] device-code unavailable, using legacy begin flow:', e);
+          start = null;
+        }
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+
+        if (start) {
+          // ── device-code branch (mDNS-free) ──
+          setDeviceUserCode(start.userCode);
+          setDeviceVerificationUri(start.verificationUri);
+          // Open HF's device page (public internet — no robot/mDNS dependency).
+          // `_complete` pre-fills the code; we still show it in-app as a backup.
+          await openExternalUrl(start.verificationUriComplete);
+          if (runId !== runIdRef.current || !mountedRef.current) return;
+          setPhase('device-code-waiting');
+
+          const deadline = Date.now() + start.expiresInMs;
+          for (;;) {
+            await sleep(start.intervalMs);
+            if (runId !== runIdRef.current || !mountedRef.current) return;
+            let status: DeviceCodeStatus;
+            try {
+              status = await getDeviceStatus(ip, start.sessionId);
+            } catch {
+              // Transient poll blip: keep trying until the deadline.
+              if (Date.now() > deadline) status = 'expired';
+              else continue;
+            }
+            if (runId !== runIdRef.current || !mountedRef.current) return;
+            if (status === 'authorized') break;
+            if (status === 'error' || status === 'expired' || status === 'cancelled') {
+              setError({
+                code: 'oauth-unconfirmed',
+                message:
+                  "We couldn't confirm your Hugging Face sign-in. Open the page again, " +
+                  'enter the code shown, then try again.',
+                recoverPhase: 'linking-account',
+              });
+              setPhase('error');
+              return;
+            }
+            if (Date.now() > deadline) {
+              setError({
+                code: 'oauth-unconfirmed',
+                message:
+                  'Sign-in timed out. Open the Hugging Face page again and enter the ' +
+                  'code to finish, then try again.',
+                recoverPhase: 'linking-account',
+              });
+              setPhase('error');
+              return;
+            }
+          }
+          // Authorized: the status route also brings the central relay up. Fall
+          // through to the shared central confirmation to get the listing.
+          setPhase('central-waiting');
+          await confirmOnlineAndFinish();
+          return;
+        }
+
+        // ── legacy branch (older daemon: mDNS callback) ──
+        await openExternalUrl(robotOAuthBeginUrl(ip));
         if (runId !== runIdRef.current || !mountedRef.current) return;
         setPhase('central-waiting');
-        const hwid = identityRef.current?.hardwareId ?? null;
-        const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        setResult({ hardwareId: hwid, robot: matched });
-        // Settle to the exact sleep pose and AWAIT the ack before finishing.
-        // The first wake-up wizard opens on "Tuck Me In" and compares the live
-        // pose against this canonical sleep pose, and BLE is torn down on
-        // unmount - so the SLEEP write MUST land before `done` lets the finale
-        // auto-advance and drop the link. `gotoSleep` swallows its own errors,
-        // so a failed cue still never blocks the finish.
-        await gotoSleep();
-        if (runId !== runIdRef.current || !mountedRef.current) return;
-        setPhase('done');
+        await confirmOnlineAndFinish();
       } catch (e) {
         if (runId !== runIdRef.current || !mountedRef.current) return;
         fail((e as Error).message ?? String(e), 'linking-account');
@@ -590,6 +824,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         startScanning();
         return;
       case 'authenticating':
+      case 'wifi-already-connected':
       case 'wifi-scanning':
       case 'wifi-pick':
         // Still authenticated over BLE - rewind to the PIN step (re-entering it
@@ -601,6 +836,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         setPhase('wifi-pick');
         return;
       case 'central-waiting':
+      case 'device-code-waiting':
         setPhase('linking-account');
         return;
       default:
@@ -620,6 +856,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     identityRef.current = null;
     robotIpRef.current = null;
     setRobotLanIp(null);
+    setDeviceUserCode(null);
+    setDeviceVerificationUri(null);
     setError(null);
     setScanning(false);
     setDevices([]);
@@ -638,6 +876,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     selectedSsid,
     result,
     robotLanIp,
+    deviceUserCode,
+    deviceVerificationUri,
     startScanning,
     rescan,
     selectDevice,
@@ -645,6 +885,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     rescanWifi,
     selectNetwork,
     submitPassword,
+    skipWifiSetup,
     linkAccount,
     retry,
     reset,
@@ -656,8 +897,13 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 /**
  * Poll HF central until a robot whose `meta.hardware_id` matches the BLE
  * `hardwareId` shows up, or we give up. Returns the matching entry, or `null`
- * (Wi-Fi joined but not yet registered - the user is sent back to the list to
- * wait it out). When we have no hwid to match on, we resolve `null` quickly.
+ * when the robot never registered in time. A `null` is now treated by
+ * `linkAccount` as an UNCONFIRMED OAuth (a recoverable error), not a success.
+ *
+ * When we have no hwid to match on we can't confirm at all, so we resolve
+ * `null` quickly (after a short grace) rather than spinning the full timeout —
+ * the caller then surfaces `oauth-unconfirmed` and the user retries. (This is
+ * the honest outcome: without a hwid we have no signal that sign-in worked.)
  */
 async function waitForCentral(
   token: string,

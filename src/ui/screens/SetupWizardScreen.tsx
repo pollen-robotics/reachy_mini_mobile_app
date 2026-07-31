@@ -41,7 +41,6 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import type { BleDevice } from '@/features/ble/bleWifi';
@@ -78,10 +77,12 @@ const PHASE_FRACTION: Record<SetupPhase, number> = {
   connecting: 0.2,
   pin: 0.27,
   authenticating: 0.34,
+  'wifi-already-connected': 0.46,
   'wifi-scanning': 0.46,
   'wifi-pick': 0.56,
   'wifi-connecting': 0.76,
   'linking-account': 0.82,
+  'device-code-waiting': 0.88,
   'central-waiting': 0.92,
   done: 1,
   error: 0,
@@ -242,6 +243,14 @@ function StepView({
       return <PinView onSubmit={m.submitPin} />;
     case 'authenticating':
       return <BusyView title="Checking the code" caption="One moment…" />;
+    case 'wifi-already-connected':
+      return (
+        <AlreadyOnlineView
+          ssid={m.selectedSsid ?? ''}
+          onSkip={m.skipWifiSetup}
+          onChangeNetwork={m.rescanWifi}
+        />
+      );
     case 'wifi-scanning':
       return <BusyView title="Finding networks" caption="Scanning nearby Wi-Fi (~10 s)…" />;
     case 'wifi-pick':
@@ -258,7 +267,9 @@ function StepView({
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
     case 'linking-account':
-      return <LinkAccountView onLink={m.linkAccount} lanIp={m.robotLanIp} />;
+      return <LinkAccountView onLink={m.linkAccount} />;
+    case 'device-code-waiting':
+      return <DeviceCodeView userCode={m.deviceUserCode} verificationUri={m.deviceVerificationUri} />;
     case 'central-waiting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="registering" />;
     case 'done':
@@ -300,7 +311,7 @@ function stepFromFraction(f: number): number {
   return TOTAL_STEPS;
 }
 
-function Headline({ title, caption }: { title: string; caption?: string }) {
+function Headline({ title, caption }: { title: string; caption?: React.ReactNode }) {
   return (
     <Stack spacing={0.75} sx={{ alignItems: 'center', textAlign: 'center' }}>
       <Typography component="h1" sx={{ fontSize: TYPO.xxl, fontWeight: FONT_WEIGHT.semibold, m: 0 }}>
@@ -417,7 +428,7 @@ function SetupScaffold({
 }: {
   hero?: React.ReactNode;
   title: string;
-  caption?: string;
+  caption?: React.ReactNode;
   body?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
@@ -636,15 +647,17 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
       body={
         <TextField
           value={pin}
-          onChange={e => setPin(e.target.value.replace(/\s/g, '').slice(0, PIN_LENGTH))}
+          // The setup code is numeric (e.g. `00966`): strip everything but
+          // digits so a stray letter / paste can't get in, and cap the length.
+          onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, PIN_LENGTH))}
           onKeyDown={e => {
             if (e.key === 'Enter') submit();
           }}
           autoFocus
           slotProps={{
             htmlInput: {
-              inputMode: 'text',
-              autoCapitalize: 'characters',
+              inputMode: 'numeric',
+              pattern: '[0-9]*',
               'aria-label': 'Setup code',
               style: {
                 textAlign: 'center',
@@ -848,58 +861,125 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
     stage === 'joining'
       ? `Joining ${ssid || 'the network'}…`
       : 'Registering with Hugging Face…';
-  return <SetupScaffold hero={<CircularProgress size={26} sx={{ color: 'primary.main' }} />} title={title} caption={caption} />;
+  return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />} title={title} caption={caption} />;
 }
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
 
-function LinkAccountView({ onLink, lanIp }: { onLink: () => void; lanIp: string | null }) {
+function LinkAccountView({ onLink }: { onLink: () => void }) {
   return (
     <SetupScaffold
-      title="Link your Reachy"
+      title="Link me to Hugging Face"
       caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
-      body={<RobotAddressNote lanIp={lanIp} />}
       actions={<PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>}
     />
   );
 }
 
+/* --- 6c. device-code sign-in (redirect-free HF OAuth) -------------------- */
+
 /**
- * Tell the user how we'll reach the robot for the OAuth step. When we read its
- * LAN IP over Bluetooth we show it (the reliable path); otherwise we fall back
- * to mDNS by name and say so, so a failure to resolve isn't a mystery.
+ * Redirect-free Hugging Face sign-in (device-code flow): the browser is open on
+ * HF's device page and we're polling the robot for completion. The robot talks
+ * to HF directly, so nothing depends on reaching it at `reachy-mini.local` -
+ * this is the mDNS-free path used on daemons that support it. We surface the
+ * code in-app (and a manual "open again" link) as a backup in case the browser
+ * lost the pre-filled query.
  */
-function RobotAddressNote({ lanIp }: { lanIp: string | null }) {
-  if (lanIp) {
-    return (
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{
-          alignItems: 'center',
-          px: 1.5,
-          py: 1,
-          borderRadius: RADIUS.md,
-          bgcolor: alpha(STATUS.success, 0.12),
-        }}
-      >
-        <WifiIcon sx={{ fontSize: 18, color: STATUS.success }} />
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.primary' }}>
-          Found your Reachy at{' '}
-          <Box
-            component="span"
-            sx={{ fontWeight: FONT_WEIGHT.semibold, fontVariantNumeric: 'tabular-nums' }}
-          >
-            {lanIp}
-          </Box>
-        </Typography>
-      </Stack>
-    );
-  }
+function DeviceCodeView({
+  userCode,
+  verificationUri,
+}: {
+  userCode: string | null;
+  verificationUri: string | null;
+}) {
   return (
-    <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
-      We'll reach your Reachy by name on your Wi-Fi (reachy-mini.local).
-    </Typography>
+    <SetupScaffold
+      hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />}
+      title="Finish in your browser"
+      caption="We opened Hugging Face for you. Sign in and confirm the code below to bring your Reachy online - keep this app open."
+      body={
+        userCode ? (
+          <Stack spacing={2} sx={{ width: '100%', alignItems: 'center' }}>
+            <Box
+              sx={{
+                px: 3,
+                py: 1.5,
+                bgcolor: 'background.paper',
+                borderRadius: `${RADIUS.lg}px`,
+                border: theme => `1px solid ${theme.palette.divider}`,
+              }}
+            >
+              <Typography
+                sx={{
+                  fontFamily: 'monospace',
+                  fontSize: '1.7rem',
+                  fontWeight: FONT_WEIGHT.bold,
+                  letterSpacing: '0.3rem',
+                  textAlign: 'center',
+                  // Trailing letter-spacing pads the right edge; nudge back to center.
+                  pl: '0.3rem',
+                }}
+              >
+                {userCode}
+              </Typography>
+            </Box>
+            {verificationUri ? (
+              <Button
+                onClick={() => void openExternalUrl(verificationUri)}
+                sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
+              >
+                Open Hugging Face again ↗
+              </Button>
+            ) : null}
+          </Stack>
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * Robot is already on Wi-Fi (detected over BLE right after the PIN step): there
+ * is nothing to provision, so we offer to skip straight to account linking. The
+ * secondary action re-runs the normal Wi-Fi pick for users who want to move the
+ * robot to a different network. This is also the natural path for "just re-link
+ * Hugging Face" on a robot that's already online.
+ */
+function AlreadyOnlineView({
+  ssid,
+  onSkip,
+  onChangeNetwork,
+}: {
+  ssid: string;
+  onSkip: () => void;
+  onChangeNetwork: () => void;
+}) {
+  return (
+    <SetupScaffold
+      title="Already online"
+      caption={
+        ssid ? (
+          <>
+            I'm already online on{' '}
+            <Box component="span" sx={{ fontWeight: FONT_WEIGHT.semibold }}>
+              {ssid}
+            </Box>
+            . You can skip Wi-Fi setup and finish linking me to Hugging Face.
+          </>
+        ) : (
+          "I'm already online. You can skip Wi-Fi setup and finish linking me to Hugging Face."
+        )
+      }
+      actions={
+        <Stack spacing={1} sx={{ width: '100%' }}>
+          <PrimaryButton onClick={onSkip}>Continue</PrimaryButton>
+          <TextButton onClick={onChangeNetwork} sx={{ color: 'text.secondary' }}>
+            Use a different network
+          </TextButton>
+        </Stack>
+      }
+    />
   );
 }
 

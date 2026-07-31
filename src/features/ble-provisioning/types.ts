@@ -22,10 +22,12 @@ export type SetupPhase =
   | 'connecting' // GATT connect + read identity (hwid)
   | 'pin' // user enters the 5-char setup code
   | 'authenticating' // PIN_ + WIFI_KEYEX in flight
+  | 'wifi-already-connected' // robot already on Wi-Fi: offer to skip provisioning
   | 'wifi-scanning' // WIFI_SCAN in flight (~10 s)
   | 'wifi-pick' // choose an SSID + enter its password inline
   | 'wifi-connecting' // sealed connect + poll WIFI_STATUS
   | 'linking-account' // robot-side HF OAuth (open browser) so it can register
+  | 'device-code-waiting' // redirect-free (device-code) HF sign-in: browser open, polling the robot
   | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central (last step)
   | 'done' // success - robot reachable; naming happens in the first wake-up wizard
   | 'error'; // recoverable failure (see SetupError.recoverPhase)
@@ -60,6 +62,14 @@ export interface SetupError {
     | 'daemon-unreachable'
     | 'ble-dropped'
     | 'timeout'
+    // No usable LAN IP for the robot was read over BLE, so we can't reach its
+    // OAuth endpoint. We reach the robot strictly by IP (mDNS is unreliable on
+    // mobile and never used), so a missing IP is a hard, explicit failure.
+    | 'robot-ip-unknown'
+    // The robot never registered on HF central after the OAuth step, so we
+    // could not confirm sign-in actually completed. Treated as a recoverable
+    // failure instead of a silent success.
+    | 'oauth-unconfirmed'
     | 'unknown';
   /** Human-readable, shown verbatim in the error step. */
   message: string;
@@ -70,8 +80,8 @@ export interface SetupError {
 /** Final payload handed back to the host when provisioning succeeds. */
 export interface SetupResult {
   hardwareId: string | null;
-  /** The matching central listing, when it appeared before we gave up
-   *  waiting. `null` means "Wi-Fi joined but not yet visible on central" -
-   *  the user is sent back to the list to wait it out. */
+  /** The matching central listing. Always non-null on success now: we only
+   *  reach `done` once the robot has actually registered on central (that's
+   *  our OAuth-completed signal). Kept nullable for the type's history. */
   robot: CentralRobotEntry | null;
 }
