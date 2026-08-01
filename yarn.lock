@@ -111,7 +111,7 @@
   dependencies:
     "@babel/types" "^7.29.0"
 
-"@babel/runtime@^7.12.5", "@babel/runtime@^7.18.3", "@babel/runtime@^7.28.6", "@babel/runtime@^7.5.5", "@babel/runtime@^7.8.7":
+"@babel/runtime@^7.12.5", "@babel/runtime@^7.18.3", "@babel/runtime@^7.5.5", "@babel/runtime@^7.8.7":
   version "7.29.2"
   resolved "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.2.tgz"
   integrity sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==
@@ -578,22 +578,10 @@
   dependencies:
     "@tauri-apps/api" ">=2.0.0-beta.6"
 
-"@mui/core-downloads-tracker@^7.3.10":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/core-downloads-tracker/-/core-downloads-tracker-7.3.10.tgz"
-  integrity sha512-vrOpWRmPJSuwLo23J62wggEm/jvGdzqctej+UOCtgDUz6nZJQuj3ByPccVyaa7eQmwAzUwKN56FQPMKkqbj1GA==
-
 "@mui/core-downloads-tracker@^9.0.1":
   version "9.0.1"
   resolved "https://registry.yarnpkg.com/@mui/core-downloads-tracker/-/core-downloads-tracker-9.0.1.tgz#74be0bfd6bef24d76fe009be9d91851516278749"
   integrity sha512-GzamIIhZ1bH77dq7eKaeyRgJdkypsxin4jBFq2EMs4lBWRR0LFO1CSVMsoebn/VvjcNrnrOrjy48MkrkQUK2iw==
-
-"@mui/icons-material@^7.3.5":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/icons-material/-/icons-material-7.3.10.tgz"
-  integrity sha512-Au0ma4NSKGKNiimukj8UT/W1x2Qx6Qwn2RvFGykiSqVLYBNlIOPbjnIMvrwLGLu89EEpTVdu/ys/OduZR+tWqw==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
 
 "@mui/icons-material@^9.0.0":
   version "9.0.1"
@@ -601,24 +589,6 @@
   integrity sha512-5PRpQjVLTNLyV/2J9J53Yz4R0tVbodG0BQDN2zQI1QBG1OPYM25ar+4N20eyFOfJT6zKglLzsnU70+zdVLaTkw==
   dependencies:
     "@babel/runtime" "^7.29.2"
-
-"@mui/material@^7.3.5":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/material/-/material-7.3.10.tgz"
-  integrity sha512-cHvGOk2ZEfbQt3LnGe0ZKd/ETs9gsUpkW66DCO+GSjMZhpdKU4XsuIr7zJ/B/2XaN8ihxuzHfYAR4zPtCN4RYg==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-    "@mui/core-downloads-tracker" "^7.3.10"
-    "@mui/system" "^7.3.10"
-    "@mui/types" "^7.4.12"
-    "@mui/utils" "^7.3.10"
-    "@popperjs/core" "^2.11.8"
-    "@types/react-transition-group" "^4.4.12"
-    clsx "^2.1.1"
-    csstype "^3.2.3"
-    prop-types "^15.8.1"
-    react-is "^19.2.3"
-    react-transition-group "^4.4.5"
 
 "@mui/material@^9.0.0":
   version "9.0.1"
@@ -638,15 +608,6 @@
     react-is "^19.2.4"
     react-transition-group "^4.4.5"
 
-"@mui/private-theming@^7.3.10":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/private-theming/-/private-theming-7.3.10.tgz"
-  integrity sha512-j3EZN+zOctxUISvJSmsEPo5o2F8zse4l5vRkBY+ps6UtnL6J7o14kUaI4w7gwo73id9e3cDNMVQK/9BVaMHVBw==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-    "@mui/utils" "^7.3.10"
-    prop-types "^15.8.1"
-
 "@mui/private-theming@^9.0.1":
   version "9.0.1"
   resolved "https://registry.yarnpkg.com/@mui/private-theming/-/private-theming-9.0.1.tgz#3bd627d10326fb682b824c4a1fa5d07b0401f813"
@@ -654,18 +615,6 @@
   dependencies:
     "@babel/runtime" "^7.29.2"
     "@mui/utils" "^9.0.1"
-    prop-types "^15.8.1"
-
-"@mui/styled-engine@^7.3.10":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/styled-engine/-/styled-engine-7.3.10.tgz"
-  integrity sha512-WxE9SiF8xskAQqGjsp0poXCkCqsoXFEsSr0HBXfApmGHR+DBnXRp+z46Vsltg4gpPM4Z96DeAQRpeAOnhNg7Ng==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-    "@emotion/cache" "^11.14.0"
-    "@emotion/serialize" "^1.3.3"
-    "@emotion/sheet" "^1.4.0"
-    csstype "^3.2.3"
     prop-types "^15.8.1"
 
 "@mui/styled-engine@^9.0.0":
@@ -677,20 +626,6 @@
     "@emotion/cache" "^11.14.0"
     "@emotion/serialize" "^1.3.3"
     "@emotion/sheet" "^1.4.0"
-    csstype "^3.2.3"
-    prop-types "^15.8.1"
-
-"@mui/system@^7.3.10":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/system/-/system-7.3.10.tgz"
-  integrity sha512-/sfPpdpJaQn7BSF+avjIdHSYmxHp0UOBYNxSG9QGKfMOD6sLANCpRPCnanq1Pe0lFf0NHkO2iUk0TNzdWC1USQ==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-    "@mui/private-theming" "^7.3.10"
-    "@mui/styled-engine" "^7.3.10"
-    "@mui/types" "^7.4.12"
-    "@mui/utils" "^7.3.10"
-    clsx "^2.1.1"
     csstype "^3.2.3"
     prop-types "^15.8.1"
 
@@ -708,31 +643,12 @@
     csstype "^3.2.3"
     prop-types "^15.8.1"
 
-"@mui/types@^7.4.12":
-  version "7.4.12"
-  resolved "https://registry.npmjs.org/@mui/types/-/types-7.4.12.tgz"
-  integrity sha512-iKNAF2u9PzSIj40CjvKJWxFXJo122jXVdrmdh0hMYd+FR+NuJMkr/L88XwWLCRiJ5P1j+uyac25+Kp6YC4hu6w==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-
 "@mui/types@^9.0.0":
   version "9.0.0"
   resolved "https://registry.yarnpkg.com/@mui/types/-/types-9.0.0.tgz#92d8c64e72cb863ee59108cb20cc476d648a3ab9"
   integrity sha512-i1cuFCAWN44b3AJWO7mh7tuh1sqbQSeVr/94oG0TX5uXivac8XalgE4/6fQZcmGZigzbQ35IXxj/4jLpRIBYZg==
   dependencies:
     "@babel/runtime" "^7.29.2"
-
-"@mui/utils@^7.3.10":
-  version "7.3.10"
-  resolved "https://registry.npmjs.org/@mui/utils/-/utils-7.3.10.tgz"
-  integrity sha512-7y2eIfy0h7JPz+Yy4pS+wgV68d46PuuxDqKBN4Q8VlPQSsCAGwroMCV6xWyc7g9dvEp8ZNFsknc59GHWO+r6Ow==
-  dependencies:
-    "@babel/runtime" "^7.28.6"
-    "@mui/types" "^7.4.12"
-    "@types/prop-types" "^15.7.15"
-    clsx "^2.1.1"
-    prop-types "^15.8.1"
-    react-is "^19.2.3"
 
 "@mui/utils@^9.0.1":
   version "9.0.1"
@@ -763,16 +679,15 @@
   resolved "https://registry.yarnpkg.com/@noble/hashes/-/hashes-1.8.0.tgz#cee43d801fcef9644b11b8194857695acd5f815a"
   integrity sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==
 
-"@pollen-robotics/reachy-mini-sdk@1.8.0-main.3d52f7d":
-  version "1.8.0-main.3d52f7d"
-  resolved "https://registry.yarnpkg.com/@pollen-robotics/reachy-mini-sdk/-/reachy-mini-sdk-1.8.0-main.3d52f7d.tgz#e698ea5252134caa04d92231b5cb8a4f232acde4"
-  integrity sha512-UGbg7voVJrX9tn7yFhilzD+lXY/QKsNf9Ks98kKQxMDks/io3xQ6fJN4EhbVtOJ+fycqc9XILgsl8PSDwBpgtQ==
+"@pollen-robotics/reachy-mini-sdk@file:vendor/reachy-mini-sdk-branch.tgz":
+  version "0.0.0-managed-by-ci"
+  resolved "file:vendor/reachy-mini-sdk-branch.tgz#0a0ea30ad65141e9419d273140d903380b2c9064"
   dependencies:
     "@emotion/react" "^11.14.0"
     "@emotion/styled" "^11.14.1"
     "@huggingface/hub" "^0.15.2"
-    "@mui/icons-material" "^7.3.5"
-    "@mui/material" "^7.3.5"
+    "@mui/icons-material" "^9.0.0"
+    "@mui/material" "^9.0.0"
 
 "@popperjs/core@^2.11.8":
   version "2.11.8"
@@ -2327,11 +2242,6 @@ react-is@^16.13.1, react-is@^16.7.0:
   version "16.13.1"
   resolved "https://registry.npmjs.org/react-is/-/react-is-16.13.1.tgz"
   integrity sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==
-
-react-is@^19.2.3:
-  version "19.2.5"
-  resolved "https://registry.npmjs.org/react-is/-/react-is-19.2.5.tgz"
-  integrity sha512-Dn0t8IQhCmeIT3wu+Apm1/YVsJXsGWi6k4sPdnBIdqMVtHtv0IGi6dcpNpNkNac0zB2uUAqNX3MHzN8c+z2rwQ==
 
 react-is@^19.2.4:
   version "19.2.6"
