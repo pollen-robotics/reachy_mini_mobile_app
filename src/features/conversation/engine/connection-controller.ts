@@ -231,6 +231,54 @@ export function createConnectionController(
     console.info(`[connection] transport-recovered cause=${cause}`);
   };
 
+  // ─── Auto re-dial policy ────────────────────────────────────────
+  /**
+   * Behind the `robot-events.ts` `sessionReconnecting` /
+   * `sessionReconnected` listeners (SDK `autoReconnect: true`).
+   *
+   * During a re-dial the transport is down BY DESIGN for up to ~20 s:
+   * dc-health must not count the failing writes (it would escalate to
+   * a fatal error and tear the session down mid-recovery), the pose
+   * dispatcher must stage instead of send, and the user needs an
+   * honest caption. We deliberately do NOT touch the connection FSM:
+   * the engine's invariants tie the conversation FSM to `live`, and
+   * the conversation pipeline (HF realtime websocket) survives the
+   * re-dial just fine - only the robot leg is being rebuilt.
+   *
+   * On success the daemon serves a FRESH session: the motor-mode
+   * dedup cache is stale (the new session never saw our `enabled`),
+   * so it is cleared and re-synced. The video path heals itself via
+   * the SDK's `videoTrack` re-fire + the cache listener.
+   */
+  const onSessionReconnecting = (detail: {
+    attempt: number;
+    maxAttempts: number;
+    cause: string;
+  }): void => {
+    console.info(
+      `[connection] session-reconnecting attempt=${detail.attempt}/` +
+        `${detail.maxAttempts} cause=${detail.cause}`,
+    );
+    dcHealth.setSuspended(true);
+    onTransportDegraded(`redial:${detail.cause}`);
+    emitErrorMessage("Reconnecting to your Reachy…");
+  };
+
+  const onSessionReconnected = (detail: { attempt: number }): void => {
+    console.info(
+      `[connection] session-reconnected attempt=${detail.attempt}`,
+    );
+    dcHealth.setSuspended(false);
+    onTransportRecovered("redial");
+    emitErrorMessage(null);
+    // Fresh daemon session: forget the previous session's motor mode
+    // so the dedup guard can't swallow the re-assert, then re-sync
+    // (no-op unless the bring-up / conversation actually needs
+    // motors right now).
+    session.recordMotorMode(null);
+    syncMotorMode();
+  };
+
   // ─── Motor-mode sync ────────────────────────────────────────────
   /**
    * Sync the daemon-side motor mode to the current state of both FSMs,
@@ -547,6 +595,12 @@ export function createConnectionController(
       // Negotiate the audio tracks up front so the HF realtime bridge
       // has them ready when the user taps the orb to start.
       enableMicrophone: true,
+      // Let the SDK re-dial an established session whose transport
+      // died (ICE failure, network loss) instead of surfacing a
+      // fatal error. The engine reacts to `sessionReconnecting` /
+      // `sessionReconnected` (see the auto re-dial policy above);
+      // ignored by SDK builds that predate the option.
+      autoReconnect: true,
     });
     // Hand the SDK ref to the session so its lifecycle methods can use
     // it. The controller's local `robot` stays in sync; the session is
@@ -564,6 +618,8 @@ export function createConnectionController(
       probeRobotLink,
       onTransportDegraded,
       onTransportRecovered,
+      onSessionReconnecting,
+      onSessionReconnected,
     });
 
     let authenticated = false;

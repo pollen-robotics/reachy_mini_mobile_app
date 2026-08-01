@@ -36,6 +36,19 @@
  *                          iOS WKWebView, which is why we *also* listen
  *                          to `online`/`offline`).
  *
+ * Auto re-dial events (SDK `autoReconnect: true`, see
+ * `_runRedialLoop` in the SDK):
+ *
+ *   - `sessionReconnecting` { attempt: number; maxAttempts: number;
+ *                             cause: string }
+ *                             One per re-dial attempt. The old
+ *                             transport is already torn down.
+ *   - `sessionReconnected`  { attempt: number }
+ *                             Re-dial succeeded: fresh PC + DC, a new
+ *                             `videoTrack` fires alongside. Daemon-side
+ *                             per-session state (motor mode, pose
+ *                             subscription) must be re-asserted by us.
+ *
  * We intentionally don't strong-type these via `addEventListener`
  * overloads: the payloads reach us as `CustomEvent<…>` casts at the
  * few call sites (`robot-events.ts`), which stays readable without an
@@ -57,6 +70,15 @@ export interface ReachyMiniOptions {
   enableMicrophone?: boolean;
   clientId?: string;
   appName?: string;
+  /**
+   * Enable the SDK's automatic session re-dial: when an ESTABLISHED
+   * session's transport dies (ICE failure past the grace window,
+   * network loss), the SDK tears the WebRTC leg down and retries
+   * `startSession` with backoff instead of emitting a fatal error.
+   * Emits `sessionReconnecting` per attempt and `sessionReconnected`
+   * on success; a terminal give-up falls back to `sessionStopped`.
+   */
+  autoReconnect?: boolean;
 }
 
 export interface ReachyMiniInstance extends EventTarget {
@@ -83,6 +105,14 @@ export interface ReachyMiniInstance extends EventTarget {
 
   startSession(robotId: string): Promise<void>;
   stopSession(): Promise<void>;
+
+  /**
+   * Toggle the SDK's automatic session re-dial at runtime (see the
+   * `autoReconnect` constructor option). Disabling cancels any
+   * in-flight re-dial loop. Optional: absent on SDK builds that
+   * predate the auto-reconnect pass.
+   */
+  setAutoReconnect?(enabled: boolean): void;
 
   attachVideo(el: HTMLVideoElement): () => void;
 

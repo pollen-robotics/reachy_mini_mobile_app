@@ -78,6 +78,20 @@ export interface WireRobotEventsDeps {
   /** Exit degraded mode (ungate pose writes). No-op when we weren't
    *  degraded - again, the hook's business. */
   onTransportRecovered: (cause: string) => void;
+
+  // ─── Auto re-dial hooks (SDK `autoReconnect: true`) ────────────────
+  /** The SDK began (or is retrying) an automatic session re-dial. The
+   *  old transport is already gone: the hook suspends dc-health,
+   *  enters degraded mode and surfaces a "Reconnecting…" caption. */
+  onSessionReconnecting: (detail: {
+    attempt: number;
+    maxAttempts: number;
+    cause: string;
+  }) => void;
+  /** The re-dial landed: fresh PC + DC on the same robot. The hook
+   *  resumes dc-health, exits degraded mode and re-asserts the
+   *  daemon-side per-session state (motor mode). */
+  onSessionReconnected: (detail: { attempt: number }) => void;
 }
 
 export function wireRobotEvents(deps: WireRobotEventsDeps): void {
@@ -93,6 +107,8 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     probeRobotLink,
     onTransportDegraded,
     onTransportRecovered,
+    onSessionReconnecting,
+    onSessionReconnected,
   } = deps;
 
   const videoCache = session.videoCache;
@@ -119,6 +135,8 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     "networkOnline",
     "networkOffline",
     "networkChange",
+    "sessionReconnecting",
+    "sessionReconnected",
     "error",
   ] as const) {
     robot.addEventListener(name, (event) => {
@@ -297,5 +315,46 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     if (isConversationActive()) {
       void probeRobotLink();
     }
+  });
+
+  // ─── Auto re-dial (SDK `autoReconnect: true`) ────────────────────
+  //
+  // When an ESTABLISHED session's transport dies, the SDK now tears
+  // the WebRTC leg down and re-dials `startSession` itself instead of
+  // emitting a fatal `error` + `sessionStopped`. From the engine's
+  // point of view:
+  //
+  //   - `sessionReconnecting` (per attempt) - the link is down by
+  //     design. The hook suspends dc-health (30 Hz pose writes all
+  //     fail during the re-dial; the failure streak would otherwise
+  //     escalate to a fatal error mid-recovery), gates the pose
+  //     dispatcher and puts up the "Reconnecting…" caption.
+  //   - `sessionReconnected` - fresh PC + DC on the same robot. A new
+  //     `videoTrack` fires alongside (handled by the cache listener
+  //     above); the hook resumes dc-health and re-asserts the
+  //     daemon-side motor mode (a fresh daemon session starts from
+  //     scratch).
+  //   - a terminal give-up (all attempts failed) falls back to the
+  //     plain `sessionStopped` event - the unsolicited-drop fatal
+  //     path above already owns that surface.
+  robot.addEventListener("sessionReconnecting", (event) => {
+    const detail = (
+      event as CustomEvent<{
+        attempt: number;
+        maxAttempts: number;
+        cause: string;
+      }>
+    ).detail;
+    // The cached stream belongs to the torn-down PC; a late
+    // `attachVideo()` during the re-dial must not replay it. The
+    // fresh stream re-populates the cache via the `videoTrack`
+    // listener when the re-dial lands.
+    videoCache.clear();
+    onSessionReconnecting(detail);
+  });
+
+  robot.addEventListener("sessionReconnected", (event) => {
+    const detail = (event as CustomEvent<{ attempt: number }>).detail;
+    onSessionReconnected(detail);
   });
 }

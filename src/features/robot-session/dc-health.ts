@@ -45,6 +45,15 @@ export interface DcHealthMonitor {
   /** Reset the failure counter. Called on a fresh session start so
    *  a previous flaky session doesn't poison the new one. */
   reset: () => void;
+  /**
+   * Pause / resume the monitor. While suspended, send failures are
+   * not counted and probes are no-ops. Used during the SDK's auto
+   * re-dial: the transport is DOWN BY DESIGN for up to ~20 s and
+   * every queued motion write fails - without the suspension the
+   * failure streak would escalate to a fatal error and kill the
+   * reconnection mid-flight. Resuming also resets the counter.
+   */
+  setSuspended: (suspended: boolean) => void;
 }
 
 // Raised from 40 → 120 (2026-06) alongside the pose-dispatcher
@@ -61,8 +70,10 @@ const FAILURE_LOG_INTERVAL = 20;
 
 export function createDcHealthMonitor(deps: DcHealthDeps): DcHealthMonitor {
   let consecutiveSendFailures = 0;
+  let suspended = false;
 
   const recordSend = (ok: boolean, where: string): void => {
+    if (suspended) return;
     if (ok) {
       consecutiveSendFailures = 0;
       return;
@@ -87,6 +98,7 @@ export function createDcHealthMonitor(deps: DcHealthDeps): DcHealthMonitor {
   };
 
   const probeRobotLink = async (): Promise<void> => {
+    if (suspended) return;
     const robot = deps.getRobot();
     if (!robot) return;
     // Neutral antennas is a safe "heartbeat" - won't move the robot
@@ -113,5 +125,13 @@ export function createDcHealthMonitor(deps: DcHealthDeps): DcHealthMonitor {
     consecutiveSendFailures = 0;
   };
 
-  return { recordSend, probeRobotLink, reset };
+  const setSuspended = (value: boolean): void => {
+    if (suspended === value) return;
+    suspended = value;
+    // Failures accumulated before the suspension belong to the dead
+    // transport; the resumed monitor judges the NEW one from zero.
+    if (!value) consecutiveSendFailures = 0;
+  };
+
+  return { recordSend, probeRobotLink, reset, setSuspended };
 }
