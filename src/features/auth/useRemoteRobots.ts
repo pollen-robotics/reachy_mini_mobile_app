@@ -11,7 +11,9 @@
  *      poll. Authoritative for the initial render and any transient
  *      missed-event scenario.
  *
- * 2. `openCentralListener` SSE stream (`/events`):
+ * 2. `openCentralListener` SSE stream (`/events`), provided by the
+ *    SDK (shared with the host picker, incl. the lease heartbeat
+ *    that keeps central from silently TTL-evicting the listener):
  *    - Realtime push of busy/free transitions and online/offline
  *      changes from central. We patch the TanStack Query cache as
  *      events arrive so the UI flips within ~50 ms instead of
@@ -52,7 +54,8 @@ import {
   type CentralListenerHandle,
   type CentralPeerStatusChangedEvent,
   type CentralSessionStateChangedEvent,
-} from './centralListenerStream';
+} from '@pollen-robotics/reachy-mini-sdk';
+import { CENTRAL_SIGNALING_URL } from '@/shared/env';
 import { dropProducer, patchBusyState } from './remoteRobotsReducers';
 
 export type RemoteRobotsState =
@@ -143,6 +146,8 @@ export function useRemoteRobots(
 
     const handle: CentralListenerHandle = openCentralListener({
       token,
+      signalingUrl: CENTRAL_SIGNALING_URL,
+      appName: 'Reachy Mini Mobile (scan)',
       onConnect: () => {
         // Reconnect after a drop: the cache may have missed
         // events while the stream was down. Trigger a REST
