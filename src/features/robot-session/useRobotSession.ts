@@ -39,6 +39,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import {
+  fetchRobotsFromCentral,
+  extractRobotHardwareId,
+  extractRobotId,
+} from '@/features/auth/fetchRobotsFromCentral';
+import {
   mountConversation,
   type ConnectionState,
   type ConversationState,
@@ -234,8 +239,19 @@ export interface RobotSessionHandle {
 }
 
 interface UseRobotSessionOptions {
-  /** Central peer id of the robot the user picked upstream. */
+  /** Central peer id of the robot the user picked upstream. Used as
+   *  the engine mount key and the initial connect target - but the
+   *  engine re-resolves the live peer id (see `robotHardwareId`) before
+   *  each `startSession`, because this snapshot can go stale. */
   robotId: string;
+  /**
+   * Stable hardware id of the picked robot (from the central listing's
+   * `meta.hardware_id`), or `null` for a daemon too old to expose one.
+   * When present, the engine re-resolves the live peer id from central
+   * by matching this id right before each connect, self-healing against
+   * the peer-id rotation that breaks the bare `robotId` snapshot.
+   */
+  robotHardwareId?: string | null;
   /** HF token, kept on the panel's session storage by upstream
    *  auth hook. Forwarded here so the engine can re-seed if it
    *  gets cleared mid-session. */
@@ -256,6 +272,7 @@ const TOOL_TOAST_MIN_MS = 1500;
 
 export function useRobotSession({
   robotId,
+  robotHardwareId,
   token,
   audioLevelsTargetRef,
   shouldDeferInitialWakeUp,
@@ -266,6 +283,14 @@ export function useRobotSession({
   // closure captured on first render.
   const shouldDeferInitialWakeUpRef = useRef(shouldDeferInitialWakeUp);
   shouldDeferInitialWakeUpRef.current = shouldDeferInitialWakeUp;
+  // Token + hardware id are read through refs by the peer-id resolver
+  // below: the engine mounts once per `robotId`, so the resolver closure
+  // must see the CURRENT token / hardware id rather than the values
+  // captured on first render.
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const hardwareIdRef = useRef(robotHardwareId ?? null);
+  hardwareIdRef.current = robotHardwareId ?? null;
   // Used for StrictMode-safe mount: a fast remount could race with
   // the previous engine's teardown if we didn't gate on a per-mount
   // cancel token.
@@ -347,6 +372,28 @@ export function useRobotSession({
         // current first-wake-up decision, not the one at mount time.
         shouldDeferInitialWakeUp: () =>
           shouldDeferInitialWakeUpRef.current?.() ?? false,
+        // Re-resolve the live peer id from central by the robot's stable
+        // hardware id right before each connect. The bare `robotId` we
+        // mounted with is a snapshot that rotates on every relay
+        // reconnect, so dialing it directly is the main reason a
+        // connection would hang. Returns `null` (⇒ keep the captured id)
+        // when we have no hardware id / token or central can't match it.
+        resolvePeerId: async (): Promise<string | null> => {
+          const hwid = hardwareIdRef.current;
+          const tok = tokenRef.current;
+          if (!hwid || !tok) return null;
+          try {
+            const res = await fetchRobotsFromCentral(tok);
+            if (!res.ok) return null;
+            const match = res.robots.find(
+              (r) => extractRobotHardwareId(r) === hwid,
+            );
+            return match ? extractRobotId(match) : null;
+          } catch (err) {
+            console.warn('[session] peer-id re-resolution failed:', err);
+            return null;
+          }
+        },
         // Pass a *getter*, not `audioLevelsTargetRef.current`: the
         // orb DOM may be unmounted/remounted while the engine
         // stays alive (tab switches between Conv ↔ Apps, iframe

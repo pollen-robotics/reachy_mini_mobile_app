@@ -22,9 +22,17 @@ interface RemoteSignInScreenProps {
    * destination to fall back to until the user has signed in).
    */
   onBack?: () => void;
+  /**
+   * True when the user was bounced here because their token expired
+   * or was rejected (auto-eviction), rather than a fresh launch or a
+   * deliberate sign-out. Surfaces a short "session expired" notice so
+   * the sudden return to sign-in reads as expected, not a random
+   * logout.
+   */
+  expired?: boolean;
 }
 
-export default function RemoteSignInScreen({ onSignedIn, onBack }: RemoteSignInScreenProps) {
+export default function RemoteSignInScreen({ onSignedIn, onBack, expired }: RemoteSignInScreenProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,6 +138,12 @@ export default function RemoteSignInScreen({ onSignedIn, onBack }: RemoteSignInS
         {error ? (
           <Alert severity="error" sx={{ width: '100%', maxWidth: 420 }}>
             {error}
+          </Alert>
+        ) : expired ? (
+          // Only when there's no fresh sign-in error to show: a failed
+          // retry is more actionable than the stale "expired" reason.
+          <Alert severity="info" sx={{ width: '100%', maxWidth: 420 }}>
+            Your Hugging Face session expired. Please sign in again.
           </Alert>
         ) : null}
 

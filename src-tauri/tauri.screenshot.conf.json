@@ -5,10 +5,13 @@
       {
         "label": "main",
         "title": "Reachy Mini",
-        "width": 428,
-        "height": 926,
+        "width": 540,
+        "height": 1105,
         "resizable": false,
-        "decorations": false
+        "decorations": false,
+        "shadow": false,
+        "center": true,
+        "alwaysOnTop": true
       }
     ]
   }

@@ -58,7 +58,8 @@
  * on tab-switch because it's the only piece whose silence-while-
  * background is actually surprising / wasteful.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import {
   BottomNavigation,
   BottomNavigationAction,
@@ -101,7 +102,7 @@ import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
-import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
+import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -161,14 +162,35 @@ interface ConnectedSessionProps {
 }
 
 /**
- * Master switch for the first wake-up wizard. TEMPORARY: kept OFF for
- * now while the flow is still being polished. When `false`, the wizard
- * never mounts AND the bring-up wakes the robot itself as usual (the
- * `shouldDeferInitialWakeUp` gate stays closed because `wakeUpDone`
- * starts `true`), so it stays disabled on the first connection and on
- * every reconnect. Flip to `true` to re-enable the wizard.
+ * Master switch for the first wake-up wizard. When `false`, the wizard
+ * never mounts AND the bring-up wakes the robot itself as usual, on the
+ * first connection and on every reconnect.
  */
 const FIRST_WAKE_UP_WIZARD_ENABLED = false;
+
+/**
+ * Dev-only escape hatch. When `true` (the default in dev) the wizard runs
+ * on EVERY connection, ignoring the robot's persisted "completed" flag, so
+ * we always exercise the flow while iterating. Flip to `false` to respect
+ * the flag like production (wizard shows once, then never again until the
+ * robot's flag is reset). No effect in production builds - there the
+ * persisted robot-side flag always governs.
+ *
+ * "Relaunches on every Reachy startup" falls out of this naturally: the
+ * flag lives on the robot, so it's the same first-connection decision each
+ * time the daemon (re)starts.
+ */
+const FORCE_FIRST_WAKE_UP_IN_DEV = true;
+
+/**
+ * Wizard gate resolution.
+ *  - `pending`: we don't yet know whether to show it (querying the robot's
+ *    persisted flag). We defer the bring-up wake meanwhile so the robot
+ *    stays asleep for a clean wizard entrance.
+ *  - `show`   : mount the wizard; it owns the first `wakeUp()`.
+ *  - `done`   : skip / finished - wake the robot normally, never mount.
+ */
+type WizardGate = 'pending' | 'show' | 'done';
 
 /**
  * Inner component split from the export so we can call
@@ -188,30 +210,122 @@ function ConnectedSession({
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
 
-  // First wake-up wizard. TEMPORARY: gated behind
-  // `FIRST_WAKE_UP_WIZARD_ENABLED` (currently OFF). When disabled we seed
-  // `wakeUpDone` to `true` so the wizard never mounts - on the first
-  // connection AND on every reconnect - and the bring-up wakes the robot
-  // itself. When re-enabled it starts `false` and, with no persistence
-  // yet, triggers on EVERY connection until the daemon/SDK
-  // `get/set_first_wake_up` flag lands.
+  // First wake-up wizard gate. The robot persists a "completed" flag, so the
+  // wizard only ever shows once per robot (until reset) - we don't re-run it
+  // on every connection. In dev, `FORCE_FIRST_WAKE_UP_IN_DEV` overrides that
+  // and shows it every time so we can iterate.
   //
-  // Declared BEFORE `useRobotSession` so we can hand the engine a
-  // first-wake-up gate: while the wizard is still pending we defer the
-  // bring-up wake-up to it (its motor step plays the wake trajectory),
-  // and once it's done (or the wizard is disabled) we wake on connect.
-  const [wakeUpDone, setWakeUpDone] = useState(!FIRST_WAKE_UP_WIZARD_ENABLED);
+  // Seed:
+  //  - wizard disabled          → `done` (never mount, wake on connect).
+  //  - dev force                → `show` (mount every connection).
+  //  - otherwise                → `pending` (resolve from the robot's flag
+  //                               once we're live, see the effect below).
+  //
+  // Declared BEFORE `useRobotSession` so the engine's bring-up gate can read
+  // it: while `pending`/`show` we defer the initial wake so the wizard's
+  // motor step owns the first `wakeUp()`; on `done` we wake on connect.
+  const forceWizard =
+    import.meta.env.DEV && FORCE_FIRST_WAKE_UP_IN_DEV && FIRST_WAKE_UP_WIZARD_ENABLED;
+  const [wizardGate, setWizardGate] = useState<WizardGate>(() => {
+    if (!FIRST_WAKE_UP_WIZARD_ENABLED) return 'done';
+    return forceWizard ? 'show' : 'pending';
+  });
+
+  // True while the on-connect wake-up animation is playing (wizard skipped):
+  // greys out the End-session button so the user can't tear the session down
+  // mid-wake. Cleared when `wakeUp()` resolves (motion done) or times out.
+  const [waking, setWaking] = useState(false);
 
   const session = useRobotSession({
     robotId,
+    robotHardwareId,
     token,
     audioLevelsTargetRef: orbRef,
-    shouldDeferInitialWakeUp: () => !wakeUpDone,
+    shouldDeferInitialWakeUp: () => wizardGate !== 'done',
   });
 
   // Latest published daemon version (GitHub). Fail-open: `null` until it
-  // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
+  // resolves / when offline, which keeps `DaemonUpdateGate` dormant and
+  // `daemonOutdated` false.
   const latestDaemonVersion = useLatestDaemonVersion();
+
+  // Same verdict the mandatory update gate renders on: is the connected
+  // daemon behind the latest public release? Used below to hold the wizard
+  // gate closed until an outdated daemon has been updated. Unknown versions
+  // (offline / pre-update) read as not-outdated (fail-open).
+  const daemonOutdated = isDaemonOutdated(session.daemonVersion, latestDaemonVersion);
+
+  // Resolve the gate once the session is live: query the robot's persisted
+  // first-wake-up flag and either show the wizard or skip it. On skip we
+  // wake the robot ourselves, since we deferred the bring-up wake while the
+  // flag was still unknown. Fail-open: an old daemon / closed channel
+  // (`null`) skips the wizard. Dev-force / disabled short-circuit the seed
+  // above, so this only runs for the real production gating.
+  useEffect(() => {
+    if (wizardGate !== 'pending') return;
+    if (session.phase !== 'live') return;
+    // Wait out the blocking daemon-update gate first. An outdated daemon
+    // predates `get_first_wake_up`, so querying it now would just time out
+    // (fail-open null) and we'd wrongly skip the wizard + wake the robot
+    // before the user even updates. Once they update and the session
+    // reacquires, `session.daemonVersion` changes, `daemonOutdated` flips
+    // false and this re-runs against a current daemon. Dev branch builds can
+    // read "outdated" vs the public release yet still support the command,
+    // so we never block them (mirrors the update gate's own DEV bypass).
+    if (!import.meta.env.DEV && daemonOutdated) return;
+    let cancelled = false;
+    void (async () => {
+      const robot = session.getRobot();
+      const completed = robot ? await robot.getFirstWakeUp() : null;
+      if (cancelled) return;
+      if (completed === false) {
+        setWizardGate('show');
+      } else {
+        setWizardGate('done');
+        if (robot) {
+          // Grey out End-session for the duration of the wake animation.
+          // Bounded by timeoutMs so a missed motion-done edge can't trap it.
+          setWaking(true);
+          void robot
+            .wakeUp({ timeoutMs: 8000 })
+            .catch(() => {})
+            .finally(() => {
+              if (!cancelled) setWaking(false);
+            });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wizardGate, session, daemonOutdated]);
+
+  // Optimistic display name. `robotName` comes from the central listing we
+  // booted the session from, which is fixed for the session's lifetime. The
+  // daemon applies a rename live (status + central relay + mDNS, no restart),
+  // but our in-memory listing won't refresh on its own - so we override the
+  // name locally the moment a rename lands, so the topbar identity + settings
+  // reflect it immediately instead of only on the next app launch.
+  const [displayName, setDisplayName] = useState(robotName);
+  const handleRenameRobot = useCallback(
+    async (name: string): Promise<string | null> => {
+      const robot = session.getRobot();
+      if (!robot) return null;
+      const saved = await robot.setRobotName(name);
+      if (saved) setDisplayName(saved);
+      return saved;
+    },
+    [session],
+  );
+
+  // Wizard finished: close the gate and persist the completion flag on the
+  // robot so it never shows again (dev-force ignores the flag on the next
+  // run, but we still store it - production respects it). Fire-and-forget:
+  // a failed write must not trap the user in the wizard.
+  const handleWizardFinish = useCallback(() => {
+    setWizardGate('done');
+    void session.getRobot()?.setFirstWakeUp(true);
+  }, [session]);
 
   // Remember which personality this robot is wearing, keyed by its
   // stable hardware id, so the discovery list ("Your Reachies") can
@@ -579,7 +693,7 @@ function ConnectedSession({
           }}
         >
           <IdentityChipBar
-            robotName={robotName}
+            robotName={displayName}
             transport={robotTransport}
             linkKind={session.webrtcTransport?.kind ?? null}
             linkRttMs={session.webrtcTransport?.rttMs ?? null}
@@ -645,7 +759,7 @@ function ConnectedSession({
               aria-label="End session"
               onClick={handleLeave}
               color="primary"
-              disabled={leaving}
+              disabled={leaving || waking}
               // Pull the glyph toward the screen edge with a negative
               // MARGIN (not `edge="end"`, which uses -12px, nor a padding
               // override which would oval the hover). `mr: -1` (-8px)
@@ -1002,6 +1116,13 @@ function ConnectedSession({
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
                 conversationLive={session.conversationState !== 'idle'}
+                robotName={displayName}
+                renameRobot={handleRenameRobot}
+                signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
+                onSignedOutRobot={() => {
+                  setSettingsOpen(false);
+                  handleLeave();
+                }}
               />
             )}
           </Box>
@@ -1013,7 +1134,8 @@ function ConnectedSession({
             hfToken={token}
             hfUsername={username}
             robotPeerId={robotId}
-            robotName={robotName}
+            robotHardwareId={robotHardwareId}
+            robotName={displayName}
             transport={robotTransport}
             sessionPhase={session.phase}
             onClose={() => setOpenedApp(null)}
@@ -1085,18 +1207,25 @@ function ConnectedSession({
           />
         )}
 
-        {/* First wake-up wizard. Shown once the session is live, on top of
-            the conversation UI but BELOW the daemon update gate (zIndex
-            1380 vs 1400) so a mandatory update still wins. TEMPORARY: it
-            re-triggers on every connection until the persisted
-            first-wake-up flag is wired in. */}
-        {FIRST_WAKE_UP_WIZARD_ENABLED && !leaving && session.phase === 'live' && !wakeUpDone && (
-          <FirstWakeUpWizard
-            session={session}
-            robotName={robotName}
-            onFinish={() => setWakeUpDone(true)}
-          />
-        )}
+        {/* First wake-up wizard. Shown once per robot: the gate resolves from
+            the daemon's persisted `get_first_wake_up` flag (see the wizard-gate
+            effect above), and `set_first_wake_up` is written on finish. Sits on
+            top of the conversation UI but BELOW the daemon update gate (zIndex
+            1380 vs 1400) so a mandatory update still wins. */}
+        {/* AnimatePresence lets the wizard play its exit fade on finish so the
+            conversation UI (already mounted behind it) cross-fades in instead
+            of hard-cutting when `wakeUpDone` flips true. */}
+        <AnimatePresence>
+          {!leaving && session.phase === 'live' && wizardGate === 'show' && (
+            <FirstWakeUpWizard
+              key="first-wake-up"
+              session={session}
+              robotName={displayName}
+              onRename={handleRenameRobot}
+              onFinish={handleWizardFinish}
+            />
+          )}
+        </AnimatePresence>
       </Stack>
     </DaemonStateProvider>
   );

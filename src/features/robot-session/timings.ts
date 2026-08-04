@@ -29,37 +29,26 @@
  *
  * Worst-case bring-up latency before a fatal error is surfaced:
  *
- *     startAttemptTimeoutMs * startMaxAttempts
- *     + startRetryGapMs * (startMaxAttempts - 1)
- *   = 8_000 * 2 + 12_000 * 1
- *   = 28_000 ms
+ *     startAttemptTimeoutMs = 8_000 ms
+ *
+ * `startSession()` runs a SINGLE guarded attempt (no retry). The
+ * previous 2-attempt / 12 s-gap loop was removed: it only ever
+ * retried the SAME stale peer id, so it never recovered anything and
+ * just made the user wait ~28 s. The live peer id is now re-resolved
+ * from central right before the attempt (`RobotSession.start()`), and
+ * genuine transport drops are handled by the connection controller's
+ * background-resilience re-arm.
  *
  * Plus the wake-up trajectory (~2 s on a healthy robot), which is
  * bounded inside the SDK and not represented here.
  */
 export const SESSION_TIMINGS = {
   /**
-   * Per-attempt timeout for `robot.startSession()`. Healthy LAN
+   * Timeout for the single `robot.startSession()` attempt. Healthy LAN
    * handshakes complete in 1-3 s; 8 s is a generous upper bound that
    * detects the silent daemon death without holding the user hostage.
    */
   startAttemptTimeoutMs: 8_000,
-
-  /**
-   * Wait between two `startSession()` attempts. Sized to comfortably
-   * exceed the measured daemon recovery window (13-16 s) MINUS the
-   * 8 s already spent on attempt 1, so the 2nd attempt typically
-   * lands on a freshly restarted daemon rather than on the
-   * half-resurrected one.
-   */
-  startRetryGapMs: 12_000,
-
-  /**
-   * Total `startSession()` attempts (1st + retries). One retry is
-   * enough: the libnice crash is a true random race, two crashes in
-   * a row with a 12 s gap is vanishingly rare.
-   */
-  startMaxAttempts: 2,
 
   /**
    * Duration of the smooth ease-out from the wobbler / antennas last

@@ -19,7 +19,7 @@
  *      (`stopSession` THEN `disconnect`) and resets the in-memory
  *      bookkeeping (`established`, motor mode cache).
  *   3. `reacquire()` reconnects the SDK if it dropped, then runs
- *      `start()` (which goes through the retry loop helper) - and
+ *      `start()` (a single guarded `startSession()` attempt) - and
  *      DOES NOT replay the wake-up trajectory (the robot stayed
  *      awake during the handoff).
  *   4. `stopSession()` calls go through `expectedStop` so the
@@ -140,9 +140,10 @@ function createMockRobot(): MockRobot {
  * the real `start()` flow (no mock-out of `startRobotSession`) so
  * the test exercises the actual code path consumers will use.
  *
- * Healthy mock = the first `startSession()` attempt resolves
- * immediately, so we never hit the 8s/12s retry timers and don't
- * need fake timers in these tests.
+ * Healthy mock = the single `startSession()` attempt resolves
+ * immediately, so we never hit the 8s timeout guard and don't need
+ * fake timers in these tests. No `resolvePeerId` is wired, so
+ * `start()` uses the selected id as-is (re-resolution is a no-op).
  */
 async function setupEstablishedSession(): Promise<{
   session: RobotSession;

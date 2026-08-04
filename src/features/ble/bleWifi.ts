@@ -42,7 +42,6 @@ import { gcm } from '@noble/ciphers/aes';
 import {
   type BleDevice,
   createScanRegistry,
-  looksLikeReachy,
   parseScanMessage,
   reachyBySignal,
 } from './bleScanCore';
@@ -51,8 +50,9 @@ import {
 export const CMD_CHAR = '12345678-1234-5678-1234-56789abcdef1';
 export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
 // Read-only status characteristics exposed by the daemon's GATT app. Reading
-// these (post-connect) is how we learn the robot's identity + Wi-Fi state,
-// since the v2 advert carries no identity (all robots advertise "ReachyMini").
+// these (post-connect) is how we learn the robot's identity + Wi-Fi state; the
+// advert carries no per-robot identity (all robots advertise "ReachyMini"), so
+// the hardware id comes from the GATT characteristic below.
 export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
 export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
 
@@ -164,91 +164,20 @@ function _awaitNotification(timeoutMs: number): Promise<string> {
   });
 }
 
-// `BleDevice`, `normalizeDevice`, `parseScanMessage`, `looksLikeReachy`,
-// `reachyBySignal` and the dedup/staleness registry now live in the pure,
-// testable core (`bleScanCore.ts`). Re-exported here so existing imports from
+// `BleDevice`, `normalizeDevice`, `parseScanMessage`, `reachyBySignal` and the
+// dedup/staleness registry now live in the pure, testable core
+// (`bleScanCore.ts`). Re-exported here so existing imports from
 // `@/features/ble/bleWifi` keep resolving unchanged.
-export { looksLikeReachy, reachyBySignal };
+export { reachyBySignal };
 export type { BleDevice };
 
 // The blec plugin owns a SINGLE global scanner. Two overlapping scans
 // therefore fight over it: a stale scan's trailing stopScan() would kill a
 // newer one, so a rescan triggered before the previous window elapsed (wizard
 // remount, retry(), a connection drop bouncing back to 'scanning') silently
-// fails to re-trigger. Each scanDevices() call claims a token; only the latest
-// token is allowed to stop the scanner.
+// fails to re-trigger. Each scan claims a token; only the latest token is
+// allowed to stop the scanner.
 let _scanToken = 0;
-
-/**
- * Scan and return ALL discovered devices (deduped by address). The UI lists
- * them so you can tap the robot directly — robust even when the advertised
- * name is null in the scan callback. `onUpdate` fires on each scan tick.
- */
-export async function scanDevices(
-  timeoutMs = 15000,
-  onUpdate?: (devices: BleDevice[]) => void,
-  log: (s: string) => void = () => {},
-): Promise<BleDevice[]> {
-  const myToken = ++_scanToken;
-
-  // The plugin's check_permissions ALSO triggers the Android runtime
-  // permission request when not yet granted, returning false immediately
-  // (the grant is async). First Scan shows the dialog; approve, Scan again.
-  const granted = await checkPermissions();
-  log(`permissions granted = ${granted}`);
-  if (!granted) {
-    throw new Error(
-      'Bluetooth permission not granted yet — approve the "Nearby devices" ' +
-        'dialog, then tap Scan again.',
-    );
-  }
-
-  // Make sure no previous scan is still occupying the single global scanner
-  // before we start ours, then give the plugin a moment to settle.
-  try {
-    await stopScan();
-    await new Promise((r) => setTimeout(r, 120));
-  } catch {
-    /* nothing was scanning */
-  }
-
-  const byAddr = new Map<string, BleDevice>();
-  let ticks = 0;
-  // `parseScanMessage` handles the array / `{result}` / single / null shape
-  // variance across plugin versions in one place (see bleScanCore.ts).
-  const handler = (msg: unknown) => {
-    ticks++;
-    for (const d of parseScanMessage(msg)) byAddr.set(d.address, d);
-    log(`  tick ${ticks}: ${byAddr.size} device(s) total`);
-    onUpdate?.([...byAddr.values()]);
-  };
-
-  log(`scanning ${timeoutMs}ms…`);
-  // CRITICAL: startScan RESOLVES IMMEDIATELY (it kicks off a background scan
-  // that auto-stops after `timeout`; devices stream in via the channel). We
-  // must keep collecting for the window — NOT stop right away, which was
-  // killing the scan ~0ms in.
-  await startScan(handler, timeoutMs);
-  await new Promise((r) => setTimeout(r, timeoutMs));
-  // A newer scan claimed the scanner while we were waiting — leave it alone,
-  // otherwise we'd stop the fresh scan the user just asked for.
-  if (myToken !== _scanToken) {
-    log('superseded by a newer scan — not stopping it');
-    return [...byAddr.values()];
-  }
-  try {
-    await stopScan();
-  } catch {
-    /* already auto-stopped by the plugin */
-  }
-  // NOTE: plugin 0.4.x DROPPED any device whose name was null in the scan
-  // record (Kotlin `sendResult`: `if (name == null) return`), so a robot whose
-  // name rode only in the scan response could be invisible. 0.8.x reports a
-  // (possibly empty) string instead, so this drop no longer applies — we still
-  // match on the service UUID (`looksLikeReachy`) as belt-and-suspenders.
-  log(`scan done: ${byAddr.size} device(s) seen over ${ticks} tick(s)`);
-  return [...byAddr.values()];
-}
 
 export interface ScanController {
   /** Stop the continuous scan loop and release the scanner (best-effort). */
@@ -267,17 +196,15 @@ const CONT_SCAN_PRUNE_MS = 2_000;
 /**
  * Continuously scan for BLE devices until `stop()` is called.
  *
- * Unlike {@link scanDevices} (one fixed window that then freezes), this re-arms
- * the plugin's single-shot scanner in a loop and streams a LIVE list via
+ * Re-arms the plugin's single-shot scanner in a loop and streams a LIVE list via
  * `onUpdate`: new robots appear within a window, and a robot that goes away is
  * pruned after `staleAfterMs`. Built to back a "looking for Reachies" view that
  * stays fresh the whole time it is on screen — the caller restarts it on
  * refocus (mobile kills BLE scans when the app is backgrounded) and MUST call
  * `stop()` before connecting (the radio can't scan and connect at once).
  *
- * Shares the global `_scanToken` with {@link scanDevices}: starting any newer
- * scan supersedes this loop, which then exits without fighting over the single
- * plugin scanner.
+ * Claims the global `_scanToken`: starting any newer scan supersedes this
+ * loop, which then exits without fighting over the single plugin scanner.
  */
 export function startContinuousScan(opts: {
   onUpdate: (devices: BleDevice[]) => void;
