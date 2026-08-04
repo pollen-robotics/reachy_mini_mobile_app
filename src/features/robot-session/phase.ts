@@ -34,6 +34,11 @@ export type SessionPhase =
   | 'released'
   /** Engine is bringing the WebRTC session back after a release. */
   | 'reacquiring'
+  /** In-place recovery after a transport-level fatal on a session
+   *  that had already reached ready. The host shows a compact
+   *  reconnect overlay; the full error view only renders if this
+   *  attempt fails. */
+  | 'recovering'
   /** Full teardown is in flight (sleep + disable + stopSession +
    *  disconnect). */
   | 'tearing-down'

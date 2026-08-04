@@ -387,6 +387,46 @@ export function createConversationHandle(
       setConversationState("idle");
     },
 
+    recoverSession: async () => {
+      if (isUnmounted()) return;
+      const robot = getRobot();
+      if (!robot || !session.getSelectedRobotId()) return;
+      if (session.isEstablished()) {
+        // Defensive: nothing to recover. A UI race (recover fired
+        // while the session healed by itself) must not double-start.
+        return;
+      }
+      console.log(
+        `[shell-webrtc] recoverSession: entering, robot.state=${robot.state}, selectedRobotId=${session.getSelectedRobotId()}`,
+      );
+
+      setConnectionState("starting");
+
+      // Same retry-aware bring-up as `reacquireSession`: reconnect the
+      // SDK if it was dropped, then re-run `start()`.
+      const result = await session.reacquire({
+        onAttempt: emitConnectionAttempt,
+        isCancelled: () => isUnmounted(),
+      });
+      if (!result.ok) {
+        if (result.cancelled) return;
+        await onFatalError(result.reason);
+        return;
+      }
+
+      // Unlike an iframe handoff, the robot did NOT stay awake: the
+      // fatal teardown played sleepAndDisable (or, when the transport
+      // was already dead, the daemon's idle reset slept it server-side).
+      // Replay the wake dance before announcing `live` so the overlay
+      // covers the trajectory. Idempotent on daemons with the wake
+      // stand-down when the robot is somehow still up.
+      await session.wakeUp();
+
+      session.setEstablished(true);
+      setConnectionState("live");
+      setConversationState("idle");
+    },
+
     // ─── Audio volume controls ──────────────────────────────────────
     //
     // Thin pass-throughs to the SDK's DataChannel round-trips. We

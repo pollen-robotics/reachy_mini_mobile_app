@@ -150,6 +150,12 @@ export interface RobotSessionHandle {
   /** Re-acquire the WebRTC session after a previous release. Skips
    *  wake-up. Resolves once `startSession` has completed. */
   reacquire: () => Promise<void>;
+  /** In-place recovery after a transport-level fatal on a session
+   *  that had already reached ready. Drives the `recovering` phase
+   *  (compact overlay) while the engine re-runs the bring-up + wake.
+   *  If it fails, the engine lands back on `error` and the host's
+   *  error view takes over. */
+  recover: () => Promise<void>;
   /** Full session teardown (sleep + motors disabled + stopSession +
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
@@ -489,6 +495,21 @@ export function useRobotSession({
     }
   }, []);
 
+  const recover = useCallback(async (): Promise<void> => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    setPhaseHint('recovering');
+    try {
+      await chainLifecycle(async () => {
+        await handle.recoverSession();
+      });
+    } finally {
+      // Back to engine-driven phase: `live` on success, `error` when
+      // the recovery attempt failed (the engine re-ran onFatalError).
+      setPhaseHint(null);
+    }
+  }, []);
+
   const tearDown = useCallback(async (): Promise<void> => {
     const handle = handleRef.current;
     if (!handle) {
@@ -608,6 +629,7 @@ export function useRobotSession({
     requestStop,
     releaseForHandoff,
     reacquire,
+    recover,
     tearDown,
     getSpeakerVolume,
     setSpeakerVolume,

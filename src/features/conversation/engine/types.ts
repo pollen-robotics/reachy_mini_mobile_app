@@ -296,6 +296,19 @@ export interface ConversationEngineHandle {
    * double-acquire defensively).
    */
   reacquireSession: () => Promise<void>;
+  /**
+   * In-place session recovery after a transport-level fatal error
+   * (SDK re-dial gave up, data-channel death, failed reacquire). Same
+   * bring-up path as `reacquireSession`, plus the wake dance: unlike
+   * an iframe handoff the robot did NOT stay awake - the fatal
+   * teardown (or the daemon's own idle reset) parked it in the sleep
+   * pose - so recovery replays `wakeUp()`. On daemons with the wake
+   * stand-down this is a silent no-op when the robot is still up.
+   *
+   * Failure routes back through the fatal-error path, so the host's
+   * error view still renders when recovery cannot heal the session.
+   */
+  recoverSession: () => Promise<void>;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //

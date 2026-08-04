@@ -98,6 +98,7 @@ import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
+import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
 import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
@@ -408,6 +409,40 @@ function ConnectedSession({
   // stays mounted underneath so the orb resumes smoothly.
   const showReacquiringOverlay = !leaving && !isError && session.phase === 'reacquiring';
 
+  // Recovering overlay: an in-place bring-up retry after a
+  // transport-level fatal on an established session (see the
+  // auto-recover effect below). Compact on purpose - the full
+  // connecting pipeline stays reserved for the initial bring-up.
+  const showRecoveringOverlay = !leaving && session.phase === 'recovering';
+
+  // One-shot in-place recovery. When a session that had already
+  // reached ready dies (SDK re-dial gave up, data-channel fatal,
+  // failed reacquire), retry the bring-up under the compact overlay
+  // INSTEAD of dumping the user straight onto the fatal error view -
+  // whose only exit remounts everything and replays the full
+  // connecting pipeline. One attempt per incident: a second
+  // consecutive fatal falls through to `SessionErrorView` as before.
+  // The latch re-arms once the session is healthy again, so the NEXT
+  // incident gets its own automatic attempt.
+  const autoRecoverTriedRef = useRef(false);
+  useEffect(() => {
+    if (session.phase === 'live') {
+      autoRecoverTriedRef.current = false;
+      return;
+    }
+    if (session.phase !== 'error' || leaving) return;
+    // Initial bring-up failures keep the full error UX: there is no
+    // "known good" state to restore, the pipeline narrative is honest.
+    if (!session.hasReachedReady) return;
+    // While an iframe app owns the slot, the close-path reacquire is
+    // the recovery mechanism - don't fight it from underneath.
+    if (openedApp !== null) return;
+    if (autoRecoverTriedRef.current) return;
+    autoRecoverTriedRef.current = true;
+    console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
+    void session.recover();
+  }, [session, leaving, openedApp]);
+
   // Keep-screen-on rule. We only ask the OS to suppress the idle
   // timer while the user is engaged with the robot in a way that
   // can't tolerate a mid-flow screen lock. Three contexts qualify:
@@ -699,10 +734,22 @@ function ConnectedSession({
           {/* Reacquiring overlay stays scoped to the conversation column
               (above the panel, below the header / bottom nav) - the
               user is briefly back on the conv tab and we want them to
-              see the chrome they're returning to. */}
+              see the chrome they're returning to. Compact view: the
+              full connecting pipeline is for the initial bring-up
+              only, replaying it here read as a from-scratch reconnect. */}
           {showReacquiringOverlay && tab === 'conv' && (
             <Overlay>
-              <ConnectingView state="connecting" />
+              <ReconnectingView connectionAttempt={session.connectionAttempt} />
+            </Overlay>
+          )}
+
+          {/* Recovering overlay: in-place retry after a transport
+              fatal (see the auto-recover effect). Spans both tabs -
+              unlike a reacquire, a connection loss can hit while the
+              user is anywhere in the session UI. */}
+          {showRecoveringOverlay && (
+            <Overlay>
+              <ReconnectingView connectionAttempt={session.connectionAttempt} />
             </Overlay>
           )}
 
