@@ -103,23 +103,17 @@ export function toSetupError(reply: string, fallbackPhase: SetupPhase): SetupErr
   return { code: 'unknown', message: msg || 'Something went wrong.', recoverPhase: fallbackPhase };
 }
 
-/** Read the robot's identity (hardware id + current network status). */
+/** Read the robot's identity (hardware id). */
 export async function readIdentity(): Promise<RobotIdentity> {
-  // Both reads are best-effort: an older daemon may not expose them, and we
-  // don't want a missing characteristic to abort the whole setup.
+  // Best-effort: an older daemon may not expose the characteristic, and we
+  // don't want a missing read to abort the whole setup.
   let hardwareId: string | null = null;
-  let networkStatus: string | null = null;
   try {
     hardwareId = await readCharacteristic(HARDWARE_ID_CHAR);
   } catch {
     hardwareId = null;
   }
-  try {
-    networkStatus = await readCharacteristic(NETWORK_STATUS_CHAR);
-  } catch {
-    networkStatus = null;
-  }
-  return { hardwareId: hardwareId || null, networkStatus: networkStatus || null };
+  return { hardwareId: hardwareId || null };
 }
 
 /**
@@ -133,12 +127,6 @@ export async function readIdentity(): Promise<RobotIdentity> {
  */
 export async function readNetworkInfo(): Promise<RobotNetInfo> {
   return parseNetworkStatus(await readCharacteristic(NETWORK_STATUS_CHAR));
-}
-
-/** `PING` → true if the robot answers `PONG`. */
-export async function ping(): Promise<boolean> {
-  const r = await sendCommand('PING', 6000);
-  return r.trim().toUpperCase() === 'PONG';
 }
 
 /** `PIN_<pin>` → true on `OK: Connected`. Opens the 300 s session. */
@@ -169,6 +157,61 @@ export async function scanWifi(): Promise<string[]> {
     return parsed.filter((s): s is string => typeof s === 'string' && s.length > 0);
   } catch {
     return [];
+  }
+}
+
+// Emotions-library move names played as onboarding cues over BLE. All ship in
+// the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
+// library`), hyphenated-lowercase by convention.
+/** Idle "I'm busy" cue played while the robot joins Wi-Fi and links its account. */
+export const WAITING_MOVE = 'waiting';
+
+/** Built-in sound asset played as the scan-list identify chirp: sound only, no
+ *  motion (the robot only animates later, in the wizard steps). */
+export const IDENTIFY_SOUND = 'surprise.ogg';
+
+/**
+ * `PLAY <move>` → plays a named recorded move (motion + bundled sound) from the
+ * robot's emotions library. Public BLE command (no PIN), used for onboarding
+ * cues (identify chirp, waiting/sleep). Best-effort: swallow everything, a
+ * failed cue must never block setup. Kept SEQUENTIAL on the shared
+ * command/response channel by callers.
+ */
+export async function play(moveName: string): Promise<void> {
+  try {
+    await sendCommand(`PLAY ${moveName}`, 6000);
+  } catch {
+    // non-critical: ignore
+  }
+}
+
+/**
+ * `PLAY_SOUND <file>` → plays a built-in sound asset (no motion) on the robot.
+ * Public BLE command (no PIN), used for the scan-list identify chirp. Sound
+ * only: the robot doesn't move here, it only animates later in the wizard.
+ * Best-effort like `play`: a failed cue must never block setup.
+ */
+export async function playSound(soundFile: string): Promise<void> {
+  try {
+    await sendCommand(`PLAY_SOUND ${soundFile}`, 6000);
+  } catch {
+    // non-critical: ignore
+  }
+}
+
+/**
+ * `SLEEP` → plays the daemon's canonical goto-sleep trajectory: interpolate to
+ * the EXACT sleep pose (+ go_sleep sound), then release torque. Public BLE
+ * command (no PIN), used as the end-of-setup "settle to sleep" cue so the
+ * first-wake-up wizard opens on a robot placed precisely in its sleep pose -
+ * the exact canonical pose the wizard's ghost compares against.
+ * Best-effort like `play`: a failed cue must never block the finish.
+ */
+export async function gotoSleep(): Promise<void> {
+  try {
+    await sendCommand('SLEEP', 6000);
+  } catch {
+    // non-critical: ignore
   }
 }
 

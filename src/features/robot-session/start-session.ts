@@ -1,33 +1,32 @@
 /**
- * Robot session bring-up with auto-retry.
+ * Robot session bring-up: a single guarded `startSession()` attempt.
  *
- * Wraps `robot.startSession(peerId)` in a small retry loop that
- * survives the daemon's intermittent libnice crash without
- * surfacing a misleading "Robot did not respond" to the user.
+ * Wraps `robot.startSession(peerId)` with a timeout guard and returns
+ * a discriminated union. There is intentionally NO retry loop.
  *
- * Why a retry loop
- * ────────────────
- * The daemon's WebRTC stack (GStreamer + libnice) hits a
- * `priv_conn_check_tick_stream_nominate` assertion on certain
- * ICE nomination races. The assert calls `abort()`, systemd
- * sees the exit code and restarts the daemon. The total
- * blackout is ~13-16 s (RestartSec=3s + ~10-13 s of FastAPI /
- * GStreamer bring-up).
+ * Why no retry
+ * ────────────
+ * The old code retried twice with a 12 s gap to survive the daemon's
+ * intermittent libnice crash (`priv_conn_check_tick_stream_nominate`
+ * abort → systemd restart, ~13-16 s blackout). In practice that retry
+ * NEVER helped for the failure users actually hit: a STALE peer id.
  *
- * Without retry, our single `startSession()` call would just
- * time out and show "Robot did not respond in time" while the
- * daemon was still rebooting. With a 12 s gap between attempts,
- * the second attempt typically lands on a fully recovered
- * daemon and succeeds.
+ * The robot's central peer id rotates on every relay reconnect (each
+ * reconnect gets a fresh id from central's `welcome`). A peer id
+ * captured a few seconds earlier (at the end of BLE setup, or in a
+ * stale robot-list snapshot) points at a producer that no longer
+ * exists - so BOTH attempts dialed a dead peer and the user waited
+ * ~28 s for nothing.
  *
- * This module is the SAFE half of the future RobotSession class
- * extraction: a pure orchestrator that takes the SDK robot ref
- * (still owned by the engine for now) and returns a discriminated
- * union. Easy to unit-test (mock `startSession` to return
- * different sequences), and the engine becomes a thin caller of
- * this function instead of carrying the retry loop inline.
+ * The real fix lives one layer up (`RobotSession.start()`): it
+ * RE-RESOLVES the live peer id from central by `hardware_id` right
+ * before calling us, so this single attempt targets the current
+ * producer. That self-heals against peer-id rotation and makes the
+ * retry redundant. Genuine transport drops are handled by the
+ * connection controller's background-resilience re-arm, not here.
  *
- * Decoupled from:
+ * This module stays a pure orchestrator: it takes the SDK robot ref
+ * and returns a result. Decoupled from:
  *   - the engine's FSM (no `setState` here)
  *   - the engine's lifecycle queue (we run inline; the host
  *     serialises via `chainLifecycle`)
@@ -38,19 +37,18 @@ import type { ConversationConnectionAttempt } from '@/features/conversation/engi
 import { SESSION_TIMINGS } from './timings';
 
 /**
- * Defaults are sourced from `SESSION_TIMINGS` (centralised in
- * `./timings.ts`) so the worst-case bring-up latency can be audited
- * from a single file. Each option can still be overridden per-call
- * for tests / experiments.
+ * Sourced from `SESSION_TIMINGS` (centralised in `./timings.ts`) so
+ * the bring-up latency can be audited from a single file. Overridable
+ * per-call for tests / experiments.
  */
 const DEFAULT_ATTEMPT_TIMEOUT_MS = SESSION_TIMINGS.startAttemptTimeoutMs;
-const DEFAULT_RETRY_GAP_MS = SESSION_TIMINGS.startRetryGapMs;
-const DEFAULT_MAX_ATTEMPTS = SESSION_TIMINGS.startMaxAttempts;
 
 export interface StartRobotSessionOptions {
   /** Live SDK instance returned by `new ReachyMini(...)`. */
   robot: ReachyMiniInstance;
-  /** Central peer id of the robot to connect to. */
+  /** Central peer id of the robot to connect to. The caller
+   *  (`RobotSession.start()`) is expected to have re-resolved this to
+   *  the CURRENT producer id before calling us. */
   peerId: string;
   /**
    * Wrapper used to call `robot.stopSession()` on timeout WITHOUT
@@ -60,18 +58,16 @@ export interface StartRobotSessionOptions {
    * counter coherent.
    */
   expectedStop: (fn: () => Promise<unknown>) => Promise<void>;
-  /** Optional progress callback fired on each attempt (1-indexed)
-   *  and once with `null` at the end (success or final failure).
-   *  Lets the host show "Reconnecting… (2 of 2)" in the UI. */
+  /** Optional progress callback fired once with `{ attempt: 1,
+   *  maxAttempts: 1 }` when the attempt starts and once with `null`
+   *  when it settles. The host uses the non-null value only to know
+   *  we're in the "Session" bring-up phase (vs. wake-up); there is no
+   *  "Reconnecting…" state anymore. */
   onAttempt?: (attempt: ConversationConnectionAttempt | null) => void;
-  /** Override the per-attempt timeout. Defaults to 8 s. */
+  /** Override the attempt timeout. Defaults to 8 s. */
   attemptTimeoutMs?: number;
-  /** Override the gap between retries. Defaults to 12 s. */
-  retryGapMs?: number;
-  /** Override the max attempt count. Defaults to 2. */
-  maxAttempts?: number;
-  /** Bail mid-loop if this returns `true`. Used by the engine to
-   *  abort retries when the host unmounted us during the gap. */
+  /** Bail before the attempt if this returns `true`. Used by the
+   *  engine to abort when the host unmounted us. */
   isCancelled?: () => boolean;
 }
 
@@ -80,8 +76,8 @@ export type StartRobotSessionResult =
   | { ok: false; reason: Error; cancelled?: boolean };
 
 /**
- * Run the bring-up loop. Resolves once a session is established,
- * or after `maxAttempts` failures. Never throws.
+ * Run a single guarded bring-up attempt. Resolves once the session is
+ * established, or with the failure reason. Never throws.
  */
 export async function startRobotSession(
   opts: StartRobotSessionOptions,
@@ -92,8 +88,6 @@ export async function startRobotSession(
     expectedStop,
     onAttempt,
     attemptTimeoutMs = DEFAULT_ATTEMPT_TIMEOUT_MS,
-    retryGapMs = DEFAULT_RETRY_GAP_MS,
-    maxAttempts = DEFAULT_MAX_ATTEMPTS,
     isCancelled,
   } = opts;
 
@@ -106,57 +100,31 @@ export async function startRobotSession(
     }
   };
 
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      console.log(
-        `[start-session] retry ${attempt}/${maxAttempts} after ${retryGapMs}ms gap`,
-      );
-      // Inform the host BEFORE the gap so the overlay can flip
-      // to "Reconnecting…" immediately rather than feeling
-      // frozen for 12 s.
-      emit({ attempt, maxAttempts });
-      await new Promise<void>((resolve) =>
-        window.setTimeout(resolve, retryGapMs),
-      );
-      // Bail if the host unmounted us during the gap.
-      if (isCancelled?.()) {
-        emit(null);
-        return {
-          ok: false,
-          reason: new Error('Session start cancelled'),
-          cancelled: true,
-        };
-      }
-    } else {
-      emit({ attempt, maxAttempts });
-    }
-
-    console.log(
-      `[start-session] attempt ${attempt}/${maxAttempts}: robot.startSession(${peerId})`,
-    );
-    const result = await tryStartSession(
-      robot,
-      peerId,
-      expectedStop,
-      attemptTimeoutMs,
-    );
-    if (result.ok) {
-      console.log(
-        `[DIAG][start-session] ATTEMPT ${attempt} SUCCESS — about to emit(null) (boundary Session→Wake-up)`,
-      );
-      emit(null);
-      return { ok: true };
-    }
-    lastError = result.reason;
+  if (isCancelled?.()) {
+    emit(null);
+    return {
+      ok: false,
+      reason: new Error('Session start cancelled'),
+      cancelled: true,
+    };
   }
 
+  emit({ attempt: 1, maxAttempts: 1 });
+  console.log(`[start-session] robot.startSession(${peerId})`);
+  const result = await tryStartSession(
+    robot,
+    peerId,
+    expectedStop,
+    attemptTimeoutMs,
+  );
   emit(null);
-  return {
-    ok: false,
-    reason: lastError ?? new Error('Session start failed (no attempts)'),
-  };
+  if (result.ok) {
+    console.log(
+      `[DIAG][start-session] SUCCESS — emit(null) (boundary Session→Wake-up)`,
+    );
+    return { ok: true };
+  }
+  return { ok: false, reason: result.reason };
 }
 
 /**

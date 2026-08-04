@@ -90,6 +90,16 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ['**/src-tauri/**'],
     },
+    // Allow the dev server to read the locally linked SDK build. When
+    // `@pollen-robotics/reachy-mini-sdk` is a `link:` dependency it
+    // resolves to a sibling repo (`../reachy_mini/ts`) outside this
+    // app's root, which Vite's default `fs.strict` would otherwise
+    // refuse to serve. Allowing the parent folder covers both repos
+    // while keeping everything else off-limits. Harmless when the dep
+    // is a normal published version (nothing outside root is imported).
+    fs: {
+      allow: [path.resolve(process.cwd(), '..'), path.resolve(process.cwd())],
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   // Bake the npm `package.json` version into the bundle so the splash

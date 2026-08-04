@@ -459,6 +459,12 @@ const liveSession: LiveSession = createLiveSession(session);
 // `detachRobot`) without the conversation engine having to know
 // anything about candidate pairs.
 session.setTransportListener(onTransportChange);
+// Wire the live peer-id re-resolver so every bring-up dials the CURRENT
+// producer instead of a stale snapshot (the robot's peer id rotates on
+// each relay reconnect). No-op when the host didn't supply one.
+session.setResolvePeerId(
+  typeof options.resolvePeerId === "function" ? options.resolvePeerId : null,
+);
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the realtime bridge. The engine reads it through
@@ -569,6 +575,10 @@ const connectionController: ConnectionController = createConnectionController({
   onConnectionLost: (opts) => onConnectionLost(opts),
   resumeAudioContexts: () => resumeAudioContexts(),
   applyMicMuted: (muted) => applyMicMuted(muted),
+  // Deferred through a closure: `motion` is created further down (the
+  // orchestrator needs `recordSend`, which the controller provides),
+  // and the gate only fires on SDK resilience events long after boot.
+  setPoseSendGate: (gated) => motion.setSendGate(gated),
 });
 
 // Motion's pose dispatcher feeds the controller's data-channel health

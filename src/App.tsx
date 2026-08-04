@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Box } from '@mui/material';
 
 import EulaConsentModal from '@/ui/screens/EulaConsentModal';
@@ -13,6 +13,7 @@ import SetupWizardScreen from '@/ui/screens/SetupWizardScreen';
 import BleUpdateScreen from '@/ui/screens/BleUpdateScreen';
 import ScreenTransition from '@/ui/design/ScreenTransition';
 import { useRemoteHfToken, isHfTokenExpired } from '@/features/auth/useRemoteHfToken';
+import { onHfTokenInvalid } from '@/features/auth/tokenInvalidation';
 import { usePrefetchApps } from '@/features/apps/useApps';
 import { usePrefetchMyApps } from '@/features/apps/useMyApps';
 import { usePrefetchSpaceLikes } from '@/features/apps/useSpaceLikes';
@@ -60,6 +61,11 @@ export default function App() {
   // mounted ScanScreen. Lets the data fetch warm up underneath
   // while the user reads "Hello, @username".
   const [justSignedIn, setJustSignedIn] = useState(false);
+  // True when the user landed on the sign-in gate because their token
+  // was rejected/expired (auto-eviction), NOT because they signed out
+  // or never signed in. Drives a short "session expired" notice so the
+  // sudden bounce to sign-in doesn't read as a random logout.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const { token, username, setToken, clear } = useRemoteHfToken();
   // First-launch EULA / privacy disclosure required by Apple
   // guideline 5.1.1 + Google Play UGC policy. The hook reads the
@@ -94,8 +100,27 @@ export default function App() {
   const handleSignOut = (): void => {
     setTarget(null);
     setScreen('scan');
+    // Deliberate sign-out: no "session expired" notice on the gate.
+    setSessionExpired(false);
     clear();
   };
+
+  // Hard auth recovery. Direct HF calls (router chat/vision) emit a
+  // token-invalid signal when Hugging Face returns 401 - a token that
+  // still looks valid locally (future `exp`, or opaque so `exp` is
+  // unreadable) but whose signature no longer verifies. The `exp`-only
+  // gate below can't catch that, so it would 401 forever with no way
+  // out. Clearing the token here collapses the app back to the sign-in
+  // gate so the user re-auths into a fresh token. Same effect as an
+  // explicit sign-out, minus the user's tap.
+  useEffect(() => {
+    return onHfTokenInvalid(() => {
+      setTarget(null);
+      setScreen('scan');
+      setSessionExpired(true);
+      clear();
+    });
+  }, [clear]);
 
   // Brand splash gate: shown once on cold start, before anything
   // else can render. The auth gate / scan screen are mounted only
@@ -140,9 +165,15 @@ export default function App() {
         }}
       >
         <RemoteSignInScreen
+          // Show a short notice when we bounced the user here on an
+          // expired/rejected token (auto-eviction) or a stored token
+          // whose `exp` has lapsed since last launch - never on a
+          // deliberate sign-out or a brand-new install (no token).
+          expired={sessionExpired || (!!token && isHfTokenExpired(token))}
           onSignedIn={(t, u) => {
             setToken(t, u);
             setScreen('scan');
+            setSessionExpired(false);
             // Trigger the welcome-back transition. The flag is
             // cleared by the WelcomeBackScreen's `onDone` after
             // its fade-out completes, leaving the user on the

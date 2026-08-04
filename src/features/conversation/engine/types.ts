@@ -438,6 +438,21 @@ export interface ConversationEngineOptions {
   shouldDeferInitialWakeUp?: () => boolean;
 
   /**
+   * Re-resolves the CURRENT central peer id for the selected robot,
+   * called right before each `startSession()` (initial bring-up,
+   * background re-arm, iframe reacquire). Returns `null` when it can't
+   * (no stable `hardware_id`, central unreachable, no match), in which
+   * case the captured `preselectedRobotId` is used as-is.
+   *
+   * Why: the robot's peer id rotates on every relay reconnect, so the
+   * id captured upstream (end of BLE setup, a stale robot-list
+   * snapshot) is frequently dead by the time we dial. Re-resolving by
+   * the stable `hardware_id` makes the single connect attempt target
+   * the live producer. When omitted, no re-resolution happens.
+   */
+  resolvePeerId?: () => Promise<string | null>;
+
+  /**
    * Fires on every CONNECTION transition (`signed-out` → `connecting`
    * → `starting` → `live` → …). The React wrapper uses it to drive the
    * session phase + an external watchdog that flips the UI to "Robot

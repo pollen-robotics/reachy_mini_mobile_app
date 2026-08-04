@@ -89,6 +89,30 @@ export interface PoseDispatcher {
    *  backpressure. Useful for instrumentation; not consumed by the
    *  engine today. */
   isThrottling: () => boolean;
+  /**
+   * Gate motion writes externally. When `gate === true`, every
+   * subsequent `flushNow()` bails out BEFORE the network write
+   * (exactly as the SCTP backpressure path does), but KEEPS the
+   * staged head/antennas values pending so the next tick after
+   * `setSendGate(false)` resumes with the freshest commands.
+   *
+   * Intended for transport degradation: when the engine observes
+   * `iceStateChange === 'disconnected'` or `networkOffline`, it
+   * gates the dispatcher so the wobbler's 30 Hz writes don't pile
+   * up in the SCTP send buffer (and produce a jerk on the robot
+   * once the link recovers). Ungated as soon as the path is
+   * healthy again (`iceStateChange === 'connected' | 'completed'`
+   * or `networkOnline`).
+   *
+   * Idempotent: gating an already-gated dispatcher is a no-op, same
+   * for ungating an open one.
+   */
+  setSendGate: (gate: boolean) => void;
+  /** Whether the dispatcher is currently gating writes via
+   *  `setSendGate(true)`. Separate from `isThrottling()` so
+   *  instrumentation can tell a deliberate gate (engine policy)
+   *  from SCTP backpressure (link saturation). */
+  isGated: () => boolean;
 }
 
 const DEFAULT_TICK_HZ = 30;
@@ -119,6 +143,11 @@ export function createPoseDispatcher(
   let dirty = false;
   let timer: { clear: () => void } | null = null;
   let throttling = false;
+  // External gate driven by the engine on transport degradation
+  // (`iceStateChange === 'disconnected'` / `networkOffline`).
+  // Separate from `throttling` so consumers can tell SCTP
+  // backpressure from a deliberate gate.
+  let gated = false;
 
   const setHead = (
     rollDeg: number,
@@ -141,6 +170,17 @@ export function createPoseDispatcher(
     if (!dirty) return;
     const robot = deps.getRobot();
     if (!robot) return;
+
+    // External gate (engine policy on transport degradation).
+    // Same shape as the SCTP backpressure path below: bail BEFORE
+    // the send, KEEP the dirty flag so the next tick after
+    // ungating picks up the freshest staged values. We do NOT
+    // touch `throttling`: that flag is reserved for actual
+    // backpressure so instrumentation can tell the two apart.
+    if (gated) {
+      deps.recordSend(false, "pose-dispatcher-gated");
+      return;
+    }
 
     // Backpressure check on the SCTP send buffer. We peek at the
     // private `_dc` field of the SDK because the public surface
@@ -189,11 +229,30 @@ export function createPoseDispatcher(
     pendingAntennasRad = null;
     dirty = false;
     throttling = false;
+    // Reset the engine-driven gate too: a fresh session shouldn't
+    // inherit the previous session's gating state. The engine
+    // re-arms the gate on the next degradation if needed.
+    gated = false;
   };
 
   const isThrottling = (): boolean => throttling;
 
-  return { setHead, setAntennas, start, stop, flushNow, isThrottling };
+  const setSendGate = (gate: boolean): void => {
+    gated = gate;
+  };
+
+  const isGated = (): boolean => gated;
+
+  return {
+    setHead,
+    setAntennas,
+    start,
+    stop,
+    flushNow,
+    isThrottling,
+    setSendGate,
+    isGated,
+  };
 }
 
 // ─── Wire-format helpers ────────────────────────────────────────────────

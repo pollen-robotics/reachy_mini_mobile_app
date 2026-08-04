@@ -9,7 +9,7 @@
  *   robot mic MediaStreamTrack -> 16 kHz PCM append events -> HF backend
  *   HF output_audio.delta PCM  -> MediaStreamTrack        -> robot speaker
  *
- * Tool calls, transcripts, and passive vision injections keep using the
+ * Tool calls, transcripts, and vision context injections keep using the
  * OpenAI-compatible realtime event names.
  */
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";

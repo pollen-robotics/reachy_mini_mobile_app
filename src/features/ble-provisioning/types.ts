@@ -10,55 +10,32 @@ import type { CentralRobotEntry } from '@/features/auth/fetchRobotsFromCentral';
 
 /**
  * Linear phases of the setup wizard. The UI maps these to a 4-step
- * progress indicator (Pair / Network / Connect / Ready); the FSM itself
- * tracks the finer-grained phase below.
+ * progress indicator (Pair / Network / Connect / Ready) via `PHASE_FRACTION`
+ * in the screen; the FSM itself tracks the finer-grained phase below.
+ *
+ * The OS Bluetooth permission is requested implicitly by the first scan (no
+ * dedicated `permission` phase), and the Wi-Fi password is entered inline in
+ * the `wifi-pick` step (no separate `wifi-password` phase).
  */
 export type SetupPhase =
-  | 'permission' // explain + request OS Bluetooth permission
   | 'scanning' // BLE scan for advertising robots
-  | 'connecting' // GATT connect + read identity (hwid, net status)
+  | 'connecting' // GATT connect + read identity (hwid)
   | 'pin' // user enters the 5-char setup code
   | 'authenticating' // PIN_ + WIFI_KEYEX in flight
+  | 'wifi-already-connected' // robot already on Wi-Fi: offer to skip provisioning
   | 'wifi-scanning' // WIFI_SCAN in flight (~10 s)
-  | 'wifi-pick' // choose an SSID
-  | 'wifi-password' // enter the Wi-Fi password
+  | 'wifi-pick' // choose an SSID + enter its password inline
   | 'wifi-connecting' // sealed connect + poll WIFI_STATUS
   | 'linking-account' // robot-side HF OAuth (open browser) so it can register
-  | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central
-  | 'done' // success - robot reachable
+  | 'device-code-waiting' // redirect-free (device-code) HF sign-in: browser open, polling the robot
+  | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central (last step)
+  | 'done' // success - robot reachable; naming happens in the first wake-up wizard
   | 'error'; // recoverable failure (see SetupError.recoverPhase)
 
-/** The four perceived steps shown in the wizard header. */
-export type SetupStage = 'pair' | 'network' | 'connect' | 'ready';
-
-/** Map a fine-grained phase to its header stage + 0-based index. */
-export function stageForPhase(phase: SetupPhase): { stage: SetupStage; index: number } {
-  switch (phase) {
-    case 'permission':
-    case 'scanning':
-    case 'connecting':
-    case 'pin':
-    case 'authenticating':
-      return { stage: 'pair', index: 0 };
-    case 'wifi-scanning':
-    case 'wifi-pick':
-    case 'wifi-password':
-      return { stage: 'network', index: 1 };
-    case 'wifi-connecting':
-    case 'linking-account':
-    case 'central-waiting':
-      return { stage: 'connect', index: 2 };
-    case 'done':
-      return { stage: 'ready', index: 3 };
-    case 'error':
-    default:
-      return { stage: 'pair', index: 0 };
-  }
-}
-
 /**
- * What we learn about the robot once connected over BLE (the advert itself
- * carries no identity in the v2 daemon - all robots advertise "ReachyMini").
+ * What we learn about the robot once connected over BLE. The advert carries no
+ * per-robot identity (all robots advertise "ReachyMini"); the canonical
+ * identity below is read post-connect from the GATT characteristics.
  */
 export interface RobotIdentity {
   /** SHA-256 prefix of the audio serial, read from the HARDWARE_ID GATT char.
@@ -66,17 +43,6 @@ export interface RobotIdentity {
    *  the BLE world and the central world. `null` when the daemon doesn't
    *  expose it. */
   hardwareId: string | null;
-  /** Raw NETWORK_STATUS read ("OFFLINE" / "HOTSPOT …" / "CONNECTED …"). */
-  networkStatus: string | null;
-}
-
-/** A Wi-Fi network the robot can see (the daemon scan returns SSIDs only). */
-export interface WifiNetwork {
-  ssid: string;
-  /** We can't infer security from the SSID-only scan; treat every network as
-   *  secured (ask for a password) and let the user pick "open" implicitly by
-   *  leaving it blank on a network that rejects the attempt. */
-  secured: boolean;
 }
 
 /**
@@ -87,7 +53,6 @@ export interface WifiNetwork {
 export interface SetupError {
   code:
     | 'permission-denied'
-    | 'no-devices'
     | 'connect-failed'
     | 'wrong-pin'
     | 'wifi-scan-failed'
@@ -97,6 +62,14 @@ export interface SetupError {
     | 'daemon-unreachable'
     | 'ble-dropped'
     | 'timeout'
+    // No usable LAN IP for the robot was read over BLE, so we can't reach its
+    // OAuth endpoint. We reach the robot strictly by IP (mDNS is unreliable on
+    // mobile and never used), so a missing IP is a hard, explicit failure.
+    | 'robot-ip-unknown'
+    // The robot never registered on HF central after the OAuth step, so we
+    // could not confirm sign-in actually completed. Treated as a recoverable
+    // failure instead of a silent success.
+    | 'oauth-unconfirmed'
     | 'unknown';
   /** Human-readable, shown verbatim in the error step. */
   message: string;
@@ -107,8 +80,8 @@ export interface SetupError {
 /** Final payload handed back to the host when provisioning succeeds. */
 export interface SetupResult {
   hardwareId: string | null;
-  /** The matching central listing, when it appeared before we gave up
-   *  waiting. `null` means "Wi-Fi joined but not yet visible on central" -
-   *  the user is sent back to the list to wait it out. */
+  /** The matching central listing. Always non-null on success now: we only
+   *  reach `done` once the robot has actually registered on central (that's
+   *  our OAuth-completed signal). Kept nullable for the type's history. */
   robot: CentralRobotEntry | null;
 }
