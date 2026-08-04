@@ -44,7 +44,10 @@ export default function ReconnectingView({ connectionAttempt }: ReconnectingView
         px: 3,
       }}
     >
-      <CircularProgress size={28} thickness={4} />
+      {/* Grey, not primary: same neutral treatment as the tab-switch
+          cover's spinner. Primary is reserved for actionable accents;
+          a passive wait state shouldn't pull that much attention. */}
+      <CircularProgress size={28} thickness={4} sx={{ color: 'grey.300' }} />
       <Stack spacing={0.5} sx={{ alignItems: 'center' }}>
         <Typography
           sx={{
