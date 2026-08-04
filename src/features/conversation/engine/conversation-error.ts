@@ -45,5 +45,14 @@ export function formatConversationError(detail: string): string {
     return "Lost the realtime connection. Retry in a moment.";
   }
 
+  // Robot-session transport fatals (SDK session dropped, data channel
+  // dead, backgrounded past the daemon timeout). Distinct from the HF
+  // realtime cases above: the user was connected to the ROBOT when it
+  // broke, so the copy must talk about the robot link - "could not
+  // start the conversation" would be both wrong and alarming here.
+  if (/session (ended|expired|stopped)|robot data channel|robot link/i.test(detail)) {
+    return "The link to your Reachy dropped and couldn't be restored automatically.";
+  }
+
   return "Could not start the conversation. Retry in a moment.";
 }

@@ -307,8 +307,13 @@ export interface ConversationEngineHandle {
    *
    * Failure routes back through the fatal-error path, so the host's
    * error view still renders when recovery cannot heal the session.
+   *
+   * `robotId` re-pins the target: the unsolicited-drop path
+   * (`sessionStopped`) clears the engine's selected robot id as part
+   * of its fresh-slate cleanup, so recovery must carry the id the
+   * host still holds.
    */
-  recoverSession: () => Promise<void>;
+  recoverSession: (robotId: string) => Promise<void>;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //

@@ -1054,7 +1054,22 @@ function ConnectedSession({
             its primary CTA. */}
         {isError && (
           <FullScreenTransition>
-            <SessionErrorView message={session.errorMessage} onBack={handleLeave} />
+            <SessionErrorView
+              message={session.errorMessage}
+              onBack={handleLeave}
+              // In-place retry, only when there was a working session to
+              // restore (same gate as the auto-recover effect). Initial
+              // bring-up failures keep Back as the single exit: with no
+              // known-good state, "try again" would just replay the same
+              // failure without new information.
+              onRetry={
+                session.hasReachedReady
+                  ? () => {
+                      void session.recover();
+                    }
+                  : undefined
+              }
+            />
           </FullScreenTransition>
         )}
 

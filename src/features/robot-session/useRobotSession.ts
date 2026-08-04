@@ -501,14 +501,17 @@ export function useRobotSession({
     setPhaseHint('recovering');
     try {
       await chainLifecycle(async () => {
-        await handle.recoverSession();
+        // Pass the host's robot id: the engine's own selected id is
+        // nulled by the unsolicited-drop cleanup, and recovery must
+        // re-dial the same robot the user was on.
+        await handle.recoverSession(robotId);
       });
     } finally {
       // Back to engine-driven phase: `live` on success, `error` when
       // the recovery attempt failed (the engine re-ran onFatalError).
       setPhaseHint(null);
     }
-  }, []);
+  }, [robotId]);
 
   const tearDown = useCallback(async (): Promise<void> => {
     const handle = handleRef.current;

@@ -387,17 +387,24 @@ export function createConversationHandle(
       setConversationState("idle");
     },
 
-    recoverSession: async () => {
+    recoverSession: async (robotId) => {
       if (isUnmounted()) return;
       const robot = getRobot();
-      if (!robot || !session.getSelectedRobotId()) return;
+      if (!robot || !robotId) return;
       if (session.isEstablished()) {
         // Defensive: nothing to recover. A UI race (recover fired
         // while the session healed by itself) must not double-start.
         return;
       }
+      // The unsolicited-drop path (`sessionStopped` in robot-events)
+      // nulls the selected robot id as part of its fresh-slate
+      // cleanup, which would make the reacquire below a no-op. Re-pin
+      // the robot the host still holds before dialing.
+      if (session.getSelectedRobotId() !== robotId) {
+        session.setSelectedRobotId(robotId);
+      }
       console.log(
-        `[shell-webrtc] recoverSession: entering, robot.state=${robot.state}, selectedRobotId=${session.getSelectedRobotId()}`,
+        `[shell-webrtc] recoverSession: entering, robot.state=${robot.state}, robotId=${robotId}`,
       );
 
       setConnectionState("starting");

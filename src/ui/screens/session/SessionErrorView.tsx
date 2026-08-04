@@ -26,7 +26,10 @@ import connectionLostUrl from '@/assets/connection-lost.svg';
 import IllustratedState from '@/ui/design/IllustratedState';
 
 interface SessionErrorViewProps {
-  /** Headline. Defaults to "Reachy connection lost". */
+  /** Headline. Defaults to "Connection interrupted" - deliberately
+   *  matter-of-fact: by the time this view renders, the automatic
+   *  in-place recovery already failed, and an alarmist "lost!"
+   *  headline adds anxiety without adding information. */
   headline?: string;
   /** Optional verbatim error from the engine / SDK. Rendered in a
    *  smaller secondary line. */
@@ -40,7 +43,7 @@ interface SessionErrorViewProps {
 }
 
 export default function SessionErrorView({
-  headline = 'Reachy connection lost',
+  headline = 'Connection interrupted',
   message,
   onBack,
   onRetry,
