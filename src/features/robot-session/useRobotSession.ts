@@ -230,6 +230,9 @@ export interface RobotSessionHandle {
 interface UseRobotSessionOptions {
   /** Central peer id of the robot the user picked upstream. */
   robotId: string;
+  /** Stable daemon-reported id from the selected central entry. Kept
+   *  separate from `robotId`, which is only the signaling peer id. */
+  hardwareId: string | null;
   /** HF token, kept on the panel's session storage by upstream
    *  auth hook. Forwarded here so the engine can re-seed if it
    *  gets cleared mid-session. */
@@ -250,11 +253,17 @@ const TOOL_TOAST_MIN_MS = 1500;
 
 export function useRobotSession({
   robotId,
+  hardwareId,
   token,
   audioLevelsTargetRef,
   shouldDeferInitialWakeUp,
 }: UseRobotSessionOptions): RobotSessionHandle {
   const handleRef = useRef<ConversationEngineHandle | null>(null);
+  // Central may enrich the selected entry without changing its signaling
+  // peer id. Keep identity lazy so allocator reconnects see that update
+  // without tearing down the robot session.
+  const hardwareIdRef = useRef(hardwareId);
+  hardwareIdRef.current = hardwareId;
   // Keep the latest host getter in a ref so the engine (mounted once per
   // `robotId`) always reads the current value at bring-up instead of the
   // closure captured on first render.
@@ -336,6 +345,7 @@ export function useRobotSession({
 
       const handle = mountConversation(inertRoot, {
         preselectedRobotId: robotId,
+        getRobotHardwareId: () => hardwareIdRef.current,
         autoStartConversation: false,
         // Read through the ref so the engine always sees the host's
         // current first-wake-up decision, not the one at mount time.

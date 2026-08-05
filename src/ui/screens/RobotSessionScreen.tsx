@@ -203,6 +203,7 @@ function ConnectedSession({
 
   const session = useRobotSession({
     robotId,
+    hardwareId: robotHardwareId,
     token,
     audioLevelsTargetRef: orbRef,
     shouldDeferInitialWakeUp: () => !wakeUpDone,

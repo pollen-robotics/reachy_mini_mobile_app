@@ -4,6 +4,7 @@ const realtimeMock = vi.hoisted(() => ({
   clients: [] as Array<{
     emit: (event: string, detail: unknown) => void;
     listeners: Record<string, Array<(detail: unknown) => void>>;
+    options: Record<string, unknown>;
   }>,
   connectImpl: vi.fn(),
   closeImpl: vi.fn(),
@@ -12,8 +13,10 @@ const realtimeMock = vi.hoisted(() => ({
 vi.mock('../huggingface-realtime', () => {
   class HuggingFaceRealtimeClient {
     listeners: Record<string, Array<(detail: unknown) => void>> = {};
+    options: Record<string, unknown>;
 
-    constructor() {
+    constructor(options: Record<string, unknown>) {
+      this.options = options;
       realtimeMock.clients.push(this);
     }
 
@@ -72,6 +75,7 @@ describe('createHuggingFaceBridge', () => {
     const onReconnecting = vi.fn();
     const bridge = createHuggingFaceBridge({
       getRobot: () => null,
+      getRobotHardwareId: () => 'hardware-123',
       getHfToken: () => 'hf-token',
       voice: 'Aiden',
       transcriptionLanguage: 'en',
@@ -88,5 +92,28 @@ describe('createHuggingFaceBridge', () => {
     );
     expect(onReconnecting).not.toHaveBeenCalled();
     expect(onFatalError).not.toHaveBeenCalled();
+  });
+
+  it('snapshots the stable hardware id when it builds a realtime client', async () => {
+    realtimeMock.connectImpl.mockResolvedValue(undefined);
+    const bridge = createHuggingFaceBridge({
+      getRobot: () => null,
+      getRobotHardwareId: () => 'hardware-123',
+      getHfToken: () => 'hf-token',
+      voice: 'Aiden',
+      transcriptionLanguage: 'en',
+      composeInstructions: () => 'Be concise.',
+      onStatus: vi.fn(),
+      onOutputTrack: vi.fn(),
+      onToolCall: vi.fn(),
+      onReconnecting: vi.fn(),
+      onFatalError: vi.fn(),
+    });
+
+    await bridge.connect({} as MediaStreamTrack);
+
+    expect(realtimeMock.clients[0].options).toMatchObject({
+      hardwareId: 'hardware-123',
+    });
   });
 });
