@@ -696,9 +696,9 @@
   resolved "https://registry.yarnpkg.com/@noble/hashes/-/hashes-1.8.0.tgz#cee43d801fcef9644b11b8194857695acd5f815a"
   integrity sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==
 
-"@pollen-robotics/reachy-mini-sdk@file:vendor/reachy-mini-sdk-672da22ac-1785793315.tgz":
-  version "0.0.0-branch.672da22ac.1785793315"
-  resolved "file:vendor/reachy-mini-sdk-672da22ac-1785793315.tgz#7c7ae7485a10fb731c1a323d1acc9b5222b448c0"
+"@pollen-robotics/reachy-mini-sdk@file:vendor/reachy-mini-sdk-48fb6eca0-1785942755.tgz":
+  version "0.0.0-branch.48fb6eca0.1785942755"
+  resolved "file:vendor/reachy-mini-sdk-48fb6eca0-1785942755.tgz#6489f751fe02b53b7de8d05e06b2876988073922"
   dependencies:
     "@emotion/react" "^11.14.0"
     "@emotion/styled" "^11.14.1"
