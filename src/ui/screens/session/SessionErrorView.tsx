@@ -22,7 +22,7 @@
  */
 import { Button, Stack } from '@mui/material';
 
-import connectionLostUrl from '@/assets/connection-lost.svg';
+import sleepingReachyUrl from '@/assets/sleeping-reachy.svg';
 import IllustratedState from '@/ui/design/IllustratedState';
 
 interface SessionErrorViewProps {
@@ -34,7 +34,7 @@ interface SessionErrorViewProps {
   /** Optional verbatim error from the engine / SDK. Rendered in a
    *  smaller secondary line. */
   message?: string | null;
-  /** Wired to the primary CTA. Always present (typically the host's
+  /** Wired to the "Back" CTA. Always present (typically the host's
    *  "Back" / "Cancel" path). */
   onBack: () => void;
   /** When provided, an additional outlined "Try again" button is
@@ -60,42 +60,48 @@ export default function SessionErrorView({
         py: 2,
       }}
     >
-      {/* Reachy "connection lost" illustration sourced from the desktop
-          app's asset library so the visual identity stays consistent
-          across the two clients. */}
+      {/* Sleeping Reachy rather than the dead-eyed "connection lost"
+          artwork: when the link drops, the daemon's idle reset really
+          does put the robot to sleep, so this is both honest and far
+          less alarming than X-eyes + a severed cable. */}
       <IllustratedState
-        illustration={connectionLostUrl}
+        illustration={sleepingReachyUrl}
         title={headline}
         description={message ?? undefined}
       >
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'center' }}>
+          {/* "Back" is the escape hatch, not the suggested action, so it
+              is grey; "Try again" (when offered) carries the primary
+              tint. `whiteSpace: nowrap` + no maxWidth: the labels must
+              never wrap - a two-line button reads as broken. */}
           <Button
             variant="outlined"
-            color="primary"
+            color="inherit"
             onClick={onBack}
             sx={{
               // Radius / text-transform / weight come from the theme's
               // generic `MuiButton` styles (RADIUS = 12px); only the
               // thicker outline + sizing are local.
+              color: 'text.secondary',
+              borderColor: 'divider',
               borderWidth: 1.5,
-              flex: 1,
-              maxWidth: 140,
-              '&:hover': { borderWidth: 1.5 },
+              px: 3,
+              whiteSpace: 'nowrap',
+              '&:hover': { borderWidth: 1.5, borderColor: 'text.secondary' },
             }}
           >
             Back
           </Button>
           {onRetry ? (
             <Button
-              variant="contained"
+              variant="outlined"
               color="primary"
               onClick={onRetry}
-              disableElevation
               sx={{
-                // Radius / text-transform / weight inherited from the
-                // theme's generic `MuiButton` styles.
-                flex: 1,
-                maxWidth: 140,
+                borderWidth: 1.5,
+                px: 3,
+                whiteSpace: 'nowrap',
+                '&:hover': { borderWidth: 1.5 },
               }}
             >
               Try again
