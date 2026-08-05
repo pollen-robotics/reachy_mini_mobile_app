@@ -39,6 +39,7 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import type { BleDevice } from '@/features/ble/bleWifi';
