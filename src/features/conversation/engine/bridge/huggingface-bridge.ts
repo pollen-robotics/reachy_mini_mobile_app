@@ -51,6 +51,7 @@ export function createHuggingFaceBridge(
         : (deps.tools ?? ROBOT_TOOLS);
     const next = new HuggingFaceRealtimeClient({
       getHfToken: deps.getHfToken,
+      hardwareId: deps.getRobotHardwareId(),
       voice: typeof deps.voice === "function" ? deps.voice() : deps.voice,
       transcriptionLanguage:
         typeof deps.transcriptionLanguage === "function"
