@@ -42,7 +42,8 @@
  * `conversation-engine.ts::doStart`), the host passes a non-null
  * `connectionAttempt`. We:
  *   - flip the headline to "Reconnecting to your Reachy"
- *   - swap the caption to the per-attempt "Attempt n of m"
+ *   - swap the caption to a calm "still trying" line (no attempt
+ *     counter - it reads as a countdown to failure)
  *   - tint the stepper's active step with the primary colour
  *     (via the `accent` prop) so the whole overlay reads as
  *     "active recovery" at a glance.
@@ -235,11 +236,13 @@ function captionFor({
 }: CaptionInputs): string {
   // Retry caption wins over everything else - the user needs to know
   // we're actively retrying, not stuck on a stale connecting message.
+  // No attempt counter ("Attempt 2 of 2") on purpose: it reads as a
+  // countdown to failure and adds anxiety without being actionable.
   // Kept short so it stays on a single line (the headline already says
   // "Reconnecting"); a longer copy wrapped to 2 lines and shifted the
   // Y-centred block.
   if (connectionAttempt && connectionAttempt.attempt > 1) {
-    return `Attempt ${connectionAttempt.attempt} of ${connectionAttempt.maxAttempts}…`;
+    return 'Still trying to reach your Reachy…';
   }
 
   // Caption order reflects the user's mental model of the bring-up,

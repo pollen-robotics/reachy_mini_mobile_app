@@ -16,21 +16,14 @@
  */
 import { CircularProgress, Stack, Typography } from '@mui/material';
 
-import type { ConversationConnectionAttempt } from '@/features/conversation';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
-interface ReconnectingViewProps {
-  /** In-flight retry info from `useRobotSession`. Non-null while the
-   *  engine is on its second (or further) `startSession` attempt. */
-  connectionAttempt?: ConversationConnectionAttempt | null;
-}
-
-export default function ReconnectingView({ connectionAttempt }: ReconnectingViewProps) {
-  const attempt = connectionAttempt ?? null;
-  const caption =
-    attempt && attempt.attempt > 1
-      ? `Attempt ${attempt.attempt} of ${attempt.maxAttempts}…`
-      : 'Restoring the session…';
+export default function ReconnectingView() {
+  // No attempt counter here on purpose: "Attempt 2 of 2" reads as a
+  // countdown to failure and adds anxiety without giving the user
+  // anything actionable. One calm, constant line is enough - if the
+  // retries run out, the error view takes over anyway.
+  const caption = 'This should only take a few seconds…';
 
   return (
     <Stack
@@ -63,11 +56,7 @@ export default function ReconnectingView({ connectionAttempt }: ReconnectingView
             fontSize: TYPO.sm,
             color: 'text.secondary',
             textAlign: 'center',
-            // Fixed one-line box so the attempt caption swapping in
-            // doesn't nudge the Y-centred block (same trick as
-            // ConnectingView's two-line reservation).
             lineHeight: 1.4,
-            height: '1.4em',
           }}
         >
           {caption}

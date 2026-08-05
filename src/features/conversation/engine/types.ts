@@ -308,12 +308,18 @@ export interface ConversationEngineHandle {
    * Failure routes back through the fatal-error path, so the host's
    * error view still renders when recovery cannot heal the session.
    *
-   * `robotId` re-pins the target: the unsolicited-drop path
-   * (`sessionStopped`) clears the engine's selected robot id as part
-   * of its fresh-slate cleanup, so recovery must carry the id the
-   * host still holds.
+   * The host passes its own robot identity because the engine's
+   * selected id is nulled by the unsolicited-drop cleanup, AND
+   * because the id itself may be dead: central peer ids change on
+   * every daemon restart, so recovery re-resolves the dial target
+   * (exact id if still listed, else a name match) against the
+   * freshest robots snapshot, waiting a bounded time for a rebooting
+   * robot to re-register.
    */
-  recoverSession: (robotId: string) => Promise<void>;
+  recoverSession: (target: {
+    robotId: string;
+    robotName?: string | null;
+  }) => Promise<void>;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //

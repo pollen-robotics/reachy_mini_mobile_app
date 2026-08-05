@@ -252,6 +252,9 @@ interface UseRobotSessionOptions {
    * the peer-id rotation that breaks the bare `robotId` snapshot.
    */
   robotHardwareId?: string | null;
+  /** Display name of the picked robot. Used by `recover()` to remap
+   *  the dial target when the daemon restarted (fresh peer id). */
+  robotName?: string | null;
   /** HF token, kept on the panel's session storage by upstream
    *  auth hook. Forwarded here so the engine can re-seed if it
    *  gets cleared mid-session. */
@@ -273,6 +276,7 @@ const TOOL_TOAST_MIN_MS = 1500;
 export function useRobotSession({
   robotId,
   robotHardwareId,
+  robotName,
   token,
   audioLevelsTargetRef,
   shouldDeferInitialWakeUp,
@@ -548,17 +552,18 @@ export function useRobotSession({
     setPhaseHint('recovering');
     try {
       await chainLifecycle(async () => {
-        // Pass the host's robot id: the engine's own selected id is
-        // nulled by the unsolicited-drop cleanup, and recovery must
-        // re-dial the same robot the user was on.
-        await handle.recoverSession(robotId);
+        // Pass the host's robot identity: the engine's own selected id
+        // is nulled by the unsolicited-drop cleanup, and the id itself
+        // may be dead (daemon restart ⇒ fresh central peer id), so the
+        // engine re-resolves the dial target - by name if needed.
+        await handle.recoverSession({ robotId, robotName });
       });
     } finally {
       // Back to engine-driven phase: `live` on success, `error` when
       // the recovery attempt failed (the engine re-ran onFatalError).
       setPhaseHint(null);
     }
-  }, [robotId]);
+  }, [robotId, robotName]);
 
   const tearDown = useCallback(async (): Promise<void> => {
     const handle = handleRef.current;

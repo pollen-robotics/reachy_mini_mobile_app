@@ -29,6 +29,7 @@
  */
 
 import { SESSION_TIMINGS } from "@/features/robot-session/timings";
+import { waitForRecoveryTarget } from "@/features/robot-session/recovery-target";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type {
@@ -387,7 +388,7 @@ export function createConversationHandle(
       setConversationState("idle");
     },
 
-    recoverSession: async (robotId) => {
+    recoverSession: async ({ robotId, robotName }) => {
       if (isUnmounted()) return;
       const robot = getRobot();
       if (!robot || !robotId) return;
@@ -396,21 +397,53 @@ export function createConversationHandle(
         // while the session healed by itself) must not double-start.
         return;
       }
-      // The unsolicited-drop path (`sessionStopped` in robot-events)
-      // nulls the selected robot id as part of its fresh-slate
-      // cleanup, which would make the reacquire below a no-op. Re-pin
-      // the robot the host still holds before dialing.
-      if (session.getSelectedRobotId() !== robotId) {
-        session.setSelectedRobotId(robotId);
-      }
       console.log(
-        `[shell-webrtc] recoverSession: entering, robot.state=${robot.state}, robotId=${robotId}`,
+        `[shell-webrtc] recoverSession: entering, robot.state=${robot.state}, robotId=${robotId}, robotName=${robotName}`,
       );
 
       setConnectionState("starting");
 
-      // Same retry-aware bring-up as `reacquireSession`: reconnect the
-      // SDK if it was dropped, then re-run `start()`.
+      // Reconnect the SDK FIRST (normally reacquire's job) because the
+      // target resolution below feeds off `robotsChanged` snapshots,
+      // and those only flow while the SDK is connected to central.
+      const reconnect = await session.ensureConnected();
+      if (!reconnect.ok) {
+        await onFatalError(reconnect.reason);
+        return;
+      }
+
+      // Re-resolve the dial target. The original peer id dies with the
+      // daemon process (central assigns a fresh one on re-registration),
+      // so a recovery after a robot reboot MUST remap - re-dialing the
+      // old id would fail forever, making the retry button useless in
+      // exactly the scenario it exists for. The bounded wait gives a
+      // rebooting daemon time to come back onto central's list.
+      const target = await waitForRecoveryTarget({
+        getKnownRobots: () => session.getKnownRobots(),
+        robotId,
+        robotName,
+        isCancelled: () => isUnmounted(),
+      });
+      if (isUnmounted()) return;
+      if (!target) {
+        await onFatalError(
+          new Error(
+            `Robot did not come back on the robot list (id=${robotId}, name=${robotName ?? "?"})`,
+          ),
+        );
+        return;
+      }
+      if (target !== robotId) {
+        console.log(
+          `[shell-webrtc] recoverSession: peer id remapped ${robotId} → ${target} (daemon restarted)`,
+        );
+      }
+      // Also covers the unsolicited-drop path (`sessionStopped` in
+      // robot-events), which nulls the selected id as part of its
+      // fresh-slate cleanup - reacquire would no-op without this.
+      session.setSelectedRobotId(target);
+
+      // Same retry-aware bring-up as `reacquireSession`.
       const result = await session.reacquire({
         onAttempt: emitConnectionAttempt,
         isCancelled: () => isUnmounted(),

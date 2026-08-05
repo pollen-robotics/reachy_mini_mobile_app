@@ -575,7 +575,15 @@ export function createConnectionController(
     // classified copy to the orb caption - never the raw engine string.
     console.error("[main] error:", detail);
     setConnectionState("error");
-    emitErrorMessage(formatConversationError(detail));
+    // Transport fallback: everything that lands here is a robot-link /
+    // session failure (unsolicited stop, re-dial exhaustion, dead data
+    // channel, bring-up timeout), never a conversation-only problem.
+    emitErrorMessage(
+      formatConversationError(
+        detail,
+        "The connection to your Reachy was lost and couldn't be restored automatically.",
+      ),
+    );
     await teardown();
   }
 

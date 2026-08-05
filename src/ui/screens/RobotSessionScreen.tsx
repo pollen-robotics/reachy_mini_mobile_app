@@ -239,6 +239,7 @@ function ConnectedSession({
   const session = useRobotSession({
     robotId,
     robotHardwareId,
+    robotName,
     token,
     audioLevelsTargetRef: orbRef,
     shouldDeferInitialWakeUp: () => wizardGate !== 'done',
@@ -520,13 +521,16 @@ function ConnectedSession({
 
   // Reacquiring overlay: fires every time we come back from an
   // iframe handoff. Short-lived (typically <2 s) and the panel
-  // stays mounted underneath so the orb resumes smoothly.
+  // stays mounted underneath so the orb resumes smoothly. Rendered
+  // full-screen (with the recovering overlay below) next to the
+  // other FullScreenTransition surfaces.
   const showReacquiringOverlay = !leaving && !isError && session.phase === 'reacquiring';
 
   // Recovering overlay: an in-place bring-up retry after a
   // transport-level fatal on an established session (see the
-  // auto-recover effect below). Compact on purpose - the full
-  // connecting pipeline stays reserved for the initial bring-up.
+  // auto-recover effect below). Compact view, full-screen cover -
+  // the full connecting pipeline stays reserved for the initial
+  // bring-up.
   const showRecoveringOverlay = !leaving && session.phase === 'recovering';
 
   // One-shot in-place recovery. When a session that had already
@@ -845,28 +849,6 @@ function ConnectedSession({
             </Box>
           )}
 
-          {/* Reacquiring overlay stays scoped to the conversation column
-              (above the panel, below the header / bottom nav) - the
-              user is briefly back on the conv tab and we want them to
-              see the chrome they're returning to. Compact view: the
-              full connecting pipeline is for the initial bring-up
-              only, replaying it here read as a from-scratch reconnect. */}
-          {showReacquiringOverlay && tab === 'conv' && (
-            <Overlay>
-              <ReconnectingView connectionAttempt={session.connectionAttempt} />
-            </Overlay>
-          )}
-
-          {/* Recovering overlay: in-place retry after a transport
-              fatal (see the auto-recover effect). Spans both tabs -
-              unlike a reacquire, a connection loss can hit while the
-              user is anywhere in the session UI. */}
-          {showRecoveringOverlay && (
-            <Overlay>
-              <ReconnectingView connectionAttempt={session.connectionAttempt} />
-            </Overlay>
-          )}
-
           {/* Tab-switch cover: a centered spinner shown for the
               minimum-duration beat after a conv <-> apps switch (see
               `handleTabChange`). Sits above both tab columns in the
@@ -1156,6 +1138,20 @@ function ConnectedSession({
             />
           </FullScreenTransition>
         )}
+        {/* Full-screen reconnect transition: covers EVERYTHING (top
+            bar, body, bottom nav) while the session is being brought
+            back - iframe-handoff reacquire or in-place recovery after
+            a transport fatal. Full-bleed on purpose: a partial overlay
+            left interactive chrome (tabs, settings) around a session
+            that can't serve any of it yet, which read as broken. The
+            view itself stays compact (spinner + one line); the full
+            connecting pipeline remains reserved for the initial
+            bring-up. */}
+        {(showReacquiringOverlay || showRecoveringOverlay) && (
+          <FullScreenTransition>
+            <ReconnectingView />
+          </FullScreenTransition>
+        )}
         {/* Full-screen leaving transition: covers EVERYTHING while the
             engine is mid-teardown (gotoSleep + motors disabled +
             stopSession + disconnect). */}
@@ -1228,24 +1224,6 @@ function ConnectedSession({
         </AnimatePresence>
       </Stack>
     </DaemonStateProvider>
-  );
-}
-
-function Overlay({ children }: { children: React.ReactNode }) {
-  return (
-    <Box
-      sx={theme => ({
-        position: 'absolute',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        bgcolor: theme.palette.background.default,
-        zIndex: 1,
-      })}
-    >
-      {children}
-    </Box>
   );
 }
 
