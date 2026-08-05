@@ -38,10 +38,10 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import WifiIcon from '@mui/icons-material/Wifi';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import type { BleDevice } from '@/features/ble/bleWifi';

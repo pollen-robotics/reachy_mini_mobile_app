@@ -49,6 +49,8 @@ export interface RealtimePort {
  */
 export interface RealtimeBackendDeps {
   getRobot: () => ReachyMiniInstance | null;
+  /** Stable robot identity used for deployed backend attribution. */
+  getRobotHardwareId: () => string | null;
   voice: string | (() => string);
   /**
    * ISO 639-1 code for the input transcription model. Resolved lazily

@@ -196,6 +196,12 @@ const preselectedRobotId: string | null =
   typeof options.preselectedRobotId === "string" && options.preselectedRobotId.length > 0
     ? options.preselectedRobotId
     : null;
+const getRobotHardwareId = (): string | null => {
+  const value = options.getRobotHardwareId?.();
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
 
 // Optional external state observers (mobile-side watchdog + orb).
 // `onConnectionStateChange` fires once per CONNECTION transition,
@@ -1003,6 +1009,7 @@ const backgroundAudioKeeper: BackgroundAudioKeeper =
 
 const realtimeBackendDeps: RealtimeBackendDeps = {
   getRobot: liveSession.getRobot,
+  getRobotHardwareId,
   // Resolve the voice lazily (re-read on every `buildClient()` so a
   // personality switch picks up the right voice on the next reconnect,
   // without rebuilding the bridge). `resolvePersonaVoice` snaps the

@@ -448,6 +448,15 @@ export interface ConversationEngineOptions {
   preselectedRobotId?: string | null;
 
   /**
+   * Stable daemon-reported hardware id from the selected central robot
+   * entry. This is attribution metadata for deployed realtime allocation;
+   * it must not be confused with `preselectedRobotId`, which is an
+   * ephemeral signaling peer id. Read lazily so reconnects can pick up a
+   * central-listing enrichment without rebuilding the engine.
+   */
+  getRobotHardwareId?: () => string | null;
+
+  /**
    * Gate consulted by the connection bring-up right before it wakes the
    * robot. When it returns `true`, the engine SKIPS the initial wake-up
    * and reaches `live` with the robot still asleep, leaving the very

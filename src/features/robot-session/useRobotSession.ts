@@ -249,7 +249,9 @@ interface UseRobotSessionOptions {
    * `meta.hardware_id`), or `null` for a daemon too old to expose one.
    * When present, the engine re-resolves the live peer id from central
    * by matching this id right before each connect, self-healing against
-   * the peer-id rotation that breaks the bare `robotId` snapshot.
+   * the peer-id rotation that breaks the bare `robotId` snapshot. Also
+   * forwarded to the engine (`getRobotHardwareId`) so realtime session
+   * allocations are attributed to this robot.
    */
   robotHardwareId?: string | null;
   /** Display name of the picked robot. Used by `recover()` to remap
@@ -371,6 +373,7 @@ export function useRobotSession({
 
       const handle = mountConversation(inertRoot, {
         preselectedRobotId: robotId,
+        getRobotHardwareId: () => hardwareIdRef.current,
         autoStartConversation: false,
         // Read through the ref so the engine always sees the host's
         // current first-wake-up decision, not the one at mount time.

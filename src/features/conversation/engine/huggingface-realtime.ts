@@ -44,6 +44,8 @@ const TOOL_CALL_PROCESSING_FALLBACK_MS = 15_000;
 // user-visible startup failure. A 4xx is a real rejection and never retried.
 const ALLOCATOR_MAX_ATTEMPTS = 2;
 const ALLOCATOR_RETRY_BACKOFF_MS = 400;
+const MOBILE_CLIENT_USER_AGENT = "reachy-mini-mobile-app";
+const REACHY_AUTHORIZATION_HEADER = "X-Reachy-Mini-Authorization";
 
 export type RealtimeStatus =
   | "idle"
@@ -69,6 +71,8 @@ export interface RealtimeToolCall {
 
 export interface HuggingFaceRealtimeOptions {
   getHfToken?: () => string | null;
+  /** Stable daemon-reported robot id. Used only by the deployed allocator. */
+  hardwareId?: string | null;
   voice: string;
   instructions: string;
   inputTrack: MediaStreamTrack;
@@ -199,7 +203,10 @@ export class HuggingFaceRealtimeClient {
 
     const hfToken =
       this.options.getHfToken?.() ?? readHfTokenFromStorage() ?? null;
-    const websocketUrl = await resolveHfRealtimeWebSocketUrl(hfToken);
+    const websocketUrl = await resolveHfRealtimeWebSocketUrl(
+      hfToken,
+      this.options.hardwareId,
+    );
 
     const outputPlayer = new PcmOutputTrack(HF_SAMPLE_RATE);
     this.outputPlayer = outputPlayer;
@@ -634,11 +641,16 @@ export function normalizeHfVoice(value: string | null | undefined): HfVoiceId {
  */
 async function postHfRealtimeSession(
   headers: Record<string, string>,
+  body: string,
 ): Promise<Response> {
-  let response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, {
+  // The init object contains only reusable string data, so every transient
+  // retry sends the exact same attribution headers and JSON payload.
+  const requestInit: RequestInit = {
     method: "POST",
     headers,
-  });
+    body,
+  };
+  let response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, requestInit);
   for (
     let attempt = 1;
     !response.ok && response.status >= 500 && attempt < ALLOCATOR_MAX_ATTEMPTS;
@@ -652,16 +664,14 @@ async function postHfRealtimeSession(
     await new Promise((resolve) =>
       setTimeout(resolve, ALLOCATOR_RETRY_BACKOFF_MS * attempt),
     );
-    response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, {
-      method: "POST",
-      headers,
-    });
+    response = await tauriFetch(HF_REALTIME_SESSION_PROXY_URL, requestInit);
   }
   return response;
 }
 
 export async function resolveHfRealtimeWebSocketUrl(
   hfToken: string | null,
+  hardwareId: string | null = null,
 ): Promise<string> {
   if (HF_REALTIME_CONNECTION_MODE === "local") {
     if (!HF_REALTIME_WS_URL) {
@@ -672,10 +682,18 @@ export async function resolveHfRealtimeWebSocketUrl(
     return normalizeHfRealtimeWebSocketUrl(HF_REALTIME_WS_URL);
   }
 
-  const headers: Record<string, string> = {};
-  if (hfToken) headers.Authorization = `Bearer ${hfToken}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": MOBILE_CLIENT_USER_AGENT,
+  };
+  if (hfToken) headers[REACHY_AUTHORIZATION_HEADER] = `Bearer ${hfToken}`;
 
-  const response = await postHfRealtimeSession(headers);
+  const normalizedHardwareId = hardwareId?.trim() ?? "";
+  const body = JSON.stringify(
+    normalizedHardwareId ? { hardware_id: normalizedHardwareId } : {},
+  );
+
+  const response = await postHfRealtimeSession(headers, body);
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
