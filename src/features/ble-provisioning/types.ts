@@ -70,6 +70,11 @@ export interface SetupError {
     // could not confirm sign-in actually completed. Treated as a recoverable
     // failure instead of a silent success.
     | 'oauth-unconfirmed'
+    // The robot's daemon reports a fault (e.g. a motor missing from the serial
+    // bus): its backend never started, so it can NOT register on central no
+    // matter how well the sign-in went. Distinguished from `oauth-unconfirmed`
+    // so the user is pointed at the robot, not at their HF sign-in.
+    | 'robot-daemon-error'
     | 'unknown';
   /** Human-readable, shown verbatim in the error step. */
   message: string;

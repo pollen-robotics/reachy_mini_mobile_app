@@ -164,6 +164,30 @@ async function getDeviceStatus(ip: string, sessionId: string): Promise<DeviceCod
   return (data.status as DeviceCodeStatus) ?? 'pending';
 }
 
+// Best-effort probe of the daemon's own health, used to explain a failed
+// central confirmation. A daemon that boots into an error state (e.g. a motor
+// missing from the serial bus) never starts its media stack, so its central
+// relay can never register — the robot then looks like a failed sign-in
+// (`oauth-unconfirmed`) when the sign-in actually succeeded. Reading
+// `/api/daemon/status` over the LAN lets us surface the REAL cause instead.
+// Returns the daemon's error description, or `null` when the daemon looks
+// healthy / can't be reached (the caller keeps the generic message then).
+async function probeDaemonFault(ip: string): Promise<string | null> {
+  try {
+    const resp = await tauriFetch(`http://${ip}:8000/api/daemon/status`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { state?: string; error?: string | null };
+    if (data.error) return data.error;
+    if (data.state === 'error') return 'The robot software is in an error state.';
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -679,11 +703,27 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     const hwid = identityRef.current?.hardwareId ?? null;
 
     // Shared tail for both flows: confirm the robot registered on central, then
-    // settle to sleep and finish. A `null` match is an unconfirmed sign-in.
+    // settle to sleep and finish. A `null` match is an unconfirmed sign-in —
+    // unless the daemon itself reports a fault, in which case we surface THAT
+    // (a robot whose backend never started can't register on central no matter
+    // how well the sign-in went, and "try signing in again" would be a lie).
     const confirmOnlineAndFinish = async (): Promise<void> => {
       const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
       if (runId !== runIdRef.current || !mountedRef.current) return;
       if (!matched) {
+        const fault = await probeDaemonFault(ip);
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+        if (fault) {
+          setError({
+            code: 'robot-daemon-error',
+            message:
+              "Your Reachy can't come online because its software reported a " +
+              `problem: ${fault} Fix this (a restart may help), then try again.`,
+            recoverPhase: 'linking-account',
+          });
+          setPhase('error');
+          return;
+        }
         setError({
           code: 'oauth-unconfirmed',
           message:
