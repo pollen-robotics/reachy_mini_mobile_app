@@ -519,18 +519,17 @@ function ConnectedSession({
   const showConnectingOverlay =
     !leaving && !isError && !session.hasReachedReady && session.phase === 'bringing-up';
 
-  // Reacquiring overlay: fires every time we come back from an
-  // iframe handoff. Short-lived (typically <2 s) and the panel
-  // stays mounted underneath so the orb resumes smoothly. Rendered
-  // full-screen (with the recovering overlay below) next to the
-  // other FullScreenTransition surfaces.
-  const showReacquiringOverlay = !leaving && !isError && session.phase === 'reacquiring';
-
   // Recovering overlay: an in-place bring-up retry after a
   // transport-level fatal on an established session (see the
   // auto-recover effect below). Compact view, full-screen cover -
   // the full connecting pipeline stays reserved for the initial
   // bring-up.
+  //
+  // Deliberately NOT shown for the `reacquiring` phase: that one fires
+  // on every iframe-app close (a planned, short-lived handoff, not a
+  // connection loss), where a full-screen "Reconnecting" reads as a
+  // failure. During reacquire the normal UI stays up and the identity
+  // chip's pulsing "Reconnecting" badge is the only indicator.
   const showRecoveringOverlay = !leaving && session.phase === 'recovering';
 
   // One-shot in-place recovery. When a session that had already
@@ -1139,15 +1138,15 @@ function ConnectedSession({
           </FullScreenTransition>
         )}
         {/* Full-screen reconnect transition: covers EVERYTHING (top
-            bar, body, bottom nav) while the session is being brought
-            back - iframe-handoff reacquire or in-place recovery after
-            a transport fatal. Full-bleed on purpose: a partial overlay
-            left interactive chrome (tabs, settings) around a session
-            that can't serve any of it yet, which read as broken. The
-            view itself stays compact (spinner + one line); the full
-            connecting pipeline remains reserved for the initial
-            bring-up. */}
-        {(showReacquiringOverlay || showRecoveringOverlay) && (
+            bar, body, bottom nav) while the session recovers in place
+            after a transport fatal. Full-bleed on purpose: a partial
+            overlay left interactive chrome (tabs, settings) around a
+            session that can't serve any of it yet, which read as
+            broken. The view itself stays compact (spinner + one line);
+            the full connecting pipeline remains reserved for the
+            initial bring-up. Iframe-handoff reacquires do NOT surface
+            here (see `showRecoveringOverlay`). */}
+        {showRecoveringOverlay && (
           <FullScreenTransition>
             <ReconnectingView />
           </FullScreenTransition>

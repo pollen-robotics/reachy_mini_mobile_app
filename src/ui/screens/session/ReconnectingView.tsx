@@ -2,8 +2,11 @@
  * Compact reconnection overlay.
  *
  * Shown when the session is being brought BACK on a screen the user
- * already knows: returning from an iframe handoff (`reacquiring`) or
- * an in-place recovery after a transport-level fatal (`recovering`).
+ * already knows: an in-place recovery after a transport-level fatal
+ * (`recovering`). Iframe-handoff reacquires (`reacquiring`) do NOT
+ * show this view - closing a store app is a planned transition, not
+ * a connection loss, and a full-screen "Reconnecting" there read as
+ * a failure. The identity chip's pulsing badge covers that case.
  *
  * Deliberately minimal - a spinner and one line of copy. The full
  * `ConnectingView` (illustration + Link/Session/Wake-up stepper) is
