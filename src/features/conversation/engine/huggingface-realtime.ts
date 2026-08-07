@@ -196,6 +196,60 @@ export class HuggingFaceRealtimeClient {
     }
   }
 
+  /**
+   * (Re)build the PCM uplink on `track`. Stops any previous streamer
+   * first, so the old Web Audio graph (and, on Android, its `<audio>`
+   * pump) is released before the new one is wired.
+   */
+  private startInputStreamer(track: MediaStreamTrack): void {
+    this.inputStreamer?.stop();
+    const streamer = new PcmInputStreamer({
+      track,
+      sendPcm: (pcm) => {
+        const ws = this.ws;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (ws.bufferedAmount > WS_BUFFERED_AMOUNT_LIMIT) return;
+        this.sendEvent({
+          type: "input_audio_buffer.append",
+          audio: pcm16ToBase64(pcm),
+        });
+      },
+    });
+    streamer.start();
+    this.inputStreamer = streamer;
+  }
+
+  /**
+   * Point the uplink at a different robot mic track WITHOUT tearing the
+   * realtime session down.
+   *
+   * Needed because the SDK's auto re-dial replaces the whole
+   * `RTCPeerConnection`: the receiver track we were reading died with the
+   * old one, so `onaudioprocess` keeps firing on a dead track and the
+   * backend hears pure silence while everything else looks healthy.
+   * Rebuilding the client instead would work, but would throw away the
+   * WebSocket and the conversation history with it.
+   *
+   * No-op when the track is unchanged or the socket is gone.
+   */
+  replaceInputTrack(track: MediaStreamTrack): void {
+    if (this.options.inputTrack === track && this.inputStreamer) return;
+    // Record it FIRST, unconditionally: when the socket isn't up yet
+    // (we're racing a reconnect that hasn't reached `handleOpen`), the
+    // streamer is started later from `this.options.inputTrack` - so
+    // stashing it here is what stops that path from re-arming the dead
+    // track we're trying to replace.
+    this.options.inputTrack = track;
+    if (!this.ws) {
+      console.log(
+        "[hf-realtime] input track stashed for the pending connection",
+      );
+      return;
+    }
+    console.log("[hf-realtime] replacing input track after robot re-dial");
+    this.startInputStreamer(track);
+  }
+
   async connect(): Promise<void> {
     if (this.ws) throw new Error("Already connected");
     this.intentionalClose = false;
@@ -267,19 +321,7 @@ export class HuggingFaceRealtimeClient {
             }),
           });
 
-          const streamer = new PcmInputStreamer({
-            track: this.options.inputTrack,
-            sendPcm: (pcm) => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-              if (ws.bufferedAmount > WS_BUFFERED_AMOUNT_LIMIT) return;
-              this.sendEvent({
-                type: "input_audio_buffer.append",
-                audio: pcm16ToBase64(pcm),
-              });
-            },
-          });
-          streamer.start();
-          this.inputStreamer = streamer;
+          this.startInputStreamer(this.options.inputTrack);
           this.setStatus("connected");
           startupSettled = true;
           resolve();

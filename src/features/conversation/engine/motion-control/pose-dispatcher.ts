@@ -178,7 +178,10 @@ export function createPoseDispatcher(
     // touch `throttling`: that flag is reserved for actual
     // backpressure so instrumentation can tell the two apart.
     if (gated) {
-      deps.recordSend(false, "pose-dispatcher-gated");
+      // NOT reported to dc-health: we CHOSE not to send. A deliberate
+      // skip is not evidence the link is dead, and at 30 Hz it reaches
+      // the 120-failure fatal threshold in 4 s - killing exactly the
+      // sessions the gate exists to protect.
       return;
     }
 
@@ -190,7 +193,15 @@ export function createPoseDispatcher(
     const dc = (robot as unknown as { _dc?: RTCDataChannel | null })._dc;
     if (dc && dc.bufferedAmount > bufferedAmountThreshold) {
       throttling = true;
-      deps.recordSend(false, "pose-dispatcher-backpressure");
+      // Also NOT reported to dc-health, same reasoning as the gate
+      // above: a full send buffer means the channel EXISTS and is
+      // congested - the opposite of the dead channel dc-health hunts
+      // for. Counting it was why a Wi-Fi blip killed the session 4 s
+      // AFTER the transport had recovered: the post-blip backlog takes
+      // seconds to drain and drains at exactly 30 "failures" a second.
+      // `throttling` / `isThrottling()` keep it visible for
+      // instrumentation. (This is what the 40 → 120 threshold bump was
+      // really working around; the threshold is not the fix.)
       return;
     }
     throttling = false;

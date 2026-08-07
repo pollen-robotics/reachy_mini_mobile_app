@@ -5,9 +5,11 @@ const realtimeMock = vi.hoisted(() => ({
     emit: (event: string, detail: unknown) => void;
     listeners: Record<string, Array<(detail: unknown) => void>>;
     options: Record<string, unknown>;
+    replaceInputTrack: (track: unknown) => void;
   }>,
   connectImpl: vi.fn(),
   closeImpl: vi.fn(),
+  replaceInputTrackImpl: vi.fn(),
 }));
 
 vi.mock('../huggingface-realtime', () => {
@@ -49,6 +51,10 @@ vi.mock('../huggingface-realtime', () => {
     sendToolResponse(): void {
       // ignored
     }
+
+    replaceInputTrack(track: unknown): void {
+      realtimeMock.replaceInputTrackImpl(track);
+    }
   }
 
   return { HuggingFaceRealtimeClient };
@@ -62,6 +68,7 @@ describe('createHuggingFaceBridge', () => {
     realtimeMock.connectImpl.mockReset();
     realtimeMock.closeImpl.mockReset();
     realtimeMock.closeImpl.mockResolvedValue(undefined);
+    realtimeMock.replaceInputTrackImpl.mockReset();
   });
 
   it('leaves initial websocket failures recoverable by the caller', async () => {
@@ -114,6 +121,88 @@ describe('createHuggingFaceBridge', () => {
 
     expect(realtimeMock.clients[0].options).toMatchObject({
       hardwareId: 'hardware-123',
+    });
+  });
+
+  // The SDK's auto re-dial swaps the whole RTCPeerConnection. The mic
+  // track we were reading is a receiver of the OLD one, so it goes dead
+  // silently - `onaudioprocess` keeps firing on a dead track and the
+  // conversation looks connected while the backend hears nothing.
+  // `rebindRobotAudio` is what re-reads it; without the swap below being
+  // detected, the orb parks on `listening` forever.
+  describe('rebindRobotAudio after an SDK re-dial', () => {
+    const audioTrack = (id: string): MediaStreamTrack =>
+      ({ id, kind: 'audio', enabled: true }) as unknown as MediaStreamTrack;
+
+    /** Robot stub whose `_pc` can be swapped, like a re-dial does. */
+    function makeRobot(track: MediaStreamTrack) {
+      const robot = {
+        _pc: { getReceivers: () => [{ track }], getTransceivers: () => [] },
+      };
+      return {
+        robot,
+        swapPeerConnection(next: MediaStreamTrack) {
+          robot._pc = {
+            getReceivers: () => [{ track: next }],
+            getTransceivers: () => [],
+          };
+        },
+      };
+    }
+
+    async function connectedBridge(first: MediaStreamTrack) {
+      realtimeMock.connectImpl.mockResolvedValue(undefined);
+      const { robot, swapPeerConnection } = makeRobot(first);
+      const bridge = createHuggingFaceBridge({
+        getRobot: () => robot as never,
+        getRobotHardwareId: () => 'hardware-123',
+        getHfToken: () => 'hf-token',
+        voice: 'Aiden',
+        transcriptionLanguage: 'en',
+        composeInstructions: () => 'Be concise.',
+        onStatus: vi.fn(),
+        onOutputTrack: vi.fn(),
+        onToolCall: vi.fn(),
+        onReconnecting: vi.fn(),
+        onFatalError: vi.fn(),
+      });
+      await bridge.connect(first);
+      return { bridge, robot, swapPeerConnection };
+    }
+
+    it("re-points the uplink at the new peer connection's receiver", async () => {
+      const before = audioTrack('mic-before');
+      const after = audioTrack('mic-after');
+      const { bridge, robot, swapPeerConnection } = await connectedBridge(before);
+
+      swapPeerConnection(after);
+      expect(bridge.rebindRobotAudio(robot as never)).toBe(true);
+
+      expect(realtimeMock.replaceInputTrackImpl).toHaveBeenCalledWith(after);
+    });
+
+    it('keeps the mute state on the replacement track', async () => {
+      const before = audioTrack('mic-before');
+      const after = audioTrack('mic-after');
+      const { bridge, robot, swapPeerConnection } = await connectedBridge(before);
+
+      bridge.setMicMuted(true);
+      swapPeerConnection(after);
+      bridge.rebindRobotAudio(robot as never);
+
+      expect(after.enabled).toBe(false);
+    });
+
+    it('reports failure when the new connection has no audio receiver', async () => {
+      const before = audioTrack('mic-before');
+      const { bridge, robot } = await connectedBridge(before);
+      (robot as { _pc: unknown })._pc = {
+        getReceivers: () => [],
+        getTransceivers: () => [],
+      };
+
+      expect(bridge.rebindRobotAudio(robot as never)).toBe(false);
+      expect(realtimeMock.replaceInputTrackImpl).not.toHaveBeenCalled();
     });
   });
 });

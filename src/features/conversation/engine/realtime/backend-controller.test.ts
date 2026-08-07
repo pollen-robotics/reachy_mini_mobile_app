@@ -15,6 +15,7 @@ function makeBridge(): RealtimeBackend {
     isReconnecting: vi.fn(() => false),
     resetReconnectCounter: vi.fn(),
     getRobotMicTrack: vi.fn(() => null),
+    rebindRobotAudio: vi.fn(() => true),
     setMicMuted: vi.fn(),
     getRealtimePort: vi.fn(() => ({ sendEvent: vi.fn(), onUserTranscript: vi.fn(() => () => {}) })),
   };
