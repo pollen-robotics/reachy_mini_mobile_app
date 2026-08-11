@@ -13,12 +13,14 @@
  *               `StoreCta` button at the bottom opens the store. See
  *               `LauncherView`.
  *   - Store   - the full catalog (search + per-category rails + the
- *               drill-down focus list). Unchanged from the original
- *               single-surface design; its three rendering modes are
- *               described below. A "Back to launcher" chevron at the
- *               top returns to the launcher (hidden while a category is
- *               drilled into - Focus owns the screen with its own
- *               back affordance).
+ *               drill-down focus list). Its three rendering modes are
+ *               described below. Both store "pages" (browse and the
+ *               category drill-down) are topped by the same
+ *               `CollapsingHeaderBar`: a permanently-sticky, iOS
+ *               large-title-style bar carrying the back chevron +
+ *               title, which shrinks as the user scrolls. The back
+ *               affordance is therefore reachable at ANY scroll
+ *               depth - no more scrolling back to the top to leave.
  *
  * Store rendering modes, all hosted on a single scrollable
  * surface so navigation feels stateless and the launch-iframe
@@ -51,7 +53,16 @@
  * `categoryTaxonomy.ts`); the slug list is never mirrored by hand.
  * See `docs/APPS_TAB_REDESIGN.md`, Section 5.
  */
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react';
 import {
   Alert,
   Box,
@@ -72,7 +83,6 @@ import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import CloseIcon from '@mui/icons-material/Close';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SearchIcon from '@mui/icons-material/Search';
-import StarOutlineIcon from '@mui/icons-material/StarBorder';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import {
   DndContext,
@@ -112,11 +122,20 @@ import AppLauncherCard from './AppLauncherCard';
 import AppRail from './AppRail';
 import AppsCreateFooter from './AppsCreateFooter';
 import LazyMount from './LazyMount';
+import StoreIntroOverlay from './StoreIntroOverlay';
 import VirtualAppList from './VirtualAppList';
 import { COLUMN_SX } from './layout';
 
+/** Imperative surface the host shell can drive. */
+export interface AppsTabViewHandle {
+  /** Pop the tab back to its root "Your apps" launcher view (used by
+   *  the bottom nav's "re-tap the active Apps tab" gesture). */
+  popToRoot: () => void;
+}
+
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
+  ref?: Ref<AppsTabViewHandle>;
 }
 
 /**
@@ -140,32 +159,47 @@ const RAIL_PREVIEW_CAP = 12;
 const RAIL_PLACEHOLDER_HEIGHT = 260;
 
 /**
- * Visual rhythm: the upper "chrome" panels (Pinned/Intro,
- * Search, focused-category header) carry a thin bottom divider
- * so the tab top reads as a vertical stack of sub-headers. The
- * category rails below are intentionally divider-less - they
- * already self-delimit via their `LABEL · count` headers + the
- * tile rows, and stacking dividers between every rail made the
- * scroll feel choppy.
+ * Geometry of the store's `CollapsingHeaderBar`.
+ *
+ * The bar keeps a CONSTANT height (fixed paddings, no animated
+ * dimension) - only the title's `transform: scale()` animates, which
+ * never reflows. The title shrinks from `TYPO.xxl` down to
+ * `TITLE_COLLAPSED_SCALE` of its size over the first
+ * `COLLAPSE_RANGE_PX` of scroll.
  */
-const PANEL_SX = {
-  py: 2,
-  borderBottom: (theme: { palette: { divider: string } }) => `1px solid ${theme.palette.divider}`,
-} as const;
+const COLLAPSE_RANGE_PX = 48;
+const TITLE_COLLAPSED_SCALE = 0.8;
 
+/**
+ * localStorage key (same `reachy.` namespace as the pin / hidden-
+ * authors stores) remembering that the user saw the first-visit
+ * store intro (`StoreIntroOverlay`). Written on the "Got it" tap,
+ * PROD ONLY - dev builds neither read nor write it (see the
+ * `introSeen` state below).
+ */
+const STORE_INTRO_SEEN_KEY = 'reachy.apps.storeIntroSeen';
+
+/**
+ * Visual rhythm: the store body is deliberately divider-less at rest -
+ * the search panel and the category rails self-delimit via spacing and
+ * their `LABEL · count` headers. The ONLY hairline is the sticky
+ * header bar's, and it fades in with scroll (see
+ * `CollapsingHeaderBar`), so the unscrolled page reads as one plain
+ * sheet.
+ */
 const RAIL_PANEL_SX = {
   pt: 4,
   pb: 0,
 } as const;
 
-// First rail sits right under the search panel's bottom divider, so it
-// needs far less top margin than the inter-rail gap above.
+// First rail sits right under the search panel, so it needs far less
+// top margin than the inter-rail gap above.
 const RAIL_PANEL_FIRST_SX = {
   pt: 2.5,
   pb: 0,
 } as const;
 
-export default function AppsTabView({ onOpen }: AppsTabViewProps) {
+export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
   const { state, refresh } = useApps();
   const hiddenAuthors = useHiddenAuthors();
 
@@ -231,6 +265,58 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
     // the clean browse layout (and the bottom toggle stays visible).
     if (next === 'pinned') setFocusedCategoryId(null);
   }, []);
+
+  // Host hook: re-tapping the active Apps tab in the bottom nav pops
+  // the sub-navigation back to the launcher (the standard mobile
+  // "tap the tab you're on = back to its root" gesture).
+  useImperativeHandle(
+    ref,
+    () => ({ popToRoot: () => handleChangeView('pinned') }),
+    [handleChangeView]
+  );
+
+  // Push/pop scroll reset. The launcher, the store browse layout and
+  // the category drill-down all share ONE scroll container, so without
+  // this a drill-down would inherit the browse scroll offset (and the
+  // way back too). Resetting on every sub-page transition makes each
+  // "page" land at its top, matching the push/pop mental model the
+  // sticky header bar sells. Also re-zeroes the bar's collapse state
+  // via the scroll event this emits.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [view, focusedCategoryId]);
+
+  // Store intro overlay (see `StoreIntroOverlay`).
+  //
+  // PROD: one-shot onboarding. The seen-flag is persisted to
+  // localStorage on the "Got it" tap (on DISMISSAL, not on show, so a
+  // user who kills the app mid-intro is greeted again next launch)
+  // and the intro never resurfaces once dismissed.
+  //
+  // DEV: no persistence at all - the stored flag is neither read nor
+  // written, and the seen-state re-arms every time the user leaves
+  // the store sub-view, so the intro shows on EVERY store entrance
+  // while iterating on it.
+  const [introSeen, setIntroSeen] = useState<boolean>(() => {
+    if (import.meta.env.DEV) return false;
+    try {
+      return window.localStorage.getItem(STORE_INTRO_SEEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const dismissIntro = useCallback(() => {
+    setIntroSeen(true);
+    if (import.meta.env.DEV) return;
+    try {
+      window.localStorage.setItem(STORE_INTRO_SEEN_KEY, '1');
+    } catch {
+      // Private mode / quota: the intro still hides for this session.
+    }
+  }, []);
+  useEffect(() => {
+    if (import.meta.env.DEV && view !== 'store') setIntroSeen(false);
+  }, [view]);
 
   const pinnedApps = usePinnedApps();
 
@@ -387,6 +473,9 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
         // intentionally spill beyond the viewport edge to host
         // their internal scroll track.
         overflow: 'hidden',
+        // Anchor for the absolutely-positioned first-visit store
+        // intro overlay, which covers exactly this tab body.
+        position: 'relative',
       }}
     >
       <Box
@@ -413,80 +502,52 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
           />
         ) : (
           <>
-            {/* Focused-category header: a thin in-body sub-header
-                with a back chevron + label + count. Replaces the
-                old sub-header chrome we used to render above the
-                body. */}
+            {/* Focused-category header: the same sticky collapsing
+                bar as the browse layout's "Discover apps" - one line,
+                back chevron + label + inline count, same typography,
+                same placement, same collapse-on-scroll. The two store
+                pages read as siblings and the back affordance never
+                scrolls away. */}
             {focusedBucket && (
-              <Box sx={PANEL_SX}>
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  sx={{
-                    alignItems: 'center',
-                    ...COLUMN_SX,
-                    py: 0.25,
-                    minHeight: 36,
-                  }}
-                >
-                  <IconButton
-                    size="small"
-                    aria-label="Back to apps"
-                    onClick={() => setFocusedCategoryId(null)}
-                    sx={{ ml: -0.5 }}
-                  >
-                    <ArrowBackIosNewIcon sx={{ fontSize: TYPO.md }} />
-                  </IconButton>
-                  <Stack sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography
-                      sx={{
-                        fontSize: TYPO.body,
-                        fontWeight: FONT_WEIGHT.semibold,
-                        color: 'text.primary',
-                      }}
-                    >
-                      {focusedBucket.descriptor.label}
-                    </Typography>
-                    <Typography sx={{ fontSize: TYPO.tiny, color: 'text.secondary' }}>
-                      {focusedBucket.apps.length} app
-                      {focusedBucket.apps.length === 1 ? '' : 's'}
-                    </Typography>
-                  </Stack>
-                </Stack>
-              </Box>
+              <CollapsingHeaderBar
+                scrollRef={scrollRef}
+                title={focusedBucket.descriptor.label}
+                count={focusedBucket.apps.length}
+                backLabel="Back to apps"
+                onBack={() => setFocusedCategoryId(null)}
+              />
             )}
 
             {/* Browse panels: pinned + search + per-category rails.
                 Each lives in its own bottom-divider panel. */}
             {!focusedBucket && (
               <>
-                {/* Store header: folds the back affordance INTO the
-                    title row (no standalone chevron row eating a whole
-                    line) and carries a one-line "tap ★ to add to your
-                    launcher" hint. Replaces the old illustration-heavy
-                    intro panel. */}
-                <Box sx={{ ...PANEL_SX, pt: 3.5, pb: 1 }}>
-                  <StoreHeader onBack={() => handleChangeView('pinned')} />
-                </Box>
+                {/* Store header bar: permanently-sticky back chevron +
+                    "Discover apps" title, shrinking as the user
+                    scrolls (iOS large-title pattern). No hero below:
+                    onboarding lives in the one-shot `StoreIntroOverlay`
+                    sheet, so browse starts straight at the search
+                    panel. */}
+                <CollapsingHeaderBar
+                  scrollRef={scrollRef}
+                  title="Discover apps"
+                  backLabel="Back to launcher"
+                  onBack={() => handleChangeView('pinned')}
+                />
 
-                {/* Search panel: sticky once it scrolls to the
-                    top of the body. The `position: sticky` works
-                    because the panel is a direct child of the
-                    scroll container above. The `bgcolor` on the
-                    panel hides the rails sliding underneath while
-                    the bar is pinned. The vertical padding here
-                    overrides `PANEL_SX.py` (2 → 4) so the search
-                    panel has more breathing room top + bottom
-                    than the surrounding pinned / rails panels.
-                 */}
+                {/* Search panel: regular scrolling content (it used
+                    to be sticky under the header bar, but the pinned
+                    bar + search combo ate ~120px of a phone screen;
+                    the header bar alone keeps the way back always
+                    reachable, and search is a "top of the store"
+                    action anyway). No divider: at rest the store top
+                    must read as one plain sheet - the only hairline
+                    is the header bar's, which fades in with scroll.
+                    Tight vertical padding: with the dividers gone the
+                    search no longer needs panel-sized breathing room. */}
                 <Box
                   sx={{
-                    ...PANEL_SX,
-                    py: 3,
-                    position: 'sticky',
-                    top: 0,
-                    zIndex: 2,
-                    bgcolor: 'background.default',
+                    py: 1.5,
                   }}
                 >
                   {/* Tighter horizontal gutter than the rest of
@@ -646,6 +707,15 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
           </>
         ))}
       </Box>
+
+      {/* First-visit store onboarding overlay: an opaque cover of
+          this tab body (absolute against the relative Stack above).
+          Gated on the persisted seen-flag AND on real store content
+          being visible (never over the loading / error
+          placeholders). */}
+      {view === 'store' && !introSeen && initialPlaceholder === null && (
+        <StoreIntroOverlay onDismiss={dismissIntro} />
+      )}
       <Snackbar
         open={snackbar !== null}
         autoHideDuration={3500}
@@ -671,94 +741,171 @@ export default function AppsTabView({ onOpen }: AppsTabViewProps) {
 // ===========================================================================
 
 /**
- * Store header: the store's top block, in two tiers.
+ * Collapsing sticky header bar, shared by the store's two "pages"
+ * (browse's "Discover apps" and the focused-category drill-down) so
+ * both read at the same hierarchy with the same back affordance.
  *
- *   1. Title row - a back IconButton sits inline to the left of the
- *      "Discover apps" title (so "return to launcher" costs zero extra
- *      vertical space - no standalone chevron row). The title is sized
- *      to match the Settings sheet header (`TYPO.xxl` / bold) so the
- *      two top-level surfaces read at the same hierarchy.
- *   2. Hero row - a short blurb + the "tap ★ to add to your launcher"
- *      hint on the left, the rotating `<ReachiesCarousel>` (a Reachy
- *      persona cross-fading every ~0.75 s, the touch the old
- *      illustration-heavy `IntroPanel` carried) on the right.
+ * iOS large-title flavour: the bar is permanently stuck to the top of
+ * the scroll body (the back chevron stays reachable at ANY scroll
+ * depth - the whole point), and the title shrinks from `TYPO.xxl`
+ * toward `TITLE_COLLAPSED_SCALE` over the first `COLLAPSE_RANGE_PX`
+ * of scroll. A permanent bottom hairline detaches the bar from the
+ * content sliding underneath.
  *
- * Layout:
+ * The collapse progress is scroll-linked but deliberately bypasses
+ * React state: a passive rAF-throttled scroll listener writes a
+ * `--collapse` custom property onto the SCROLL CONTAINER itself
+ * (inherited by the bar and any sibling panel that wants to react to
+ * the collapse), and styles consume it via `calc()`. Re-rendering
+ * the whole Apps tree at scroll frequency just to shrink a title
+ * would jank the rails; this way React renders the bar exactly once.
  *
- *   [‹]  Discover apps
- *   Browse community-made apps for your Reachy.   ┌────┐
- *   Tap the ★ on any app to add it to your ...    │ 🤖 │
- *                                                 └────┘
+ * The title shrinks via `transform: scale()` (composited, no reflow)
+ * with a left origin so it contracts toward the chevron, and the bar
+ * keeps a CONSTANT height (fixed paddings, nothing dimensional
+ * animates) so the content below never shifts as the collapse runs.
+ *
+ * Layout (collapse 0 → 1):
+ *
+ *   [‹]  Discover apps        →     [‹] Discover apps
+ *   [‹]  Most liked · 12      →     [‹] Most liked · 12
  */
-function StoreHeader({ onBack }: { onBack: () => void }) {
+function CollapsingHeaderBar({
+  scrollRef,
+  title,
+  count,
+  backLabel,
+  onBack,
+}: {
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  title: string;
+  count?: number;
+  backLabel: string;
+  onBack: () => void;
+}) {
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const progress = Math.min(1, Math.max(0, scroller.scrollTop / COLLAPSE_RANGE_PX));
+      scroller.style.setProperty('--collapse', progress.toFixed(3));
+    };
+    const onScroll = () => {
+      if (raf === 0) raf = requestAnimationFrame(update);
+    };
+    update();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      if (raf !== 0) cancelAnimationFrame(raf);
+      scroller.style.removeProperty('--collapse');
+    };
+  }, [scrollRef]);
+
   return (
-    <Box sx={COLUMN_SX}>
-      {/* Single row so the rotating Reachy persona can take the FULL
-          header height (title row + blurb) and visually overflow up to
-          the "Discover apps" title, rather than being boxed into a small
-          square next to the blurb only. Left column stacks the title +
-          blurb; the carousel on the right `stretch`es to that column's
-          height. */}
-      <Stack direction="row" spacing={2} sx={{ alignItems: 'stretch' }}>
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <IconButton
-              size="small"
-              aria-label="Back to launcher"
-              onClick={onBack}
-              sx={{ ml: -0.5, flexShrink: 0 }}
-            >
-              <ArrowBackIosNewIcon sx={{ fontSize: TYPO.md }} />
-            </IconButton>
-            <Typography
-              component="h2"
-              sx={{
-                fontSize: TYPO.xxl,
-                fontWeight: FONT_WEIGHT.bold,
-                color: 'text.primary',
-                letterSpacing: '-0.3px',
-                lineHeight: 1.2,
-              }}
-            >
-              Discover apps
-            </Typography>
-          </Stack>
-
-          <Stack spacing={0.5} sx={{ mt: 1.5, flex: 1, justifyContent: 'center' }}>
-            <Typography
-              sx={{
-                fontSize: TYPO.body,
-                fontWeight: FONT_WEIGHT.medium,
-                color: 'text.primary',
-                lineHeight: 1.4,
-              }}
-            >
-              Browse community-made apps for your Reachy.
-            </Typography>
-            <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.4 }}>
-              Tap the{' '}
-              <Box component="span" sx={{ display: 'inline-flex', verticalAlign: '-4px' }}>
-                <StarOutlineIcon sx={{ fontSize: 18 }} />
-              </Box>{' '}
-              on any app to add it to your launcher.
-            </Typography>
-          </Stack>
-        </Stack>
-
-        {/* Carousel fills the full header height. `overflow: hidden`
-            clips the carousel's `zoom > 1` spill to the slot. */}
-        <Box
-          aria-hidden
+    <Box
+      sx={{
+        position: 'sticky',
+        top: 0,
+        // Above the scroll body's regular content so the bar's opaque
+        // bg hides whatever slides underneath while pinned.
+        zIndex: 3,
+        bgcolor: 'background.default',
+        // Scroll-linked hairline: invisible at rest (the unscrolled
+        // page reads as one plain sheet, no chrome), fading in with
+        // the collapse so the pinned bar detaches from the content
+        // sliding underneath. Pseudo-element instead of a real border
+        // so the bar's height never changes and opacity can ride the
+        // same `--collapse` variable as the title scale.
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: '1px',
+          bgcolor: 'divider',
+          opacity: 'var(--collapse, 0)',
+        },
+      }}
+    >
+      {/* Clones the launcher header's measured geometry (title at
+          x=56 / y=30 in a 390px viewport with the 24px gutter) so
+          switching launcher <-> store never makes the title row
+          jump. Plain flex Box on purpose: MUI's `Stack spacing`
+          emits a `& > :not(style):not(style) { margin: 0 }` reset
+          that OVERRIDES any sx margin on the children - the very
+          negative margins this row depends on. */}
+      <Box
+        sx={{
+          ...COLUMN_SX,
+          display: 'flex',
+          alignItems: 'center',
+          // At rest the paddings clone the launcher header (30px
+          // above the title so it lands at the launcher's y, 24px of
+          // air below = the launcher's `mb: 3`); once pinned BOTH
+          // converge to 22px so the title row sits dead-centre in
+          // the fixed chrome. Scroll-linked through the same
+          // `--collapse` variable as the title scale, so everything
+          // eases together (bar: 78px at rest → 68px pinned).
+          pt: 'calc(30px - 8px * var(--collapse, 0))',
+          pb: 'calc(24px - 2px * var(--collapse, 0))',
+        }}
+      >
+        {/* Margin math (all vs the 24px column gutter):
+            - `ml: -1.625` = -8px button padding -5px of internal SVG
+              whitespace (the ArrowBackIosNew stroke starts at 1/4 of
+              its viewBox, so 5px at a 20px glyph), so the VISIBLE
+              stroke sits on the gutter exactly like the launcher's
+              AppsIcon edge.
+            - `mr: 1.125` lands the title at gutter+32px = the
+              launcher's title x (24px glyph + 8px gap).
+            - `my: -1` collapses the 36px hitbox to the text row's
+              height so the tall button never inflates the bar. */}
+        <IconButton
+          aria-label={backLabel}
+          onClick={onBack}
+          sx={{ p: 1, ml: -1.625, mr: 1.125, my: -1, flexShrink: 0, color: 'primary.main' }}
+        >
+          <ArrowBackIosNewIcon sx={{ fontSize: 20 }} />
+        </IconButton>
+        <Typography
+          component="h2"
           sx={{
-            flexShrink: 0,
-            alignSelf: 'stretch',
-            width: 'calc((100% - 48px) / 3.2)',
+            fontSize: TYPO.xxl,
+            fontWeight: FONT_WEIGHT.bold,
+            color: 'text.primary',
+            letterSpacing: '-0.3px',
+            lineHeight: 1.2,
+            minWidth: 0,
+            whiteSpace: 'nowrap',
             overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            transform: `scale(calc(1 - ${1 - TITLE_COLLAPSED_SCALE} * var(--collapse, 0)))`,
+            transformOrigin: 'left center',
+            willChange: 'transform',
           }}
         >
-          <ReachiesCarousel zoom={1.1} verticalAlign="55%" />
-        </Box>
-      </Stack>
+          {title}
+          {/* Inline count, launcher-title style ("Most liked · 12"):
+              one line with the label, never a second sub-line. */}
+          {count !== undefined && (
+            <Box
+              component="span"
+              sx={{
+                color: 'text.disabled',
+                fontWeight: FONT_WEIGHT.regular,
+                fontSize: TYPO.lg,
+                ml: 0.75,
+              }}
+            >
+              · {count}
+            </Box>
+          )}
+        </Typography>
+      </Box>
     </Box>
   );
 }
@@ -983,17 +1130,11 @@ function SortableLauncherCard({
 
 /** Empty launcher: a friendly nudge toward the store. Built on the
  *  shared `IllustratedState` so its sizing matches the app's other
- *  full-screen states. */
+ *  full-screen states, and on `FullHeightCenter` so it sits in the
+ *  vertical middle of the tab body like the loading/error states. */
 function LauncherEmpty({ onBrowseStore }: { onBrowseStore: () => void }) {
   return (
-    <Box
-      sx={{
-        ...COLUMN_SX,
-        pt: 5,
-        display: 'flex',
-        justifyContent: 'center',
-      }}
-    >
+    <FullHeightCenter>
       <IllustratedState
         illustration={<ReachiesCarousel zoom={1.5} verticalAlign="42%" />}
         title="Your launcher is empty"
@@ -1001,7 +1142,7 @@ function LauncherEmpty({ onBrowseStore }: { onBrowseStore: () => void }) {
       >
         <StoreCta onClick={onBrowseStore} />
       </IllustratedState>
-    </Box>
+    </FullHeightCenter>
   );
 }
 

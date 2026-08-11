@@ -200,6 +200,17 @@ export interface ConversationConnectionAttempt {
   maxAttempts: number;
 }
 
+/**
+ * Sub-phase of the post-handshake bring-up (the connecting overlay's
+ * "Wake-up" step). `wake` while the wake trajectory is awaited,
+ * `finalize` while the stragglers settle (XVF3800 audio config +
+ * daemon version read, which run concurrently with the wake but can
+ * outlive it on a slow / older daemon). `null` outside the bring-up.
+ * Lets the overlay say WHAT it's waiting on instead of holding one
+ * opaque caption for up to ~10 s.
+ */
+export type ConversationBringUpPhase = 'wake' | 'finalize';
+
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
    *  Safe to call multiple times. */
@@ -628,4 +639,14 @@ export interface ConversationEngineOptions {
    * `ConversationConnectionAttempt` for the rationale.
    */
   onConnectionAttempt?: (attempt: ConversationConnectionAttempt | null) => void;
+
+  /**
+   * Notifies the host as the post-handshake bring-up progresses
+   * (see `ConversationBringUpPhase`). Fired with `'wake'` right
+   * after `startSession` resolves, `'finalize'` once the wake
+   * settled, and `null` when the connection reaches `live` (or the
+   * bring-up aborts). The host refines the connecting overlay's
+   * Wake-up caption with it.
+   */
+  onBringUpPhase?: (phase: ConversationBringUpPhase | null) => void;
 }

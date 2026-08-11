@@ -215,6 +215,7 @@ export default function DaemonUpdateGate({
         effectivePhase === 'rebooting' ||
         effectivePhase === 'failed') && (
         <Button
+          variant="text"
           onClick={onBackToRobots}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 14 }} />}
           sx={{
@@ -369,6 +370,7 @@ function UpdateLogDisclosure({
   return (
     <Stack spacing={0.5} sx={{ width: '100%', alignItems: 'center' }}>
       <Button
+        variant="text"
         onClick={() => setOpen((v) => !v)}
         size="small"
         sx={{
@@ -409,6 +411,7 @@ function UpdateLogDisclosure({
 function DevSkipButton({ onClick }: { onClick: () => void }) {
   return (
     <Button
+      variant="text"
       onClick={onClick}
       size="small"
       sx={{
@@ -429,6 +432,7 @@ function DevSkipButton({ onClick }: { onClick: () => void }) {
 function TroubleshootingLink() {
   return (
     <Button
+      variant="text"
       onClick={() => void openExternalUrl(TROUBLESHOOTING_URL)}
       size="small"
       sx={{

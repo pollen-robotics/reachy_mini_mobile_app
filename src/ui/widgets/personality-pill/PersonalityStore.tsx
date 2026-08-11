@@ -10,28 +10,61 @@
  * siblings.
  *
  * Self-contained + isolated: it reads the personalities store and
- * applies a pick live (no auto-close), so the host (`ConversationPanel`)
- * can swap it in/out in one line. The family taxonomy lives here (not
- * in the shared model) on purpose - it's a presentation concern of
- * this surface, and keeping it local means the data layer stays
- * untouched.
+ * applies a pick live, then signals the host via `onPicked` so it can
+ * close the picker (after letting the selection feedback play). The
+ * family taxonomy lives here (not in the shared model) on purpose -
+ * it's a presentation concern of this surface, and keeping it local
+ * means the data layer stays untouched.
  *
  * Creating: when the user has NO custom personas yet, a prominent
  * illustrated CTA card sits above the catalog. Once they have at least
  * one, that card gives way to a compact "+ New" button on the right of
- * the "Yours" rail title (the create entry follows the customs). Editing
- * a custom persona happens from the personality band's pencil (the
- * active "select"); deletion is tucked inside the editor (see
- * `CreatePersonalityModal`) behind an explicit confirmation.
+ * the "Yours" rail title (the create entry follows the customs).
+ *
+ * Curating (edit mode): the "Yours" rail carries an Edit/Done toggle
+ * (mirroring the apps launcher's edit mode). While editing:
+ *   - each custom tile grows a drag handle (top-left) and becomes
+ *     reorderable within the rail via dnd-kit (order persists through
+ *     `reorderCustomPersonalities`),
+ *   - the selection checkmark gives way to a pencil badge on EVERY
+ *     custom tile, and tapping a tile opens the editor instead of
+ *     picking the persona,
+ *   - the create entries hide - editing is about curating the existing
+ *     set, not growing it.
+ * Deletion is tucked inside the editor (see `CreatePersonalityModal`)
+ * behind an explicit confirmation.
  */
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Box, Button, ButtonBase, Stack, Typography, alpha, useTheme } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import reachyCreateProfile from '@/assets/reachy-create-profile.svg';
 
 import {
   type Personality,
+  reorderCustomPersonalities,
   setActivePersonality,
   useActivePersonality,
   useIsAvatarPending,
@@ -45,6 +78,25 @@ interface PersonalityStoreProps {
   /** Open the "author a new persona" form. Surfaced as a dedicated CTA
    *  card at the top of the store (the band no longer carries a "+"). */
   onCreate: () => void;
+  /** Open the editor for a custom persona. Wired to the pencil badge
+   *  on custom tiles (built-ins aren't editable, so their tiles never
+   *  show one). */
+  onEdit: (persona: Personality) => void;
+  /** Fired on EVERY tile tap (including re-picking the already-active
+   *  persona). The host uses it to close the picker after a short
+   *  delay, so the tile's selection pop + check badge get to play
+   *  before the grid swaps back to the orb. */
+  onPicked?: () => void;
+  /**
+   * "Yours" rail curate mode (drag handles + pencil badges). OWNED BY
+   * THE HOST, not local state: opening a persona's editor unmounts this
+   * store (the form takes the body slot), so a local flag would reset
+   * and closing the form would strand the user back in browse mode
+   * mid-curation. The host keeps it alive across that round-trip and
+   * resets it when the picker itself closes.
+   */
+  editMode: boolean;
+  onEditModeChange: (editMode: boolean) => void;
 }
 
 /** Family taxonomy (presentation-only, local to this experiment).
@@ -55,6 +107,17 @@ const FAMILIES: ReadonlyArray<{ id: string; label: string; blurb: string }> = [
   { id: 'character', label: 'Characters', blurb: 'A costume, an accent, a whole world.' },
   { id: 'helpful', label: 'Assistants & coaches', blurb: 'Helpful, get something done with you.' },
 ];
+
+/** Deterministic per-tile seed for the edit-mode wiggle (mirrors the
+ *  apps launcher): each card gets a slightly different phase/duration
+ *  so the rail shimmers organically instead of marching in lockstep. */
+function tileSeed(id: string): number {
+  let s = 0;
+  for (let i = 0; i < id.length; i++) {
+    s = (s * 31 + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(s);
+}
 
 const FAMILY_BY_ID: Record<string, string> = {
   // Assistants & coaches: actually try to help you do something.
@@ -87,14 +150,14 @@ const FAMILY_ORDER: Record<string, string[]> = {
   character: [
     'builtin:default', // Reachy - always first
     'builtin:captain_circuit', // Captain Circuit - second
+    'builtin:nature_documentarian', // Nature Doc - third
     'builtin:mars_rover',
-    'builtin:tiny_anxious_robot',
     'builtin:noir_detective',
     'builtin:mad_scientist',
     'builtin:time_traveler',
     'builtin:victorian_butler',
     'builtin:bored_teenager',
-    'builtin:nature_documentarian',
+    'builtin:tiny_anxious_robot', // Tiny Worry - last
   ],
   helpful: [
     'builtin:language_buddy', // first
@@ -106,14 +169,72 @@ const FAMILY_ORDER: Record<string, string[]> = {
   ],
 };
 
-export function PersonalityStore({ onCreate }: PersonalityStoreProps) {
+export function PersonalityStore({
+  onCreate,
+  onEdit,
+  onPicked,
+  editMode,
+  onEditModeChange,
+}: PersonalityStoreProps) {
   const catalog = usePersonalitiesCatalog();
   const active = useActivePersonality();
 
   // Newest-first: the store appends new customs (oldest -> newest) and edits
   // keep their slot, so reversing the insertion order surfaces the persona
-  // the user just made at the head of the "Yours" rail.
+  // the user just made at the head of the "Yours" rail. (A manual reorder
+  // in edit mode rewrites the STORAGE order so this reversal still yields
+  // exactly what the user arranged - see `handleDragEnd`.)
   const customs = catalog.filter(p => p.kind === 'custom').reverse();
+
+  // Drag-to-reorder sensors (edit mode only). Drags start ONLY from a
+  // tile's dedicated handle (see `SortablePersonaTile`) because the rail
+  // is itself a horizontal scroller - a whole-card drag would fight the
+  // pan gesture. The small distance threshold still lets the handle
+  // distinguish a stray tap from a deliberate drag; the keyboard sensor
+  // gives arrow-key reordering for free (a11y).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  // Persona currently being dragged, mirrored into the DragOverlay. The
+  // overlay is what the user actually sees moving: the rail track is a
+  // scroll container (overflow hidden), so the in-list tile would get
+  // CLIPPED the moment the drag leaves the track's box. The overlay is
+  // portalled to <body>, escaping every clipping ancestor, while the
+  // original stays in the rail as a dimmed placeholder marking the slot.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const draggedPersona = dragId ? (customs.find(p => p.id === dragId) ?? null) : null;
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setDragId(String(event.active.id));
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setDragId(null);
+      const { active: dragged, over } = event;
+      if (!over || dragged.id === over.id) return;
+      const displayIds = customs.map(p => p.id);
+      const from = displayIds.indexOf(String(dragged.id));
+      const to = displayIds.indexOf(String(over.id));
+      if (from === -1 || to === -1) return;
+      // The rail displays customs REVERSED (newest first), so the new
+      // display order is flipped back before persisting: storage keeps
+      // its oldest->newest convention and `addCustomPersonality` can
+      // keep appending (new personas still land at the rail's head).
+      const reordered = arrayMove(displayIds, from, to);
+      reorderCustomPersonalities([...reordered].reverse());
+    },
+    [customs],
+  );
+
+  // Auto-exit edit mode once the last custom is gone (deleting it from
+  // the editor would otherwise leave a dangling "Done" over an empty
+  // rail - which unmounts entirely below).
+  useEffect(() => {
+    if (customs.length === 0 && editMode) onEditModeChange(false);
+  }, [customs.length, editMode, onEditModeChange]);
   const byFamily = (familyId: string) => {
     const order = FAMILY_ORDER[familyId] ?? [];
     const rank = (id: string) => {
@@ -125,12 +246,14 @@ export function PersonalityStore({ onCreate }: PersonalityStoreProps) {
       .sort((a, b) => rank(a.id) - rank(b.id));
   };
 
-  // Apply the pick live and stay open: the store behaves like a gallery,
-  // so selecting a persona updates the active one immediately (the band
-  // above reflects it) while the user keeps browsing. Closing is an
-  // explicit action via the band's chevron.
+  // Apply the pick live, then let the host close the picker: tapping a
+  // persona means "use this one", so the user lands back on the orb
+  // ready to talk instead of having to find the band toggle to exit.
+  // `onPicked` fires even when re-picking the active persona - the
+  // intent ("use this one") is the same either way.
   const pick = (id: string) => {
     if (id !== active.id) setActivePersonality(id);
+    onPicked?.();
   };
 
   return (
@@ -167,35 +290,122 @@ export function PersonalityStore({ onCreate }: PersonalityStoreProps) {
 
           {/* YOURS: custom personas rail (only when the user has any),
               with the create entry living as a "+ New" action on its
-              title. Editing a custom persona happens from the band's
-              pencil (the active "select"); deletion lives inside the
-              editor. */}
+              title and an Edit/Done toggle for curating (reorder +
+              edit). Deletion lives inside the editor. */}
           {customs.length > 0 && (
             <Rail
               label="Yours"
-              blurb="The personalities you created."
+              blurb={
+                editMode
+                  ? 'Drag to reorder, tap a card to edit.'
+                  : 'The personalities you created.'
+              }
               count={customs.length}
-              // Three-state create entry, scaling with how many customs
-              // the user owns:
-              //   1-2  -> a vertical "create" card tacked on as the last
-              //           tile in the rail (an in-between between the big
-              //           hero card and the bare button).
-              //   3+   -> the compact "+ New" button back on the title,
-              //           since by then the rail is busy enough that an
-              //           extra tile would just crowd it.
+              disableSnap={editMode}
+              // Title actions:
+              //   - "+ New" appears once the user owns 3+ customs (below
+              //     that, a vertical create tile lives in the rail
+              //     instead) and hides in edit mode - curating is about
+              //     the existing set, not growing it.
+              //   - Edit/Done toggles the curate mode (drag handles +
+              //     pencil badges on every card).
               action={
-                customs.length >= 3 ? <NewPersonaButton onClick={onCreate} /> : undefined
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  {customs.length >= 3 && !editMode && (
+                    <NewPersonaButton onClick={onCreate} />
+                  )}
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    size="small"
+                    onClick={() => onEditModeChange(!editMode)}
+                    aria-pressed={editMode}
+                    aria-label={
+                      editMode ? 'Done editing your personalities' : 'Edit your personalities'
+                    }
+                    startIcon={
+                      editMode ? (
+                        <CheckRoundedIcon sx={{ fontSize: 16 }} />
+                      ) : (
+                        <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                      )
+                    }
+                    sx={{ ...railActionButtonSx, '& .MuiButton-startIcon': { ml: -0.25, mr: 0.5 } }}
+                  >
+                    {editMode ? 'Done' : 'Edit'}
+                  </Button>
+                </Stack>
               }
             >
-              {customs.map(p => (
-                <PersonaTile
-                  key={p.id}
-                  persona={p}
-                  active={p.id === active.id}
-                  onClick={() => pick(p.id)}
-                />
-              ))}
-              {customs.length < 3 && <CreatePersonaTile onCreate={onCreate} />}
+              {editMode ? (
+                // Edit mode: the rail becomes a sortable surface. Drops
+                // persist the new order to the personalities store; the
+                // create tile is omitted while curating.
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  // Edge auto-scroll: holding the dragged card against
+                  // the rail's left/right edge pans the track, so a
+                  // persona can travel across the whole (scrollable)
+                  // set in one drag. Wider x threshold than the default
+                  // so it kicks in comfortably; y disabled - reordering
+                  // is strictly horizontal and the vertical store body
+                  // scrolling under a drag would just be noise.
+                  autoScroll={{ threshold: { x: 0.25, y: 0 } }}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onDragCancel={() => setDragId(null)}
+                >
+                  <SortableContext
+                    items={customs.map(p => p.id)}
+                    strategy={horizontalListSortingStrategy}
+                  >
+                    {customs.map(p => (
+                      <SortablePersonaTile
+                        key={p.id}
+                        persona={p}
+                        active={p.id === active.id}
+                        onEdit={() => onEdit(p)}
+                      />
+                    ))}
+                  </SortableContext>
+                  {/* The floating card: portalled to <body> so it can
+                      travel outside the rail's scroll clipping. Slight
+                      lift (scale + shadow) so it reads as "picked up". */}
+                  {createPortal(
+                    <DragOverlay adjustScale={false}>
+                      {draggedPersona ? (
+                        <Box
+                          sx={{
+                            transform: 'scale(1.04)',
+                            filter: `drop-shadow(0 8px 20px ${alpha('#000', 0.25)})`,
+                          }}
+                        >
+                          <PersonaTile
+                            persona={draggedPersona}
+                            active={draggedPersona.id === active.id}
+                            editMode
+                            onClick={() => {}}
+                          />
+                        </Box>
+                      ) : null}
+                    </DragOverlay>,
+                    document.body,
+                  )}
+                </DndContext>
+              ) : (
+                <>
+                  {customs.map(p => (
+                    <PersonaTile
+                      key={p.id}
+                      persona={p}
+                      active={p.id === active.id}
+                      onClick={() => pick(p.id)}
+                    />
+                  ))}
+                  {customs.length < 3 && <CreatePersonaTile onCreate={onCreate} />}
+                </>
+              )}
             </Rail>
           )}
 
@@ -422,6 +632,7 @@ function Rail({
   blurb,
   count,
   action,
+  disableSnap = false,
   children,
 }: {
   label: string;
@@ -432,6 +643,10 @@ function Rail({
   /** Optional control pinned to the right of the title row (e.g. the
    *  "+ New" create button on the "Yours" rail). */
   action?: ReactNode;
+  /** Turn off the track's scroll snapping. Needed while drag-reordering:
+   *  snap fights dnd-kit's edge auto-scroll (every programmatic scroll
+   *  gets re-snapped, so the pan stalls). */
+  disableSnap?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -479,7 +694,7 @@ function Rail({
           overflowY: 'hidden',
           scrollbarWidth: 'none',
           '::-webkit-scrollbar': { display: 'none' },
-          scrollSnapType: 'x proximity',
+          scrollSnapType: disableSnap ? 'none' : 'x proximity',
           scrollPaddingInlineStart: theme.spacing(3),
           '& > *': { scrollSnapAlign: 'start' },
           // Vertical padding so the tiles' drop shadow isn't clipped
@@ -496,18 +711,25 @@ function Rail({
 
 /* ──────────────────────────────────────────────────────────────────
  * Persona tile: avatar + name + tagline. Sober (paper bg + hairline /
- * primary ring when active). Editing is NOT on the tile - it lives on
- * the personality band (the "select"), which exposes a pencil for the
- * active custom persona.
+ * primary ring when active). In the "Yours" rail's edit mode
+ * (`editMode`) the tile flips from "pick" to "curate": the selection
+ * check disappears, a pencil badge appears on the disc's lower-right
+ * (the check's spot) on EVERY custom tile, and tapping the card opens
+ * the editor instead of activating the persona. The drag handle lives
+ * on the sortable wrapper (see `SortablePersonaTile`), not here.
  * ────────────────────────────────────────────────────────────────── */
 
 interface PersonaTileProps {
   persona: Personality;
   active: boolean;
   onClick: () => void;
+  /** Curate mode: swap the selection affordances (check, pop) for the
+   *  edit ones (pencil badge, "Edit" semantics). The host guarantees
+   *  `onClick` opens the editor when this is set. */
+  editMode?: boolean;
 }
 
-function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
+function PersonaTile({ persona, active, onClick, editMode = false }: PersonaTileProps) {
   const theme = useTheme();
   // Click counter for the avatar "pop": each tap bumps it, which
   // remounts the avatar wrapper via `key` and replays the spring
@@ -522,14 +744,16 @@ function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
   // ask for any id. Drives the cooking ring over the tile's portrait.
   const cooking = useIsAvatarPending(persona.id);
   const handleClick = () => {
-    setPopKey(k => k + 1);
+    // No selection pop while curating: the tap opens the editor, so
+    // playing the "picked!" spring would be a false signal.
+    if (!editMode) setPopKey(k => k + 1);
     onClick();
   };
   return (
     <ButtonBase
       onClick={handleClick}
-      aria-pressed={active}
-      aria-label={`Use personality ${persona.name}`}
+      aria-pressed={editMode ? undefined : active}
+      aria-label={editMode ? `Edit ${persona.name}` : `Use personality ${persona.name}`}
       focusRipple
       sx={{
         flexShrink: 0,
@@ -597,12 +821,40 @@ function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
             name={persona.name}
           />
         </Box>
-        {/* Selection check. It's shown on every active tile, but the
+        {/* Edit pencil (curate mode): sits exactly where the selection
+            check normally lives (disc lower-right, same 30px
+            outlined-paper treatment) - the check gives way to it on
+            EVERY custom tile while editing. Purely decorative
+            (aria-hidden): the whole tile already opens the editor in
+            this mode, the badge just labels the gesture. */}
+        {editMode && (
+          <Box
+            aria-hidden
+            sx={{
+              position: 'absolute',
+              bottom: 2,
+              right: 2,
+              width: 30,
+              height: 30,
+              borderRadius: '50%',
+              bgcolor: 'background.paper',
+              color: 'primary.main',
+              display: 'grid',
+              placeItems: 'center',
+              border: `1.5px solid ${alpha(theme.palette.primary.main, 0.55)}`,
+              boxShadow: `0 1px 4px ${alpha('#000', 0.15)}`,
+            }}
+          >
+            <EditOutlinedIcon sx={{ fontSize: 16 }} />
+          </Box>
+        )}
+        {/* Selection check. It's shown on every active tile (outside
+            curate mode - the pencil takes its spot there), but the
             pop-in spring only plays on an actual user pick (`popKey >
             0`): when the panel opens with a persona already selected the
             badge appears statically, no animation. A paper ring lifts it
             off the orange disc edge. */}
-        {active && (
+        {active && !editMode && (
           <Box
             aria-hidden
             sx={{
@@ -639,7 +891,10 @@ function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
           fontWeight: FONT_WEIGHT.semibold,
           fontSize: TYPO.sm,
           lineHeight: 1.2,
-          color: active ? 'primary.main' : 'text.primary',
+          // Always text.primary, even when active: the selection is
+          // already carried by the primary ring + check badge, and a
+          // primary title would fight with them for attention.
+          color: 'text.primary',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -668,5 +923,121 @@ function PersonaTile({ persona, active, onClick }: PersonaTileProps) {
       </Typography>
 
     </ButtonBase>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Sortable wrapper for a persona tile (edit mode only). dnd-kit's
+ * sort transform/transition live on THIS wrapper (translate as
+ * neighbours shuffle) while the inner `PersonaTile` stays untouched.
+ *
+ * Unlike the apps launcher (whole card = drag handle), the drag here
+ * starts ONLY from the dedicated dots handle at the card's top-left:
+ * the rail is itself a horizontal scroller, so a whole-card drag
+ * would be indistinguishable from a pan. The handle sits as a SIBLING
+ * overlay of the tile's ButtonBase (not inside it), so its presses
+ * never trigger the tile's ripple or its "open editor" tap.
+ * ────────────────────────────────────────────────────────────────── */
+
+function SortablePersonaTile({
+  persona,
+  active,
+  onEdit,
+}: {
+  persona: Personality;
+  active: boolean;
+  onEdit: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: persona.id });
+  // Edit-mode wiggle, same recipe as the apps launcher: seeded per-tile
+  // phase offset / duration / variant so neighbouring cards never
+  // tremble in sync.
+  const { wiggleDelayMs, wiggleDurationMs, wiggleVariant } = useMemo(() => {
+    const seed = tileSeed(persona.id);
+    return {
+      wiggleDelayMs: -(seed % 560),
+      wiggleDurationMs: 480 + ((seed >>> 3) % 160),
+      wiggleVariant: seed % 2 === 0 ? 'a' : 'b',
+    } as const;
+  }, [persona.id]);
+  return (
+    <Box
+      ref={setNodeRef}
+      // Inline style (not sx) for the drag transform: it changes every
+      // frame while dragging, and emotion would mint a new class per
+      // frame.
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      sx={{
+        flexShrink: 0,
+        // While dragging, the VISIBLE card is the portalled DragOverlay
+        // (which escapes the rail's scroll clipping); this in-list
+        // original stays as a dimmed ghost marking the drop slot.
+        opacity: isDragging ? 0.35 : 1,
+      }}
+    >
+      {/* Wiggle layer: the CSS rotate lives on its own element between
+          the dnd translate (outer wrapper) and the tile, so the two
+          transforms compose instead of clobbering each other - exactly
+          the apps launcher's structure. The lifted card stops wiggling
+          (its ghost holds still too): the overlay is the one flying. */}
+      <Box
+        sx={{
+          position: 'relative',
+          transformOrigin: 'center',
+          animation: isDragging
+            ? 'none'
+            : `persona-card-wiggle-${wiggleVariant} ${wiggleDurationMs}ms ease-in-out ${wiggleDelayMs}ms infinite`,
+          '@keyframes persona-card-wiggle-a': {
+            '0%, 100%': { transform: 'rotate(-0.8deg)' },
+            '25%': { transform: 'rotate(0.8deg)' },
+            '50%': { transform: 'rotate(-0.5deg)' },
+            '75%': { transform: 'rotate(0.8deg)' },
+          },
+          '@keyframes persona-card-wiggle-b': {
+            '0%, 100%': { transform: 'rotate(0.8deg)' },
+            '25%': { transform: 'rotate(-0.8deg)' },
+            '50%': { transform: 'rotate(0.5deg)' },
+            '75%': { transform: 'rotate(-0.8deg)' },
+          },
+          '@media (prefers-reduced-motion: reduce)': {
+            animation: 'none',
+          },
+        }}
+      >
+        <PersonaTile persona={persona} active={active} editMode onClick={onEdit} />
+        {/* Drag handle: the classic 2x3 dots, top-left of the card.
+            `touchAction: none` is what actually frees the gesture from
+            the rail's horizontal pan on touch devices. */}
+        <Box
+          component="span"
+          {...attributes}
+          {...listeners}
+          aria-label={`Reorder ${persona.name}`}
+          sx={{
+            position: 'absolute',
+            top: 4,
+            left: 4,
+            zIndex: 2,
+            width: 36,
+            height: 36,
+            display: 'grid',
+            placeItems: 'center',
+            color: 'text.secondary',
+            opacity: 0.65,
+            borderRadius: '50%',
+            touchAction: 'none',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            WebkitTapHighlightColor: 'transparent',
+            '&:focus-visible': {
+              outline: t => `2px solid ${t.palette.primary.main}`,
+              outlineOffset: 1,
+            },
+          }}
+        >
+          <DragIndicatorIcon sx={{ fontSize: 20 }} />
+        </Box>
+      </Box>
+    </Box>
   );
 }

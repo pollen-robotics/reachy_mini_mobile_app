@@ -69,6 +69,7 @@ import {
   IconButton,
   Stack,
   Typography,
+  alpha,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
@@ -93,7 +94,7 @@ import { useChangePersonaAnimation } from '@/features/personalities/useChangePer
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
-import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
+import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
@@ -383,8 +384,18 @@ function ConnectedSession({
     },
     []
   );
+  // Imperative handle into the Apps tab so the shell can pop its
+  // sub-navigation (store / drill-down) back to the launcher.
+  const appsViewRef = useRef<AppsTabViewHandle | null>(null);
   const handleTabChange = (value: Tab): void => {
-    if (leaving || value === tab) return;
+    if (leaving) return;
+    if (value === tab) {
+      // Re-tap on the active Apps tab = pop back to "Your apps"
+      // (standard mobile tab-bar gesture). No spinner: it's an
+      // in-tab reset, not a tab switch.
+      if (value === 'apps') appsViewRef.current?.popToRoot();
+      return;
+    }
     if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
     setTabSpinner(true);
     setTab(value);
@@ -678,9 +689,15 @@ function ConnectedSession({
           sx={{
             alignItems: 'center',
             flexShrink: 0,
-            ml: -2,
-            mr: -3,
-            px: 2,
+            // True full-bleed: cancel the column's `px: 3` on BOTH
+            // sides so the bottom divider reaches the screen edges
+            // (an asymmetric `ml: -2` used to leave an 8px unbordered
+            // strip on the left). `pl: 3` restores the 24px content
+            // inset; `pr: 2` keeps the action cluster's tighter right
+            // rhythm (the power button overshoots via `edge="end"`).
+            mx: -3,
+            pl: 3,
+            pr: 2,
             pb: 1.5,
             pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 10px)',
             minHeight: 68,
@@ -844,7 +861,7 @@ function ConnectedSession({
                 flexDirection: 'column',
               }}
             >
-              <AppsTabView onOpen={setOpenedApp} />
+              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} />
             </Box>
           )}
 
@@ -855,7 +872,7 @@ function ConnectedSession({
               tab hydrates underneath it without flashing a half-built
               frame. Fades in/out for a smooth transition, and uses a
               high local `zIndex` (10) so it covers the Apps tab's
-              sticky search bar (`zIndex: 2`), which would otherwise
+              sticky header bar (`zIndex: 3`), which would otherwise
               poke through the cover. */}
           <Fade in={tabSpinner} timeout={{ enter: 0, exit: 350 }} unmountOnExit>
             <Box
@@ -963,26 +980,26 @@ function ConnectedSession({
               paddingBottom: 0.75,
               gap: 0.5,
               backgroundColor: 'transparent',
+              // Icon glyph in primary in BOTH states (MUI's default is
+              // text.secondary when inactive): both tabs read as equally
+              // "alive" actions. Active-tab identification falls to the
+              // paper fill below + the label weight bump - the colour is
+              // no longer part of that contract. The labels keep their
+              // own forced text.secondary, so this only tints the icons.
+              color: theme.palette.primary.main,
               transition: theme.transitions.create(['background-color', 'box-shadow'], {
                 duration: 180,
                 easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
               }),
-              // Selected state. We keep MUI's default colour rules
-              // for the icon (`text.secondary` inactive,
-              // `primary.main` active) and swap the bg to
-              // `background.paper` so the active tab pops against
-              // the bar's `background.default` grey backdrop. Using
-              // a palette token (rather than a hard `#fff`) means
-              // the contrast holds in both modes: in light mode the
-              // active tab reads as a paper card on a grey bar; in
-              // dark mode it's a slightly lighter dark surface on a
-              // darker bar - same visual hierarchy, both palettes.
-              // No outline: the paper fill + the primary-tinted
-              // icon are enough to identify the active tab, and an
-              // outline added visual noise that competed with the
-              // divider lines between siblings.
+              // Selected state: the whole action gets a soft primary
+              // wash. With both tabs fully primary-tinted (icon +
+              // label), colour alone can't identify the active tab, so
+              // the tinted fill carries it - the full-slot version of
+              // the M3 indicator pill. Alpha-based so it composes over
+              // the bar's `background.default` in both light and dark
+              // modes.
               '&.Mui-selected': {
-                backgroundColor: theme.palette.background.paper,
+                backgroundColor: alpha(theme.palette.primary.main, 0.08),
               },
             },
             // Light vertical divider between adjacent actions.
@@ -994,26 +1011,21 @@ function ConnectedSession({
             '& .MuiBottomNavigationAction-root:not(:last-of-type)': {
               boxShadow: `inset -1px 0 0 0 ${theme.palette.divider}`,
             },
-            // Label colour. We deliberately keep the label in
-            // `text.secondary` (MUI's default) - the icon glyph
-            // carries the brand colour, the label stays neutral
-            // and supportive so the bar reads as a hierarchy
-            // (icon = identity, label = wayfinding) rather than
-            // a wall of primary text. The selected-state cue is
-            // the soft fill on the action button + the slight
-            // weight bump below.
+            // Label colour: muted on the INACTIVE tab so the active
+            // one (primary + paper fill + weight bump) is instantly
+            // readable at a glance.
             '& .MuiBottomNavigationAction-label': {
               fontSize: TYPO.xs,
               fontWeight: FONT_WEIGHT.medium,
               color: `${theme.palette.text.secondary} !important`,
             },
-            // Selected = same colour, heavier weight. We pin the
-            // size so the bar doesn't twitch (MUI defaults bump
-            // the font size on selection).
+            // Selected = primary, heavier weight. We pin the size so
+            // the bar doesn't twitch (MUI defaults bump the font
+            // size on selection).
             '& .MuiBottomNavigationAction-label.Mui-selected': {
               fontSize: TYPO.xs,
               fontWeight: FONT_WEIGHT.semibold,
-              color: `${theme.palette.text.secondary} !important`,
+              color: `${theme.palette.primary.main} !important`,
             },
             // Sizing applies to both MUI icons (`MuiSvgIcon-root`)
             // and native `<svg>` elements - the latter is what
@@ -1134,6 +1146,7 @@ function ConnectedSession({
             <ConnectingView
               state={session.connectionState}
               connectionAttempt={session.connectionAttempt}
+              bringUpPhase={session.bringUpPhase}
             />
           </FullScreenTransition>
         )}

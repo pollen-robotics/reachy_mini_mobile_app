@@ -184,7 +184,9 @@ export function useRemoteRobots(
         // matching row. The whole point of Palier 2 is to avoid
         // a full REST refetch on every busy/free transition.
         queryClient.setQueryData<CentralRobotEntry[]>(cacheKey, prev =>
-          patchBusyState(prev, event.peerId, event.busy, event.activeApp),
+          // `activeApp` became optional in the SDK's central event types;
+          // our reducer keeps the stricter `string | null`.
+          patchBusyState(prev, event.peerId, event.busy, event.activeApp ?? null),
         );
       },
       onError: err => {

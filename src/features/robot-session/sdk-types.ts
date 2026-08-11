@@ -190,6 +190,20 @@ export interface ReachyMiniInstance extends EventTarget {
    */
   wakeUp(options?: { timeoutMs?: number }): Promise<void>;
 
+  /** Cached motor-mode check: `enabled` or `gravity_compensation`
+   *  count as awake. Synchronous, reads the SDK's state mirror. */
+  isAwake(): boolean;
+
+  /**
+   * Idempotent wake (SDK >= feat/sdk-js-core): no-op when already
+   * under position control, flips `gravity_compensation` back to
+   * `enabled` without replaying the emote, and otherwise plays the
+   * wake trajectory AWAITED to completion (internal ~5 s budget).
+   * Never rejects on a wake failure - always resolves `true` once
+   * the robot is as awake as it's going to get.
+   */
+  ensureAwake(timeoutMs?: number): Promise<boolean>;
+
   /**
    * Play the goto-sleep trajectory and release motor torque at the
    * end. Same async/Promise semantics as `wakeUp`. Call this

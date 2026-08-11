@@ -158,6 +158,7 @@ import {
 import type {
   ConnectionState,
   ConversationState,
+  ConversationBringUpPhase,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -169,6 +170,7 @@ import type {
 // New code should pull these straight from `./types`.
 export type {
   ConnectionState,
+  ConversationBringUpPhase,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -313,6 +315,20 @@ const emitConnectionAttempt = (
     onConnectionAttempt(info);
   } catch (err) {
     console.warn("[engine] onConnectionAttempt callback threw:", err);
+  }
+};
+
+const onBringUpPhase: ((phase: ConversationBringUpPhase | null) => void) | null =
+  typeof options.onBringUpPhase === "function"
+    ? options.onBringUpPhase
+    : null;
+
+const emitBringUpPhase = (phase: ConversationBringUpPhase | null): void => {
+  if (!onBringUpPhase) return;
+  try {
+    onBringUpPhase(phase);
+  } catch (err) {
+    console.warn("[engine] onBringUpPhase callback threw:", err);
   }
 };
 
@@ -575,6 +591,7 @@ const connectionController: ConnectionController = createConnectionController({
   preselectedRobotId,
   shouldDeferInitialWakeUp: options.shouldDeferInitialWakeUp,
   emitConnectionAttempt,
+  emitBringUpPhase,
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),

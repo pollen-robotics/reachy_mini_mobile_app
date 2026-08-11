@@ -325,6 +325,7 @@ export default function BleUpdateScreen({ onBack }: { onBack: () => void }) {
       <Stack direction="row" sx={{ alignItems: 'center', px: 1, py: 1, flexShrink: 0, minHeight: 48 }}>
         {step !== 'updating' && (
           <Button
+            variant="text"
             aria-label="Back"
             onClick={handleBack}
             startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
@@ -505,6 +506,7 @@ function ScanView({
         ) : null
       ) : (
         <Button
+          variant="text"
           onClick={onRescan}
           startIcon={<RefreshIcon />}
           disabled={busy}
@@ -798,7 +800,7 @@ function FailedView({
       <Headline title="Update couldn't complete" caption={message ?? 'Something went wrong. Make sure the robot is on and close, then try again.'} />
       <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 320 }}>
         <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
-        <Button onClick={onBack} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
+        <Button variant="text" onClick={onBack} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
           Back
         </Button>
       </Stack>

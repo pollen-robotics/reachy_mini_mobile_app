@@ -359,6 +359,7 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
         }}
       >
         <Button
+          variant="text"
           onClick={handleFinish}
           disabled={navLocked}
           sx={{

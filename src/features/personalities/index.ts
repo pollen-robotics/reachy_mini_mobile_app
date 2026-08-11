@@ -43,6 +43,7 @@ export {
   getActivePersonality,
   markAvatarPending,
   removeCustomPersonality,
+  reorderCustomPersonalities,
   resolvePersonalityById,
   setActivePersonality,
   setCustomPersonalityAvatar,

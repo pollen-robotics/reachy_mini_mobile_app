@@ -332,8 +332,10 @@ export class RobotSession {
   }
 
   /**
-   * Wake the robot (motors + head/antennas trajectory). Hard-bounded
-   * by the helper's JS timeout. Never throws.
+   * Make sure the robot is awake (idempotent, via the SDK's
+   * `ensureAwake()`): no-op when already under position control,
+   * wake trajectory awaited otherwise. Hard-bounded by the helper's
+   * JS timeout. Never throws.
    */
   async wakeUp(): Promise<void> {
     if (!this.robot) return;

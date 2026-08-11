@@ -43,7 +43,10 @@ import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
 import type { EngineCore } from "./engine-core";
-import type { ConversationConnectionAttempt } from "./types";
+import type {
+  ConversationBringUpPhase,
+  ConversationConnectionAttempt,
+} from "./types";
 
 export interface ConnectionControllerDeps {
   /** Shared engine state (connection + conversation FSMs + gates). The
@@ -67,6 +70,9 @@ export interface ConnectionControllerDeps {
   // ─── Observer plumbing ────────────────────────────────────────────
   /** Per-attempt progress for the host's "Connecting…" view. */
   emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
+  /** Post-handshake bring-up sub-phase for the host's "Connecting…"
+   *  view (`wake` → `finalize` → null). */
+  emitBringUpPhase: (phase: ConversationBringUpPhase | null) => void;
   /** Push a user-facing caption under the orb (null clears it). */
   emitErrorMessage: (message: string | null) => void;
   /** Surface the daemon version resolved during bring-up (just before
@@ -157,6 +163,7 @@ export function createConnectionController(
     preselectedRobotId,
     shouldDeferInitialWakeUp,
     emitConnectionAttempt,
+    emitBringUpPhase,
     emitErrorMessage,
     emitDaemonVersion,
     onConnectionLive,
@@ -454,11 +461,37 @@ export function createConnectionController(
       return;
     }
 
-    // Wake the robot now that the data channel is live. We AWAIT the
-    // wake-up here so the host's "Connecting" transition stays up for
-    // the duration of the wake animation. The state machine doesn't
-    // flip to `live` until motors are actually enabled and the head /
-    // antennas have settled into their wake pose.
+    // ── Post-handshake bring-up: wake ∥ audio config ∥ version read ──
+    //
+    // The three remaining bring-up steps only share the (now open)
+    // DataChannel and are otherwise independent: the wake drives the
+    // motors through the daemon's move player, the XVF3800 config
+    // talks to the USB audio board, and the version read is a pure
+    // metadata roundtrip. They used to run sequentially, which stacked
+    // their timeout budgets on the connecting overlay (up to ~15 s
+    // worst case on a slow daemon); concurrently, the "Wake-up" step
+    // lasts exactly as long as its slowest member (usually the wake
+    // trajectory itself, ~2.5-4 s).
+    emitBringUpPhase("wake");
+
+    // Kick the two DataChannel roundtrips off first so they overlap
+    // with the wake trajectory. Both are best-effort + hard-bounded:
+    // a missing audio board (Lite / dev) resolves false, a slow /
+    // unsupported version read resolves null.
+    const audioConfigPromise: Promise<unknown> = robot
+      ? applyAudioStartupConfig(robot)
+      : Promise.resolve();
+    const versionPromise: Promise<string | null> = robot
+      ? readDaemonVersionDuringBringUp(robot, VERSION_BRINGUP_TIMEOUT_MS)
+      : Promise.resolve(null);
+
+    // Wake the robot. We AWAIT it so the host's "Connecting"
+    // transition stays up for the duration of the wake animation: the
+    // state machine doesn't flip to `live` until motors are actually
+    // enabled and the head / antennas have settled into their wake
+    // pose. Goes through the SDK's idempotent `ensureAwake()` (see
+    // `wakeRobot` in physical.ts), so an already-awake robot is an
+    // instant no-op instead of a daemon roundtrip.
     //
     // EXCEPTION: when the host signals a pending first-wake-up wizard
     // (`shouldDeferInitialWakeUp()` → true), we deliberately SKIP the
@@ -475,7 +508,6 @@ export function createConnectionController(
       );
     } else {
       const tBeforeWake = performance.now();
-      console.log(`[DIAG] doStart: about to await session.wakeUp() at t+${Math.round(tBeforeWake - tDoStart0)}ms`);
       await session.wakeUp();
       console.log(
         `[DIAG] doStart: session.wakeUp() resolved in ${Math.round(
@@ -484,12 +516,10 @@ export function createConnectionController(
       );
     }
 
-    // Apply the tuned XVF3800 audio-board parameters now that the
-    // DataChannel is live. Best-effort: a missing audio board (Lite /
-    // dev) just warns and returns false.
-    if (robot) {
-      await applyAudioStartupConfig(robot);
-    }
+    // Wake settled; wait for the stragglers (usually already resolved
+    // by now - they only outlive the wake on a slow / older daemon).
+    emitBringUpPhase("finalize");
+    await audioConfigPromise;
 
     // Mark the SDK / DataChannel as ready. The mobile app gates the
     // conversation pipeline behind a "user clicked Start" UI flag, so
@@ -497,19 +527,14 @@ export function createConnectionController(
     // that's the desired state during the wake-up animation.
     session.setEstablished(true);
 
-    // Resolve the daemon version as the LAST bring-up step, before we
-    // announce `live`. Emitting it now (while the connecting overlay is
-    // still up) means the host's update gate can decide before the
-    // session UI is ever painted - no jarring post-connect "pop". The
-    // read is hard-bounded + fail-open so a slow / unsupported daemon
-    // can't trap the user on the connecting screen.
-    if (robot) {
-      const version = await readDaemonVersionDuringBringUp(
-        robot,
-        VERSION_BRINGUP_TIMEOUT_MS,
-      );
-      emitDaemonVersion(version);
-    }
+    // Surface the daemon version BEFORE we announce `live`: emitting
+    // it while the connecting overlay is still up means the host's
+    // update gate can decide before the session UI is ever painted -
+    // no jarring post-connect "pop". The read is hard-bounded +
+    // fail-open so a slow / unsupported daemon can't trap the user on
+    // the connecting screen.
+    emitDaemonVersion(await versionPromise);
+    emitBringUpPhase(null);
 
     // SDK + DataChannel are up, wake-up was fired, motors are enabled:
     // the transport is `live`. Whether the AI side runs on top is a
@@ -574,6 +599,9 @@ export function createConnectionController(
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
     console.error("[main] error:", detail);
+    // A fatal can land mid-bring-up; don't leak a stale sub-phase
+    // into the next connect cycle.
+    emitBringUpPhase(null);
     setConnectionState("error");
     // Transport fallback: everything that lands here is a robot-link /
     // session failure (unsolicited stop, re-dial exhaustion, dead data

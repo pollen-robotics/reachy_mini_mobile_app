@@ -47,6 +47,7 @@ import {
   mountConversation,
   type ConnectionState,
   type ConversationState,
+  type ConversationBringUpPhase,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
@@ -95,6 +96,13 @@ export interface RobotSessionHandle {
    * so it never bleeds across session attempts.
    */
   connectionAttempt: ConversationConnectionAttempt | null;
+  /**
+   * Sub-phase of the post-handshake bring-up (`wake` / `finalize`),
+   * `null` outside it. Drives the refined caption under the
+   * connecting overlay's "Wake-up" step. See
+   * `ConversationBringUpPhase` for the semantics.
+   */
+  bringUpPhase: ConversationBringUpPhase | null;
   /**
    * Live snapshot of the WebRTC transport used by the audio peer
    * connection: ICE candidate-pair classification (`lan` / `direct`
@@ -316,6 +324,8 @@ export function useRobotSession({
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
+  const [bringUpPhase, setBringUpPhase] =
+    useState<ConversationBringUpPhase | null>(null);
   const [webrtcTransport, setWebrtcTransport] =
     useState<ConversationTransportInfo | null>(null);
   /**
@@ -439,6 +449,10 @@ export function useRobotSession({
         onConnectionAttempt: (info) => {
           if (cancelToken.cancelled) return;
           setConnectionAttempt(info);
+        },
+        onBringUpPhase: (phase) => {
+          if (cancelToken.cancelled) return;
+          setBringUpPhase(phase);
         },
         onDaemonVersionChange: (version) => {
           if (cancelToken.cancelled) return;
@@ -678,6 +692,7 @@ export function useRobotSession({
     hasReachedReady,
     daemonVersion,
     connectionAttempt,
+    bringUpPhase,
     webrtcTransport,
     startConversation,
     stopConversation,

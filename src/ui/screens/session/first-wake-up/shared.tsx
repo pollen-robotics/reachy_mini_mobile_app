@@ -229,6 +229,7 @@ export function SubtleLink({
 }) {
   return (
     <Button
+      variant="text"
       onClick={onClick}
       disabled={disabled}
       sx={{
@@ -322,6 +323,7 @@ export function EmoteStepActions({
 function FooterLink({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <Button
+      variant="text"
       onClick={onClick}
       sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.medium, fontSize: TYPO.xs, color: 'primary.main' }}
     >
