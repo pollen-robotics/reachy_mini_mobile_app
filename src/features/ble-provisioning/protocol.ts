@@ -97,6 +97,18 @@ export function toSetupError(reply: string, fallbackPhase: SetupPhase): SetupErr
   if (lower.includes('not connected') || lower.includes('authenticate')) {
     return { code: 'wrong-pin', message: 'Session expired - re-enter the setup code.', recoverPhase: 'pin' };
   }
+  // Phone-side BLE plugin error ("Characteristic <uuid> not available"): the
+  // GATT discovery came up stale/partial (typically after the app was killed
+  // mid-connection). Retrying the same step would hit the same dead handle -
+  // only a fresh connect re-runs discovery, so recover via the scan step.
+  if (lower.includes('not available') && lower.includes('characteristic')) {
+    return {
+      code: 'ble-stale',
+      message:
+        'The Bluetooth link went stale. Tap your Reachy to reconnect, then try again.',
+      recoverPhase: 'scanning',
+    };
+  }
   if (lower.includes('scan')) {
     return { code: 'wifi-scan-failed', message: "Couldn't scan for Wi-Fi networks.", recoverPhase: 'wifi-scanning' };
   }

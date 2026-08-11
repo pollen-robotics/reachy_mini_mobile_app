@@ -346,25 +346,48 @@ export async function connect(
   address: string,
   log: (s: string) => void = () => {},
 ): Promise<void> {
-  log(`connecting to ${address}…`);
-  await withTimeout(
-    blecConnect(address, () => {
-      log('plugin reported disconnect');
-      _subscribed = false;
-    }),
-    15000,
-    'connect',
-  );
-  log('blecConnect returned; subscribing…');
-  if (!_subscribed) {
-    try {
+  const attempt = async () => {
+    log(`connecting to ${address}…`);
+    await withTimeout(
+      blecConnect(address, () => {
+        log('plugin reported disconnect');
+        _subscribed = false;
+      }),
+      15000,
+      'connect',
+    );
+    log('blecConnect returned; subscribing…');
+    if (!_subscribed) {
       await withTimeout(subscribeString(RESP_CHAR, _onNotification), 8000, 'subscribe');
       _subscribed = true;
       log('subscribed to RESPONSE notifications');
-    } catch (e) {
-      // Non-fatal: synchronous-reply commands still work; only the async
-      // WIFI_* results need the subscription. Surface it rather than hang.
-      log(`subscribe failed (continuing): ${(e as Error).message ?? e}`);
+    }
+  };
+
+  try {
+    await attempt();
+  } catch (e) {
+    // A failed connect or subscribe right after connect usually means the
+    // GATT discovery was stale or partial (classic after the app was killed
+    // mid-connection: iOS serves a cached service table and every later
+    // characteristic op dies with "not available"). One clean disconnect +
+    // reconnect forces a fresh discovery.
+    log(`connect/subscribe failed (${(e as Error).message ?? e}); retrying with a fresh connection…`);
+    _subscribed = false;
+    try {
+      await blecDisconnect();
+    } catch {
+      /* link already down */
+    }
+    try {
+      await attempt();
+    } catch (e2) {
+      // Second subscribe failure: keep the old lenient behaviour instead of
+      // failing the whole connect. Synchronous-reply commands still work
+      // without the subscription (only async WIFI_* results need it), and an
+      // OLD robot without notify support must still reach the PIN step to be
+      // diagnosed as outdated (command echo) rather than "can't connect".
+      log(`retry failed too (continuing unsubscribed): ${(e2 as Error).message ?? e2}`);
     }
   }
 }

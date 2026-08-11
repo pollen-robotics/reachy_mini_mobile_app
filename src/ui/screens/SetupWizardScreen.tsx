@@ -36,6 +36,7 @@ import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -142,6 +143,7 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
         }}
       >
         <Button
+          variant="text"
           aria-label={m.canGoBack ? 'Go back one step' : 'Cancel setup'}
           onClick={m.canGoBack ? m.goBack : onCancel}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
@@ -248,6 +250,9 @@ function StepView({
       return (
         <AlreadyOnlineView
           ssid={m.selectedSsid ?? ''}
+          robotIp={m.robotLanIp}
+          resolvingIp={m.resolvingIp}
+          robotReachable={m.robotReachable}
           onSkip={m.skipWifiSetup}
           onChangeNetwork={m.rescanWifi}
         />
@@ -260,6 +265,8 @@ function StepView({
       return (
         <WifiPickView
           networks={m.networks}
+          currentSsid={m.connectedSsid}
+          onKeepCurrent={m.skipWifiSetup}
           onSelect={m.selectNetwork}
           onConnect={m.submitPassword}
           onRescan={m.rescanWifi}
@@ -268,7 +275,14 @@ function StepView({
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
     case 'linking-account':
-      return <LinkAccountView onLink={m.linkAccount} />;
+      return (
+        <LinkAccountView
+          onLink={m.linkAccount}
+          robotIp={m.robotLanIp}
+          resolvingIp={m.resolvingIp}
+          robotReachable={m.robotReachable}
+        />
+      );
     case 'device-code-waiting':
       return <DeviceCodeView userCode={m.deviceUserCode} verificationUri={m.deviceVerificationUri} />;
     case 'central-waiting':
@@ -384,6 +398,7 @@ function paperCardSx(active: boolean, radius: number = RADIUS.lg) {
 function TextButton(props: React.ComponentProps<typeof Button>) {
   return (
     <Button
+      variant="text"
       {...props}
       sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold, ...props.sx }}
     />
@@ -517,6 +532,7 @@ function ScanView({
         ) : (
           <Stack sx={{ alignItems: 'center' }}>
             <Button
+              variant="text"
               onClick={onRescan}
               startIcon={<RefreshIcon />}
               sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
@@ -685,11 +701,18 @@ function PinView({ onSubmit }: { onSubmit: (pin: string) => void }) {
 
 function WifiPickView({
   networks,
+  currentSsid,
+  onKeepCurrent,
   onSelect,
   onConnect,
   onRescan,
 }: {
   networks: string[];
+  /** SSID the robot is already CONFIRMED connected to (null when none): its
+   *  row shows a "Connected" chip and taps straight through to account
+   *  linking - no password re-entry for a network the robot is already on. */
+  currentSsid: string | null;
+  onKeepCurrent: () => void;
   onSelect: (ssid: string) => void;
   onConnect: (password: string, ssid: string) => void;
   onRescan: () => void;
@@ -714,15 +737,19 @@ function WifiPickView({
       body={
         networks.length > 0 ? (
           <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {networks.map(ssid => (
-              <WifiNetworkRow
-                key={ssid}
-                ssid={ssid}
-                expanded={expanded === ssid}
-                onToggle={() => toggle(ssid)}
-                onConnect={password => onConnect(password, ssid)}
-              />
-            ))}
+            {networks.map(ssid =>
+              ssid === currentSsid ? (
+                <ConnectedNetworkRow key={ssid} ssid={ssid} onContinue={onKeepCurrent} />
+              ) : (
+                <WifiNetworkRow
+                  key={ssid}
+                  ssid={ssid}
+                  expanded={expanded === ssid}
+                  onToggle={() => toggle(ssid)}
+                  onConnect={password => onConnect(password, ssid)}
+                />
+              ),
+            )}
           </List>
         ) : (
           <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
@@ -732,7 +759,7 @@ function WifiPickView({
       }
       actions={
         <Stack sx={{ alignItems: 'center' }}>
-          <Button onClick={onRescan} startIcon={<RefreshIcon />} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
+          <Button variant="text" onClick={onRescan} startIcon={<RefreshIcon />} sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}>
             Rescan
           </Button>
         </Stack>
@@ -748,6 +775,45 @@ function WifiPickView({
  * is local and remounts on each expand (`unmountOnExit`) so autofocus fires and
  * the field starts empty every time.
  */
+/**
+ * Row for the network the robot is already connected to: no password
+ * accordion - tapping it continues straight to account linking (same action
+ * as the "already online" screen's Continue).
+ */
+function ConnectedNetworkRow({ ssid, onContinue }: { ssid: string; onContinue: () => void }) {
+  return (
+    <Box sx={{ ...paperCardSx(false), overflow: 'hidden' }}>
+      <ListItemButton onClick={onContinue} sx={{ px: 2, py: 1.75, borderRadius: `${RADIUS.lg}px` }}>
+        <Stack direction="row" spacing={1.75} sx={{ alignItems: 'center', width: '100%' }}>
+          <WifiIcon sx={{ color: STATUS.success, fontSize: 22 }} />
+          <Typography
+            sx={{ flex: 1, minWidth: 0, fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}
+            noWrap
+          >
+            {ssid}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              px: 1,
+              py: 0.25,
+              borderRadius: `${RADIUS.sm}px`,
+              bgcolor: alpha(STATUS.success, 0.12),
+              color: STATUS.success,
+              fontSize: TYPO.xs,
+              fontWeight: FONT_WEIGHT.semibold,
+              flexShrink: 0,
+            }}
+          >
+            Connected
+          </Typography>
+          <ChevronRightIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
+        </Stack>
+      </ListItemButton>
+    </Box>
+  );
+}
+
 function WifiNetworkRow({
   ssid,
   expanded,
@@ -867,11 +933,111 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
 
-function LinkAccountView({ onLink }: { onLink: () => void }) {
+/**
+ * Live status pill for the robot's LAN address, walking the two preconditions
+ * sign-in actually depends on: the robot's IP (read over BLE - these used to
+ * fail silently and only surface at the OAuth step as a cryptic error) and
+ * phone→robot HTTP reachability (the genuine "same network" test; knowing the
+ * robot's IP proves nothing about the phone's own network). States:
+ * resolving → IP found / checking reach → reachable (green) | unreachable
+ * (warning + hint) | not found (warning; sign-in retries before giving up).
+ */
+function RobotAddressBadge({
+  ip,
+  resolving,
+  reachable,
+}: {
+  ip: string | null;
+  resolving: boolean;
+  reachable: boolean | null;
+}) {
+  let tint: string | undefined;
+  let content: React.ReactNode;
+  const labelSx = { fontSize: TYPO.xs, fontWeight: FONT_WEIGHT.semibold } as const;
+  const monoSx = { ...labelSx, fontFamily: 'monospace' } as const;
+
+  if (ip && reachable === true) {
+    tint = STATUS.success;
+    content = (
+      <>
+        <WifiIcon sx={{ fontSize: 14 }} />
+        <Typography sx={monoSx}>{ip}</Typography>
+      </>
+    );
+  } else if (ip && reachable === false) {
+    tint = STATUS.warning;
+    content = (
+      <>
+        <ErrorOutlineIcon sx={{ fontSize: 14 }} />
+        <Typography sx={labelSx}>Can't reach {ip}</Typography>
+      </>
+    );
+  } else if (ip) {
+    // IP known, reachability probe still in flight.
+    content = (
+      <>
+        <CircularProgress size={12} sx={{ color: 'inherit' }} />
+        <Typography sx={monoSx}>{ip}</Typography>
+      </>
+    );
+  } else if (resolving) {
+    content = (
+      <>
+        <CircularProgress size={12} sx={{ color: 'inherit' }} />
+        <Typography sx={labelSx}>Determining IP address…</Typography>
+      </>
+    );
+  } else {
+    tint = STATUS.warning;
+    content = (
+      <>
+        <ErrorOutlineIcon sx={{ fontSize: 14 }} />
+        <Typography sx={labelSx}>Address not found yet</Typography>
+      </>
+    );
+  }
+
+  return (
+    <Stack spacing={0.75} aria-live="polite" sx={{ alignItems: 'center' }}>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        sx={{
+          alignItems: 'center',
+          px: 1.5,
+          py: 0.5,
+          borderRadius: `${RADIUS.pill}px`,
+          bgcolor: theme => alpha(tint ?? theme.palette.text.primary, 0.08),
+          color: tint ?? 'text.secondary',
+        }}
+      >
+        {content}
+      </Stack>
+      {ip && reachable === false ? (
+        <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', textAlign: 'center', maxWidth: 280 }}>
+          Make sure this phone is on the same Wi-Fi as the robot.
+        </Typography>
+      ) : null}
+    </Stack>
+  );
+}
+
+function LinkAccountView({
+  onLink,
+  robotIp,
+  resolvingIp,
+  robotReachable,
+}: {
+  onLink: () => void;
+  robotIp: string | null;
+  resolvingIp: boolean;
+  robotReachable: boolean | null;
+}) {
   return (
     <SetupScaffold
       title="Link me to Hugging Face"
       caption="Sign in with Hugging Face so your Reachy can come online. We'll open your browser — keep this phone on the same Wi-Fi as the robot."
+      body={<RobotAddressBadge ip={robotIp} resolving={resolvingIp} reachable={robotReachable} />}
       actions={<PrimaryButton onClick={onLink}>Sign in with Hugging Face</PrimaryButton>}
     />
   );
@@ -880,12 +1046,16 @@ function LinkAccountView({ onLink }: { onLink: () => void }) {
 /* --- 6c. device-code sign-in (redirect-free HF OAuth) -------------------- */
 
 /**
- * Redirect-free Hugging Face sign-in (device-code flow): the browser is open on
- * HF's device page and we're polling the robot for completion. The robot talks
- * to HF directly, so nothing depends on reaching it at `reachy-mini.local` -
- * this is the mDNS-free path used on daemons that support it. We surface the
- * code in-app (and a manual "open again" link) as a backup in case the browser
- * lost the pre-filled query.
+ * Redirect-free Hugging Face sign-in (device-code flow): the robot polls HF
+ * directly, so nothing depends on reaching it at `reachy-mini.local` - this is
+ * the mDNS-free path used on daemons that support it.
+ *
+ * The browser is deliberately NOT auto-opened: switching to Safari hid the
+ * code before the user could read it, and HF's device page asks them to type
+ * it. So this view leads with the code (tap to copy) and a single explicit
+ * "copy & open" action; the wizard keeps polling in the background and
+ * finishes by itself once the user approves - from this phone or any other
+ * device.
  */
 function DeviceCodeView({
   userCode,
@@ -894,21 +1064,53 @@ function DeviceCodeView({
   userCode: string | null;
   verificationUri: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
+  // Spinner only once the user actually went to the browser: before that
+  // nothing is "in progress" from their point of view (the background polling
+  // is invisible plumbing), and a spinner next to a copy step reads as "wait".
+  const [opened, setOpened] = useState(false);
+
+  const copyCode = async () => {
+    if (!userCode) return;
+    try {
+      await navigator.clipboard.writeText(userCode);
+      setCopied(true);
+    } catch (err) {
+      // Non-fatal: the code stays visible on screen for manual typing.
+      console.warn('[setup] clipboard.writeText failed:', err);
+    }
+  };
+
   return (
     <SetupScaffold
-      hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />}
-      title="Finish in your browser"
-      caption="We opened Hugging Face for you. Sign in and confirm the code below to bring your Reachy online - keep this app open."
+      hero={
+        opened ? (
+          <CircularProgress size={32} sx={{ color: 'text.secondary' }} />
+        ) : (
+          <IconHero>
+            <LockOutlinedIcon sx={{ fontSize: 32 }} />
+          </IconHero>
+        )
+      }
+      title="Confirm this code on Hugging Face"
+      caption="Copy the code below, then sign in on Hugging Face and enter it. Keep this app open — setup finishes on its own once you approve."
       body={
         userCode ? (
-          <Stack spacing={2} sx={{ width: '100%', alignItems: 'center' }}>
+          <Stack spacing={1} sx={{ width: '100%', alignItems: 'center' }}>
             <Box
+              role="button"
+              aria-label="Copy code to clipboard"
+              onClick={() => void copyCode()}
               sx={{
                 px: 3,
                 py: 1.5,
                 bgcolor: 'background.paper',
                 borderRadius: `${RADIUS.lg}px`,
                 border: theme => `1px solid ${theme.palette.divider}`,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.5,
+                cursor: 'pointer',
               }}
             >
               <Typography
@@ -924,16 +1126,31 @@ function DeviceCodeView({
               >
                 {userCode}
               </Typography>
+              {copied ? (
+                <CheckCircleIcon sx={{ fontSize: 20, color: STATUS.success }} />
+              ) : (
+                <ContentCopyIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+              )}
             </Box>
-            {verificationUri ? (
-              <Button
-                onClick={() => void openExternalUrl(verificationUri)}
-                sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold }}
-              >
-                Open Hugging Face again ↗
-              </Button>
-            ) : null}
+            <Typography
+              variant="caption"
+              sx={{ color: copied ? STATUS.success : 'text.secondary' }}
+            >
+              {copied ? 'Copied to clipboard' : 'Tap to copy'}
+            </Typography>
           </Stack>
+        ) : null
+      }
+      actions={
+        verificationUri ? (
+          <PrimaryButton
+            onClick={() => {
+              setOpened(true);
+              void copyCode().then(() => openExternalUrl(verificationUri));
+            }}
+          >
+            Copy code & open Hugging Face
+          </PrimaryButton>
         ) : null
       }
     />
@@ -949,10 +1166,16 @@ function DeviceCodeView({
  */
 function AlreadyOnlineView({
   ssid,
+  robotIp,
+  resolvingIp,
+  robotReachable,
   onSkip,
   onChangeNetwork,
 }: {
   ssid: string;
+  robotIp: string | null;
+  resolvingIp: boolean;
+  robotReachable: boolean | null;
   onSkip: () => void;
   onChangeNetwork: () => void;
 }) {
@@ -972,6 +1195,7 @@ function AlreadyOnlineView({
           "I'm already online. You can skip Wi-Fi setup and finish linking me to Hugging Face."
         )
       }
+      body={<RobotAddressBadge ip={robotIp} resolving={resolvingIp} reachable={robotReachable} />}
       actions={
         <Stack spacing={1} sx={{ width: '100%' }}>
           <PrimaryButton onClick={onSkip}>Continue</PrimaryButton>
@@ -1216,6 +1440,7 @@ function OutdatedView({
             Get the desktop app ↗
           </PrimaryButton>
           <Button
+            variant="text"
             onClick={() => void openExternalUrl(TROUBLESHOOTING_URL)}
             sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.medium, color: 'text.secondary' }}
           >
