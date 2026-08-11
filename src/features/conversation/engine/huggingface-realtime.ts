@@ -31,12 +31,12 @@ const RESPONSE_DONE_FALLBACK_MS = 5_000;
 // Backstop for the "tool call in flight" processing hold. When the
 // model calls a tool, the tool-call response completes (`response.done`)
 // long before the follow-up spoken response arrives - in between we run
-// the tool (e.g. the `look` VLM round-trip, ~1-2 s) and then fire
-// `response.create`. We keep the status on `processing` across that gap
-// so the orb keeps reading "thinking" instead of flashing back to idle.
-// This timer only fires if the follow-up response never materialises
-// (network hiccup), so we never get stuck showing "thinking" forever.
-// Sized above the vision VLM timeout (8 s) plus follow-up headroom.
+// the tool (e.g. the `look` camera capture + image attach, ~1 s) and
+// then fire `response.create`. We keep the status on `processing`
+// across that gap so the orb keeps reading "thinking" instead of
+// flashing back to idle. This timer only fires if the follow-up
+// response never materialises (network hiccup), so we never get stuck
+// showing "thinking" forever.
 const TOOL_CALL_PROCESSING_FALLBACK_MS = 15_000;
 // The realtime session allocator Space occasionally answers with a gateway
 // timeout (504) or other 5xx under load. A single short retry turns most of
@@ -425,7 +425,7 @@ export class HuggingFaceRealtimeClient {
           // a `response.create`, so a follow-up is guaranteed. Consume
           // the hold once and stay on `processing` so the orb keeps
           // showing "thinking" across the tool round-trip (e.g. the
-          // `look` VLM call) instead of flashing back to idle. The
+          // `look` camera capture) instead of flashing back to idle. The
           // backstop timer covers the (rare) case where no follow-up
           // ever arrives.
           if (this.toolCallPendingResponse) {

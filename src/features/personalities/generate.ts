@@ -16,7 +16,6 @@
  *
  * How it talks to a model
  * -----------------------
- * Same transport as the vision module (`vision/providers/hf-vlm-provider.ts`):
  *
  *   - Hugging Face Inference Providers router
  *     (`router.huggingface.co/v1/chat/completions`), OpenAI-compatible.
@@ -730,7 +729,7 @@ interface ChatCompletionPayload {
 }
 
 /** Pull the assistant text out of the OpenAI-compatible envelope,
- *  accepting the same handful of shape variants the VLM provider does
+ *  accepting the handful of shape variants the router's providers emit
  *  (string content, content-as-array, Responses-API fallback). */
 function extractContent(payload: ChatCompletionPayload | null): string {
   if (!payload) return "";

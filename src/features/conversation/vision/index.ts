@@ -4,9 +4,9 @@
  * The single attach point the conversation engine talks to. Two
  * exports:
  *
- *   - `attachVision(deps)` wires the VLM provider + scene injector to
- *     the live `RealtimePort` and returns a `VisionHandle` exposing a
- *     single on-demand `look()` (backing the realtime `look` tool).
+ *   - `attachVision(deps)` wires the frame capture to the live
+ *     `RealtimePort` and returns a `VisionHandle` exposing a single
+ *     on-demand `look()` (backing the realtime `look` tool).
  *   - `getVisionPromptAppendix()` returns the system-prompt fragment
  *     the engine concatenates into `composeInstructions()`.
  *
@@ -14,54 +14,47 @@
  * the model deliberately calls the `look` tool (i.e. the user asked it
  * to look at something). Nothing is captured otherwise.
  *
- * Removal procedure (see `docs/VISION.md` § 12):
+ * How a `look` works
+ * ------------------
+ * The S2S realtime backend is natively multimodal, so we send it the
+ * ACTUAL photo instead of a text description from a separate VLM:
  *
- *   1. `rm -rf src/features/conversation/vision/`
- *   2. Remove the `attachVision` / `getVisionPromptAppendix` import
- *      + call sites in `conversation-engine.ts` (3-4 lines) and drop
- *      the `look` tool from `tools.ts` / the tool-call handler.
+ *   1. capture a JPEG frame from the robot's WebRTC video stream;
+ *   2. attach it to the conversation as an `input_image` user item
+ *      (`conversation.item.create` on the realtime data channel);
+ *   3. return an "image attached" tool result; the engine's
+ *      `sendToolResponse` then fires the `function_call_output` +
+ *      `response.create` pair and the model answers from the image.
  *
- * No env vars to clean up, no localStorage migration. The bridge's
- * `RealtimePort` + `getRealtimePort()` can stay (useful for any future
- * side-channel) or be reverted for cleanliness.
+ * This mirrors the on-robot conversation app's `camera` tool flow
+ * (`reachy_mini_conversation_app/.../huggingface_realtime.py`). No
+ * extra credential, billing tier, or gated-model acceptance is
+ * involved: the image rides the same session as the voice.
  */
 
-import { VISION_CONFIG } from "./config";
 import { captureFrame } from "./frame-capture";
 import type { RealtimePort } from "../engine/realtime/types";
-import { createProvider } from "./providers/factory";
-import { createSceneCache } from "./scene-cache";
-import { createSceneInjector } from "./scene-injector";
 import type { LookResult } from "./types";
 
 export interface VisionHandle {
   /** Terminal release. After this, `look()` returns a graceful
    *  failure instead of capturing. Idempotent. */
   dispose: () => void;
-  /** On-demand capture for the realtime `look` tool: returns a fresh
-   *  scene description (or a recent cached one if a prior look is
-   *  still fresh), so the model can answer "what do you see?" within
-   *  the same turn. Never throws - failures come back as
-   *  `{ ok: false, message }`. */
+  /** On-demand capture for the realtime `look` tool: snapshots the
+   *  camera and attaches the image to the conversation so the model
+   *  can answer "what do you see?" within the same turn. Never
+   *  throws - failures come back as `{ ok: false, message }`. */
   look: () => Promise<LookResult>;
 }
 
 export interface AttachVisionDeps {
   /** Side-channel port onto the live realtime websocket.
-   *  Obtained from `realtimeBridge.getRealtimePort()`. Used to mirror
-   *  a `look` result back into the conversation context so later
-   *  turns can reference "what you saw" without another look. */
+   *  Obtained from `realtimeBridge.getRealtimePort()`. Used to attach
+   *  the captured frame to the conversation as an `input_image` item. */
   realtime: RealtimePort;
   /** Live accessor onto the robot's WebRTC video stream. Returning
    *  `null` makes `look()` fail gracefully (camera not live yet). */
   getVideoStream: () => MediaStream | null;
-  /** Late-bound accessor for the user's HF token (stored at
-   *  `sessionStorage.hf_token` by the OAuth flow). The VLM provider
-   *  reads it on every call so a sign-out / sign-in mid-session is
-   *  picked up without rebuilding the pipeline. Returning `null`
-   *  here at `attachVision` time short-circuits to a no-op pipeline
-   *  (we can't authenticate, so `look` is unavailable). */
-  getHfToken: () => string | null;
 }
 
 /**
@@ -69,33 +62,13 @@ export interface AttachVisionDeps {
  * to the `look` tool. There is no lifecycle to drive (no timers, no
  * subscriptions) - `look()` is invoked on demand and `dispose()` is
  * called on teardown.
- *
- * Returns `null` when no HF token is available at construction time
- * (user signed out, or sessionStorage hasn't been hydrated yet). The
- * engine's call sites already tolerate `null` via optional chaining,
- * so the absence of a token degrades gracefully to "no `look` this
- * session" without breaking the convo.
  */
-export function attachVision(deps: AttachVisionDeps): VisionHandle | null {
-  if (!deps.getHfToken()) {
-    console.warn(
-      "[vision] attachVision called without an HF token — feature inert (user not signed in?)",
-    );
-    return null;
-  }
-
-  const provider = createProvider({ getHfToken: deps.getHfToken });
-  const injector = createSceneInjector({ realtime: deps.realtime });
-  // Freshness cache: a `look` fired right after a previous one reuses
-  // the recent description instead of re-capturing (the scene almost
-  // never changes within a few seconds).
-  const cache = createSceneCache();
-
+export function attachVision(deps: AttachVisionDeps): VisionHandle {
   let disposed = false;
 
   // Guard against parallel `look()` calls (the model double-firing the
   // tool): the second await piggybacks on the first's result instead
-  // of kicking off a second capture + VLM round-trip.
+  // of capturing + attaching a second image.
   let inFlightLook: Promise<LookResult> | null = null;
 
   const look = (): Promise<LookResult> => {
@@ -114,22 +87,6 @@ export function attachVision(deps: AttachVisionDeps): VisionHandle | null {
   };
 
   const doLook = async (): Promise<LookResult> => {
-    // 1. Freshness short-circuit: reuse a very recent description
-    //    rather than re-capturing for a scene that hasn't changed.
-    const recent = cache.get();
-    if (recent && cache.ageMs() < VISION_CONFIG.lookCacheFreshnessMs) {
-      console.info(
-        `[vision] look: served from cache (${Math.round(cache.ageMs())}ms old)`,
-      );
-      return {
-        ok: true,
-        description: recent.description,
-        message: recent.description,
-        cached: true,
-      };
-    }
-
-    // 2. Fresh capture.
     const stream = deps.getVideoStream();
     if (!stream) {
       console.warn("[vision] look: no video stream available");
@@ -143,18 +100,26 @@ export function attachVision(deps: AttachVisionDeps): VisionHandle | null {
 
     try {
       const frame = await captureFrame(stream);
-      const description = await provider.describeScene(frame, {
-        trigger: "look",
+      deps.realtime.sendEvent({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", image_url: frame.dataUrl }],
+        },
       });
-      cache.set(description, "look");
-      // Mirror it into the conversation context too, so later turns
-      // can still reference "what you saw" without another look.
-      injector.inject(description, "look");
-      console.info(`[vision] look: fresh capture (${description.length} chars)`);
-      return { ok: true, description, message: description };
+      console.info(
+        `[vision] look: attached camera frame (${frame.widthPx}x${frame.heightPx})`,
+      );
+      return {
+        ok: true,
+        message:
+          "Camera image captured and attached to the conversation. " +
+          "Answer from what you actually see in that image.",
+      };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      console.warn("[vision] look: capture/VLM failed:", reason);
+      console.warn("[vision] look: capture failed:", reason);
       return {
         ok: false,
         message:

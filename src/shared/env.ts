@@ -201,26 +201,6 @@ export const STICKER_THEME_MODEL: string =
   'Qwen/Qwen2.5-7B-Instruct';
 
 /**
- * Vision-language model used to describe what the robot sees. Override
- * via `VITE_VISION_HF_MODEL` (e.g. `Qwen/Qwen2.5-VL-72B-Instruct`,
- * `zai-org/GLM-4.5V`). Append `:fastest` / `:cheapest` / `:<provider>`
- * to pin a routing policy.
- *
- * Default is `google/gemma-3-27b-it`: a NON-reasoning multimodal model.
- * We moved off `zai-org/GLM-4.5V` because, as a reasoning VLM, it
- * routinely spent the whole token budget in `reasoning_content` and
- * returned an empty `content` ("HF VLM returned empty description").
- * Gemma emits its answer directly, and it's served by two providers
- * (featherless-ai + scaleway) so the router keeps meaningful failover.
- *
- * Consumers:
- *   - `features/conversation/vision/config.ts`
- */
-export const VISION_HF_MODEL: string =
-  (import.meta.env.VITE_VISION_HF_MODEL as string | undefined) ??
-  'google/gemma-3-27b-it';
-
-/**
  * Default routing policy suffix for the HF Inference Providers router.
  * `preferred` honours the order set in the user's HF Inference Provider
  * settings. Override via `VITE_HF_ROUTER_POLICY`; an unrecognised value

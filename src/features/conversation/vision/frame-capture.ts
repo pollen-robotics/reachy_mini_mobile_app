@@ -10,8 +10,8 @@
  *   - `MediaStreamTrackProcessor` is Chromium-only and not yet
  *     available in the Tauri WKWebView build.
  *
- * The canvas path works everywhere and is fast enough at our cadence
- * (1 capture / 30 s, ~640 px wide).
+ * The canvas path works everywhere and is fast enough for our usage
+ * (one capture per `look` tool call, ~640 px wide).
  *
  * The function is fully self-cleaning: every DOM node and stream
  * binding it creates is released before the promise resolves /

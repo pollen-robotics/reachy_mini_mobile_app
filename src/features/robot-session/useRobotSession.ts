@@ -79,7 +79,7 @@ export interface RobotSessionHandle {
   /** Most recent tool-call toast label, or null when dismissed. */
   toolToastLabel: string | null;
   /** Visual intent of the current tool-call toast. `"error"` when the
-   *  last surfaced tool call failed (e.g. a VLM error behind `look`). */
+   *  last surfaced tool call failed (e.g. a camera error behind `look`). */
   toolToastVariant: "info" | "error";
   /** Whether the engine has reached `ready` (or further) at least
    *  once on the current session. Sticky: stays true through

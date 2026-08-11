@@ -122,7 +122,6 @@ import {
 } from "../background-audio-keeper";
 import { createAudioMonitorsControl } from "./audio-monitors-control";
 import { loadSettings, type Settings } from "./settings";
-import { readHfTokenFromStorage } from "./hf-token";
 import { memoryStore } from "./memory";
 import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
 import { RobotSession } from "@/features/robot-session/RobotSession";
@@ -936,8 +935,8 @@ const toolCallHandler = createToolCallHandler({
   onToolToast: onToolToast ?? undefined,
   // Late-bound onto the `vision` handle declared further down (same
   // forward-reference pattern as the bridge): the `look` tool calls
-  // through here. When vision is inert (no HF token) `vision` is null
-  // and we return a graceful "unavailable" result rather than throw.
+  // through here. Before the backend is built `vision` is null and we
+  // return a graceful "unavailable" result rather than throw.
   look: () =>
     backend?.vision()?.look() ??
     Promise.resolve({
@@ -1175,30 +1174,23 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
 // personality, language or tool change apply on the next conversation
 // start without rebuilding it.
 //
-// Vision side-channel (see `docs/VISION.md`)
-// ──────────────────────────────────────────
+// Vision side-channel
+// ───────────────────
 // On-demand scene awareness: the camera is read ONLY when the model
-// calls the `look` tool (no passive/periodic capture). The result is
-// mirrored into the realtime context as a `<scene_observation>` block.
-// `attachVision` returns null when no HF token is available, and every
-// call site degrades to a no-op via optional chaining. Vision lives on
-// the bridge's `RealtimePort`; the controller keeps the build + attach
-// in one place so the engine can't forget to wire it.
-//
-// The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits Hugging
-// Face's Inference Providers router with the USER'S OWN HF token (the
-// same token in `sessionStorage.hf_token` used by the realtime
-// allocator), deliberately decoupling vision from the voice pipeline:
-//   - no master model-provider key on the wire (no server-side proxy, no shared bill);
-//   - per-user billing (each user's calls land on their own HF tier);
-//   - changing the VLM model is a one-line edit in `vision/config.ts`.
+// calls the `look` tool (no passive/periodic capture). The captured
+// frame is attached straight to the realtime conversation as an
+// `input_image` user item - the S2S backend is natively multimodal, so
+// the model sees the actual photo. No separate VLM call, no extra
+// credential or billing tier (mirrors the on-robot conversation app's
+// `camera` tool flow). Vision lives on the bridge's `RealtimePort`;
+// the controller keeps the build + attach in one place so the engine
+// can't forget to wire it.
 backend = createRealtimeBackendController({
   bridgeDeps: realtimeBackendDeps,
   attachVision: (bridge) =>
     attachVision({
       realtime: bridge.getRealtimePort(),
       getVideoStream: liveSession.getVideoStream,
-      getHfToken: readHfTokenFromStorage,
     }),
 });
 

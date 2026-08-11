@@ -161,8 +161,8 @@ export interface ConversationToolToastEvent {
   /**
    * Visual intent of the toast. `"info"` (default) is the normal
    * "tool is running" pill; `"error"` is emitted when a tool call
-   * fails (e.g. the VLM behind `look` errored or returned nothing) so
-   * the host can render it as a visible failure instead of a silent
+   * fails (e.g. the camera capture behind `look` errored) so the
+   * host can render it as a visible failure instead of a silent
    * disappearance.
    */
   variant?: "info" | "error";

@@ -108,7 +108,7 @@ function syncSessionStorage(token: string | null, username: string | null): void
  * connect path keeps working on a slightly-stale token) — but it also
  * means the app's auth gate, which only checks `!token`, would replay
  * a long-dead token forever: every direct HF call (whoami,
- * /api/spaces, the vision VLM router) 401s and there is no in-app way
+ * /api/spaces, the inference router) 401s and there is no in-app way
  * to recover. This predicate lets the gate treat an expired token as
  * "needs sign-in" so the user re-auths into a fresh token.
  *

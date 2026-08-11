@@ -28,8 +28,8 @@ export interface RealtimeBackendControllerDeps {
    *  lazy, so a personality / language / tool change is picked up at the
    *  next conversation start without rebuilding the bridge. */
   bridgeDeps: RealtimeBackendDeps;
-  /** Wire the vision side-channel onto the built bridge. Returns null
-   *  when vision is inert (no HF token). */
+  /** Wire the vision side-channel onto the built bridge. `null` is
+   *  tolerated (vision inert) and degrades every call site to a no-op. */
   attachVision: (bridge: RealtimeBackend) => VisionHandle | null;
   /** Bridge factory. Defaults to the real Hugging Face bridge;
    *  injectable so the controller is testable without module mocks. */

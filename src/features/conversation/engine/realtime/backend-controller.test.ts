@@ -23,7 +23,7 @@ function makeBridge(): RealtimeBackend {
 function makeVision(): VisionHandle & { dispose: ReturnType<typeof vi.fn> } {
   return {
     dispose: vi.fn(),
-    look: vi.fn(async () => ({ ok: true, message: 'ok', description: 'ok' })),
+    look: vi.fn(async () => ({ ok: true, message: 'ok' })),
   };
 }
 
