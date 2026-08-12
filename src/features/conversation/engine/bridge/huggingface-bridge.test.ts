@@ -134,18 +134,21 @@ describe('createHuggingFaceBridge', () => {
     const audioTrack = (id: string): MediaStreamTrack =>
       ({ id, kind: 'audio', enabled: true }) as unknown as MediaStreamTrack;
 
-    /** Robot stub whose `_pc` can be swapped, like a re-dial does. */
+    /**
+     * Robot stub whose peer connection can be swapped, like a re-dial
+     * does. Mirrors the SDK's PUBLIC `peerConnection` getter - the bridge
+     * moved off the private `_pc` when the SDK started exposing it.
+     */
     function makeRobot(track: MediaStreamTrack) {
-      const robot = {
-        _pc: { getReceivers: () => [{ track }], getTransceivers: () => [] },
-      };
+      const pcFor = (t: MediaStreamTrack) => ({
+        getReceivers: () => [{ track: t }],
+        getTransceivers: () => [],
+      });
+      const robot = { peerConnection: pcFor(track) };
       return {
         robot,
         swapPeerConnection(next: MediaStreamTrack) {
-          robot._pc = {
-            getReceivers: () => [{ track: next }],
-            getTransceivers: () => [],
-          };
+          robot.peerConnection = pcFor(next);
         },
       };
     }
@@ -196,7 +199,7 @@ describe('createHuggingFaceBridge', () => {
     it('reports failure when the new connection has no audio receiver', async () => {
       const before = audioTrack('mic-before');
       const { bridge, robot } = await connectedBridge(before);
-      (robot as { _pc: unknown })._pc = {
+      robot.peerConnection = {
         getReceivers: () => [],
         getTransceivers: () => [],
       };
