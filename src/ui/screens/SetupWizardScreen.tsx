@@ -148,7 +148,7 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
           onClick={m.canGoBack ? m.goBack : onCancel}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 16 }} />}
           sx={{
-            color: 'text.secondary',
+            color: 'primary.main',
             textTransform: 'none',
             fontWeight: FONT_WEIGHT.semibold,
             fontSize: TYPO.sm,
@@ -1223,7 +1223,7 @@ function AlreadyOnlineView({
       actions={
         <Stack spacing={1} sx={{ width: '100%' }}>
           <PrimaryButton onClick={onSkip}>Continue</PrimaryButton>
-          <TextButton onClick={onChangeNetwork} sx={{ color: 'text.secondary' }}>
+          <TextButton onClick={onChangeNetwork}>
             Use a different network
           </TextButton>
         </Stack>

@@ -529,7 +529,7 @@ export function ConversationSettingsPanel({
                     Connection, software, account and live logs.
                   </Typography>
                 </Stack>
-                <ChevronRightRoundedIcon sx={{ fontSize: TYPO.xl, color: 'text.disabled', flexShrink: 0 }} />
+                <ChevronRightRoundedIcon sx={{ fontSize: TYPO.xl, color: 'primary.main', flexShrink: 0 }} />
               </Row>
             </Card>
           </Section>
