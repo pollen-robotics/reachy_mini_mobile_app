@@ -1,13 +1,16 @@
 /**
  * The classic persona form: name + a voice picker that auditions on select
  * (sharing one row), a tagline, and the system-prompt "Instructions" box
- * that grows to fill the leftover height. In create mode it's fronted by a
- * "back to vibe generator" link; edit mode opens straight here. Purely
- * presentational - all state and handlers (including voice playback) come
- * from props.
+ * that grows to fill the leftover height. Reached from the hero's "I'll write
+ * it myself" on-ramp, or straight away in edit mode. Purely presentational -
+ * all state and handlers (including voice playback) come from props.
+ *
+ * One-way door: there's no link back to the vibe hero. Authoring by hand and
+ * describing a vibe are two different intents, and a "back" here read as a
+ * navigation stack the rest of this flow doesn't have. The way out is the
+ * band's "✕".
  */
-import { Box, Button, MenuItem, Stack, TextField } from '@mui/material';
-import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
+import { Box, MenuItem, Stack, TextField } from '@mui/material';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
 import { AVAILABLE_VOICES, VOICE_DESCRIPTIONS } from '@/features/personalities';
@@ -28,8 +31,6 @@ export interface CreatePersonalityFieldsProps {
   onInstructionsChange: (value: string) => void;
   /** The voice currently auditioning (pulses the speaker icon). */
   playingVoice: string | null;
-  /** Create mode only: return to the vibe-generator hero. */
-  onBack: () => void;
 }
 
 export function CreatePersonalityFields({
@@ -43,7 +44,6 @@ export function CreatePersonalityFields({
   instructions,
   onInstructionsChange,
   playingVoice,
-  onBack,
 }: CreatePersonalityFieldsProps) {
   return (
     <Stack
@@ -58,30 +58,6 @@ export function CreatePersonalityFields({
         minHeight: 0,
       }}
     >
-      {/* Create-mode back link: returns to the "describe it" hero. The typed
-          vibe and any generated fields stay in state, so going back to
-          re-roll never loses work. Edit mode has no generator, so no link. */}
-      {!isEdit && (
-        <Button
-          variant="text"
-          color="primary"
-          onClick={onBack}
-          startIcon={<ChevronLeftRoundedIcon />}
-          disableRipple
-          sx={{
-            alignSelf: 'flex-start',
-            textTransform: 'none',
-            fontSize: TYPO.sm,
-            fontWeight: FONT_WEIGHT.semibold,
-            p: 0,
-            minWidth: 0,
-            '&:hover': { bgcolor: 'transparent' },
-          }}
-        >
-          Back to vibe generator
-        </Button>
-      )}
-
       {/* Identity: name + voice share one row, tagline sits below. The
           avatar - and its regenerate control - live on the persistent
           personality band above. Picking a voice auditions it right away

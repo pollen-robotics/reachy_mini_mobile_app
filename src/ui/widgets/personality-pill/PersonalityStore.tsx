@@ -447,7 +447,7 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
       component="button"
       type="button"
       onClick={onCreate}
-      aria-label="Create your own agent"
+      aria-label="Create your own personality"
       sx={{
         width: '100%',
         appearance: 'none',
@@ -487,7 +487,7 @@ function CreateCard({ onCreate }: { onCreate: () => void }) {
             color: 'text.primary',
           }}
         >
-          Create your own agent
+          Create your own personality
         </Typography>
         <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary' }}>
           Toss out an idea and watch Reachy bring it to life.
@@ -526,7 +526,7 @@ function NewPersonaButton({ onClick }: { onClick: () => void }) {
       variant="outlined"
       color="primary"
       size="small"
-      aria-label="Create your own agent"
+      aria-label="Create your own personality"
       endIcon={<AddRoundedIcon sx={{ fontSize: TYPO.lg }} />}
       sx={railActionButtonSx}
     >
@@ -549,7 +549,7 @@ function CreatePersonaTile({ onCreate }: { onCreate: () => void }) {
   return (
     <ButtonBase
       onClick={onCreate}
-      aria-label="Create your own agent"
+      aria-label="Create your own personality"
       focusRipple
       sx={{
         flexShrink: 0,
@@ -615,7 +615,7 @@ function CreatePersonaTile({ onCreate }: { onCreate: () => void }) {
           minHeight: '2.7em',
         }}
       >
-        Dream up a character
+        Dream up a personality
       </Typography>
     </ButtonBase>
   );

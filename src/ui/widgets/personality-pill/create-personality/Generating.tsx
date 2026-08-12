@@ -259,7 +259,7 @@ export function CreatePersonalityGenerating({
           <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
             <CircularProgress size={12} sx={{ color: 'text.disabled' }} />
             <ShimmerText sx={{ fontSize: TYPO.xs }}>
-              Bringing your character to life…
+              Bringing this personality to life…
             </ShimmerText>
           </Stack>
         )}

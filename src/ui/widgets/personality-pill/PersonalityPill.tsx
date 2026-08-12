@@ -138,9 +138,9 @@ export function PersonalityPill({
   // Title mirrors the live name while authoring (falling back to the
   // static label until the user types one); otherwise the shown persona.
   const title = draftActive
-    ? draft.name.trim() || (creating ? 'Create your agent' : shown.name)
+    ? draft.name.trim() || (creating ? 'Create your personality' : shown.name)
     : creating
-      ? 'Create your agent'
+      ? 'Create your personality'
       : shown.name;
   // Regenerate control (edit only): the band hosts the avatar's
   // regenerate button now, anchored on the disc, since the avatar never

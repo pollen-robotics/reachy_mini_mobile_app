@@ -281,6 +281,20 @@ export async function streamPersonality(
   } catch (err) {
     window.clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", onExternalAbort);
+    // A caller-driven cancel must stay an AbortError so the UI can tell
+    // "the user backed out" from "the request failed" and skip its error
+    // reporting entirely.
+    if (opts.signal?.aborted) throw err;
+    // Our own idle guard fired before a single byte arrived (the timer
+    // spans the router's discovery + model-chain retries, not just the
+    // stream), which surfaces here as a bare AbortError. Report it as the
+    // retryable stall it is rather than a confusing network error.
+    if (controller.signal.aborted) {
+      throw new GeneratePersonalityError(
+        "request_failed",
+        "the model took too long to answer - give it another try",
+      );
+    }
     throw fromRouterError(err);
   }
 

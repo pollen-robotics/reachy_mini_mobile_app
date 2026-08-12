@@ -355,6 +355,10 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // True while the conversation tab has a persona authoring form open. The
+  // bottom tab bar is pulled for the duration - see the `BottomNavigation`
+  // below for why.
+  const [authoringPersona, setAuthoringPersona] = useState(false);
   // The conv tab is kept mounted (just `display: none`d) so its orb
   // audio refs survive a tab switch, which makes switching TO it
   // instant. The Apps tab used to be torn down and remounted on every
@@ -847,6 +851,7 @@ function ConnectedSession({
                   session={session}
                   orbRef={orbRef}
                   active={tab === 'conv'}
+                  onAuthoringChange={setAuthoringPersona}
                 />
               </Box>
             </Box>
@@ -909,6 +914,16 @@ function ConnectedSession({
           sx={theme => ({
             flexShrink: 0,
             mx: -3,
+            // Pulled while a persona authoring form is up, for the same reason
+            // the settings sheet covers this bar: a focused task with unsaved
+            // work owns the whole screen. Leaving it would put "Apps" - a
+            // half-the-screen-wide target - directly under the form's CTA, and
+            // tapping it runs the conv panel's inactive-tab teardown, which
+            // drops the form and every field the user typed with no
+            // confirmation and no draft kept. The form carries its own way out
+            // (the band's "✕", the hero's own close, the generation screen's
+            // "Cancel"), so nobody gets trapped here.
+            display: authoringPersona ? 'none' : 'flex',
             // BottomNavigation sizing on iPhone X+ : the bar must be
             // tall enough to host BOTH the comfortable 68 px tap row
             // AND the iOS home-indicator safe-area below it, AND each

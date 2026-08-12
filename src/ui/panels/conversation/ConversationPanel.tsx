@@ -81,6 +81,14 @@ export interface ConversationPanelProps {
    * Defaults to `true` for standalone callers.
    */
   active?: boolean;
+  /**
+   * Fired when the persona authoring form opens / closes (create AND edit).
+   * The shell hides its bottom tab bar while it's up: switching tabs runs the
+   * `active` teardown below, which drops the form and every unsaved field with
+   * it, so leaving a 50%-width "throw my draft away" target sitting under the
+   * CTA is a trap. Always fired with `false` on unmount.
+   */
+  onAuthoringChange?: (authoring: boolean) => void;
 }
 
 /** Which persona-authoring form (if any) is open in the body slot. */
@@ -93,6 +101,7 @@ export function ConversationPanel({
   session,
   orbRef,
   active = true,
+  onAuthoringChange,
 }: ConversationPanelProps) {
   const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
@@ -194,8 +203,9 @@ export function ConversationPanel({
   //     is now gone.
   const [formMode, setFormMode] = useState<PersonaFormMode>(null);
   const formOpen = formMode !== null;
-  // True while the create form is in its full-panel "Meet" phase: the band is
-  // hidden so the form fills the panel area (top bar / bottom nav stay put).
+  // True while the create form is on one of its full-panel screens (the vibe
+  // hero, then generation + reveal): the band is hidden so the form fills the
+  // panel area. The app's top bar stays put either way.
   const [immersiveForm, setImmersiveForm] = useState(false);
   // Band trailing affordance: closes any open form, else opens create.
   const toggleForm = useCallback(() => {
@@ -208,6 +218,15 @@ export function ConversationPanel({
     setFormMode({ kind: 'edit', persona });
   }, [cancelPickerClose]);
   const closeForm = useCallback(() => setFormMode(null), []);
+
+  // Let the shell know an authoring form is up so it can pull its bottom tab
+  // bar (see `onAuthoringChange`). The unmount cleanup matters: the panel is
+  // dropped outright when the session tears down / errors out, and a stranded
+  // `true` would leave the user on a tab-less screen.
+  useEffect(() => {
+    onAuthoringChange?.(formOpen);
+  }, [formOpen, onAuthoringChange]);
+  useEffect(() => () => onAuthoringChange?.(false), [onAuthoringChange]);
 
   // Leaving the conversation tab (the panel is kept mounted, just
   // `display: none`d) should collapse every transient overlay so the
@@ -317,9 +336,8 @@ export function ConversationPanel({
       {/* SUB-HEADER: full-bleed band that hosts the personality
           hero. Visible while the picker/store is open (it stays the
           persistent "select" affordance whose chevron toggles back to
-          the orb). Hidden only while the create form is in its
-          full-panel "Meet" phase, so the body slot expands to fill the
-          freed space. */}
+          the orb). Hidden on the create funnel's full-panel screens, so
+          the body slot expands to fill the freed space. */}
       <Box
         sx={{
           width: '100vw',
@@ -327,9 +345,9 @@ export function ConversationPanel({
           flexShrink: 0,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
-          // Hidden while the create form is in its full-panel "Meet"
-          // phase, so the body slot below expands to fill the freed
-          // space (the app's top bar / bottom nav stay put either way).
+          // Hidden on the create funnel's full-panel screens, so the
+          // body slot below expands to fill the freed space (the app's
+          // top bar stays put either way).
           display: immersiveForm ? 'none' : 'block',
           // Let the persona avatar disc spill slightly past the band's
           // bottom divider and paint OVER the body slot below it.
