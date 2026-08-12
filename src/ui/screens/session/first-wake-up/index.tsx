@@ -77,6 +77,14 @@ interface FirstWakeUpWizardProps {
   /** Friendly robot name for the copy. Updated live once the naming step saves,
    *  so the closing "meet" line reflects the chosen name. */
   robotName?: string;
+  /**
+   * True once the onboarding moves dataset is warm in the robot's HF cache
+   * (or the preload failed / timed out - the owner fails open, see
+   * `RobotSessionScreen`). While false, the welcome step holds its start
+   * action behind a "Preparing my moves" state so the first emote step never
+   * plays into a cold-cache download stall.
+   */
+  movesReady?: boolean;
   /** Persist a new display name over the session (naming step). Resolves the
    *  saved name, or `null` on failure. Updating the parent's optimistic name is
    *  the caller's job (so `robotName` here reflects it for the finale). */
@@ -85,7 +93,13 @@ interface FirstWakeUpWizardProps {
   onFinish: () => void;
 }
 
-export default function FirstWakeUpWizard({ session, robotName, onRename, onFinish }: FirstWakeUpWizardProps) {
+export default function FirstWakeUpWizard({
+  session,
+  robotName,
+  movesReady = true,
+  onRename,
+  onFinish,
+}: FirstWakeUpWizardProps) {
   const [step, setStep] = useState<Step>('welcome');
   // Draft for the naming step, lifted here so it survives the step's remount on
   // step transitions (each step is keyed in AnimatePresence, so a local field
@@ -459,6 +473,7 @@ export default function FirstWakeUpWizard({ session, robotName, onRename, onFini
                   onReplay={() => playStepEmote(step)}
                   sleepCheck={sleepCheck}
                   sleepBlocked={sleepBlocked}
+                  movesReady={movesReady}
                   onRename={onRename}
                   nameDraft={nameDraft}
                   onNameDraftChange={setNameDraft}
@@ -600,6 +615,7 @@ function StepView({
   onReplay,
   sleepCheck,
   sleepBlocked,
+  movesReady,
   onRename,
   nameDraft,
   onNameDraftChange,
@@ -623,6 +639,8 @@ function StepView({
   sleepCheck: SleepPositionCheck;
   /** True when the robot isn't yet in sleep position (welcome step gate). */
   sleepBlocked: boolean;
+  /** True once the onboarding moves dataset preload settled (welcome gate). */
+  movesReady: boolean;
   /** Persist a new display name over the session (naming step). */
   onRename: (name: string) => Promise<string | null>;
   /** Controlled naming-step draft (lifted to the shell to survive remounts). */
@@ -635,7 +653,15 @@ function StepView({
 }) {
   switch (step) {
     case 'welcome':
-      return <WelcomeStep session={session} onNext={onNext} check={sleepCheck} blocked={sleepBlocked} />;
+      return (
+        <WelcomeStep
+          session={session}
+          onNext={onNext}
+          check={sleepCheck}
+          blocked={sleepBlocked}
+          movesReady={movesReady}
+        />
+      );
     case 'microphone':
       return <MicrophoneStep session={session} onNext={onNext} onStageVisible={onStageVisible} />;
     case 'motor':

@@ -98,7 +98,10 @@ import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsT
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
-import { ONBOARDING_MOVES_DATASET } from './session/first-wake-up/constants';
+import {
+  ONBOARDING_MOVES_DATASET,
+  ONBOARDING_PRELOAD_TIMEOUT_MS,
+} from './session/first-wake-up/constants';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
@@ -325,18 +328,37 @@ function ConnectedSession({
   // dataset now, so the motor step's `wake-mini-up` (first move played,
   // ~2 steps away) hits a local cache instead of blocking on a download.
   // The daemon deliberately no longer preloads app-specific datasets at
-  // startup - this is the app-side half of that contract. Fire-and-forget,
-  // idempotent daemon-side; a failed/absent preload only costs latency
+  // startup - this is the app-side half of that contract. Completion is
+  // TRACKED (not fire-and-forget): the wizard holds its start action on
+  // `movesReady` so the first emote never races a cold-cache download.
+  // Fail-open on error/timeout - a failed/absent preload only costs latency
   // (`play_recorded_move` downloads on demand). Ref-guarded because the
   // session handle is a fresh object every render.
   const preloadedOnboardingRef = useRef(false);
+  const [onboardingMovesReady, setOnboardingMovesReady] = useState(false);
   useEffect(() => {
     if (preloadedOnboardingRef.current) return;
     if (wizardGate !== 'show' || session.phase !== 'live') return;
     const robot = session.getRobot();
-    if (robot?.preloadDataset) {
-      preloadedOnboardingRef.current = true;
+    if (!robot) return;
+    preloadedOnboardingRef.current = true;
+    if (robot.preloadDatasetAndWait) {
+      void robot
+        .preloadDatasetAndWait(ONBOARDING_MOVES_DATASET, {
+          timeoutMs: ONBOARDING_PRELOAD_TIMEOUT_MS,
+        })
+        // Rejections (channel closed, session teardown) and error/timeout
+        // resolutions all unlock the wizard the same way: lazy download
+        // still works at play time, just slower.
+        .catch(() => null)
+        .then(() => setOnboardingMovesReady(true));
+    } else if (robot.preloadDataset) {
+      // Older SDK without the awaited variant: fire-and-forget like before,
+      // and don't hold the wizard on a signal that will never come.
       robot.preloadDataset(ONBOARDING_MOVES_DATASET);
+      setOnboardingMovesReady(true);
+    } else {
+      setOnboardingMovesReady(true);
     }
   }, [wizardGate, session]);
 
@@ -1264,6 +1286,7 @@ function ConnectedSession({
               key="first-wake-up"
               session={session}
               robotName={displayName}
+              movesReady={onboardingMovesReady}
               onRename={handleRenameRobot}
               onFinish={handleWizardFinish}
             />

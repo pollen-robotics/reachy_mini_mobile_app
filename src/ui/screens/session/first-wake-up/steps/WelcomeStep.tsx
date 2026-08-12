@@ -6,7 +6,7 @@ import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import type { SleepPositionCheck } from '@/ui/widgets/reachy-viz/useSleepPositionCheck';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
-import { PrimaryButton, StepScaffold } from '../shared';
+import { ButtonSpinner, PrimaryButton, StepScaffold } from '../shared';
 
 /** Compact motor names for the inline dot-separated list. */
 function shortMotor(name: string): string {
@@ -22,6 +22,7 @@ export default function WelcomeStep({
   onNext,
   check,
   blocked,
+  movesReady,
 }: {
   session: RobotSessionHandle;
   onNext: () => void;
@@ -29,6 +30,10 @@ export default function WelcomeStep({
   check: SleepPositionCheck;
   /** True while the robot isn't yet in its sleep position. */
   blocked: boolean;
+  /** True once the onboarding moves dataset preload settled (see the shell).
+   *  While false, the start button shows a "Preparing my moves" wait state so
+   *  the later emote steps never play into a cold-cache download stall. */
+  movesReady: boolean;
 }) {
   // Release motor torque on entry so the user can physically place the robot in
   // its sleep position by hand. Without this the robot may still be holding
@@ -86,8 +91,16 @@ export default function WelcomeStep({
         ) : null
       }
       actions={
-        <PrimaryButton onClick={onNext} disabled={blocked}>
-          {blocked ? 'Place me in sleep position' : "Let's go"}
+        // The sleep-pose gate (a physical task) reads first; only once the
+        // robot is tucked in does a still-pending preload surface as a short
+        // "preparing" wait. It clears on its own (completion, error or the
+        // shell's timeout all release it), so there's no escape hatch here.
+        <PrimaryButton
+          onClick={onNext}
+          disabled={blocked || !movesReady}
+          startIcon={!blocked && !movesReady ? <ButtonSpinner /> : undefined}
+        >
+          {blocked ? 'Place me in sleep position' : movesReady ? "Let's go" : 'Preparing my moves…'}
         </PrimaryButton>
       }
     />

@@ -207,6 +207,29 @@ export interface ReachyMiniInstance extends EventTarget {
   preloadDataset?(dataset: string): boolean;
 
   /**
+   * Like `preloadDataset`, but resolves once the daemon acks the preload,
+   * i.e. when the dataset is actually in the robot's local HF cache.
+   * Resolves `true` on success, `false` on a daemon-reported download
+   * failure, `null` on the SDK's fail-open timeout (slow download, or a
+   * daemon that predates the command and never replies). Rejects when the
+   * data channel isn't open or the session tears down mid-flight. Optional
+   * because an SDK build older than the awaited variant won't have it.
+   */
+  preloadDatasetAndWait?(
+    dataset: string,
+    options?: { timeoutMs?: number },
+  ): Promise<boolean | null>;
+
+  /**
+   * Stop whatever move is currently playing on the daemon (recorded move,
+   * uploaded move, goto), silencing its bundled sound too. Fire-and-forget
+   * and idempotent: a stop with no move running is acked as a no-op, not an
+   * error. Returns `false` if the data channel is not open. Optional because
+   * a daemon/SDK older than the command simply won't have it.
+   */
+  stopMove?(): boolean;
+
+  /**
    * Play the wake-up trajectory (head + antennas, ~2 s) AND power
    * the motors on. The post-PR-1085 SDK returns a Promise that
    * resolves on the daemon's `completed: true` ack, with optional

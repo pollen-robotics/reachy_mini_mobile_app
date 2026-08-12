@@ -15,12 +15,23 @@ export const DISCORD_URL = 'https://discord.gg/pollen-robotics';
  * Onboarding-specific moves (wake / waiting / deep-sleep / toc-toc-toc) don't
  * live in the default emotions library yet - they ship in this dataset.
  * The daemon does NOT preload app-specific datasets: `RobotSessionScreen`
- * warms this one via `preloadDataset` as soon as the wizard gate resolves to
- * "show", so the motor step's first move plays without a download stall.
+ * warms this one via `preloadDatasetAndWait` as soon as the wizard gate
+ * resolves to "show", and the wizard's start action waits for it (see
+ * `movesReady`), so the motor step's first move plays without a download
+ * stall.
  * TEMPORARY: drop the per-move `dataset` override (and the preload call) once
  * they're merged into `pollen-robotics/reachy-mini-emotions-library`.
  */
 export const ONBOARDING_MOVES_DATASET = 'Anne-Charlotte/new-emotions';
+
+/**
+ * Upper bound on how long the wizard's start action waits for the onboarding
+ * dataset preload before letting the user through anyway. On a cold cache the
+ * download takes a few seconds on decent Wi-Fi; past this bound we stop
+ * gating - `play_recorded_move` falls back to downloading on demand (slower
+ * first move, but never a stuck wizard).
+ */
+export const ONBOARDING_PRELOAD_TIMEOUT_MS = 30000;
 
 /**
  * Recorded emotion moves (motion + bundled sound) played per step over the
