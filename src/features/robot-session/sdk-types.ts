@@ -196,6 +196,17 @@ export interface ReachyMiniInstance extends EventTarget {
   ): boolean;
 
   /**
+   * Ask the daemon to pre-download a recorded-move dataset into its local HF
+   * cache so a later `playRecordedMove` from it starts instantly. The daemon
+   * only preloads the official pollen-robotics libraries by itself - any
+   * app-specific dataset (e.g. the onboarding moves) is our job to warm at
+   * session start. Fire-and-forget + idempotent (cache-first daemon-side);
+   * on failure `playRecordedMove` still downloads on demand. Optional
+   * because a daemon older than the command simply won't have it.
+   */
+  preloadDataset?(dataset: string): boolean;
+
+  /**
    * Play the wake-up trajectory (head + antennas, ~2 s) AND power
    * the motors on. The post-PR-1085 SDK returns a Promise that
    * resolves on the daemon's `completed: true` ack, with optional

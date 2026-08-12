@@ -98,6 +98,7 @@ import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsT
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
+import { ONBOARDING_MOVES_DATASET } from './session/first-wake-up/constants';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
@@ -319,6 +320,25 @@ function ConnectedSession({
     },
     [session],
   );
+
+  // The wizard will run: warm the robot's HF cache for the onboarding moves
+  // dataset now, so the motor step's `wake-mini-up` (first move played,
+  // ~2 steps away) hits a local cache instead of blocking on a download.
+  // The daemon deliberately no longer preloads app-specific datasets at
+  // startup - this is the app-side half of that contract. Fire-and-forget,
+  // idempotent daemon-side; a failed/absent preload only costs latency
+  // (`play_recorded_move` downloads on demand). Ref-guarded because the
+  // session handle is a fresh object every render.
+  const preloadedOnboardingRef = useRef(false);
+  useEffect(() => {
+    if (preloadedOnboardingRef.current) return;
+    if (wizardGate !== 'show' || session.phase !== 'live') return;
+    const robot = session.getRobot();
+    if (robot?.preloadDataset) {
+      preloadedOnboardingRef.current = true;
+      robot.preloadDataset(ONBOARDING_MOVES_DATASET);
+    }
+  }, [wizardGate, session]);
 
   // Wizard finished: close the gate and persist the completion flag on the
   // robot so it never shows again (dev-force ignores the flag on the next
