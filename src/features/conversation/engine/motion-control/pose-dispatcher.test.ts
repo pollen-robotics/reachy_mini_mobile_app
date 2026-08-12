@@ -128,7 +128,11 @@ describe('SCTP backpressure', () => {
     dispatcher.flushNow();
 
     expect(sendRaw).not.toHaveBeenCalled();
-    expect(recordSend).toHaveBeenCalledWith(false, 'pose-dispatcher-backpressure');
+    // A congested buffer must NOT be reported to dc-health: the channel
+    // exists, it's just busy. Counting it as a send failure is what let
+    // a post-blip drain (30 "failures"/s) trip the 120-failure fatal and
+    // tear down a session whose transport had already recovered.
+    expect(recordSend).not.toHaveBeenCalled();
     expect(dispatcher.isThrottling()).toBe(true);
 
     // Buffer drains: the same staged values go out and the flag clears.
@@ -140,14 +144,18 @@ describe('SCTP backpressure', () => {
 });
 
 describe('engine send gate (transport degradation)', () => {
-  it('blocks writes under its own label without touching the throttling flag', () => {
+  it('blocks writes without reporting them as link failures', () => {
     dispatcher.setSendGate(true);
     expect(dispatcher.isGated()).toBe(true);
 
     dispatcher.setHead(1, 2, 3);
     dispatcher.flushNow();
     expect(sendRaw).not.toHaveBeenCalled();
-    expect(recordSend).toHaveBeenCalledWith(false, 'pose-dispatcher-gated');
+    // We CHOSE not to send, so dc-health must hear nothing about it -
+    // otherwise the gate is self-defeating: 4 s of degradation at 30 Hz
+    // reaches the fatal threshold and kills the session the gate is
+    // meant to carry through the blip.
+    expect(recordSend).not.toHaveBeenCalled();
     // A deliberate gate is not SCTP backpressure.
     expect(dispatcher.isThrottling()).toBe(false);
   });

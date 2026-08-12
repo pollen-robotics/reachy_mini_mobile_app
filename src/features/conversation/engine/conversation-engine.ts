@@ -604,6 +604,11 @@ const connectionController: ConnectionController = createConnectionController({
   // orchestrator needs `recordSend`, which the controller provides),
   // and the gate only fires on SDK resilience events long after boot.
   setPoseSendGate: (gated) => motion.setSendGate(gated),
+  // Same deferred-closure trick: `backend` is built further down, and
+  // this only fires on an SDK re-dial, long after boot.
+  rebindRobotAudio: (robotInstance) => {
+    backend?.bridge().rebindRobotAudio(robotInstance);
+  },
 });
 
 // Motion's pose dispatcher feeds the controller's data-channel health

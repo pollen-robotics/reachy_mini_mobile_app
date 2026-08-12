@@ -98,6 +98,11 @@ export interface ConnectionControllerDeps {
    *  orchestrator's send gate so degraded-link frames stay staged
    *  instead of piling up in the SCTP send buffer. */
   setPoseSendGate: (gated: boolean) => void;
+  /** Re-bind the conversation audio legs after the SDK re-dialled the
+   *  session. The re-dial swaps the whole `RTCPeerConnection`, so the
+   *  realtime bridge's mic track and output sender both belong to a
+   *  dead connection until this runs. */
+  rebindRobotAudio: (robotInstance: ReachyMiniInstance) => void;
 }
 
 export interface ConnectionController {
@@ -171,6 +176,7 @@ export function createConnectionController(
     resumeAudioContexts,
     applyMicMuted,
     setPoseSendGate,
+    rebindRobotAudio,
   } = deps;
 
   const { connection, conversation } = core;
@@ -225,6 +231,15 @@ export function createConnectionController(
   let transportDegraded = false;
   const onTransportDegraded = (cause: string): void => {
     setPoseSendGate(true);
+    // Stop dc-health judging the link while we're deliberately not
+    // using it. Without this the gate is self-defeating: every gated
+    // flush reports `recordSend(false)` at 30 Hz, so 4 s of degradation
+    // reaches the 120-failure fatal threshold and tears down a session
+    // that was about to recover on its own. Observed exactly that on a
+    // Wi-Fi blip: 1.8 s of ICE-disconnected, full recovery at
+    // `ice=connected`, then a fatal 1.6 s LATER purely on the streak
+    // accumulated while gated plus the SCTP backlog draining after.
+    dcHealth.setSuspended(true);
     session.markTransportChecking();
     if (!transportDegraded) {
       transportDegraded = true;
@@ -235,6 +250,11 @@ export function createConnectionController(
     if (!transportDegraded) return;
     transportDegraded = false;
     setPoseSendGate(false);
+    // Resuming also zeroes the counter, which is the point: the frames
+    // that failed against the dying transport must not be held against
+    // the recovered one, and the send buffer needs a moment to drain
+    // before its failures mean anything.
+    dcHealth.setSuspended(false);
     console.info(`[connection] transport-recovered cause=${cause}`);
   };
 
@@ -278,6 +298,27 @@ export function createConnectionController(
     dcHealth.setSuspended(false);
     onTransportRecovered("redial");
     emitErrorMessage(null);
+    // The re-dial built a NEW RTCPeerConnection, so the realtime
+    // bridge's mic track (a receiver of the old PC) is dead and the AI
+    // voice is routed to the old sender. Nothing else re-announces
+    // audio - the SDK's `ontrack` only re-emits `videoTrack` - so
+    // without this the session comes back "connected" while the
+    // conversation is deaf and mute.
+    if (robot) rebindRobotAudio(robot);
+    // Promote back to `live`. A phone-side network drop also kills the
+    // SDK's central SSE feed, and its `disconnected` event demotes the
+    // FSM to `authenticated` (see `robot-events.ts`). That demotion
+    // predates auto-reconnect: the SDK now heals both legs by itself,
+    // but nothing puts the FSM back, so the app parks on
+    // `authenticated` over a perfectly live session. The next orb tap
+    // then reads as "not connected" and runs a full COLD bring-up -
+    // reconnect, re-dial, and a fresh wake-up dance (the robot visibly
+    // "restarting"), usually bouncing through `error` first because the
+    // daemon still holds the old session slot.
+    if (session.isEstablished() && connection.current() !== "live") {
+      console.info("[connection] re-dial: restoring live after signaling drop");
+      setConnectionState("live");
+    }
     // Fresh daemon session: forget the previous session's motor mode
     // so the dedup guard can't swallow the re-assert, then re-sync
     // (no-op unless the bring-up / conversation actually needs
