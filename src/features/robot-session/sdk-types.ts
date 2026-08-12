@@ -7,7 +7,7 @@
  * runtime in the npm tarball and declares the public surface; the
  * interface below is the engine's superset — it adds the
  * runtime-only fields and aliases the engine actually consumes
- * (`_pc`, `attachVideo`, `setMicMuted`, `sendRaw`, ...).
+ * (`peerConnection`, `attachVideo`, `setMicMuted`, `sendRaw`, ...).
  *
  * The SDK is an `EventTarget`; listeners are wired via
  * `addEventListener`. The events the mobile shell consumes are:
@@ -99,10 +99,11 @@ export interface ReachyMiniInstance extends EventTarget {
   readonly audioMuted: boolean;
 
   /**
-   * Exposed by the SDK as an internal field but used by the webrtc_example
-   * reference to pull stats; we read it to get the audio receiver/senders.
+   * Underlying RTCPeerConnection; we read it to get the audio
+   * receivers/senders. Auto-reconnect re-dials REPLACE this object, so
+   * re-read it on every use - never capture it across ticks.
    */
-  _pc: RTCPeerConnection | null;
+  readonly peerConnection: RTCPeerConnection | null;
 
   authenticate(): Promise<boolean>;
   login(): Promise<void>;

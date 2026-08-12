@@ -21,7 +21,7 @@
  *   streaming  (listening / user-speaking / ai-speaking)
  *
  * Audio routing (robot = hub):
- *   robot mic track (received on robot._pc) ─▶ HF realtime input PCM
+ *   robot mic track (received on robot.peerConnection) ─▶ HF realtime input PCM
  *   HF output PCM track                     ─▶ robot audio sender (replaceTrack)
  *
  * Layered architecture
@@ -789,7 +789,7 @@ async function runConversationParts(): Promise<void> {
     const w = window as unknown as Record<string, unknown>;
     const prevTimer = w.__micDiagTimer as ReturnType<typeof setInterval> | undefined;
     if (prevTimer) clearInterval(prevTimer);
-    w.__robotPc = robot._pc;
+    w.__robotPc = robot.peerConnection;
     w.__robotMicTrack = robotMicTrack;
     console.info("[MIC-DIAG] robot mic track:", {
       id: robotMicTrack.id,
@@ -799,7 +799,7 @@ async function runConversationParts(): Promise<void> {
     });
     let lastBytes = 0;
     w.__micDiagTimer = setInterval(() => {
-      const pc = robot?._pc;
+      const pc = robot?.peerConnection;
       if (!pc) return;
       void pc.getStats().then((stats) => {
         stats.forEach((report) => {

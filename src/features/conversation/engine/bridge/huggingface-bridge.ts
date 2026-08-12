@@ -211,7 +211,7 @@ export function createHuggingFaceBridge(
   const routeOutputToRobot = (track: MediaStreamTrack): void => {
     const robot = deps.getRobot();
     if (!robot) return;
-    const pc = robot._pc;
+    const pc = robot.peerConnection;
     if (!pc) return;
 
     const transceivers = pc.getTransceivers();
@@ -279,7 +279,7 @@ export function createHuggingFaceBridge(
   const getRobotMicTrack = (
     robotInstance: ReachyMiniInstance,
   ): MediaStreamTrack | null => {
-    const pc = robotInstance._pc;
+    const pc = robotInstance.peerConnection;
     if (!pc) return null;
     for (const receiver of pc.getReceivers()) {
       if (receiver.track && receiver.track.kind === "audio") {

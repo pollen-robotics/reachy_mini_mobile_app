@@ -19,7 +19,7 @@
  * back/skip header, and one cross-fading step per page. This file is the
  * shell + step router; each step lives in `./steps/*` and exercises the
  * hardware through the `RobotSessionHandle` (mic AnalyserNode off
- * `getRobot()._pc`, `wakeUp()`, volume + `playSound`, `attachVideo`).
+ * `getRobot().peerConnection`, `wakeUp()`, volume + `playSound`, `attachVideo`).
  */
 
 import { AnimatePresence, motion } from 'motion/react';

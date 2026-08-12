@@ -23,8 +23,11 @@ export interface SleepPositionCheck {
 }
 
 interface StateDetail {
+  /** Per-motor head joint values (7, body yaw at [0]). */
   head_joint_positions?: number[];
-  antennas_joint_positions?: number[];
+  /** The two antenna motor values [rightRad, leftRad] - the state feed has
+   *  no separate `antennas_joint_positions`; `antennas` IS the motor data. */
+  antennas?: number[];
 }
 
 interface StateCapableRobot extends EventTarget {
@@ -90,7 +93,7 @@ export function useSleepPositionCheck(session: RobotSessionHandle): SleepPositio
 
     const update = (detail: StateDetail | undefined) => {
       const head = detail?.head_joint_positions;
-      const antennas = detail?.antennas_joint_positions;
+      const antennas = detail?.antennas;
       // No per-motor data yet (older daemon): stay IDLE so callers fail open.
       if (!Array.isArray(head) || head.length !== 7 || !Array.isArray(antennas) || antennas.length !== 2) {
         return;

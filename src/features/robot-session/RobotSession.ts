@@ -165,7 +165,7 @@ export class RobotSession {
   }
 
   private startTransportMonitor(): void {
-    const pc = this.robot?._pc;
+    const pc = this.robot?.peerConnection;
     if (!pc) return;
     this.transportMonitor.start(pc, this.transportListener);
   }

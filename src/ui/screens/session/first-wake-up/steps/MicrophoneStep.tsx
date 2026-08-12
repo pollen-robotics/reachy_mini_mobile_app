@@ -29,25 +29,17 @@ const tap = keyframes`
   100% { transform: translateY(-14px); }
 `;
 
-// Detection runs on the hook's `activity` signal (onset strength), NOT raw
-// amplitude. Steady ambient noise reads ~0 there, so none of this trips on a
-// quiet-but-humming room. Hysteresis (two thresholds) stops the gate from
-// chattering when activity hovers near the edge.
-/** Cross this to count as "input happening" (gate opens). */
-const ACTIVITY_ON = 0.2;
-/** Drop below this before the gate closes again (must be < ACTIVITY_ON). */
-const ACTIVITY_OFF = 0.1;
-/** Credits needed to pass. Roughly: a couple of taps, or ~1 s of scratch. */
-const DETECTION_REQUIRED = 1.0;
-/** Each fresh onset (rising edge) is worth this much credit - this is what
- *  makes short taps count for something instead of barely nudging the bar. */
-const TAP_CREDIT = 0.45;
-/** Credit per second of sustained activity at full strength (covers scratching). */
-const SUSTAIN_GAIN = 1;
+// Detection is a plain stopwatch on the hook's `loud` flag: the bar fills
+// while the robot's mic clearly hears something above the room's ambient
+// level (the hook owns the baseline + hysteresis). One rule the user can
+// feel: when the bars are hot, the bar fills.
+/** Cumulative loud time needed to pass. The hook's ~250 ms tap hangover
+ *  means a couple of firm taps or a short scratch gets there. */
+const REQUIRED_LOUD_S = 0.6;
 /** A quiet gap tolerated before progress resets. Generous so a natural pause
  *  between taps doesn't wipe the user's progress. */
-const DETECTION_GRACE_PERIOD = 1.5;
-/** Clamp on per-frame dt so a stalled tab can't dump a huge chunk of credit. */
+const QUIET_RESET_S = 1.5;
+/** Clamp on per-frame dt so a stalled tab can't dump a huge chunk of time. */
 const MAX_DT = 0.2;
 
 export default function MicrophoneStep({
@@ -60,52 +52,61 @@ export default function MicrophoneStep({
   onStageVisible: (visible: boolean) => void;
 }) {
   const { trouble, openTrouble, closeTrouble } = useTroubleshoot(onStageVisible);
-  const { level, activity, isActive } = useRobotMicLevel(session);
+  const { level, loud, isActive } = useRobotMicLevel(session);
   const [progress, setProgress] = useState(0);
   const [complete, setComplete] = useState(false);
 
   const accumulatedRef = useRef(0);
   const lastTickRef = useRef<number | null>(null);
   const lastLoudRef = useRef<number | null>(null);
-  const gateOpenRef = useRef(false);
   const doneRef = useRef(false);
 
-  // Turn the onset `activity` into progress. Two ways to earn credit:
-  //   1. a discrete tap  -> a chunk (TAP_CREDIT) on each rising edge
-  //   2. sustained scratch -> dt * activity while the gate stays open
-  // Ambient noise -> activity ~0 -> gate never opens -> zero accumulation, so
-  // neither the bar nor the progress climbs "for nothing".
+  // Latest loud flag, mirrored into a ref so the rAF loop below reads the
+  // live value without re-subscribing on every audio frame.
+  const loudRef = useRef(false);
+  useEffect(() => {
+    loudRef.current = loud;
+  }, [loud]);
+
+  // Progress = a stopwatch of loud time. The tick runs on its own rAF
+  // clock, NOT on `loud` state changes: in silence React stops
+  // re-rendering, so an effect keyed on the flag would never evaluate the
+  // quiet-gap reset below until the NEXT sound. A self-driving clock makes
+  // the reset actually happen 1.5s into the silence.
   useEffect(() => {
     if (complete) return;
-    const now = Date.now() / 1000;
-    const dt = lastTickRef.current == null ? 0 : Math.min(now - lastTickRef.current, MAX_DT);
-    lastTickRef.current = now;
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const now = Date.now() / 1000;
+      const dt = lastTickRef.current == null ? 0 : Math.min(now - lastTickRef.current, MAX_DT);
+      lastTickRef.current = now;
 
-    // Hysteresis: once open, tolerate a lower level before closing.
-    const open = gateOpenRef.current ? activity > ACTIVITY_OFF : activity > ACTIVITY_ON;
-
-    if (open) {
-      if (!gateOpenRef.current) accumulatedRef.current += TAP_CREDIT; // rising edge = a tap
-      accumulatedRef.current += dt * activity * SUSTAIN_GAIN; // scratch
-      gateOpenRef.current = true;
-      lastLoudRef.current = now;
-    } else {
-      gateOpenRef.current = false;
-      if (lastLoudRef.current != null && now - lastLoudRef.current > DETECTION_GRACE_PERIOD) {
+      if (loudRef.current) {
+        accumulatedRef.current += dt;
+        lastLoudRef.current = now;
+      } else if (lastLoudRef.current != null && now - lastLoudRef.current > QUIET_RESET_S) {
         accumulatedRef.current = 0;
         lastLoudRef.current = null;
       }
-    }
 
-    const next = Math.min(accumulatedRef.current / DETECTION_REQUIRED, 1);
-    setProgress(next);
-    if (accumulatedRef.current >= DETECTION_REQUIRED && !doneRef.current) {
-      doneRef.current = true;
-      setComplete(true);
-      setProgress(1);
-      window.setTimeout(onNext, 900);
-    }
-  }, [activity, complete, onNext]);
+      // Same-value setState is a no-op re-render-wise, so ticking at rAF
+      // rate during silence costs nothing.
+      const next = Math.min(accumulatedRef.current / REQUIRED_LOUD_S, 1);
+      setProgress(next);
+      if (accumulatedRef.current >= REQUIRED_LOUD_S && !doneRef.current) {
+        doneRef.current = true;
+        setComplete(true);
+        setProgress(1);
+        window.setTimeout(onNext, 900);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      lastTickRef.current = null;
+    };
+  }, [complete, onNext]);
 
   // Calm, low-churn copy: keyed off progress (not the instantaneous `detected`
   // flag, which flickers around the threshold) so each phrase change is a
@@ -156,9 +157,8 @@ export default function MicrophoneStep({
       feedback={
         <Stack spacing={1.5} sx={{ width: '100%', maxWidth: 320, alignItems: 'center' }}>
           <Box sx={{ width: '100%' }}>
-            {/* Bars reflect the captured loudness only (`level`), decoupled
-                from the onset/tap detector (`activity`) so the visual isn't a
-                self-fulfilling echo of the detection logic. */}
+            {/* Bars show the same loudness the detector gates on: when the
+                bars are hot, the progress bar fills. One mental model. */}
             <FrequencyBars level={level} isActive={isActive} height={56} />
           </Box>
           <Box sx={{ width: '100%' }}>

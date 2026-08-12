@@ -167,7 +167,7 @@ interface ConnectedSessionProps {
  * never mounts AND the bring-up wakes the robot itself as usual, on the
  * first connection and on every reconnect.
  */
-const FIRST_WAKE_UP_WIZARD_ENABLED = false;
+const FIRST_WAKE_UP_WIZARD_ENABLED = true;
 
 /**
  * Dev-only escape hatch. When `true` (the default in dev) the wizard runs
