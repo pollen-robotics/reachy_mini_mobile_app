@@ -2,30 +2,40 @@
  * Motion stack orchestrator.
  *
  * Encapsulates the three low-level motion controllers
- * (`PoseDispatcher` + `WobblerControl` + `AntennasControl`) behind
+ * (`PoseDispatcher` + `DaemonHeadControl` + `AntennasControl`) behind
  * a single named API the engine can drive from FSM transitions and
- * lifecycle events. Replaces ~30 scattered `wobblerControl.X()` /
+ * lifecycle events. Replaces ~30 scattered `daemonHead.X()` /
  * `antennasControl.X()` / `poseDispatcher.X()` call sites with a
  * focused vocabulary:
  *
- *   - Pipeline lifecycle: `startSession()`, `attachAiOutput(track)`,
+ *   - Pipeline lifecycle: `startSession()`,
  *     `stop({ glide, concurrentTask })`.
  *   - Per-FSM-event hooks: `onUserSpeak()`, `onAiSpeak()`,
  *     `onListening()`, `onProcessing()`, `onReconnecting()`. Each
  *     hook captures the "right thing for the motion stack to do in
  *     state X" so the engine's `onStatus` switch reads as a clean
  *     mapping `FSM state -> motion event`.
- *   - Visibility: `resumeAudio()` to wake the wobbler's
- *     AudioContext after a tab return (the antennas oscillator is
- *     time-based, no audio to resume).
+ *
+ * Who animates the head
+ * ─────────────────────
+ * The daemon does, not us. It owns both the face tracking and the
+ * speech wobble; the app only turns them on and off through
+ * `DaemonHeadControl`. The reason is the order the daemon composes the
+ * head target in: app pose, blended toward the tracking aim, THEN the
+ * speech offsets. At full tracking weight the app's pose writes are
+ * dropped entirely, so an app-side wobbler would be invisible - and
+ * the daemon's wobble is PTS-aligned with what the speaker actually
+ * plays, which the app could never match through a jitter buffer. The
+ * app keeps the antennas, which tracking never touches.
  *
  * Why a single object
  * ───────────────────
  * 1. The three controllers must start / stop in a SPECIFIC order
- *    (sync stops first, then await concurrent work, then drop the
- *    pose dispatcher last). Centralising that order here means a
- *    new actor in the stack (a 4th controller, a new gate) is
- *    plumbed in once, not three or four times across the engine.
+ *    (hand the head back to the app first, sync stops next, then
+ *    await concurrent work, then drop the pose dispatcher last).
+ *    Centralising that order here means a new actor in the stack (a
+ *    4th controller, a new gate) is plumbed in once, not three or
+ *    four times across the engine.
  *
  * 2. Behaviour per FSM state used to be scattered: 4 places in the
  *    engine wrote pairs like `wobbler.reset() + antennas.freeze()`
@@ -40,19 +50,18 @@
  * What the orchestrator does NOT own
  * ──────────────────────────────────
  * - The realtime bridge close: that's external slow work. Callers
- *   pass it as `stop({ concurrentTask })` so the glide-to-neutral
+ *   pass it as `stop({ concurrentTask })` so the landing to neutral
  *   runs in parallel with the bridge close (saving ~bridge-close-ms
  *   off teardown latency).
  * - The audio level monitors (mic + AI side): those drive UI
- *   visuals and live in `audio-monitors-control.ts`. The
- *   `attachAiOutput` callback notifies the orchestrator about the
- *   AI track for the wobbler, but the engine separately calls
- *   `audioMonitors.startAi(track)` for the visualisation - the two
- *   consumers happen to share the same track.
+ *   visuals and live in `audio-monitors-control.ts`. Nothing on the
+ *   motion side needs the assistant track any more, since the wobble
+ *   is derived on the robot from the audio it receives.
  * - The tool-call handler: it lives one layer up because it also
  *   handles non-motion tools (`remember`, `forget`). It DOES feed
- *   `isPoseLocked` into the orchestrator via deps so the wobbler
- *   yields while a tool-driven pose is held.
+ *   `isPoseLocked` into the orchestrator via deps so face tracking
+ *   parks while a tool-driven pose is held - otherwise the daemon
+ *   would discard that pose and "look up" would do nothing.
  */
 
 import { SESSION_TIMINGS } from "@/features/robot-session/timings";
@@ -61,11 +70,11 @@ import {
   type AntennasControl,
   createAntennasControl,
 } from "./antennas-control";
-import { createPoseDispatcher } from "./pose-dispatcher";
 import {
-  type WobblerControl,
-  createWobblerControl,
-} from "./wobbler-control";
+  type DaemonHeadControl,
+  createDaemonHeadControl,
+} from "./daemon-head-control";
+import { createPoseDispatcher } from "./pose-dispatcher";
 
 const GLIDE_TO_NEUTRAL_MS = SESSION_TIMINGS.glideToNeutralMs;
 
@@ -73,14 +82,15 @@ export interface MotionOrchestratorDeps {
   /** Live SDK accessor. Forwarded to the three underlying
    *  controllers; they all bail out (no-op) when null. */
   getRobot: () => ReachyMiniInstance | null;
-  /** Forwarded to the wobbler. True while a tool-call head pose
-   *  is "held" by the tool-call handler's restore timer; the
-   *  wobbler skips its 30 Hz writes so the head stays where the
-   *  model put it. */
+  /** Forwarded to the daemon head control. True while a tool-call
+   *  head pose is "held" by the tool-call handler's restore timer;
+   *  face tracking parks for the duration so the daemon stops
+   *  discarding the app's pose and the head stays where the model
+   *  put it. */
   isPoseLocked: () => boolean;
-  /** Forwarded to the wobbler + antennas. True while a streamed
-   *  choreography is playing; both controllers yield so the
-   *  recorded frames don't fight live offsets. */
+  /** Forwarded to the daemon head control + antennas. True while a
+   *  streamed choreography is playing; tracking parks and the
+   *  antennas yield so the recorded frames reach the joints. */
   isMovePlaying: () => boolean;
   /** Forwarded to the pose dispatcher's `recordSend` hook so the
    *  DC-health monitor can track the actual outbound rate from
@@ -90,11 +100,11 @@ export interface MotionOrchestratorDeps {
 }
 
 export interface MotionStopOptions {
-  /** When `true`, the wobbler + antennas play a 700 ms cubic
-   *  ease-out to neutral after the sync stops. When `false`, no
-   *  glide (typically the power-off path: gotoSleep is about to
-   *  own the head + antennas trajectory and any glide frame would
-   *  just fight the daemon-side sleep animation). */
+  /** When `true`, the head is eased to neutral daemon-side and the
+   *  antennas play their 700 ms cubic ease-out. When `false`, no
+   *  landing at all (typically the power-off path: gotoSleep is about
+   *  to own the head + antennas trajectory, and both our landing and
+   *  its own would be refused as a second concurrent move anyway). */
   glide: boolean;
   /** Optional awaitable the orchestrator races AGAINST the glide.
    *  Typical use: pass `realtimeBridge.close()` so the bridge tears
@@ -107,14 +117,9 @@ export interface MotionStopOptions {
 export interface MotionOrchestrator {
   /** Bring up the motion stack for a fresh conversation: start the
    *  pose dispatcher (so the controllers' first frames land in a
-   *  running tick), then start the antennas oscillator. The
-   *  wobbler waits for its AI audio track via `attachAiOutput`. */
+   *  running tick), start the antennas oscillator, then hand the head
+   *  to the daemon (face tracking + speech wobble). */
   startSession(): void;
-  /** Bind the assistant audio track to the wobbler. Called
-   *  from the realtime bridge's `onOutputTrack` callback once the
-   *  inbound track lands. Idempotent across reconnects (the
-   *  wobbler tears its previous instance down on `start`). */
-  attachAiOutput(assistantTrack: MediaStreamTrack): void;
   /** Tear the motion stack down. See `MotionStopOptions` for the
    *  glide / concurrent-task semantics. */
   stop(opts: MotionStopOptions): Promise<void>;
@@ -126,12 +131,14 @@ export interface MotionOrchestrator {
   // simply calls the matching hook instead of touching the
   // individual controllers.
 
-  /** Barge-in: user started talking. Reset the wobbler's head
-   *  baseline and freeze the antennas at their current angle so
-   *  the robot looks "attentive" rather than oscillating idly. */
+  /** Barge-in: user started talking. Zero the daemon's speech
+   *  offsets, which the cut assistant turn would otherwise leave
+   *  applied, and freeze the antennas at their current angle so the
+   *  robot looks "attentive" rather than oscillating idly. */
   onUserSpeak(): void;
   /** Reachy is generating speech audio. Resume the antennas
-   *  oscillator if it was frozen. */
+   *  oscillator if it was frozen. The head needs nothing: the daemon
+   *  is already wobbling it from the audio it plays. */
   onAiSpeak(): void;
   /** Backend is "thinking" between user-speak and ai-speak.
    *  Resume the antennas oscillator so the robot doesn't look
@@ -140,18 +147,12 @@ export interface MotionOrchestrator {
   /** Back to listening: the AI response is fully done (silence
    *  detected on the AI track). Resume the antennas oscillator. */
   onListening(): void;
-  /** Realtime bridge is rebuilding its backend session. The wobbler's
-   *  input track is about to go away, so stop it; freeze the
-   *  antennas so the orb doesn't keep oscillating during the
-   *  reconnect spinner. */
+  /** Realtime bridge is rebuilding its backend session. The assistant
+   *  audio is about to stop mid-flight, so zero the speech offsets;
+   *  freeze the antennas so the orb doesn't keep oscillating during
+   *  the reconnect spinner. Face tracking stays on: the robot keeps
+   *  watching the user while the session comes back. */
   onReconnecting(): void;
-
-  /** Wake the wobbler's private AudioContext after a visibility
-   *  return (Safari / iOS aggressively suspend audio contexts in
-   *  hidden tabs). The antennas oscillator is purely time-based,
-   *  no audio context to resume. Safe to call when no wobbler is
-   *  active. */
-  resumeAudio(): void;
 
   /** Gate / ungate the pose dispatcher's network writes while the
    *  transport is degraded (`iceStateChange === 'disconnected' |
@@ -171,11 +172,11 @@ export function createMotionOrchestrator(
     getRobot: deps.getRobot,
     recordSend: deps.recordSend,
   });
-  const wobblerControl: WobblerControl = createWobblerControl({
+  const daemonHead: DaemonHeadControl = createDaemonHeadControl({
     getRobot: deps.getRobot,
     isPoseLocked: deps.isPoseLocked,
     isMovePlaying: deps.isMovePlaying,
-    poseDispatcher,
+    recordSend: deps.recordSend,
   });
   const antennasControl: AntennasControl = createAntennasControl({
     getRobot: deps.getRobot,
@@ -192,30 +193,37 @@ export function createMotionOrchestrator(
       // lands here too with the dispatcher already running, no harm.
       poseDispatcher.start();
       antennasControl.start();
-    },
-    attachAiOutput(assistantTrack) {
-      wobblerControl.start(assistantTrack);
+      // Last, so the daemon starts aiming the head only once our own
+      // channels are live and can be parked again on the way out.
+      daemonHead.enable();
     },
     async stop({ glide, concurrentTask }) {
-      // Order matters: kill the 30 Hz pose streams synchronously
-      // BEFORE any await, otherwise the wobbler / antennas keep
-      // ticking through `concurrentTask` and can race the
-      // trajectory gate. A late wobbler / antennas write is enough
+      // Order matters, and the first step is the subtle one: hand the
+      // head back to the app BEFORE anything tries to move it. While
+      // tracking holds full weight the daemon discards every head
+      // target it receives, including the frames its own goto player
+      // writes, so a landing requested first would move nothing and
+      // the head would jump the moment tracking went away.
+      daemonHead.disable();
+      // Then kill the 30 Hz antennas stream synchronously BEFORE any
+      // await, otherwise it keeps ticking through `concurrentTask` and
+      // can race the trajectory gate. A late antennas write is enough
       // to wedge the Dynamixel bus on the way out.
-      wobblerControl.stop();
       antennasControl.stop();
 
       if (glide) {
         // Gentle exit: ease the head + antennas to neutral in
         // parallel with `concurrentTask` (typically the realtime
         // bridge close) so the iframe / next conversation takes
-        // over a calmly-posed robot. The glide flushes its final
-        // neutral frame through the dispatcher, so we stop the
-        // dispatcher AFTER it lands.
-        const glidePromise = Promise.all([
-          wobblerControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-          antennasControl.glideToNeutral(GLIDE_TO_NEUTRAL_MS),
-        ]);
+        // over a calmly-posed robot. The head lands daemon-side at
+        // 100 Hz from wherever tracking left it, immune to the
+        // data-channel cadence; the antennas glide flushes its final
+        // frame through the dispatcher, so we stop the dispatcher
+        // AFTER it lands.
+        daemonHead.gotoNeutral(GLIDE_TO_NEUTRAL_MS);
+        const glidePromise = antennasControl.glideToNeutral(
+          GLIDE_TO_NEUTRAL_MS,
+        );
         if (concurrentTask) await concurrentTask;
         await glidePromise;
       } else if (concurrentTask) {
@@ -227,7 +235,7 @@ export function createMotionOrchestrator(
       poseDispatcher.stop();
     },
     onUserSpeak() {
-      wobblerControl.reset();
+      daemonHead.clearSpeechOffsets();
       antennasControl.freeze();
     },
     onAiSpeak() {
@@ -240,11 +248,8 @@ export function createMotionOrchestrator(
       antennasControl.resume();
     },
     onReconnecting() {
-      wobblerControl.stop();
+      daemonHead.clearSpeechOffsets();
       antennasControl.freeze();
-    },
-    resumeAudio() {
-      wobblerControl.resumeAudio();
     },
     setSendGate(gate) {
       poseDispatcher.setSendGate(gate);

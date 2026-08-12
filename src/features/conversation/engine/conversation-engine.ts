@@ -98,7 +98,9 @@
  *                              silent one-shot reconnect.
  *
  *     motion-control/
- *       wobbler-control.ts     `HeadWobbler` lifecycle + gates.
+ *       daemon-head-control.ts Face tracking + speech wobble, run on
+ *                              the robot, with the gates that park
+ *                              tracking when the app owns the head.
  *       antennas-control.ts    `AntennasOscillator` lifecycle.
  *       pose-dispatcher.ts     30 Hz coalescing tick to the daemon.
  *
@@ -438,15 +440,16 @@ const settings: Settings = loadSettings();
 // lazily so the null window before assignment degrades to a no-op.
 let backend: RealtimeBackendController | null = null;
 
-// Head-motion + antennas oscillator. The actual `HeadWobbler` and
-// `AntennasOscillator` instances live inside their respective
+// Head behaviour + antennas oscillator. The `AntennasOscillator`
+// instance and the daemon head commands live inside their respective
 // controllers, which expose a small `start / stop / freeze / resume`
 // surface so the engine doesn't have to manage their lifecycles
 // directly.
 //
-// Both controllers are stateless until first `start()`. Recreated
-// per session for the wobbler (it's bound to the assistant audio
-// track), reused across sessions for the antennas.
+// Both controllers are stateless until first `start()` and reused
+// across sessions: neither is bound to a session-specific object any
+// more, now that the head wobble comes from the audio the robot
+// receives rather than from an analyser on the assistant track.
 
 // Mic + AI level monitors moved to `audioMonitors` (created above
 // alongside the host-callback wrapping). They drive the orb's
@@ -732,8 +735,9 @@ async function onConnectionLive(): Promise<void> {
 }
 
 /**
- * The conversation pipeline proper: antenna oscillator, head wobbler,
- * HF realtime client, mic plumbing. Split out of `doStart` so the
+ * The conversation pipeline proper: antenna oscillator, daemon-side
+ * head behaviour, HF realtime client, mic plumbing. Split out of
+ * `doStart` so the
  * mobile app can defer it until the user is in the right view (the
  * SDK / DataChannel is brought up earlier because it doubles as the
  * daemon proxy transport during wake-up).
@@ -825,11 +829,10 @@ async function runConversationParts(): Promise<void> {
     console.warn("[MIC-DIAG] setup failed", err);
   }
 
-  // Bring the motion stack up (pose dispatcher + antennas
-  // oscillator). The wobbler waits for its AI track via the
-  // bridge's `onOutputTrack` callback, which forwards into
-  // `motion.attachAiOutput`. Idempotent on re-acquire paths: a
-  // running dispatcher / oscillator stays running.
+  // Bring the motion stack up: pose dispatcher + antennas oscillator
+  // on our side, then face tracking + speech wobble handed to the
+  // daemon. Idempotent on re-acquire paths: a running dispatcher /
+  // oscillator stays running and the daemon commands are not resent.
   motion.startSession();
   // Spin up the silent keepalive AudioContext so iOS treats us as
   // an actively-playing audio app and grants background time when
@@ -910,8 +913,8 @@ async function recoverConversationStartFailure(err: unknown): Promise<void> {
 // (`move_head`, `play_move`, `remember`, `forget`), the lazily-created
 // `MovePlayer`, and the head-pose restore timer. We feed it the
 // engine state it needs through getters and listen to its
-// `onMoveStart` / `onMoveEnd` callbacks so the wobbler + antennas
-// pause cleanly during a choreography.
+// `onMoveStart` / `onMoveEnd` callbacks so the antennas and the
+// daemon's face tracking pause cleanly during a choreography.
 
 const toolCallHandler = createToolCallHandler({
   getRobot: liveSession.getRobot,
@@ -950,7 +953,7 @@ const toolCallHandler = createToolCallHandler({
 // Browsers throttle JS timers and may suspend AudioContexts in hidden
 // tabs. The WebRTC media stack itself is native and keeps running, so
 // the voice conversation continues to flow - but:
-//   - our VAD / wobbler / mic-level analysers stop updating
+//   - our VAD / mic-level analysers stop updating
 //   - AudioContexts can end up suspended on return (Safari, mobile)
 //   - a device sleep during silence can kill everything
 //
@@ -959,12 +962,11 @@ const toolCallHandler = createToolCallHandler({
 // the audio-context resume on visibility return, below.
 
 function resumeAudioContexts(): void {
-  // HeadWobbler, MicLevelMonitor and AiLevelMonitor each own a private
-  // AudioContext that some browsers (notably Safari / iOS) suspend
-  // when the tab goes into the background. Wake them back up.
-  // (AntennasOscillator has no AudioContext - it's purely time-based,
-  // hence no resume on the motion side beyond `motion.resumeAudio()`.)
-  motion.resumeAudio();
+  // MicLevelMonitor and AiLevelMonitor each own a private AudioContext
+  // that some browsers (notably Safari / iOS) suspend when the tab goes
+  // into the background. Wake them back up. Nothing to do on the motion
+  // side: the antennas oscillator is purely time-based, and the head is
+  // animated by the daemon from audio we never touch.
   audioMonitors.resumeAudio();
 }
 
@@ -976,23 +978,26 @@ function resumeAudioContexts(): void {
 // ─── Motion stack ──────────────────────────────────────────────────────
 //
 // `motion-control/orchestrator.ts` bundles the three low-level motion
-// controllers - pose dispatcher, head wobbler, antennas oscillator -
-// behind a single named API the engine drives from FSM transitions
-// and lifecycle events:
+// controllers - pose dispatcher, daemon head control, antennas
+// oscillator - behind a single named API the engine drives from FSM
+// transitions and lifecycle events:
 //
-//   - `startSession()` / `attachAiOutput(track)` / `stop({ glide })`
-//     for the conversation-pipeline lifecycle.
+//   - `startSession()` / `stop({ glide })` for the
+//     conversation-pipeline lifecycle.
 //   - `onUserSpeak()` / `onAiSpeak()` / `onListening()` /
 //     `onProcessing()` / `onReconnecting()` for per-FSM-event hooks
 //     (each captures "the right thing to do on the motion side in
 //     state X" in exactly one place).
-//   - `resumeAudio()` to wake the wobbler's private AudioContext on
-//     visibility return.
 //
-// The dispatcher coalesces the wobbler's 20 Hz head writes + the
-// antennas oscillator's 30 Hz writes into ONE `set_full_target` per
-// 30 Hz tick (with SCTP backpressure throttling). See the
-// orchestrator file's docstring for the full rationale.
+// The head itself is animated on the robot: the daemon follows the
+// user's face and wobbles the head in time with the speech it plays,
+// which is both better synchronised and unavoidable, since at full
+// tracking weight the daemon discards any head pose we send. The
+// dispatcher is therefore left carrying the antennas oscillator's
+// 30 Hz writes (with SCTP backpressure throttling), plus the head
+// during tool-call gestures and choreographies, when tracking parks
+// and hands it back to us. See the orchestrator file's docstring for
+// the full rationale.
 const motion = createMotionOrchestrator({
   getRobot: liveSession.getRobot,
   isPoseLocked: () => toolCallHandler.isPoseLocked(),
@@ -1148,7 +1153,9 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
     }
   },
   onOutputTrack: (track) => {
-    motion.attachAiOutput(track);
+    // The motion side doesn't need this track: the head wobble is
+    // derived on the robot from the audio it receives, so only the orb
+    // visualisation consumes it here.
     audioMonitors.startAi(track);
   },
   onToolCall: (call) => {
