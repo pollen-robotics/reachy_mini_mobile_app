@@ -123,6 +123,14 @@ export class HuggingFaceRealtimeClient {
   // itself doesn't bounce the status back to idle mid-round-trip.
   private toolCallPendingResponse = false;
   private toolCallSafetyTimer: number | null = null;
+  // Armed when the server rejects a tool follow-up `response.create`
+  // with `conversation_already_has_active_response`: a fast tool (the
+  // `look` frame grab takes ~100 ms) can answer before the tool-call
+  // response has closed server-side, and the rejection used to be
+  // swallowed - leaving the tool result (and its photo) unanswered
+  // until the user spoke again. The follow-up is re-fired on the next
+  // `response.done` instead.
+  private retryResponseCreateOnDone = false;
 
   readonly options: HuggingFaceRealtimeOptions;
 
@@ -177,6 +185,10 @@ export class HuggingFaceRealtimeClient {
     this.toolCallSafetyTimer = window.setTimeout(() => {
       this.toolCallSafetyTimer = null;
       this.toolCallPendingResponse = false;
+      // The round-trip is over as far as we're concerned; a retry
+      // firing minutes later on an unrelated response.done would be
+      // a surprise answer out of nowhere.
+      this.retryResponseCreateOnDone = false;
       // Only force idle if we're still parked on `processing` waiting
       // for a follow-up that never came.
       if (this.status === "processing") {
@@ -190,6 +202,7 @@ export class HuggingFaceRealtimeClient {
 
   private clearToolCallProcessingHold(): void {
     this.toolCallPendingResponse = false;
+    this.retryResponseCreateOnDone = false;
     if (this.toolCallSafetyTimer !== null) {
       window.clearTimeout(this.toolCallSafetyTimer);
       this.toolCallSafetyTimer = null;
@@ -383,6 +396,17 @@ export class HuggingFaceRealtimeClient {
         break;
 
       case "response.created":
+        // A NEW response started (only possible once the one that
+        // rejected our follow-up has closed): it already sees the tool
+        // output + attached image in the conversation, so a pending
+        // retry is moot - drop it rather than double-answer. NOT done
+        // on `output_item.added`: that also fires for later items of
+        // the still-active tool-call response, inside the retry window.
+        this.retryResponseCreateOnDone = false;
+        if (this.status === "connected" || this.status === "user-speaking") {
+          this.setStatus("processing");
+        }
+        break;
       case "response.output_item.added":
         if (this.status === "connected" || this.status === "user-speaking") {
           this.setStatus("processing");
@@ -417,6 +441,16 @@ export class HuggingFaceRealtimeClient {
 
       case "response.done":
       case "response.cancelled":
+        // A tool follow-up whose `response.create` was rejected while
+        // this response was still active can go out now that it closed.
+        if (this.retryResponseCreateOnDone) {
+          this.retryResponseCreateOnDone = false;
+          console.info(
+            "[hf-realtime] re-firing tool follow-up response.create " +
+              "(the first raced the active response)",
+          );
+          this.sendEvent({ type: "response.create" });
+        }
         if (this.status === "ai-speaking") {
           this.markConnectedAfterOutputDrain();
         } else if (this.status === "processing") {
@@ -512,13 +546,19 @@ export class HuggingFaceRealtimeClient {
           | { message?: string; code?: string; type?: string }
           | undefined;
         const code = err?.code ?? err?.type ?? "";
-        if (
-          code === "input_audio_buffer_commit_empty" ||
-          code === "conversation_already_has_active_response"
-        ) {
-          if (code === "input_audio_buffer_commit_empty") {
-            this.setStatus("connected");
+        if (code === "conversation_already_has_active_response") {
+          // Benign in general (barge-in races), but mid tool round-trip
+          // it means `sendToolResponse`'s `response.create` beat the
+          // tool-call response's own close to the server. Swallowing it
+          // silently is what made a `look` answer only on the NEXT user
+          // turn - re-fire once the active response is done instead.
+          if (this.toolCallPendingResponse) {
+            this.retryResponseCreateOnDone = true;
           }
+          return;
+        }
+        if (code === "input_audio_buffer_commit_empty") {
+          this.setStatus("connected");
           return;
         }
         this.emit("error", {

@@ -47,6 +47,15 @@ class FakeWebSocket extends EventTarget {
   }
 }
 
+function makeFakeAudioNode(): Record<string, unknown> {
+  return {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    gain: { value: 1 },
+    onaudioprocess: null,
+  };
+}
+
 class FakeAudioContext {
   readonly sampleRate: number;
   readonly state = 'running';
@@ -65,9 +74,25 @@ class FakeAudioContext {
     };
   }
 
+  createMediaStreamSource(): MediaStreamAudioSourceNode {
+    return makeFakeAudioNode() as unknown as MediaStreamAudioSourceNode;
+  }
+
+  createScriptProcessor(): ScriptProcessorNode {
+    return makeFakeAudioNode() as unknown as ScriptProcessorNode;
+  }
+
+  createGain(): GainNode {
+    return makeFakeAudioNode() as unknown as GainNode;
+  }
+
   close(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+class FakeMediaStream {
+  constructor(_tracks?: unknown[]) {}
 }
 
 function makeTrack(): MediaStreamTrack {
@@ -78,6 +103,22 @@ function installRealtimeBrowserFakes(): void {
   FakeWebSocket.instances = [];
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('AudioContext', FakeAudioContext);
+  vi.stubGlobal('MediaStream', FakeMediaStream);
+}
+
+function dispatchServerEvent(
+  ws: FakeWebSocket,
+  payload: Record<string, unknown>,
+): void {
+  ws.dispatchEvent(
+    Object.assign(new Event('message'), { data: JSON.stringify(payload) }),
+  );
+}
+
+function sentEventsOfType(ws: FakeWebSocket, type: string): unknown[] {
+  return ws.sent
+    .map(raw => JSON.parse(raw) as { type?: string })
+    .filter(evt => evt.type === type);
 }
 
 afterEach(() => {
@@ -141,6 +182,98 @@ describe('HuggingFaceRealtimeClient', () => {
       'Hugging Face realtime websocket closed (4401): bad session',
     );
     expect(statuses).toContain('error');
+  });
+
+  describe('tool follow-up response.create retry', () => {
+    async function connectedClient(): Promise<{
+      client: HuggingFaceRealtimeClient;
+      ws: FakeWebSocket;
+    }> {
+      installRealtimeBrowserFakes();
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          connect_url: 'ws://127.0.0.1:8765/v1/realtime?session_token=ok',
+        }),
+        text: async () => '',
+      } as Response);
+
+      const client = new HuggingFaceRealtimeClient({
+        getHfToken: () => '',
+        voice: 'Aiden',
+        instructions: 'Be concise.',
+        inputTrack: makeTrack(),
+      });
+      const connectPromise = client.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.readyState = FakeWebSocket.OPEN;
+      ws.dispatchEvent(new Event('open'));
+      await connectPromise;
+      return { client, ws };
+    }
+
+    /** Runs a tool round-trip up to (and including) the server rejection. */
+    function rejectedToolFollowUp(client: HuggingFaceRealtimeClient, ws: FakeWebSocket): void {
+      dispatchServerEvent(ws, {
+        type: 'response.function_call_arguments.done',
+        call_id: 'call-1',
+        name: 'look',
+        arguments: '{}',
+      });
+      client.sendToolResponse('call-1', 'ok');
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(1);
+      dispatchServerEvent(ws, {
+        type: 'error',
+        error: { code: 'conversation_already_has_active_response' },
+      });
+    }
+
+    it('re-fires response.create once the racing response closes', async () => {
+      const { client, ws } = await connectedClient();
+      rejectedToolFollowUp(client, ws);
+
+      // Not re-sent while the rejecting response is still active.
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(1);
+
+      dispatchServerEvent(ws, { type: 'response.done' });
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(2);
+
+      // One retry only: later response.done events must not re-answer.
+      dispatchServerEvent(ws, { type: 'response.done' });
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(2);
+
+      await client.close();
+    });
+
+    it('drops the retry when a new response starts on its own', async () => {
+      const { client, ws } = await connectedClient();
+      rejectedToolFollowUp(client, ws);
+
+      // E.g. the user barged in and the server already opened a follow-up
+      // response that sees the tool output: retrying would double-answer.
+      dispatchServerEvent(ws, { type: 'response.created' });
+      dispatchServerEvent(ws, { type: 'response.done' });
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(1);
+
+      await client.close();
+    });
+
+    it('ignores the rejection outside a tool round-trip', async () => {
+      const { client, ws } = await connectedClient();
+
+      // Same error code, but no pending tool call (barge-in race): the old
+      // swallow behaviour is the right one here.
+      dispatchServerEvent(ws, {
+        type: 'error',
+        error: { code: 'conversation_already_has_active_response' },
+      });
+      dispatchServerEvent(ws, { type: 'response.done' });
+      expect(sentEventsOfType(ws, 'response.create')).toHaveLength(0);
+
+      await client.close();
+    });
   });
 });
 
