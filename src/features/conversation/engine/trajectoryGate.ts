@@ -2,8 +2,8 @@
  * Shared "the daemon is currently playing a wake / sleep trajectory"
  * flag.
  *
- * The conversation engine's `HeadWobbler` and `AntennasOscillator`
- * push commands at ~30 Hz to the robot. While the daemon is running
+ * The conversation engine's `AntennasOscillator` and its daemon-side
+ * face tracking both drive the robot continuously. While the daemon is running
  * `wake_up.json` or `goto_sleep.json` those streams must stay silent:
  * the daemon-side controller drops `set_target` / `set_antennas` while
  * a move is active anyway (with an `Ignoring … move running` warning

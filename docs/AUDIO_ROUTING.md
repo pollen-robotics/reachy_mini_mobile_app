@@ -188,10 +188,14 @@ earpiece or headphones, Reachy connected but resting in its woken pose).
   reacts to the real source).
 - Gate motion on `robotEmbodimentActive`:
   - call `motion.startSession()` only when `robotEmbodimentActive`.
-  - in `onOutputTrack`, call `motion.attachAiOutput(track)` only when
-    `robotEmbodimentActive` (but always keep `audioMonitors.startAi`).
   - in the `onStatus` handler, guard `motion.onListening/onUserSpeak/
     onProcessing/onAiSpeak` behind the same flag.
+  - note for the phone-playback routes: the head wobble is produced by
+    the daemon from the audio the *robot* receives, so it goes quiet on
+    any route that plays the assistant on the phone instead. Face
+    tracking still works (it's driven by the camera, not the audio).
+    Restoring the wobble there would mean feeding the daemon
+    `set_speech_offsets` from a phone-side analyser.
 - `releaseSdkPhoneMic(robot)`: only when `micSource === "robot"` (phone
   modes keep our capture stream alive; the lit iOS mic indicator is then
   legitimate).

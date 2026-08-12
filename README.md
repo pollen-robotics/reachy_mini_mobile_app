@@ -10,9 +10,11 @@ Sign in with Hugging Face, pick one of your robots, and:
 - **Drive the head manually** with a virtual joystick + monitor camera +
   adjust speaker / microphone volume from a dedicated Robot tab.
 
-The robot is expected to be already provisioned (on Wi-Fi, advertising
-itself on the HF central signaling Space). First-time Wi-Fi setup is
-handled outside this app.
+First-time setup is built in: a brand-new robot is provisioned onto
+Wi-Fi over Bluetooth Low Energy (no hotspot juggling) and linked to the
+user's Hugging Face account, after which it registers on the HF central
+signaling Space like any other robot. See
+[`docs/BLE_SETUP_FLOW.md`](./docs/BLE_SETUP_FLOW.md).
 
 ## Status
 
@@ -67,6 +69,9 @@ folder structure, the import conventions, the layer rules, and a
 "where do I put X?" cheat sheet.
 
 For the deep specs:
+- [`docs/BLE_SETUP_FLOW.md`](./docs/BLE_SETUP_FLOW.md) - the first-time
+  BLE setup flow (pairing, Wi-Fi join, IP discovery, reachability
+  probe, HF account link) with the full flow diagram
 - [`docs/MCP_DESIGN.md`](./docs/MCP_DESIGN.md) - design draft for an MCP
   server wrapping the daemon
 - [`docs/APP_STORE_COMPLIANCE.md`](./docs/APP_STORE_COMPLIANCE.md) -

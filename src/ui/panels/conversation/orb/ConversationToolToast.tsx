@@ -15,7 +15,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineRounded';
 export interface ConversationToolToastProps {
   label: string | null;
   /** `"error"` renders the pill as a failure (error palette + warning
-   *  icon) so a failed tool call - e.g. a VLM error behind `look` -
+   *  icon) so a failed tool call - e.g. a camera error behind `look` -
    *  is visibly surfaced instead of silently fading out. */
   variant?: 'info' | 'error';
 }

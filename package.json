@@ -35,7 +35,9 @@
     "@noble/ciphers": "^1.0.0",
     "@noble/curves": "^1.6.0",
     "@noble/hashes": "^1.5.0",
-    "@pollen-robotics/reachy-mini-sdk": "1.8.0-main.3d52f7d",
+    "@pollen-robotics/reachy-mini-sdk": "file:vendor/reachy-mini-sdk-fb321d479-stop-move-1786546338.tgz",
+    "@react-three/drei": "^10.7.6",
+    "@react-three/fiber": "^9.4.0",
     "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.11.0",
@@ -48,6 +50,7 @@
     "react-dom": "^19.2.5",
     "tauri-plugin-auth-session-api": "^0.2.2",
     "tauri-plugin-keep-screen-on-api": "^0.1.4",
+    "three": "^0.181.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
@@ -55,6 +58,7 @@
     "@tauri-apps/cli": "2.11.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.0",
     "@vitejs/plugin-react-swc": "^4.0.0",
     "eslint": "^9.20.0",
     "eslint-plugin-react-hooks": "^5.2.0",

@@ -15,6 +15,7 @@ function makeBridge(): RealtimeBackend {
     isReconnecting: vi.fn(() => false),
     resetReconnectCounter: vi.fn(),
     getRobotMicTrack: vi.fn(() => null),
+    rebindRobotAudio: vi.fn(() => true),
     setMicMuted: vi.fn(),
     getRealtimePort: vi.fn(() => ({ sendEvent: vi.fn(), onUserTranscript: vi.fn(() => () => {}) })),
   };
@@ -23,7 +24,7 @@ function makeBridge(): RealtimeBackend {
 function makeVision(): VisionHandle & { dispose: ReturnType<typeof vi.fn> } {
   return {
     dispose: vi.fn(),
-    look: vi.fn(async () => ({ ok: true, message: 'ok', description: 'ok' })),
+    look: vi.fn(async () => ({ ok: true, message: 'ok' })),
   };
 }
 

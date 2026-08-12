@@ -378,7 +378,13 @@ export default function RobotInfoPanel({
             {/* Negative inset cancels the small IconButton's internal
                 padding so the arrow glyph lands exactly on the `px: 3`
                 gutter, where the root header's cog/settings icon sits. */}
-            <IconButton aria-label="Back to settings" onClick={onBack} size="small" sx={{ ml: -0.625 }}>
+            <IconButton
+              aria-label="Back to settings"
+              onClick={onBack}
+              size="small"
+              color="primary"
+              sx={{ ml: -0.625 }}
+            >
               <ArrowBackRoundedIcon sx={{ fontSize: 22 }} />
             </IconButton>
             <Typography

@@ -119,7 +119,10 @@ function buildTheme(mode: 'light' | 'dark'): Theme {
         },
       },
       MuiButton: {
-        defaultProps: { disableElevation: true },
+        // `outlined` is the app's default button voice (nearly every CTA
+        // already opts into it explicitly); text-style buttons must now
+        // opt OUT with an explicit `variant="text"`.
+        defaultProps: { variant: 'outlined', disableElevation: true },
         styleOverrides: {
           root: { borderRadius: RADIUS, paddingInline: 20, paddingBlock: 10 },
         },

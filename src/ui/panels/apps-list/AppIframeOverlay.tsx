@@ -161,6 +161,15 @@ interface AppIframeOverlayProps {
    * placeholder if it's `null`. */
   hfUsername: string | null;
   robotPeerId: string;
+  /**
+   * Stable hardware id of the robot (central `meta.hardware_id`), or
+   * `null` for an older daemon. Threaded into the embed creds +
+   * `host:init` so the embedded app re-resolves the live `robotPeerId`
+   * from central right before `startSession()`. The bare peer id
+   * rotates on every relay reconnect, so after the Space cold-start it
+   * is frequently stale; matching on hardware id self-heals that.
+   */
+  robotHardwareId: string | null;
   robotName: string;
   /** Physical transport string from the robot's central listing
    *  (`wifi` / `usb` / …). Forwarded to `<IdentityChipBar>` so the
@@ -214,6 +223,7 @@ export default function AppIframeOverlay({
   hfToken,
   hfUsername,
   robotPeerId,
+  robotHardwareId,
   robotName,
   transport,
   sessionPhase,
@@ -326,11 +336,12 @@ export default function AppIframeOverlay({
       hfToken,
       hfUsername,
       robotPeerId,
+      robotHardwareId,
       robotName,
       theme: isDark ? 'dark' : 'light',
       appName: effectiveApp.name,
     }),
-    [hfToken, hfUsername, robotPeerId, robotName, isDark, effectiveApp.name]
+    [hfToken, hfUsername, robotPeerId, robotHardwareId, robotName, isDark, effectiveApp.name]
   );
 
   const credsBundle: EmbedCredsBundle = useMemo(
@@ -431,6 +442,7 @@ export default function AppIframeOverlay({
           hfToken: credsBundle.hfToken,
           userName: credsBundle.userName,
           robotPeerId: credsBundle.robotPeerId,
+          robotHardwareId: credsBundle.robotHardwareId,
           config: credsBundle.config,
           hostName: credsBundle.hostName,
           appName: credsBundle.appName,

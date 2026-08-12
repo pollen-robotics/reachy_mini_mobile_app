@@ -19,6 +19,7 @@ describe('derivePhase', () => {
       'releasing',
       'released',
       'reacquiring',
+      'recovering',
       'tearing-down',
       'live',
       'bringing-up',

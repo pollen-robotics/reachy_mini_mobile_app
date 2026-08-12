@@ -39,9 +39,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { chainLifecycle } from '@/features/robot-session/lifecycle-queue';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import {
+  fetchRobotsFromCentral,
+  extractRobotHardwareId,
+  extractRobotId,
+} from '@/features/auth/fetchRobotsFromCentral';
+import {
   mountConversation,
   type ConnectionState,
   type ConversationState,
+  type ConversationBringUpPhase,
   type ConversationConnectionAttempt,
   type ConversationEngineHandle,
   type ConversationToolToastEvent,
@@ -73,7 +79,7 @@ export interface RobotSessionHandle {
   /** Most recent tool-call toast label, or null when dismissed. */
   toolToastLabel: string | null;
   /** Visual intent of the current tool-call toast. `"error"` when the
-   *  last surfaced tool call failed (e.g. a VLM error behind `look`). */
+   *  last surfaced tool call failed (e.g. a camera error behind `look`). */
   toolToastVariant: "info" | "error";
   /** Whether the engine has reached `ready` (or further) at least
    *  once on the current session. Sticky: stays true through
@@ -90,6 +96,13 @@ export interface RobotSessionHandle {
    * so it never bleeds across session attempts.
    */
   connectionAttempt: ConversationConnectionAttempt | null;
+  /**
+   * Sub-phase of the post-handshake bring-up (`wake` / `finalize`),
+   * `null` outside it. Drives the refined caption under the
+   * connecting overlay's "Wake-up" step. See
+   * `ConversationBringUpPhase` for the semantics.
+   */
+  bringUpPhase: ConversationBringUpPhase | null;
   /**
    * Live snapshot of the WebRTC transport used by the audio peer
    * connection: ICE candidate-pair classification (`lan` / `direct`
@@ -150,6 +163,12 @@ export interface RobotSessionHandle {
   /** Re-acquire the WebRTC session after a previous release. Skips
    *  wake-up. Resolves once `startSession` has completed. */
   reacquire: () => Promise<void>;
+  /** In-place recovery after a transport-level fatal on a session
+   *  that had already reached ready. Drives the `recovering` phase
+   *  (compact overlay) while the engine re-runs the bring-up + wake.
+   *  If it fails, the engine lands back on `error` and the host's
+   *  error view takes over. */
+  recover: () => Promise<void>;
   /** Full session teardown (sleep + motors disabled + stopSession +
    *  disconnect). Used by the host before navigating away from the
    *  screen. Resolves once the engine's lifecycle queue has drained. */
@@ -228,11 +247,24 @@ export interface RobotSessionHandle {
 }
 
 interface UseRobotSessionOptions {
-  /** Central peer id of the robot the user picked upstream. */
+  /** Central peer id of the robot the user picked upstream. Used as
+   *  the engine mount key and the initial connect target - but the
+   *  engine re-resolves the live peer id (see `robotHardwareId`) before
+   *  each `startSession`, because this snapshot can go stale. */
   robotId: string;
-  /** Stable daemon-reported id from the selected central entry. Kept
-   *  separate from `robotId`, which is only the signaling peer id. */
-  hardwareId: string | null;
+  /**
+   * Stable hardware id of the picked robot (from the central listing's
+   * `meta.hardware_id`), or `null` for a daemon too old to expose one.
+   * When present, the engine re-resolves the live peer id from central
+   * by matching this id right before each connect, self-healing against
+   * the peer-id rotation that breaks the bare `robotId` snapshot. Also
+   * forwarded to the engine (`getRobotHardwareId`) so realtime session
+   * allocations are attributed to this robot.
+   */
+  robotHardwareId?: string | null;
+  /** Display name of the picked robot. Used by `recover()` to remap
+   *  the dial target when the daemon restarted (fresh peer id). */
+  robotName?: string | null;
   /** HF token, kept on the panel's session storage by upstream
    *  auth hook. Forwarded here so the engine can re-seed if it
    *  gets cleared mid-session. */
@@ -253,22 +285,26 @@ const TOOL_TOAST_MIN_MS = 1500;
 
 export function useRobotSession({
   robotId,
-  hardwareId,
+  robotHardwareId,
+  robotName,
   token,
   audioLevelsTargetRef,
   shouldDeferInitialWakeUp,
 }: UseRobotSessionOptions): RobotSessionHandle {
   const handleRef = useRef<ConversationEngineHandle | null>(null);
-  // Central may enrich the selected entry without changing its signaling
-  // peer id. Keep identity lazy so allocator reconnects see that update
-  // without tearing down the robot session.
-  const hardwareIdRef = useRef(hardwareId);
-  hardwareIdRef.current = hardwareId;
   // Keep the latest host getter in a ref so the engine (mounted once per
   // `robotId`) always reads the current value at bring-up instead of the
   // closure captured on first render.
   const shouldDeferInitialWakeUpRef = useRef(shouldDeferInitialWakeUp);
   shouldDeferInitialWakeUpRef.current = shouldDeferInitialWakeUp;
+  // Token + hardware id are read through refs by the peer-id resolver
+  // below: the engine mounts once per `robotId`, so the resolver closure
+  // must see the CURRENT token / hardware id rather than the values
+  // captured on first render.
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const hardwareIdRef = useRef(robotHardwareId ?? null);
+  hardwareIdRef.current = robotHardwareId ?? null;
   // Used for StrictMode-safe mount: a fast remount could race with
   // the previous engine's teardown if we didn't gate on a per-mount
   // cancel token.
@@ -288,6 +324,8 @@ export function useRobotSession({
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [connectionAttempt, setConnectionAttempt] =
     useState<ConversationConnectionAttempt | null>(null);
+  const [bringUpPhase, setBringUpPhase] =
+    useState<ConversationBringUpPhase | null>(null);
   const [webrtcTransport, setWebrtcTransport] =
     useState<ConversationTransportInfo | null>(null);
   /**
@@ -351,6 +389,28 @@ export function useRobotSession({
         // current first-wake-up decision, not the one at mount time.
         shouldDeferInitialWakeUp: () =>
           shouldDeferInitialWakeUpRef.current?.() ?? false,
+        // Re-resolve the live peer id from central by the robot's stable
+        // hardware id right before each connect. The bare `robotId` we
+        // mounted with is a snapshot that rotates on every relay
+        // reconnect, so dialing it directly is the main reason a
+        // connection would hang. Returns `null` (⇒ keep the captured id)
+        // when we have no hardware id / token or central can't match it.
+        resolvePeerId: async (): Promise<string | null> => {
+          const hwid = hardwareIdRef.current;
+          const tok = tokenRef.current;
+          if (!hwid || !tok) return null;
+          try {
+            const res = await fetchRobotsFromCentral(tok);
+            if (!res.ok) return null;
+            const match = res.robots.find(
+              (r) => extractRobotHardwareId(r) === hwid,
+            );
+            return match ? extractRobotId(match) : null;
+          } catch (err) {
+            console.warn('[session] peer-id re-resolution failed:', err);
+            return null;
+          }
+        },
         // Pass a *getter*, not `audioLevelsTargetRef.current`: the
         // orb DOM may be unmounted/remounted while the engine
         // stays alive (tab switches between Conv ↔ Apps, iframe
@@ -389,6 +449,10 @@ export function useRobotSession({
         onConnectionAttempt: (info) => {
           if (cancelToken.cancelled) return;
           setConnectionAttempt(info);
+        },
+        onBringUpPhase: (phase) => {
+          if (cancelToken.cancelled) return;
+          setBringUpPhase(phase);
         },
         onDaemonVersionChange: (version) => {
           if (cancelToken.cancelled) return;
@@ -498,6 +562,25 @@ export function useRobotSession({
       setPhaseHint(null);
     }
   }, []);
+
+  const recover = useCallback(async (): Promise<void> => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    setPhaseHint('recovering');
+    try {
+      await chainLifecycle(async () => {
+        // Pass the host's robot identity: the engine's own selected id
+        // is nulled by the unsolicited-drop cleanup, and the id itself
+        // may be dead (daemon restart ⇒ fresh central peer id), so the
+        // engine re-resolves the dial target - by name if needed.
+        await handle.recoverSession({ robotId, robotName });
+      });
+    } finally {
+      // Back to engine-driven phase: `live` on success, `error` when
+      // the recovery attempt failed (the engine re-ran onFatalError).
+      setPhaseHint(null);
+    }
+  }, [robotId, robotName]);
 
   const tearDown = useCallback(async (): Promise<void> => {
     const handle = handleRef.current;
@@ -609,6 +692,7 @@ export function useRobotSession({
     hasReachedReady,
     daemonVersion,
     connectionAttempt,
+    bringUpPhase,
     webrtcTransport,
     startConversation,
     stopConversation,
@@ -618,6 +702,7 @@ export function useRobotSession({
     requestStop,
     releaseForHandoff,
     reacquire,
+    recover,
     tearDown,
     getSpeakerVolume,
     setSpeakerVolume,

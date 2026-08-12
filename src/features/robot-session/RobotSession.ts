@@ -25,8 +25,9 @@
  *                                       bitrate. Started/stopped at
  *                                       the session-pc lifecycle
  *                                       boundaries below.
- *   - `start`                        — run `startRobotSession()`
- *                                       with retry + expectedStop wrap.
+ *   - `start`                        — re-resolve the live peer id,
+ *                                       then run a single guarded
+ *                                       `startRobotSession()` attempt.
  *   - `wakeUp` / `sleepAndDisable`   — physical robot operations,
  *                                       hard-bounded by JS timeouts.
  *   - `stop`                         — `expectedStop(stopSession())`.
@@ -69,13 +70,24 @@ import type { ConversationConnectionAttempt } from '@/features/conversation/engi
 export type MotorMode = 'enabled' | 'disabled' | 'gravity_compensation';
 
 export interface SessionStartOptions {
-  /** Forwarded to the retry loop's progress callback so the host can
-   *  show "Reconnecting… (2 of 2)" during the inter-attempt gap. */
+  /** Forwarded to `startRobotSession`'s progress callback. Fires once
+   *  when the attempt starts and once (null) when it settles; the host
+   *  uses it to know we're in the "Session" bring-up phase. */
   onAttempt?: (info: ConversationConnectionAttempt | null) => void;
-  /** Bail mid-loop if this returns `true`. The host wires it to its
-   *  own unmount / leaving signal. */
+  /** Bail before the attempt if this returns `true`. The host wires it
+   *  to its own unmount / leaving signal. */
   isCancelled?: () => boolean;
 }
+
+/**
+ * Re-resolves the CURRENT central peer id for this robot, or `null`
+ * when it can't (no stable id available, central unreachable, no
+ * match). The peer id rotates on every relay reconnect, so a value
+ * captured earlier (BLE setup, a stale robot list) may be dead by the
+ * time we `startSession()`. Wired by the engine (`setResolvePeerId`)
+ * from the HF token + the robot's stable `hardware_id`.
+ */
+export type ResolvePeerId = () => Promise<string | null>;
 
 export class RobotSession {
   /**
@@ -112,6 +124,7 @@ export class RobotSession {
   private knownRobots: RobotInfo[] = [];
   private established = false;
   private lastMotorMode: MotorMode | null = null;
+  private resolvePeerId: ResolvePeerId | null = null;
 
   // ─── SDK ref management ─────────────────────────────────────────
 
@@ -152,13 +165,26 @@ export class RobotSession {
   }
 
   private startTransportMonitor(): void {
-    const pc = this.robot?._pc;
+    const pc = this.robot?.peerConnection;
     if (!pc) return;
     this.transportMonitor.start(pc, this.transportListener);
   }
 
   private stopTransportMonitor(): void {
     this.transportMonitor.stop();
+  }
+
+  /**
+   * Force the monitor's published kind back to `'checking'` without
+   * waiting for the next `getStats()` tick. Used by the engine on
+   * deterministic degradation signals (`iceStateChange ===
+   * 'disconnected' | 'failed'`, `networkOffline`): those are
+   * reliable, whereas `getStats()` during a degrading link is
+   * browser-specific. Idempotent / no-op when the monitor isn't
+   * running.
+   */
+  markTransportChecking(): void {
+    this.transportMonitor.markChecking();
   }
 
   getRobot(): ReachyMiniInstance | null {
@@ -173,6 +199,15 @@ export class RobotSession {
 
   setSelectedRobotId(id: string | null): void {
     this.selectedRobotId = id;
+  }
+
+  /**
+   * Register (or clear, by passing `null`) the callback that
+   * re-resolves the live peer id before each `start()` / `reacquire()`.
+   * Wired once by the engine. See `ResolvePeerId`.
+   */
+  setResolvePeerId(resolve: ResolvePeerId | null): void {
+    this.resolvePeerId = resolve;
   }
 
   getKnownRobots(): readonly RobotInfo[] {
@@ -239,14 +274,19 @@ export class RobotSession {
   }
 
   /**
-   * Bring up the WebRTC session against `selectedRobotId`. Wraps
-   * `startRobotSession()` (which handles the libnice retry loop +
-   * per-attempt timeout). Caller is responsible for any FSM
-   * transition (`starting` / `ready` / error reset).
+   * Bring up the WebRTC session against `selectedRobotId`.
    *
-   * On success, arms the transport monitor against the freshly-up
-   * `_pc` so the host's listener starts receiving updates as soon as
-   * ICE settles. On failure the monitor stays idle.
+   * Re-resolves the CURRENT peer id first (via `resolvePeerId`, if
+   * wired) so we never dial a stale producer: the robot's central peer
+   * id rotates on every relay reconnect, so the id captured upstream
+   * (BLE setup, robot-list snapshot) may already be dead. A fresh value
+   * replaces `selectedRobotId`; a `null` (no stable id, central
+   * unreachable, no match) keeps the captured one as a best-effort
+   * fallback. Then runs a single guarded `startRobotSession()` attempt.
+   *
+   * Caller is responsible for any FSM transition (`starting` / `ready`
+   * / error reset). On success, arms the transport monitor against the
+   * freshly-up `_pc`; on failure the monitor stays idle.
    */
   async start(opts: SessionStartOptions = {}): Promise<StartRobotSessionResult> {
     if (!this.robot || !this.selectedRobotId) {
@@ -255,6 +295,7 @@ export class RobotSession {
         reason: new Error('Robot or peer id missing'),
       };
     }
+    await this.refreshSelectedPeerId();
     const result = await startRobotSession({
       robot: this.robot,
       peerId: this.selectedRobotId,
@@ -267,8 +308,34 @@ export class RobotSession {
   }
 
   /**
-   * Wake the robot (motors + head/antennas trajectory). Hard-bounded
-   * by the helper's JS timeout. Never throws.
+   * Refresh `selectedRobotId` with the live peer id from central.
+   * No-op when no resolver is wired or it returns `null` (keeps the
+   * captured id). Never throws - a failed re-resolution just falls
+   * back to whatever we already had.
+   */
+  private async refreshSelectedPeerId(): Promise<void> {
+    if (!this.resolvePeerId) return;
+    try {
+      const fresh = await this.resolvePeerId();
+      if (fresh && fresh !== this.selectedRobotId) {
+        console.log(
+          `[robot-session] re-resolved peer id ${this.selectedRobotId} -> ${fresh}`,
+        );
+        this.selectedRobotId = fresh;
+      }
+    } catch (err) {
+      console.warn(
+        '[robot-session] peer-id re-resolution failed, using captured id:',
+        err,
+      );
+    }
+  }
+
+  /**
+   * Make sure the robot is awake (idempotent, via the SDK's
+   * `ensureAwake()`): no-op when already under position control,
+   * wake trajectory awaited otherwise. Hard-bounded by the helper's
+   * JS timeout. Never throws.
    */
   async wakeUp(): Promise<void> {
     if (!this.robot) return;
@@ -345,9 +412,9 @@ export class RobotSession {
 
   /**
    * Bring the session back after a `release()`. Reconnects the SDK
-   * if dropped, then runs `start()` with the same retry/timeout
-   * logic as the initial bring-up (so reacquire benefits from
-   * libnice crash recovery for free).
+   * if dropped, then runs `start()` - so reacquire also re-resolves
+   * the live peer id before dialing (self-heals against the peer-id
+   * rotation that a long iframe handoff can trigger).
    *
    * Idempotent: returns `{ ok: true }` if already established.
    * Caller is responsible for FSM transitions (`starting` / `ready`).

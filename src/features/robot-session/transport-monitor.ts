@@ -191,9 +191,61 @@ export class TransportMonitor {
     this.prevSampleTs = 0;
   }
 
+  /**
+   * Force the published transport kind back to `'checking'` without
+   * waiting for the next `getStats()` tick to confirm it. Intended
+   * for the engine to call when it observes an external degradation
+   * signal (`iceStateChange === 'disconnected' | 'failed'`,
+   * `networkOffline`) - those signals are deterministic, whereas
+   * `getStats()` behaviour during a degrading link is browser-
+   * specific (some keep the candidate-pair as `succeeded` for a
+   * while, some drop it immediately, Safari sometimes returns
+   * empty stats). Forcing `checking` gives the UI a stable
+   * "we're not actually streaming right now" signal.
+   *
+   * Side-effects:
+   *   - Resets `lastBps` / the RTT window so the next published
+   *     value isn't "stuck at 4 Mbps / 3 bars" while the link is
+   *     dying.
+   *   - Resets the byte-counter snapshot so the bitrate measurement
+   *     restarts cleanly from the next tick (otherwise we'd diff
+   *     against stale, pre-degradation counters).
+   *   - Bypasses the dedup so the listener fires even if we were
+   *     already on `'checking'`.
+   *
+   * Safe to call when not started (no listener / no pc) - it's a
+   * no-op in that case. Idempotent.
+   */
+  markChecking(): void {
+    if (!this.listener) return;
+    this.lastKind = 'checking';
+    this.lastBps = null;
+    this.lastRemoteIp = null;
+    this.lastLevel = linkQualityLevel(null, 'checking');
+    this.rttWindowMs = [];
+    this.prevBytesSent = -1;
+    this.prevBytesRecv = -1;
+    this.prevSampleTs = 0;
+    try {
+      this.listener({ kind: 'checking', bps: null, remoteIp: null, rttMs: null });
+    } catch (err) {
+      console.warn('[transport] onTransportChange listener threw:', err);
+    }
+  }
+
   private async tick(): Promise<void> {
     const pc = this.pc;
     if (!pc) return;
+    // `getStats()` on a closed PC rejects with `InvalidStateError` on
+    // some engines (Safari, older Chromium) and resolves with empty
+    // stats on others. Either way it's noise: the host always calls
+    // `stop()` on teardown, but ticks already queued before that can
+    // still fire one last time - and now that the SDK retains the
+    // PC briefly across the ICE grace window, the race is slightly
+    // wider. Bail early when we know the underlying PC is dead.
+    if (pc.connectionState === 'closed' || pc.signalingState === 'closed') {
+      return;
+    }
     try {
       const stats = await pc.getStats();
       const bps = this.sampleBitrate(stats);

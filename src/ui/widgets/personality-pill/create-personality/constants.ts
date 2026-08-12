@@ -15,8 +15,8 @@ export const TAGLINE_MAX = 60;
 export const VIBE_MAX = 240;
 
 /** Shared look for the primary CTA (outlined primary, comfortable tap
- *  target). Reused so "Create & use" and the edit row's "Save" stay
- *  byte-identical. */
+ *  target). Reused so every action-plate button - the hero's "Bring it to
+ *  life", "Create & use", the edit row's Save/Delete - stays byte-identical. */
 export const ctaSx = {
   textTransform: 'none',
   fontSize: TYPO.md,
@@ -27,22 +27,25 @@ export const ctaSx = {
   borderRadius: `${RADIUS.md}px`,
 } as const;
 
-/** Shared look for the generation buttons (Generate / Randomize), both
- *  outlined primary so they read as a matched pair. */
-export const genBtnSx = {
+/**
+ * "Surprise me" idea button, sitting in the vibe card's footer.
+ *
+ * It used to be a label-less die tucked inside the input as an end
+ * adornment, which made the one affordance that unblocks an empty screen
+ * the least legible thing on it (and gave no hint that tapping it
+ * REPLACES whatever you typed). Now it's a compact labelled text button:
+ * borderless and primary-tinted so it stays subordinate to the plate's CTA,
+ * but readable without a hover.
+ */
+export const ideaBtnSx = {
   textTransform: 'none',
   fontSize: TYPO.sm,
   fontWeight: FONT_WEIGHT.semibold,
-  borderRadius: `${RADIUS.md}px`,
-  borderWidth: 1.5,
-  '&:hover': { borderWidth: 1.5 },
-} as const;
-
-/** Label-less "Randomize" die that lives INSIDE the vibe input (end
- *  adornment): borderless, primary-tinted. */
-export const diceBtnSx = {
   color: 'primary.main',
-  p: 0.75,
+  px: 0.75,
+  py: 0.25,
+  minWidth: 0,
+  borderRadius: `${RADIUS.sm}px`,
   '&:hover': {
     bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.08),
   },

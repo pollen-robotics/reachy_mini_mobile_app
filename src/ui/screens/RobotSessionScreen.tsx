@@ -58,7 +58,8 @@
  * on tab-switch because it's the only piece whose silence-while-
  * background is actually surprising / wasteful.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import {
   BottomNavigation,
   BottomNavigationAction,
@@ -68,6 +69,7 @@ import {
   IconButton,
   Stack,
   Typography,
+  alpha,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
@@ -92,15 +94,20 @@ import { useChangePersonaAnimation } from '@/features/personalities/useChangePer
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
-import AppsTabView from '@/ui/panels/apps-list/AppsTabView';
+import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
+import {
+  ONBOARDING_MOVES_DATASET,
+  ONBOARDING_PRELOAD_TIMEOUT_MS,
+} from './session/first-wake-up/constants';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import LeavingView from './session/LeavingView';
+import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
-import { useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
+import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -160,14 +167,35 @@ interface ConnectedSessionProps {
 }
 
 /**
- * Master switch for the first wake-up wizard. TEMPORARY: kept OFF for
- * now while the flow is still being polished. When `false`, the wizard
- * never mounts AND the bring-up wakes the robot itself as usual (the
- * `shouldDeferInitialWakeUp` gate stays closed because `wakeUpDone`
- * starts `true`), so it stays disabled on the first connection and on
- * every reconnect. Flip to `true` to re-enable the wizard.
+ * Master switch for the first wake-up wizard. When `false`, the wizard
+ * never mounts AND the bring-up wakes the robot itself as usual, on the
+ * first connection and on every reconnect.
  */
-const FIRST_WAKE_UP_WIZARD_ENABLED = false;
+const FIRST_WAKE_UP_WIZARD_ENABLED = true;
+
+/**
+ * Dev-only escape hatch. When `true` (the default in dev) the wizard runs
+ * on EVERY connection, ignoring the robot's persisted "completed" flag, so
+ * we always exercise the flow while iterating. Flip to `false` to respect
+ * the flag like production (wizard shows once, then never again until the
+ * robot's flag is reset). No effect in production builds - there the
+ * persisted robot-side flag always governs.
+ *
+ * "Relaunches on every Reachy startup" falls out of this naturally: the
+ * flag lives on the robot, so it's the same first-connection decision each
+ * time the daemon (re)starts.
+ */
+const FORCE_FIRST_WAKE_UP_IN_DEV = true;
+
+/**
+ * Wizard gate resolution.
+ *  - `pending`: we don't yet know whether to show it (querying the robot's
+ *    persisted flag). We defer the bring-up wake meanwhile so the robot
+ *    stays asleep for a clean wizard entrance.
+ *  - `show`   : mount the wizard; it owns the first `wakeUp()`.
+ *  - `done`   : skip / finished - wake the robot normally, never mount.
+ */
+type WizardGate = 'pending' | 'show' | 'done';
 
 /**
  * Inner component split from the export so we can call
@@ -187,31 +215,161 @@ function ConnectedSession({
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
 
-  // First wake-up wizard. TEMPORARY: gated behind
-  // `FIRST_WAKE_UP_WIZARD_ENABLED` (currently OFF). When disabled we seed
-  // `wakeUpDone` to `true` so the wizard never mounts - on the first
-  // connection AND on every reconnect - and the bring-up wakes the robot
-  // itself. When re-enabled it starts `false` and, with no persistence
-  // yet, triggers on EVERY connection until the daemon/SDK
-  // `get/set_first_wake_up` flag lands.
+  // First wake-up wizard gate. The robot persists a "completed" flag, so the
+  // wizard only ever shows once per robot (until reset) - we don't re-run it
+  // on every connection. In dev, `FORCE_FIRST_WAKE_UP_IN_DEV` overrides that
+  // and shows it every time so we can iterate.
   //
-  // Declared BEFORE `useRobotSession` so we can hand the engine a
-  // first-wake-up gate: while the wizard is still pending we defer the
-  // bring-up wake-up to it (its motor step plays the wake trajectory),
-  // and once it's done (or the wizard is disabled) we wake on connect.
-  const [wakeUpDone, setWakeUpDone] = useState(!FIRST_WAKE_UP_WIZARD_ENABLED);
+  // Seed:
+  //  - wizard disabled          → `done` (never mount, wake on connect).
+  //  - dev force                → `show` (mount every connection).
+  //  - otherwise                → `pending` (resolve from the robot's flag
+  //                               once we're live, see the effect below).
+  //
+  // Declared BEFORE `useRobotSession` so the engine's bring-up gate can read
+  // it: while `pending`/`show` we defer the initial wake so the wizard's
+  // motor step owns the first `wakeUp()`; on `done` we wake on connect.
+  const forceWizard =
+    import.meta.env.DEV && FORCE_FIRST_WAKE_UP_IN_DEV && FIRST_WAKE_UP_WIZARD_ENABLED;
+  const [wizardGate, setWizardGate] = useState<WizardGate>(() => {
+    if (!FIRST_WAKE_UP_WIZARD_ENABLED) return 'done';
+    return forceWizard ? 'show' : 'pending';
+  });
+
+  // True while the on-connect wake-up animation is playing (wizard skipped):
+  // greys out the End-session button so the user can't tear the session down
+  // mid-wake. Cleared when `wakeUp()` resolves (motion done) or times out.
+  const [waking, setWaking] = useState(false);
 
   const session = useRobotSession({
     robotId,
-    hardwareId: robotHardwareId,
+    robotHardwareId,
+    robotName,
     token,
     audioLevelsTargetRef: orbRef,
-    shouldDeferInitialWakeUp: () => !wakeUpDone,
+    shouldDeferInitialWakeUp: () => wizardGate !== 'done',
   });
 
   // Latest published daemon version (GitHub). Fail-open: `null` until it
-  // resolves / when offline, which keeps `DaemonUpdateGate` dormant.
+  // resolves / when offline, which keeps `DaemonUpdateGate` dormant and
+  // `daemonOutdated` false.
   const latestDaemonVersion = useLatestDaemonVersion();
+
+  // Same verdict the mandatory update gate renders on: is the connected
+  // daemon behind the latest public release? Used below to hold the wizard
+  // gate closed until an outdated daemon has been updated. Unknown versions
+  // (offline / pre-update) read as not-outdated (fail-open).
+  const daemonOutdated = isDaemonOutdated(session.daemonVersion, latestDaemonVersion);
+
+  // Resolve the gate once the session is live: query the robot's persisted
+  // first-wake-up flag and either show the wizard or skip it. On skip we
+  // wake the robot ourselves, since we deferred the bring-up wake while the
+  // flag was still unknown. Fail-open: an old daemon / closed channel
+  // (`null`) skips the wizard. Dev-force / disabled short-circuit the seed
+  // above, so this only runs for the real production gating.
+  useEffect(() => {
+    if (wizardGate !== 'pending') return;
+    if (session.phase !== 'live') return;
+    // Wait out the blocking daemon-update gate first. An outdated daemon
+    // predates `get_first_wake_up`, so querying it now would just time out
+    // (fail-open null) and we'd wrongly skip the wizard + wake the robot
+    // before the user even updates. Once they update and the session
+    // reacquires, `session.daemonVersion` changes, `daemonOutdated` flips
+    // false and this re-runs against a current daemon. Dev branch builds can
+    // read "outdated" vs the public release yet still support the command,
+    // so we never block them (mirrors the update gate's own DEV bypass).
+    if (!import.meta.env.DEV && daemonOutdated) return;
+    let cancelled = false;
+    void (async () => {
+      const robot = session.getRobot();
+      const completed = robot ? await robot.getFirstWakeUp() : null;
+      if (cancelled) return;
+      if (completed === false) {
+        setWizardGate('show');
+      } else {
+        setWizardGate('done');
+        if (robot) {
+          // Grey out End-session for the duration of the wake animation.
+          // Bounded by timeoutMs so a missed motion-done edge can't trap it.
+          setWaking(true);
+          void robot
+            .wakeUp({ timeoutMs: 8000 })
+            .catch(() => {})
+            .finally(() => {
+              if (!cancelled) setWaking(false);
+            });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wizardGate, session, daemonOutdated]);
+
+  // Optimistic display name. `robotName` comes from the central listing we
+  // booted the session from, which is fixed for the session's lifetime. The
+  // daemon applies a rename live (status + central relay + mDNS, no restart),
+  // but our in-memory listing won't refresh on its own - so we override the
+  // name locally the moment a rename lands, so the topbar identity + settings
+  // reflect it immediately instead of only on the next app launch.
+  const [displayName, setDisplayName] = useState(robotName);
+  const handleRenameRobot = useCallback(
+    async (name: string): Promise<string | null> => {
+      const robot = session.getRobot();
+      if (!robot) return null;
+      const saved = await robot.setRobotName(name);
+      if (saved) setDisplayName(saved);
+      return saved;
+    },
+    [session],
+  );
+
+  // The wizard will run: warm the robot's HF cache for the onboarding moves
+  // dataset now, so the motor step's `wake-mini-up` (first move played,
+  // ~2 steps away) hits a local cache instead of blocking on a download.
+  // The daemon deliberately no longer preloads app-specific datasets at
+  // startup - this is the app-side half of that contract. Completion is
+  // TRACKED (not fire-and-forget): the wizard holds its start action on
+  // `movesReady` so the first emote never races a cold-cache download.
+  // Fail-open on error/timeout - a failed/absent preload only costs latency
+  // (`play_recorded_move` downloads on demand). Ref-guarded because the
+  // session handle is a fresh object every render.
+  const preloadedOnboardingRef = useRef(false);
+  const [onboardingMovesReady, setOnboardingMovesReady] = useState(false);
+  useEffect(() => {
+    if (preloadedOnboardingRef.current) return;
+    if (wizardGate !== 'show' || session.phase !== 'live') return;
+    const robot = session.getRobot();
+    if (!robot) return;
+    preloadedOnboardingRef.current = true;
+    if (robot.preloadDatasetAndWait) {
+      void robot
+        .preloadDatasetAndWait(ONBOARDING_MOVES_DATASET, {
+          timeoutMs: ONBOARDING_PRELOAD_TIMEOUT_MS,
+        })
+        // Rejections (channel closed, session teardown) and error/timeout
+        // resolutions all unlock the wizard the same way: lazy download
+        // still works at play time, just slower.
+        .catch(() => null)
+        .then(() => setOnboardingMovesReady(true));
+    } else if (robot.preloadDataset) {
+      // Older SDK without the awaited variant: fire-and-forget like before,
+      // and don't hold the wizard on a signal that will never come.
+      robot.preloadDataset(ONBOARDING_MOVES_DATASET);
+      setOnboardingMovesReady(true);
+    } else {
+      setOnboardingMovesReady(true);
+    }
+  }, [wizardGate, session]);
+
+  // Wizard finished: close the gate and persist the completion flag on the
+  // robot so it never shows again (dev-force ignores the flag on the next
+  // run, but we still store it - production respects it). Fire-and-forget:
+  // a failed write must not trap the user in the wizard.
+  const handleWizardFinish = useCallback(() => {
+    setWizardGate('done');
+    void session.getRobot()?.setFirstWakeUp(true);
+  }, [session]);
 
   // Remember which personality this robot is wearing, keyed by its
   // stable hardware id, so the discovery list ("Your Reachies") can
@@ -239,6 +397,10 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // True while the conversation tab has a persona authoring form open. The
+  // bottom tab bar is pulled for the duration - see the `BottomNavigation`
+  // below for why.
+  const [authoringPersona, setAuthoringPersona] = useState(false);
   // The conv tab is kept mounted (just `display: none`d) so its orb
   // audio refs survive a tab switch, which makes switching TO it
   // instant. The Apps tab used to be torn down and remounted on every
@@ -268,8 +430,18 @@ function ConnectedSession({
     },
     []
   );
+  // Imperative handle into the Apps tab so the shell can pop its
+  // sub-navigation (store / drill-down) back to the launcher.
+  const appsViewRef = useRef<AppsTabViewHandle | null>(null);
   const handleTabChange = (value: Tab): void => {
-    if (leaving || value === tab) return;
+    if (leaving) return;
+    if (value === tab) {
+      // Re-tap on the active Apps tab = pop back to "Your apps"
+      // (standard mobile tab-bar gesture). No spinner: it's an
+      // in-tab reset, not a tab switch.
+      if (value === 'apps') appsViewRef.current?.popToRoot();
+      return;
+    }
     if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
     setTabSpinner(true);
     setTab(value);
@@ -404,10 +576,46 @@ function ConnectedSession({
   const showConnectingOverlay =
     !leaving && !isError && !session.hasReachedReady && session.phase === 'bringing-up';
 
-  // Reacquiring overlay: fires every time we come back from an
-  // iframe handoff. Short-lived (typically <2 s) and the panel
-  // stays mounted underneath so the orb resumes smoothly.
-  const showReacquiringOverlay = !leaving && !isError && session.phase === 'reacquiring';
+  // Recovering overlay: an in-place bring-up retry after a
+  // transport-level fatal on an established session (see the
+  // auto-recover effect below). Compact view, full-screen cover -
+  // the full connecting pipeline stays reserved for the initial
+  // bring-up.
+  //
+  // Deliberately NOT shown for the `reacquiring` phase: that one fires
+  // on every iframe-app close (a planned, short-lived handoff, not a
+  // connection loss), where a full-screen "Reconnecting" reads as a
+  // failure. During reacquire the normal UI stays up and the identity
+  // chip's pulsing "Reconnecting" badge is the only indicator.
+  const showRecoveringOverlay = !leaving && session.phase === 'recovering';
+
+  // One-shot in-place recovery. When a session that had already
+  // reached ready dies (SDK re-dial gave up, data-channel fatal,
+  // failed reacquire), retry the bring-up under the compact overlay
+  // INSTEAD of dumping the user straight onto the fatal error view -
+  // whose only exit remounts everything and replays the full
+  // connecting pipeline. One attempt per incident: a second
+  // consecutive fatal falls through to `SessionErrorView` as before.
+  // The latch re-arms once the session is healthy again, so the NEXT
+  // incident gets its own automatic attempt.
+  const autoRecoverTriedRef = useRef(false);
+  useEffect(() => {
+    if (session.phase === 'live') {
+      autoRecoverTriedRef.current = false;
+      return;
+    }
+    if (session.phase !== 'error' || leaving) return;
+    // Initial bring-up failures keep the full error UX: there is no
+    // "known good" state to restore, the pipeline narrative is honest.
+    if (!session.hasReachedReady) return;
+    // While an iframe app owns the slot, the close-path reacquire is
+    // the recovery mechanism - don't fight it from underneath.
+    if (openedApp !== null) return;
+    if (autoRecoverTriedRef.current) return;
+    autoRecoverTriedRef.current = true;
+    console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
+    void session.recover();
+  }, [session, leaving, openedApp]);
 
   // Keep-screen-on rule. We only ask the OS to suppress the idle
   // timer while the user is engaged with the robot in a way that
@@ -527,9 +735,15 @@ function ConnectedSession({
           sx={{
             alignItems: 'center',
             flexShrink: 0,
-            ml: -2,
-            mr: -3,
-            px: 2,
+            // True full-bleed: cancel the column's `px: 3` on BOTH
+            // sides so the bottom divider reaches the screen edges
+            // (an asymmetric `ml: -2` used to leave an 8px unbordered
+            // strip on the left). `pl: 3` restores the 24px content
+            // inset; `pr: 2` keeps the action cluster's tighter right
+            // rhythm (the power button overshoots via `edge="end"`).
+            mx: -3,
+            pl: 3,
+            pr: 2,
             pb: 1.5,
             pt: 'calc(var(--inset-top, env(safe-area-inset-top, 0px)) + 10px)',
             minHeight: 68,
@@ -545,7 +759,7 @@ function ConnectedSession({
           }}
         >
           <IdentityChipBar
-            robotName={robotName}
+            robotName={displayName}
             transport={robotTransport}
             linkKind={session.webrtcTransport?.kind ?? null}
             linkRttMs={session.webrtcTransport?.rttMs ?? null}
@@ -611,7 +825,7 @@ function ConnectedSession({
               aria-label="End session"
               onClick={handleLeave}
               color="primary"
-              disabled={leaving}
+              disabled={leaving || waking}
               // Pull the glyph toward the screen edge with a negative
               // MARGIN (not `edge="end"`, which uses -12px, nor a padding
               // override which would oval the hover). `mr: -1` (-8px)
@@ -679,6 +893,7 @@ function ConnectedSession({
                   session={session}
                   orbRef={orbRef}
                   active={tab === 'conv'}
+                  onAuthoringChange={setAuthoringPersona}
                 />
               </Box>
             </Box>
@@ -693,18 +908,8 @@ function ConnectedSession({
                 flexDirection: 'column',
               }}
             >
-              <AppsTabView onOpen={setOpenedApp} />
+              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} />
             </Box>
-          )}
-
-          {/* Reacquiring overlay stays scoped to the conversation column
-              (above the panel, below the header / bottom nav) - the
-              user is briefly back on the conv tab and we want them to
-              see the chrome they're returning to. */}
-          {showReacquiringOverlay && tab === 'conv' && (
-            <Overlay>
-              <ConnectingView state="connecting" />
-            </Overlay>
           )}
 
           {/* Tab-switch cover: a centered spinner shown for the
@@ -714,7 +919,7 @@ function ConnectedSession({
               tab hydrates underneath it without flashing a half-built
               frame. Fades in/out for a smooth transition, and uses a
               high local `zIndex` (10) so it covers the Apps tab's
-              sticky search bar (`zIndex: 2`), which would otherwise
+              sticky header bar (`zIndex: 3`), which would otherwise
               poke through the cover. */}
           <Fade in={tabSpinner} timeout={{ enter: 0, exit: 350 }} unmountOnExit>
             <Box
@@ -751,6 +956,16 @@ function ConnectedSession({
           sx={theme => ({
             flexShrink: 0,
             mx: -3,
+            // Pulled while a persona authoring form is up, for the same reason
+            // the settings sheet covers this bar: a focused task with unsaved
+            // work owns the whole screen. Leaving it would put "Apps" - a
+            // half-the-screen-wide target - directly under the form's CTA, and
+            // tapping it runs the conv panel's inactive-tab teardown, which
+            // drops the form and every field the user typed with no
+            // confirmation and no draft kept. The form carries its own way out
+            // (the band's "✕", the hero's own close, the generation screen's
+            // "Cancel"), so nobody gets trapped here.
+            display: authoringPersona ? 'none' : 'flex',
             // BottomNavigation sizing on iPhone X+ : the bar must be
             // tall enough to host BOTH the comfortable 68 px tap row
             // AND the iOS home-indicator safe-area below it, AND each
@@ -822,26 +1037,26 @@ function ConnectedSession({
               paddingBottom: 0.75,
               gap: 0.5,
               backgroundColor: 'transparent',
+              // Icon glyph in primary in BOTH states (MUI's default is
+              // text.secondary when inactive): both tabs read as equally
+              // "alive" actions. Active-tab identification falls to the
+              // paper fill below + the label weight bump - the colour is
+              // no longer part of that contract. The labels keep their
+              // own forced text.secondary, so this only tints the icons.
+              color: theme.palette.primary.main,
               transition: theme.transitions.create(['background-color', 'box-shadow'], {
                 duration: 180,
                 easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
               }),
-              // Selected state. We keep MUI's default colour rules
-              // for the icon (`text.secondary` inactive,
-              // `primary.main` active) and swap the bg to
-              // `background.paper` so the active tab pops against
-              // the bar's `background.default` grey backdrop. Using
-              // a palette token (rather than a hard `#fff`) means
-              // the contrast holds in both modes: in light mode the
-              // active tab reads as a paper card on a grey bar; in
-              // dark mode it's a slightly lighter dark surface on a
-              // darker bar - same visual hierarchy, both palettes.
-              // No outline: the paper fill + the primary-tinted
-              // icon are enough to identify the active tab, and an
-              // outline added visual noise that competed with the
-              // divider lines between siblings.
+              // Selected state: the whole action gets a soft primary
+              // wash. With both tabs fully primary-tinted (icon +
+              // label), colour alone can't identify the active tab, so
+              // the tinted fill carries it - the full-slot version of
+              // the M3 indicator pill. Alpha-based so it composes over
+              // the bar's `background.default` in both light and dark
+              // modes.
               '&.Mui-selected': {
-                backgroundColor: theme.palette.background.paper,
+                backgroundColor: alpha(theme.palette.primary.main, 0.08),
               },
             },
             // Light vertical divider between adjacent actions.
@@ -853,26 +1068,21 @@ function ConnectedSession({
             '& .MuiBottomNavigationAction-root:not(:last-of-type)': {
               boxShadow: `inset -1px 0 0 0 ${theme.palette.divider}`,
             },
-            // Label colour. We deliberately keep the label in
-            // `text.secondary` (MUI's default) - the icon glyph
-            // carries the brand colour, the label stays neutral
-            // and supportive so the bar reads as a hierarchy
-            // (icon = identity, label = wayfinding) rather than
-            // a wall of primary text. The selected-state cue is
-            // the soft fill on the action button + the slight
-            // weight bump below.
+            // Label colour: muted on the INACTIVE tab so the active
+            // one (primary + paper fill + weight bump) is instantly
+            // readable at a glance.
             '& .MuiBottomNavigationAction-label': {
               fontSize: TYPO.xs,
               fontWeight: FONT_WEIGHT.medium,
               color: `${theme.palette.text.secondary} !important`,
             },
-            // Selected = same colour, heavier weight. We pin the
-            // size so the bar doesn't twitch (MUI defaults bump
-            // the font size on selection).
+            // Selected = primary, heavier weight. We pin the size so
+            // the bar doesn't twitch (MUI defaults bump the font
+            // size on selection).
             '& .MuiBottomNavigationAction-label.Mui-selected': {
               fontSize: TYPO.xs,
               fontWeight: FONT_WEIGHT.semibold,
-              color: `${theme.palette.text.secondary} !important`,
+              color: `${theme.palette.primary.main} !important`,
             },
             // Sizing applies to both MUI icons (`MuiSvgIcon-root`)
             // and native `<svg>` elements - the latter is what
@@ -956,6 +1166,13 @@ function ConnectedSession({
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
                 conversationLive={session.conversationState !== 'idle'}
+                robotName={displayName}
+                renameRobot={handleRenameRobot}
+                signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
+                onSignedOutRobot={() => {
+                  setSettingsOpen(false);
+                  handleLeave();
+                }}
               />
             )}
           </Box>
@@ -967,7 +1184,8 @@ function ConnectedSession({
             hfToken={token}
             hfUsername={username}
             robotPeerId={robotId}
-            robotName={robotName}
+            robotHardwareId={robotHardwareId}
+            robotName={displayName}
             transport={robotTransport}
             sessionPhase={session.phase}
             onClose={() => setOpenedApp(null)}
@@ -985,7 +1203,22 @@ function ConnectedSession({
             <ConnectingView
               state={session.connectionState}
               connectionAttempt={session.connectionAttempt}
+              bringUpPhase={session.bringUpPhase}
             />
+          </FullScreenTransition>
+        )}
+        {/* Full-screen reconnect transition: covers EVERYTHING (top
+            bar, body, bottom nav) while the session recovers in place
+            after a transport fatal. Full-bleed on purpose: a partial
+            overlay left interactive chrome (tabs, settings) around a
+            session that can't serve any of it yet, which read as
+            broken. The view itself stays compact (spinner + one line);
+            the full connecting pipeline remains reserved for the
+            initial bring-up. Iframe-handoff reacquires do NOT surface
+            here (see `showRecoveringOverlay`). */}
+        {showRecoveringOverlay && (
+          <FullScreenTransition>
+            <ReconnectingView />
           </FullScreenTransition>
         )}
         {/* Full-screen leaving transition: covers EVERYTHING while the
@@ -1008,7 +1241,22 @@ function ConnectedSession({
             its primary CTA. */}
         {isError && (
           <FullScreenTransition>
-            <SessionErrorView message={session.errorMessage} onBack={handleLeave} />
+            <SessionErrorView
+              message={session.errorMessage}
+              onBack={handleLeave}
+              // In-place retry, only when there was a working session to
+              // restore (same gate as the auto-recover effect). Initial
+              // bring-up failures keep Back as the single exit: with no
+              // known-good state, "try again" would just replay the same
+              // failure without new information.
+              onRetry={
+                session.hasReachedReady
+                  ? () => {
+                      void session.recover();
+                    }
+                  : undefined
+              }
+            />
           </FullScreenTransition>
         )}
 
@@ -1024,38 +1272,28 @@ function ConnectedSession({
           />
         )}
 
-        {/* First wake-up wizard. Shown once the session is live, on top of
-            the conversation UI but BELOW the daemon update gate (zIndex
-            1380 vs 1400) so a mandatory update still wins. TEMPORARY: it
-            re-triggers on every connection until the persisted
-            first-wake-up flag is wired in. */}
-        {FIRST_WAKE_UP_WIZARD_ENABLED && !leaving && session.phase === 'live' && !wakeUpDone && (
-          <FirstWakeUpWizard
-            session={session}
-            robotName={robotName}
-            onFinish={() => setWakeUpDone(true)}
-          />
-        )}
+        {/* First wake-up wizard. Shown once per robot: the gate resolves from
+            the daemon's persisted `get_first_wake_up` flag (see the wizard-gate
+            effect above), and `set_first_wake_up` is written on finish. Sits on
+            top of the conversation UI but BELOW the daemon update gate (zIndex
+            1380 vs 1400) so a mandatory update still wins. */}
+        {/* AnimatePresence lets the wizard play its exit fade on finish so the
+            conversation UI (already mounted behind it) cross-fades in instead
+            of hard-cutting when `wakeUpDone` flips true. */}
+        <AnimatePresence>
+          {!leaving && session.phase === 'live' && wizardGate === 'show' && (
+            <FirstWakeUpWizard
+              key="first-wake-up"
+              session={session}
+              robotName={displayName}
+              movesReady={onboardingMovesReady}
+              onRename={handleRenameRobot}
+              onFinish={handleWizardFinish}
+            />
+          )}
+        </AnimatePresence>
       </Stack>
     </DaemonStateProvider>
-  );
-}
-
-function Overlay({ children }: { children: React.ReactNode }) {
-  return (
-    <Box
-      sx={theme => ({
-        position: 'absolute',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        bgcolor: theme.palette.background.default,
-        zIndex: 1,
-      })}
-    >
-      {children}
-    </Box>
   );
 }
 

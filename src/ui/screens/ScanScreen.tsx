@@ -71,6 +71,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
+  alpha,
   Avatar,
   Box,
   Button,
@@ -110,6 +111,7 @@ import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { VariantTag } from '@/ui/design/MetaPill';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
+import FirstReachyInvite from './scan/FirstReachyInvite';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
@@ -149,6 +151,22 @@ export default function ScanScreen({
   const displayName = profile.username ?? username;
   const robots = remote.state.kind !== 'no-token' ? remote.state.robots : [];
   const hasRobots = robots.length > 0;
+  // "Loaded, but zero robots linked" → show the dedicated onboarding
+  // invitation (a prominent CTA to register a first Reachy) instead of
+  // the terse empty card. Loading / error keep their own states. When the
+  // invite is up we hide the sticky bottom bar so the screen shows a
+  // single, unambiguous call to action rather than two identical buttons.
+  const showEmptyInvite =
+    !hasRobots && remote.state.kind !== 'loading' && remote.state.kind !== 'error';
+  // Initial fetch with no robots yet: the whole screen collapses to a single
+  // centered spinner (no hero illustration, no "Your Reachies" header, no
+  // sticky add bar) so the first paint is quiet while we wait on central -
+  // matching the lightweight loading treatment used elsewhere in the app.
+  const isInitialLoading = !hasRobots && remote.state.kind === 'loading';
+  // Fleet-listing chrome (hero + header) only makes sense once there's a list
+  // to head, or on the error state that keeps its message in place. The
+  // loading and empty-invite states are deliberately chrome-free.
+  const showListChrome = hasRobots || remote.state.kind === 'error';
   // The refresh icon spins for ANY in-flight fetch (initial load
   // included). Both the refresh icon (right of the list) and the
   // bottom add bar stay mounted in every state: conditionally
@@ -216,20 +234,27 @@ export default function ScanScreen({
             py: 4,
           }}
         >
-          <Stack
-            spacing={2}
-            sx={{
-              alignItems: 'center',
-            }}
-          >
-            <HeroBuste />
-            <RobotsHeader
-              state={remote.state.kind}
-              count={robots.length}
-              hasRobots={hasRobots}
-              isRefreshing={isRefreshing}
-            />
-          </Stack>
+          {/* Hero illustration + "Your Reachies" header are the
+              fleet-listing chrome. They only show once there's a list to
+              head (has-robots) or on the error state; the loading and
+              empty-invite states are chrome-free so each reads as a single,
+              dedicated view (a quiet spinner, then the onboarding invite). */}
+          {showListChrome && (
+            <Stack
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
+              <HeroBuste />
+              <RobotsHeader
+                state={remote.state.kind}
+                count={robots.length}
+                hasRobots={hasRobots}
+                isRefreshing={isRefreshing}
+              />
+            </Stack>
+          )}
 
           {hasRobots ? (
             <List
@@ -267,15 +292,24 @@ export default function ScanScreen({
                 );
               })}
             </List>
-          ) : remote.state.kind === 'loading' ? (
-            <LoadingState />
+          ) : isInitialLoading ? (
+            <Box
+              sx={{
+                width: '100%',
+                display: 'flex',
+                justifyContent: 'center',
+                py: 6,
+              }}
+            >
+              <CircularProgress thickness={2.5} sx={{ color: theme => alpha(theme.palette.text.primary, 0.3) }} />
+            </Box>
           ) : remote.state.kind === 'error' ? (
             <CenteredMessageState
               title="Couldn't reach Hugging Face"
               subtitle={remote.state.reason}
             />
           ) : (
-            <CenteredMessageState title="No Reachy online" />
+            <FirstReachyInvite onStartSetup={onStartSetup} />
           )}
         </Stack>
       </Stack>
@@ -285,7 +319,7 @@ export default function ScanScreen({
           every state - empty / error included). Always mounted, so
           the available height of the centred content above never
           changes. */}
-      <StickyAddBar onStartSetup={onStartSetup} />
+      {!showEmptyInvite && !isInitialLoading && <StickyAddBar onStartSetup={onStartSetup} />}
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
           Google-mandated contact channels for UGC-bearing apps.
@@ -1115,33 +1149,14 @@ function StateCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LoadingState() {
-  return (
-    <StateCard>
-      <Stack
-        spacing={1.5}
-        sx={{
-          alignItems: 'center',
-          color: 'text.secondary',
-        }}
-      >
-        <CircularProgress size={24} sx={{ color: 'text.secondary' }} />
-        <Typography sx={{ fontSize: TYPO.sm, fontWeight: FONT_WEIGHT.medium }}>
-          Asking Hugging Face for your robots…
-        </Typography>
-      </Stack>
-    </StateCard>
-  );
-}
-
 /**
- * Empty / error state rendered as a card.
+ * Error state rendered as a card.
  *
  * Visually matches the robot cards (same border, radius, soft
- * shadow) via the shared `StateCard` wrapper so the empty state
- * slots into the same grid instead of floating as a bare
- * paragraph. Content is centred on both axes by `StateCard`;
- * the inner Stack just owns the typographic stack.
+ * shadow) via the shared `StateCard` wrapper so it slots into the
+ * same grid instead of floating as a bare paragraph. Content is
+ * centred on both axes by `StateCard`; the inner Stack just owns
+ * the typographic stack.
  */
 function CenteredMessageState({ title, subtitle }: { title: string; subtitle?: string }) {
   return (

@@ -16,7 +16,6 @@
  *
  * How it talks to a model
  * -----------------------
- * Same transport as the vision module (`vision/providers/hf-vlm-provider.ts`):
  *
  *   - Hugging Face Inference Providers router
  *     (`router.huggingface.co/v1/chat/completions`), OpenAI-compatible.
@@ -110,6 +109,10 @@ const PERSONA_JSON_SCHEMA: Record<string, unknown> = {
 
 export type GeneratePersonalityReason =
   | "hf_token_missing"
+  // Hugging Face rejected the token itself (HTTP 401): expired OAuth token or
+  // a signature that no longer verifies. Actionable by re-signing-in; the app
+  // shell also evicts the token and surfaces the sign-in gate on this signal.
+  | "hf_token_invalid"
   | "empty_description"
   | "request_failed"
   // The model provider is temporarily overloaded (HTTP 429/503 or a
@@ -126,16 +129,20 @@ export type GeneratePersonalityReason =
 /** Map a low-level router failure to the modal-facing error vocabulary. */
 function fromRouterError(err: unknown): GeneratePersonalityError {
   if (err instanceof HfRouterError) {
-    const reason: GeneratePersonalityReason = err.overloaded
-      ? "overloaded"
-      : err.modelUnsupported
-        ? "model_unavailable"
-        : "request_failed";
-    const message = err.overloaded
-      ? "the model provider is overloaded right now"
-      : err.modelUnsupported
-        ? "no enabled HF Inference Provider serves the generation models"
-        : err.message;
+    const reason: GeneratePersonalityReason = err.authInvalid
+      ? "hf_token_invalid"
+      : err.overloaded
+        ? "overloaded"
+        : err.modelUnsupported
+          ? "model_unavailable"
+          : "request_failed";
+    const message = err.authInvalid
+      ? "Hugging Face rejected your token (it may have expired)"
+      : err.overloaded
+        ? "the model provider is overloaded right now"
+        : err.modelUnsupported
+          ? "no enabled HF Inference Provider serves the generation models"
+          : err.message;
     return new GeneratePersonalityError(reason, message, err.status || undefined);
   }
   return new GeneratePersonalityError(
@@ -274,6 +281,20 @@ export async function streamPersonality(
   } catch (err) {
     window.clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", onExternalAbort);
+    // A caller-driven cancel must stay an AbortError so the UI can tell
+    // "the user backed out" from "the request failed" and skip its error
+    // reporting entirely.
+    if (opts.signal?.aborted) throw err;
+    // Our own idle guard fired before a single byte arrived (the timer
+    // spans the router's discovery + model-chain retries, not just the
+    // stream), which surfaces here as a bare AbortError. Report it as the
+    // retryable stall it is rather than a confusing network error.
+    if (controller.signal.aborted) {
+      throw new GeneratePersonalityError(
+        "request_failed",
+        "the model took too long to answer - give it another try",
+      );
+    }
     throw fromRouterError(err);
   }
 
@@ -722,7 +743,7 @@ interface ChatCompletionPayload {
 }
 
 /** Pull the assistant text out of the OpenAI-compatible envelope,
- *  accepting the same handful of shape variants the VLM provider does
+ *  accepting the handful of shape variants the router's providers emit
  *  (string content, content-as-array, Responses-API fallback). */
 function extractContent(payload: ChatCompletionPayload | null): string {
   if (!payload) return "";

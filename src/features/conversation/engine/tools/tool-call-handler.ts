@@ -63,10 +63,11 @@ export interface ToolCallHandlerDeps {
   /** Forwarded host callback for the orb toast. The handler
    *  formats the label; the host owns the rendering / dismissal. */
   onToolToast?: (toast: ConversationToolToastEvent) => void;
-  /** On-demand camera look, backing the `look` tool. Resolves to a
-   *  scene description or a failure message; never throws. Optional:
-   *  `undefined` when vision is off (the tool isn't registered then,
-   *  but the handler guards anyway). */
+  /** On-demand camera look, backing the `look` tool. Captures a frame
+   *  and attaches it to the conversation as an `input_image` item;
+   *  resolves to an "image attached" confirmation or a failure message.
+   *  Never throws. Optional: `undefined` when vision is off (the tool
+   *  isn't registered then, but the handler guards anyway). */
   look?: () => Promise<LookResult>;
 }
 
@@ -208,9 +209,7 @@ export function createToolCallHandler(
           break;
         }
         const look = await deps.look();
-        result = look.ok
-          ? { ok: true, message: look.description ?? look.message }
-          : { ok: false, message: look.message };
+        result = { ok: look.ok, message: look.message };
         break;
       }
       case "remember": {
@@ -267,8 +266,8 @@ export function createToolCallHandler(
 
     // Surface failures in the UI: the pending "running" pill would
     // otherwise just fade out and the user would never learn the
-    // action failed (e.g. the VLM behind `look` errored or returned
-    // an empty description). The model still gets the full
+    // action failed (e.g. the camera capture behind `look` errored).
+    // The model still gets the full
     // `result.message` via `sendToolResponse` below for its own
     // recovery / explanation to the user.
     if (!result.ok) {

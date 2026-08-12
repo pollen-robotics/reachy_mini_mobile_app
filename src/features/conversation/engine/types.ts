@@ -161,8 +161,8 @@ export interface ConversationToolToastEvent {
   /**
    * Visual intent of the toast. `"info"` (default) is the normal
    * "tool is running" pill; `"error"` is emitted when a tool call
-   * fails (e.g. the VLM behind `look` errored or returned nothing) so
-   * the host can render it as a visible failure instead of a silent
+   * fails (e.g. the camera capture behind `look` errored) so the
+   * host can render it as a visible failure instead of a silent
    * disappearance.
    */
   variant?: "info" | "error";
@@ -199,6 +199,17 @@ export interface ConversationConnectionAttempt {
   /** Total number of attempts the engine will make before giving up. */
   maxAttempts: number;
 }
+
+/**
+ * Sub-phase of the post-handshake bring-up (the connecting overlay's
+ * "Wake-up" step). `wake` while the wake trajectory is awaited,
+ * `finalize` while the stragglers settle (XVF3800 audio config +
+ * daemon version read, which run concurrently with the wake but can
+ * outlive it on a slow / older daemon). `null` outside the bring-up.
+ * Lets the overlay say WHAT it's waiting on instead of holding one
+ * opaque caption for up to ~10 s.
+ */
+export type ConversationBringUpPhase = 'wake' | 'finalize';
 
 export interface ConversationEngineHandle {
   /** Tear down all listeners, audio analysers and WebRTC peer connections.
@@ -296,6 +307,30 @@ export interface ConversationEngineHandle {
    * double-acquire defensively).
    */
   reacquireSession: () => Promise<void>;
+  /**
+   * In-place session recovery after a transport-level fatal error
+   * (SDK re-dial gave up, data-channel death, failed reacquire). Same
+   * bring-up path as `reacquireSession`, plus the wake dance: unlike
+   * an iframe handoff the robot did NOT stay awake - the fatal
+   * teardown (or the daemon's own idle reset) parked it in the sleep
+   * pose - so recovery replays `wakeUp()`. On daemons with the wake
+   * stand-down this is a silent no-op when the robot is still up.
+   *
+   * Failure routes back through the fatal-error path, so the host's
+   * error view still renders when recovery cannot heal the session.
+   *
+   * The host passes its own robot identity because the engine's
+   * selected id is nulled by the unsolicited-drop cleanup, AND
+   * because the id itself may be dead: central peer ids change on
+   * every daemon restart, so recovery re-resolves the dial target
+   * (exact id if still listed, else a name match) against the
+   * freshest robots snapshot, waiting a bounded time for a rebooting
+   * robot to re-register.
+   */
+  recoverSession: (target: {
+    robotId: string;
+    robotName?: string | null;
+  }) => Promise<void>;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //
@@ -447,6 +482,21 @@ export interface ConversationEngineOptions {
   shouldDeferInitialWakeUp?: () => boolean;
 
   /**
+   * Re-resolves the CURRENT central peer id for the selected robot,
+   * called right before each `startSession()` (initial bring-up,
+   * background re-arm, iframe reacquire). Returns `null` when it can't
+   * (no stable `hardware_id`, central unreachable, no match), in which
+   * case the captured `preselectedRobotId` is used as-is.
+   *
+   * Why: the robot's peer id rotates on every relay reconnect, so the
+   * id captured upstream (end of BLE setup, a stale robot-list
+   * snapshot) is frequently dead by the time we dial. Re-resolving by
+   * the stable `hardware_id` makes the single connect attempt target
+   * the live producer. When omitted, no re-resolution happens.
+   */
+  resolvePeerId?: () => Promise<string | null>;
+
+  /**
    * Fires on every CONNECTION transition (`signed-out` → `connecting`
    * → `starting` → `live` → …). The React wrapper uses it to drive the
    * session phase + an external watchdog that flips the UI to "Robot
@@ -589,4 +639,14 @@ export interface ConversationEngineOptions {
    * `ConversationConnectionAttempt` for the rationale.
    */
   onConnectionAttempt?: (attempt: ConversationConnectionAttempt | null) => void;
+
+  /**
+   * Notifies the host as the post-handshake bring-up progresses
+   * (see `ConversationBringUpPhase`). Fired with `'wake'` right
+   * after `startSession` resolves, `'finalize'` once the wake
+   * settled, and `null` when the connection reaches `live` (or the
+   * bring-up aborts). The host refines the connecting overlay's
+   * Wake-up caption with it.
+   */
+  onBringUpPhase?: (phase: ConversationBringUpPhase | null) => void;
 }

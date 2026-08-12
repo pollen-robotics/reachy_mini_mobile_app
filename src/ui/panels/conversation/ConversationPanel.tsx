@@ -81,6 +81,14 @@ export interface ConversationPanelProps {
    * Defaults to `true` for standalone callers.
    */
   active?: boolean;
+  /**
+   * Fired when the persona authoring form opens / closes (create AND edit).
+   * The shell hides its bottom tab bar while it's up: switching tabs runs the
+   * `active` teardown below, which drops the form and every unsaved field with
+   * it, so leaving a 50%-width "throw my draft away" target sitting under the
+   * CTA is a trap. Always fired with `false` on unmount.
+   */
+  onAuthoringChange?: (authoring: boolean) => void;
 }
 
 /** Which persona-authoring form (if any) is open in the body slot. */
@@ -93,6 +101,7 @@ export function ConversationPanel({
   session,
   orbRef,
   active = true,
+  onAuthoringChange,
 }: ConversationPanelProps) {
   const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
@@ -141,34 +150,83 @@ export function ConversationPanel({
     }
   }, [conversationEngaged, session.connectionState]);
 
-  const togglePicker = useCallback(() => {
-    setPickerOpen(prev => !prev);
+  // Picking a persona in the store closes the picker, but on a SHORT
+  // delay: closing instantly would cut off the tile's selection pop +
+  // check-badge animation, making the pick feel unconfirmed. The timer
+  // lives in a ref so a manual toggle / an edit-form open can cancel a
+  // pending close (e.g. user picks a persona then immediately taps
+  // another tile's pencil - the picker must NOT vanish under the form,
+  // or closing that form would strand the user on the orb).
+  const pickerCloseTimerRef = useRef<number | null>(null);
+  const cancelPickerClose = useCallback(() => {
+    if (pickerCloseTimerRef.current !== null) {
+      window.clearTimeout(pickerCloseTimerRef.current);
+      pickerCloseTimerRef.current = null;
+    }
   }, []);
+  const handlePicked = useCallback(() => {
+    cancelPickerClose();
+    pickerCloseTimerRef.current = window.setTimeout(() => {
+      pickerCloseTimerRef.current = null;
+      setPickerOpen(false);
+    }, 400);
+  }, [cancelPickerClose]);
+  useEffect(() => cancelPickerClose, [cancelPickerClose]);
+
+  const togglePicker = useCallback(() => {
+    cancelPickerClose();
+    setPickerOpen(prev => !prev);
+  }, [cancelPickerClose]);
+
+  // "Yours" rail curate mode, HOISTED out of PersonalityStore: opening
+  // a persona's editor swaps the store out of the body slot (the form
+  // takes it), so store-local state would reset and closing the form
+  // would land the user back in browse mode mid-curation. Living here,
+  // the flag survives that round-trip; it resets whenever the picker
+  // itself closes (pick, toggle, conversation start, tab switch).
+  const [storeEditMode, setStoreEditMode] = useState(false);
+  useEffect(() => {
+    if (!pickerOpen) setStoreEditMode(false);
+  }, [pickerOpen]);
 
   // Persona authoring form: create a new persona OR edit an existing
   // custom one. Both render EMBEDDED in the body slot (below the
   // always-visible band) rather than as a full-screen overlay, so the
-  // band stays put and its "+" morphs into the "✕" that closes the
-  // form. Create is triggered from the band's trailing "+", edit from a
-  // custom card's pencil in the store.
-  //   - create success -> close form only, stay in the picker so the user
-  //     sees their new persona (cooking its avatar) instead of the tab
-  //     snapping shut.
-  //   - edit success/delete -> close form only, stay in the picker so
-  //     the user sees the updated (or removed) card.
+  // band stays put and carries the "✕" that closes the form. Create is
+  // triggered from the store's CTA card / "+ New", edit from a custom
+  // tile's pencil badge in the store.
+  //   - create success ("Save & use") -> close form AND picker: the
+  //     band already shows the new persona (with its cooking cue), so
+  //     the user lands back on the orb ready to talk.
+  //   - edit success -> same, the edited persona is now active.
+  //   - delete -> close form only, back to the picker where the card
+  //     is now gone.
   const [formMode, setFormMode] = useState<PersonaFormMode>(null);
   const formOpen = formMode !== null;
-  // True while the create form is in its full-panel "Meet" phase: the band is
-  // hidden so the form fills the panel area (top bar / bottom nav stay put).
+  // True while the create form is on one of its full-panel screens (the vibe
+  // hero, then generation + reveal): the band is hidden so the form fills the
+  // panel area. The app's top bar stays put either way.
   const [immersiveForm, setImmersiveForm] = useState(false);
   // Band trailing affordance: closes any open form, else opens create.
   const toggleForm = useCallback(() => {
     setFormMode(prev => (prev ? null : { kind: 'create' }));
   }, []);
   const openEdit = useCallback((persona: Personality) => {
+    // A pending "close after pick" must not fire under the form: the
+    // picker has to still be there when the form closes back to it.
+    cancelPickerClose();
     setFormMode({ kind: 'edit', persona });
-  }, []);
+  }, [cancelPickerClose]);
   const closeForm = useCallback(() => setFormMode(null), []);
+
+  // Let the shell know an authoring form is up so it can pull its bottom tab
+  // bar (see `onAuthoringChange`). The unmount cleanup matters: the panel is
+  // dropped outright when the session tears down / errors out, and a stranded
+  // `true` would leave the user on a tab-less screen.
+  useEffect(() => {
+    onAuthoringChange?.(formOpen);
+  }, [formOpen, onAuthoringChange]);
+  useEffect(() => () => onAuthoringChange?.(false), [onAuthoringChange]);
 
   // Leaving the conversation tab (the panel is kept mounted, just
   // `display: none`d) should collapse every transient overlay so the
@@ -278,9 +336,8 @@ export function ConversationPanel({
       {/* SUB-HEADER: full-bleed band that hosts the personality
           hero. Visible while the picker/store is open (it stays the
           persistent "select" affordance whose chevron toggles back to
-          the orb). Hidden only while the create form is in its
-          full-panel "Meet" phase, so the body slot expands to fill the
-          freed space. */}
+          the orb). Hidden on the create funnel's full-panel screens, so
+          the body slot expands to fill the freed space. */}
       <Box
         sx={{
           width: '100vw',
@@ -288,9 +345,9 @@ export function ConversationPanel({
           flexShrink: 0,
           bgcolor: 'background.default',
           borderBottom: t => `1px solid ${t.palette.divider}`,
-          // Hidden while the create form is in its full-panel "Meet"
-          // phase, so the body slot below expands to fill the freed
-          // space (the app's top bar / bottom nav stay put either way).
+          // Hidden on the create funnel's full-panel screens, so the
+          // body slot below expands to fill the freed space (the app's
+          // top bar stays put either way).
           display: immersiveForm ? 'none' : 'block',
           // Let the persona avatar disc spill slightly past the band's
           // bottom divider and paint OVER the body slot below it.
@@ -303,16 +360,14 @@ export function ConversationPanel({
               live: changing the active persona mid-call would
               force a stop+start of the realtime client and audibly
               cut Reachy off mid-sentence. The pill stays mounted
-              and keeps showing the current persona, but loses its
-              hover / chevron + carries an aria hint explaining
-              why it's locked. The user can stop the conversation
-              from the orb's stop button (or finish naturally) to
-              re-enable the picker. */}
+              and keeps showing the current persona; a tap surfaces
+              a "locked while talking" snackbar. The user can stop
+              the conversation from the orb's stop button (or finish
+              naturally) to re-enable the picker. */}
           <PersonalityPill
             open={pickerOpen}
             onToggle={togglePicker}
             onCreate={toggleForm}
-            onEditActive={openEdit}
             creating={formMode?.kind === 'create'}
             editingPersona={formMode?.kind === 'edit' ? formMode.persona : null}
             disabled={conversationEngaged}
@@ -417,16 +472,27 @@ export function ConversationPanel({
         </Box>
 
         {pickerOpen && !formOpen && (
-          <PersonalityStore onCreate={() => setFormMode({ kind: 'create' })} />
+          <PersonalityStore
+            onCreate={() => setFormMode({ kind: 'create' })}
+            onEdit={openEdit}
+            onPicked={handlePicked}
+            editMode={storeEditMode}
+            onEditModeChange={setStoreEditMode}
+          />
         )}
 
         {/* Persona authoring form, EMBEDDED in the body slot (below the
             always-visible personality band, not as a full-screen
             overlay) so the band stays put and its "✕" remains the way
-            out.             Keyed by target so switching create<->edit (or between
+            out. Keyed by target so switching create<->edit (or between
             two personas) remounts the form with fresh field state.
-              - create success -> close form only, back to picker.
-              - edit success/delete -> close form only, back to picker. */}
+              - create/edit success ("Save & use") -> close form AND
+                picker: the saved persona is now active and mirrored on
+                the band (cooking cue included), so the user lands back
+                on the orb ready to talk to it - consistent with the
+                picker's own close-on-pick behaviour.
+              - delete -> close form only, back to the picker where the
+                card is now gone. */}
         {formMode && (
           <CreatePersonalityModal
             key={formMode.kind === 'edit' ? formMode.persona.id : 'create'}
@@ -435,12 +501,7 @@ export function ConversationPanel({
             editing={formMode.kind === 'edit' ? formMode.persona : null}
             onCancel={closeForm}
             onCreated={() => {
-              // Both create AND edit return to the picker (not the orb):
-              // after "Save & use" the user lands back in the personality
-              // store with their new/updated persona visible (and cooking
-              // its avatar) rather than the tab snapping shut. Closing the
-              // store is an explicit action (its own ✕ / tapping away).
-              setPickerOpen(true);
+              setPickerOpen(false);
               closeForm();
             }}
             onDeleted={closeForm}

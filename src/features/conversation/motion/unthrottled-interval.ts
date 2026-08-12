@@ -1,7 +1,8 @@
 /**
  * A `setInterval` replacement that keeps firing at the requested rate even
  * when the window/tab loses focus or the mobile app gets backgrounded (while
- * still alive). Motion loops in this app (head-wobbler, antennas, move-player)
+ * still alive). Motion loops in this app (antennas, move-player, the
+ * head-tracking reconcile)
  * must tick at 20–100 Hz to keep the robot moving smoothly; the plain
  * `window.setInterval` gets throttled to ~1 Hz by every major browser engine
  * (Chromium, WebKit, Gecko) when the owning document isn't visible.
@@ -61,9 +62,9 @@ function ensureWorker(): Worker | null {
   // Tauri prod builds enforce the CSP from `tauri.conf.json`, so the
   // app's CSP MUST include `worker-src 'self' blob:`. Without it the
   // Worker constructor throws SecurityError silently and EVERY motion
-  // path on this app dies (head wobble, antennas, pose dispatcher,
-  // move player) - the conversation audio still plays but the robot
-  // doesn't move. We had this exact regression in 0.5.1; the fallback
+  // path on this app dies (antennas, pose dispatcher, move player,
+  // head-tracking reconcile) - the conversation audio still plays but
+  // the robot doesn't move. We had this exact regression in 0.5.1; the fallback
   // below + the loud warning in the catch are there to make the next
   // occurrence loud rather than silent.
   const workerSource = `
@@ -139,7 +140,10 @@ export function createUnthrottledInterval(
     // (callback, period, `.clear()`) so callers don't have to
     // branch. The trade-off vs the worker path is documented at the
     // top of `ensureWorker()`.
-    const id = window.setInterval(() => {
+    // `globalThis` rather than `window`: identical in the browser, but
+    // it also keeps this path usable from a non-DOM runtime, which is
+    // where the motion controllers are unit-tested.
+    const id = globalThis.setInterval(() => {
       try {
         callback();
       } catch (err) {
@@ -148,7 +152,7 @@ export function createUnthrottledInterval(
     }, ms);
     return {
       clear: () => {
-        window.clearInterval(id);
+        globalThis.clearInterval(id);
       },
     };
   }

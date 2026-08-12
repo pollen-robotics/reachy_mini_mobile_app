@@ -9,7 +9,7 @@
  *   robot mic MediaStreamTrack -> 16 kHz PCM append events -> HF backend
  *   HF output_audio.delta PCM  -> MediaStreamTrack        -> robot speaker
  *
- * Tool calls, transcripts, and passive vision injections keep using the
+ * Tool calls, transcripts, and vision context injections keep using the
  * OpenAI-compatible realtime event names.
  */
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -32,12 +32,12 @@ const RESPONSE_DONE_FALLBACK_MS = 5_000;
 // Backstop for the "tool call in flight" processing hold. When the
 // model calls a tool, the tool-call response completes (`response.done`)
 // long before the follow-up spoken response arrives - in between we run
-// the tool (e.g. the `look` VLM round-trip, ~1-2 s) and then fire
-// `response.create`. We keep the status on `processing` across that gap
-// so the orb keeps reading "thinking" instead of flashing back to idle.
-// This timer only fires if the follow-up response never materialises
-// (network hiccup), so we never get stuck showing "thinking" forever.
-// Sized above the vision VLM timeout (8 s) plus follow-up headroom.
+// the tool (e.g. the `look` camera capture + image attach, ~1 s) and
+// then fire `response.create`. We keep the status on `processing`
+// across that gap so the orb keeps reading "thinking" instead of
+// flashing back to idle. This timer only fires if the follow-up
+// response never materialises (network hiccup), so we never get stuck
+// showing "thinking" forever.
 const TOOL_CALL_PROCESSING_FALLBACK_MS = 15_000;
 // The realtime session allocator Space occasionally answers with a gateway
 // timeout (504) or other 5xx under load. A single short retry turns most of
@@ -124,6 +124,14 @@ export class HuggingFaceRealtimeClient {
   // itself doesn't bounce the status back to idle mid-round-trip.
   private toolCallPendingResponse = false;
   private toolCallSafetyTimer: number | null = null;
+  // Armed when the server rejects a tool follow-up `response.create`
+  // with `conversation_already_has_active_response`: a fast tool (the
+  // `look` frame grab takes ~100 ms) can answer before the tool-call
+  // response has closed server-side, and the rejection used to be
+  // swallowed - leaving the tool result (and its photo) unanswered
+  // until the user spoke again. The follow-up is re-fired on the next
+  // `response.done` instead.
+  private retryResponseCreateOnDone = false;
 
   readonly options: HuggingFaceRealtimeOptions;
 
@@ -178,6 +186,10 @@ export class HuggingFaceRealtimeClient {
     this.toolCallSafetyTimer = window.setTimeout(() => {
       this.toolCallSafetyTimer = null;
       this.toolCallPendingResponse = false;
+      // The round-trip is over as far as we're concerned; a retry
+      // firing minutes later on an unrelated response.done would be
+      // a surprise answer out of nowhere.
+      this.retryResponseCreateOnDone = false;
       // Only force idle if we're still parked on `processing` waiting
       // for a follow-up that never came.
       if (this.status === "processing") {
@@ -191,10 +203,65 @@ export class HuggingFaceRealtimeClient {
 
   private clearToolCallProcessingHold(): void {
     this.toolCallPendingResponse = false;
+    this.retryResponseCreateOnDone = false;
     if (this.toolCallSafetyTimer !== null) {
       window.clearTimeout(this.toolCallSafetyTimer);
       this.toolCallSafetyTimer = null;
     }
+  }
+
+  /**
+   * (Re)build the PCM uplink on `track`. Stops any previous streamer
+   * first, so the old Web Audio graph (and, on Android, its `<audio>`
+   * pump) is released before the new one is wired.
+   */
+  private startInputStreamer(track: MediaStreamTrack): void {
+    this.inputStreamer?.stop();
+    const streamer = new PcmInputStreamer({
+      track,
+      sendPcm: (pcm) => {
+        const ws = this.ws;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (ws.bufferedAmount > WS_BUFFERED_AMOUNT_LIMIT) return;
+        this.sendEvent({
+          type: "input_audio_buffer.append",
+          audio: pcm16ToBase64(pcm),
+        });
+      },
+    });
+    streamer.start();
+    this.inputStreamer = streamer;
+  }
+
+  /**
+   * Point the uplink at a different robot mic track WITHOUT tearing the
+   * realtime session down.
+   *
+   * Needed because the SDK's auto re-dial replaces the whole
+   * `RTCPeerConnection`: the receiver track we were reading died with the
+   * old one, so `onaudioprocess` keeps firing on a dead track and the
+   * backend hears pure silence while everything else looks healthy.
+   * Rebuilding the client instead would work, but would throw away the
+   * WebSocket and the conversation history with it.
+   *
+   * No-op when the track is unchanged or the socket is gone.
+   */
+  replaceInputTrack(track: MediaStreamTrack): void {
+    if (this.options.inputTrack === track && this.inputStreamer) return;
+    // Record it FIRST, unconditionally: when the socket isn't up yet
+    // (we're racing a reconnect that hasn't reached `handleOpen`), the
+    // streamer is started later from `this.options.inputTrack` - so
+    // stashing it here is what stops that path from re-arming the dead
+    // track we're trying to replace.
+    this.options.inputTrack = track;
+    if (!this.ws) {
+      console.log(
+        "[hf-realtime] input track stashed for the pending connection",
+      );
+      return;
+    }
+    console.log("[hf-realtime] replacing input track after robot re-dial");
+    this.startInputStreamer(track);
   }
 
   async connect(): Promise<void> {
@@ -268,19 +335,7 @@ export class HuggingFaceRealtimeClient {
             }),
           });
 
-          const streamer = new PcmInputStreamer({
-            track: this.options.inputTrack,
-            sendPcm: (pcm) => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-              if (ws.bufferedAmount > WS_BUFFERED_AMOUNT_LIMIT) return;
-              this.sendEvent({
-                type: "input_audio_buffer.append",
-                audio: pcm16ToBase64(pcm),
-              });
-            },
-          });
-          streamer.start();
-          this.inputStreamer = streamer;
+          this.startInputStreamer(this.options.inputTrack);
           this.setStatus("connected");
           startupSettled = true;
           resolve();
@@ -384,6 +439,17 @@ export class HuggingFaceRealtimeClient {
         break;
 
       case "response.created":
+        // A NEW response started (only possible once the one that
+        // rejected our follow-up has closed): it already sees the tool
+        // output + attached image in the conversation, so a pending
+        // retry is moot - drop it rather than double-answer. NOT done
+        // on `output_item.added`: that also fires for later items of
+        // the still-active tool-call response, inside the retry window.
+        this.retryResponseCreateOnDone = false;
+        if (this.status === "connected" || this.status === "user-speaking") {
+          this.setStatus("processing");
+        }
+        break;
       case "response.output_item.added":
         if (this.status === "connected" || this.status === "user-speaking") {
           this.setStatus("processing");
@@ -418,6 +484,16 @@ export class HuggingFaceRealtimeClient {
 
       case "response.done":
       case "response.cancelled":
+        // A tool follow-up whose `response.create` was rejected while
+        // this response was still active can go out now that it closed.
+        if (this.retryResponseCreateOnDone) {
+          this.retryResponseCreateOnDone = false;
+          console.info(
+            "[hf-realtime] re-firing tool follow-up response.create " +
+              "(the first raced the active response)",
+          );
+          this.sendEvent({ type: "response.create" });
+        }
         if (this.status === "ai-speaking") {
           this.markConnectedAfterOutputDrain();
         } else if (this.status === "processing") {
@@ -426,7 +502,7 @@ export class HuggingFaceRealtimeClient {
           // a `response.create`, so a follow-up is guaranteed. Consume
           // the hold once and stay on `processing` so the orb keeps
           // showing "thinking" across the tool round-trip (e.g. the
-          // `look` VLM call) instead of flashing back to idle. The
+          // `look` camera capture) instead of flashing back to idle. The
           // backstop timer covers the (rare) case where no follow-up
           // ever arrives.
           if (this.toolCallPendingResponse) {
@@ -513,13 +589,19 @@ export class HuggingFaceRealtimeClient {
           | { message?: string; code?: string; type?: string }
           | undefined;
         const code = err?.code ?? err?.type ?? "";
-        if (
-          code === "input_audio_buffer_commit_empty" ||
-          code === "conversation_already_has_active_response"
-        ) {
-          if (code === "input_audio_buffer_commit_empty") {
-            this.setStatus("connected");
+        if (code === "conversation_already_has_active_response") {
+          // Benign in general (barge-in races), but mid tool round-trip
+          // it means `sendToolResponse`'s `response.create` beat the
+          // tool-call response's own close to the server. Swallowing it
+          // silently is what made a `look` answer only on the NEXT user
+          // turn - re-fire once the active response is done instead.
+          if (this.toolCallPendingResponse) {
+            this.retryResponseCreateOnDone = true;
           }
+          return;
+        }
+        if (code === "input_audio_buffer_commit_empty") {
+          this.setStatus("connected");
           return;
         }
         this.emit("error", {

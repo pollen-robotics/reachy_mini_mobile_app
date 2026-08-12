@@ -15,11 +15,11 @@
  *      `generating` - the sticker Space renders the character (~1 min,
  *                     2 concurrent slots server-side). We expose the
  *                     queue size so the UI can show a waiting position.
- *   3. `done`        - the resulting image is fetched and inlined as a
+ *   3. `done`        - the resulting SVG is fetched and inlined as a
  *                     data URI so it persists in localStorage offline
- *                     (no dependency on the Space staying up). SVG is
- *                     preferred (vector, matches the built-in avatars);
- *                     PNG is the fallback.
+ *                     (no dependency on the Space staying up).
+ *
+ * SVG only, never the PNG: see `inlineStickerResult`.
  *
  * CORS: the Space serves no `Access-Control-Allow-Origin`, so every
  * request goes through `@tauri-apps/plugin-http` (proxied by the Rust
@@ -64,10 +64,8 @@ export type StickerStatus =
   | 'error';
 
 export interface StickerAvatarResult {
-  /** Inlined image, ready to drop into `Personality.avatar`. */
+  /** Inlined SVG data URI, ready to drop into `Personality.avatar`. */
   dataUri: string;
-  /** Which representation we inlined. */
-  format: 'svg' | 'png';
   /** The visual theme actually sent to the sticker API. */
   theme: string;
 }
@@ -93,6 +91,8 @@ export class StickerOverloadedError extends Error {
 interface StickerJob {
   id?: string;
   prompt?: string;
+  /** Present but never inlined - only read to detect job completion
+   *  (see `hasStickerImage`). */
   png_url?: string;
   svg_url?: string | null;
   /** Async backend only: handle + status to poll until ready. */
@@ -125,20 +125,17 @@ function stickerAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** Base64-encode raw bytes in chunks (avoids the arg-count blow-up of
- *  `String.fromCharCode(...hugeArray)` on large PNGs). */
-function bytesToBase64(bytes: Uint8Array): string {
+/** UTF-8-safe base64 of a string (SVG markup can carry non-ASCII).
+ *  Encoded in chunks to avoid the arg-count blow-up of
+ *  `String.fromCharCode(...hugeArray)` on a large document. */
+function utf8ToBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
   let binary = '';
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   }
   return btoa(binary);
-}
-
-/** UTF-8-safe base64 of a string (SVG markup can carry non-ASCII). */
-function utf8ToBase64(text: string): string {
-  return bytesToBase64(new TextEncoder().encode(text));
 }
 
 /**
@@ -225,12 +222,10 @@ export async function craftStickerTheme(
  * Generate a sticker avatar for a visual theme and inline it as a data
  * URI. Reports progress via `onStatus` (`queued`/`generating`).
  *
- * Transport-agnostic on purpose, so the shipped app survives a server-side
- * move from the current synchronous endpoint to an async/queue backend
- * WITHOUT an app update: the `POST` either returns the finished image
- * (current behaviour) or a job handle that we then poll until it resolves.
- * The image bytes are fetched separately and base64-inlined so the result
- * survives offline.
+ * Transport-agnostic on purpose, so the app works against either backend
+ * shape WITHOUT an update: the `POST` either returns the finished result
+ * outright or a job handle that we then poll until it resolves. The SVG is
+ * fetched separately and base64-inlined so the avatar survives offline.
  */
 export async function generateStickerAvatar(
   theme: string,
@@ -274,7 +269,15 @@ export async function generateStickerAvatar(
   return inlineStickerResult(data, prompt, signal);
 }
 
-/** A payload is usable once it exposes at least one image URL. */
+/**
+ * Whether the job has finished producing its assets.
+ *
+ * Deliberately satisfied by EITHER url even though we only ever inline
+ * the SVG: a (pathological) PNG-only result means the job is done and
+ * will never yield an SVG, so treating it as "ready" lets
+ * `inlineStickerResult` reject it immediately instead of polling on to
+ * the 5-minute timeout.
+ */
 function hasStickerImage(job: StickerJob): boolean {
   return Boolean(job.png_url || job.svg_url);
 }
@@ -420,48 +423,39 @@ async function pollStickerJob(
 }
 
 /**
- * Fetch the generated image(s) and inline as a data URI. Prefers the
- * vector SVG (crisp at any size, matches the built-in avatars); falls
- * back to the PNG.
+ * Fetch the generated SVG and inline it as a data URI.
+ *
+ * SVG ONLY - the PNG is never inlined, even as a fallback. The Space
+ * serves a 2048x2048 RGBA PNG (~5 MB, ~6.7 MB once base64'd), which on
+ * its own exceeds the localStorage quota that the whole persona catalog
+ * shares, so a PNG avatar would blow the write and be silently lost on
+ * the next boot. The vector is also what the built-in avatars use, and
+ * it stays crisp at any disc size. A generation that somehow yields no
+ * SVG is therefore an error, not a degraded success: the Space's
+ * pipeline always vectorises (a failed vectorisation fails the job), so
+ * a missing `svg_url` means something is genuinely wrong upstream and
+ * the caller should surface a retry rather than persist 5 MB.
  */
 async function inlineStickerResult(
   data: StickerJob,
   prompt: string,
   signal?: AbortSignal,
 ): Promise<StickerAvatarResult> {
-  if (data.svg_url) {
-    try {
-      const svgRes = await tauriFetch(absoluteUrl(data.svg_url), {
-        method: 'GET',
-        headers: stickerAuthHeaders(),
-        signal,
-      });
-      if (svgRes.ok) {
-        const svg = await svgRes.text();
-        if (svg.includes('<svg')) {
-          return {
-            dataUri: `data:image/svg+xml;base64,${utf8ToBase64(svg)}`,
-            format: 'svg',
-            theme: prompt,
-          };
-        }
-      }
-    } catch {
-      /* fall through to PNG */
-    }
-  }
-
-  if (!data.png_url) throw new Error('Sticker result missing image URL');
-  const pngRes = await tauriFetch(absoluteUrl(data.png_url), {
+  if (!data.svg_url) throw new Error('Sticker result carries no SVG');
+  const res = await tauriFetch(absoluteUrl(data.svg_url), {
     method: 'GET',
     headers: stickerAuthHeaders(),
     signal,
   });
-  if (!pngRes.ok) throw new Error('Failed to fetch generated sticker image');
-  const bytes = new Uint8Array(await pngRes.arrayBuffer());
+  if (!res.ok) {
+    throw new Error(`Failed to fetch generated sticker SVG (${res.status})`);
+  }
+  const svg = await res.text();
+  if (!svg.includes('<svg')) {
+    throw new Error('Sticker SVG payload is not SVG markup');
+  }
   return {
-    dataUri: `data:image/png;base64,${bytesToBase64(bytes)}`,
-    format: 'png',
+    dataUri: `data:image/svg+xml;base64,${utf8ToBase64(svg)}`,
     theme: prompt,
   };
 }

@@ -62,6 +62,24 @@ const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshoo
  *  grab the desktop app that can update a daemon too old for OTA. */
 const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
 
+/**
+ * Dev-only escape hatch for the blocking update prompt.
+ *
+ * When testing a daemon built from a feature branch (e.g. one based on
+ * v1.8.3 while the latest public release is v1.8.4), `isDaemonOutdated`
+ * trips and the prompt offers no skip - so a developer connected to a
+ * branch build would be forced through "Update now", which pip-installs
+ * the released wheel and wipes the branch under test. This flag surfaces a
+ * discreet "Skip" button that dismisses the gate for the session without
+ * touching the daemon.
+ *
+ * `import.meta.env.DEV` is statically `false` in any production build
+ * (`vite build`), so both the flag and the button are tree-shaken away:
+ * release users always hit the hard gate. Matches the dev-only gating of
+ * `VITE_DEV_HF_TOKEN` & friends in `shared/env.ts`.
+ */
+const DEV_BYPASS = import.meta.env.DEV;
+
 /** True only when the daemon version is known AND new enough to self-update
  *  over the WebRTC data channel. Unknown / unparseable → false (→ desktop
  *  app fallback). */
@@ -154,7 +172,10 @@ export default function DaemonUpdateGate({
     return () => window.clearTimeout(t);
   }, [phase]);
 
-  const logsActive = phase === 'updating' || phase === 'rebooting';
+  // Logs are only shown while actively installing. During `rebooting` the
+  // transport is gone anyway and a dead log tail just adds noise while the user
+  // waits, so we hide it (see the reboot copy below, which sets expectations).
+  const logsActive = phase === 'updating';
   const logs = useDaemonLogs({ session, enabled: logsActive });
 
   const handleUpdateNow = useCallback(() => {
@@ -194,6 +215,7 @@ export default function DaemonUpdateGate({
         effectivePhase === 'rebooting' ||
         effectivePhase === 'failed') && (
         <Button
+          variant="text"
           onClick={onBackToRobots}
           startIcon={<ArrowBackIosNewIcon sx={{ fontSize: 14 }} />}
           sx={{
@@ -265,6 +287,9 @@ export default function DaemonUpdateGate({
           )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) ||
             effectivePhase === 'failed') && <TroubleshootingLink />}
+          {effectivePhase === 'prompt' && DEV_BYPASS && (
+            <DevSkipButton onClick={handleContinue} />
+          )}
         </Stack>
       </Stack>
     </Box>
@@ -273,7 +298,7 @@ export default function DaemonUpdateGate({
 
 function PhaseIcon({ phase }: { phase: Phase }) {
   if (phase === 'updating' || phase === 'rebooting') {
-    return <CircularProgress size={48} sx={{ color: 'primary.main' }} />;
+    return <CircularProgress size={32} sx={{ color: 'text.secondary' }} />;
   }
   if (phase === 'done') {
     return <CheckCircleRoundedIcon sx={{ fontSize: 56, color: 'success.main' }} />;
@@ -307,9 +332,9 @@ function bodyFor(
 ): string {
   switch (phase) {
     case 'updating':
-      return 'Installing the latest software. Keep the app open - the robot will reboot when it is done.';
+      return 'Installing the latest software. Keep the app open - the robot will reboot when it is done. This usually takes about 1-2 minutes.';
     case 'rebooting':
-      return 'Finishing the update and restarting. This can take a minute. You can wait here or reconnect from the robot list once it is back.';
+      return 'Reachy is restarting to finish the update. This usually takes a minute or two - keep the app open and stay nearby while it comes back online.';
     case 'done':
       return current ? `Now running v${current}.` : 'Your Reachy is now up to date.';
     case 'failed':
@@ -345,6 +370,7 @@ function UpdateLogDisclosure({
   return (
     <Stack spacing={0.5} sx={{ width: '100%', alignItems: 'center' }}>
       <Button
+        variant="text"
         onClick={() => setOpen((v) => !v)}
         size="small"
         sx={{
@@ -379,11 +405,34 @@ function UpdateLogDisclosure({
   );
 }
 
+/** Dev-only "skip the gate" button. Rendered only in dev builds (see
+ *  {@link DEV_BYPASS}); dismisses the prompt for the session so a branch
+ *  daemon can be tested without being force-updated to the latest wheel. */
+function DevSkipButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="text"
+      onClick={onClick}
+      size="small"
+      sx={{
+        textTransform: 'none',
+        fontSize: TYPO.xs,
+        fontWeight: FONT_WEIGHT.medium,
+        color: 'text.secondary',
+        opacity: 0.7,
+      }}
+    >
+      Skip for now (dev build)
+    </Button>
+  );
+}
+
 /** Subtle link to the public troubleshooting docs - shown when the update
  *  can't run from the app, in case there's something to fix on that page. */
 function TroubleshootingLink() {
   return (
     <Button
+      variant="text"
       onClick={() => void openExternalUrl(TROUBLESHOOTING_URL)}
       size="small"
       sx={{

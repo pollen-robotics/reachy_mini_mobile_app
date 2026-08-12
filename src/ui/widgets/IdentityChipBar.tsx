@@ -65,6 +65,7 @@ interface TypeTag {
 function resolveTypeTag(phase: SessionPhase): TypeTag | null {
   if (phase === 'bringing-up') return { label: 'Connecting', tone: STATUS.info, pulse: true };
   if (phase === 'reacquiring') return { label: 'Reconnecting', tone: STATUS.info, pulse: true };
+  if (phase === 'recovering') return { label: 'Reconnecting', tone: STATUS.info, pulse: true };
   return null;
 }
 

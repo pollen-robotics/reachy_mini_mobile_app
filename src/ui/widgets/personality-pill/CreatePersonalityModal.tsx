@@ -54,6 +54,7 @@ import {
   CreatePersonalityFields,
   CreatePersonalityGenerating,
   CreatePersonalityHero,
+  CreatePersonalityHeroActions,
   VIBE_MAX,
   useVibeRoll,
   useVoiceAudition,
@@ -97,11 +98,12 @@ interface CreatePersonalityModalProps {
    */
   embedded?: boolean;
   /**
-   * (Embedded mode) Fired when the form enters/leaves its full-panel "Meet"
-   * phase (create-mode generation + reveal). The host uses it to hide its
-   * persistent personality band so this view fills the panel area - WITHOUT
-   * covering the app's top bar / bottom nav. Always fired with `false` on
-   * unmount so a mid-reveal close can't strand the band hidden.
+   * (Embedded mode) Fired when the form enters/leaves one of its full-panel
+   * create screens (the "describe a personality" hero, then generation +
+   * reveal). The host uses it to hide its persistent personality band so these
+   * views fill the panel area - WITHOUT covering the app's top bar. Always
+   * fired with `false` on unmount so a mid-reveal close can't strand the band
+   * hidden.
    */
   onImmersiveChange?: (immersive: boolean) => void;
 }
@@ -166,6 +168,15 @@ export function CreatePersonalityModal({
       err.reason === 'hf_token_missing'
     ) {
       setGenError('Sign in to Hugging Face first to generate a personality.');
+    } else if (
+      err instanceof GeneratePersonalityError &&
+      err.reason === 'hf_token_invalid'
+    ) {
+      // Hard 401: HF rejected the token (expired / signature no longer
+      // verifies). The app shell reacts to the same signal by evicting the
+      // token and surfacing the sign-in gate, so keep the copy short and
+      // point the user at the re-auth that's about to appear.
+      setGenError('Your Hugging Face session expired - sign in again to continue.');
     } else if (
       err instanceof GeneratePersonalityError &&
       err.reason === 'overloaded'
@@ -359,6 +370,21 @@ export function CreatePersonalityModal({
     [sticker, stickerCooking, vibe],
   );
 
+  // Abort handle for an in-flight persona generation, so backing out
+  // actually stops it (see the unmount cleanup below).
+  const genAbortRef = useRef<AbortController | null>(null);
+
+  // Cancelling the generation view calls `onCancel`, which makes the host drop
+  // this form - so unmount IS the cancel signal. Aborting here is what stops a
+  // resolved stream from committing + activating a persona the user just backed
+  // out of (and from kicking off a ~1 min sticker bake for it).
+  useEffect(
+    () => () => {
+      genAbortRef.current?.abort();
+    },
+    [],
+  );
+
   // Generate (create mode): hand off to the dedicated full-screen view and
   // STREAM the persona in, filling each slot as it lands (name first, hence
   // the monogram, then tagline). Once the object resolves we commit +
@@ -375,14 +401,22 @@ export function CreatePersonalityModal({
     setTagline('');
     setInstructions('');
     setPhase('generating');
+    genAbortRef.current?.abort();
+    const controller = new AbortController();
+    genAbortRef.current = controller;
     void (async () => {
       try {
         const result = await streamPersonality(vibe, {
+          signal: controller.signal,
           onPartial: partial => {
             if (partial.name !== undefined) setName(partial.name);
             if (partial.tagline !== undefined) setTagline(partial.tagline);
           },
         });
+        // A cancel that landed while the last chunks were in flight still
+        // resolves the stream: bail before the commit so we don't create a
+        // persona behind a closed form.
+        if (controller.signal.aborted) return;
         // Settle the form to the validated result (instructions land last).
         setName(result.name);
         setTagline(result.tagline);
@@ -391,9 +425,13 @@ export function CreatePersonalityModal({
         commitGeneratedPersona(result);
         setPhase('reveal');
       } catch (err) {
+        // The user backed out - there's nothing to report and no screen left
+        // to report it on.
+        if (controller.signal.aborted) return;
         reportGenError(err);
         setPhase('idea');
       } finally {
+        if (genAbortRef.current === controller) genAbortRef.current = null;
         setGenMode(null);
       }
     })();
@@ -429,18 +467,29 @@ export function CreatePersonalityModal({
     (onDeleted ?? onCreated)();
   };
 
-  // The create-mode "Meet" flow (generation + reveal) should take over the
-  // panel area - replacing the personality band above it - WITHOUT covering the
-  // app's top bar / bottom nav. We don't go `position: fixed` (that would eat
-  // the whole viewport); instead we tell the host (`onImmersiveChange`) to hide
-  // its personality band while this phase is up, so our embedded body simply
-  // grows to fill the freed space. Edit mode and the idea/manual screens stay
-  // embedded under the band.
-  const meetOverlay = embedded && !isEdit && phase !== 'idea';
+  // The create funnel's two full-panel screens - the "describe a personality"
+  // hero and the "Meet" flow (generation + reveal) - take the panel area over
+  // by replacing the personality band above them, WITHOUT covering the app's
+  // top bar. We don't go `position: fixed` (that would eat the whole viewport);
+  // instead we tell the host (`onImmersiveChange`) to hide its band while
+  // they're up, so our embedded body simply grows to fill the freed space.
+  //
+  // Why the hero counts: the band's job is to mirror the persona being
+  // authored (title + portrait disc), and on the hero there is no persona yet -
+  // so it shows the OUTGOING one, which reads as "this is who you're editing"
+  // on the one screen where that's false. It earns its place back on the manual
+  // form and in edit mode, where the mirror is live and useful.
+  const heroPhase = !isEdit && phase === 'idea' && !detailsOpen;
+  const meetPhase = !isEdit && phase !== 'idea';
+  const bandHidden = embedded && (heroPhase || meetPhase);
+  // With the band gone, so is the "✕" it lends us - the hero has to carry its
+  // own way out. The Meet screens don't: they own a "Cancel" link, which
+  // deliberately disappears once the persona is committed.
+  const showOwnClose = embedded && heroPhase;
   const notifyImmersive = onImmersiveChange;
   useEffect(() => {
-    notifyImmersive?.(meetOverlay);
-  }, [meetOverlay, notifyImmersive]);
+    notifyImmersive?.(bandHidden);
+  }, [bandHidden, notifyImmersive]);
   // Always clear the flag when the form unmounts, so a close mid-reveal can't
   // leave the host's band hidden.
   useEffect(() => () => notifyImmersive?.(false), [notifyImmersive]);
@@ -448,13 +497,13 @@ export function CreatePersonalityModal({
     <Box
       role={embedded ? 'group' : 'dialog'}
       aria-modal={embedded ? undefined : 'true'}
-      aria-label={embedded ? 'Create your own agent' : undefined}
+      aria-label={embedded ? 'Create your own personality' : undefined}
       aria-labelledby={embedded ? undefined : 'create-personality-title'}
       sx={
         embedded
           ? {
-              // In-flow: fill the host's body slot, sitting BELOW the
-              // persistent personality band (which owns title + close).
+              // In-flow: fill the host's body slot, sitting below the
+              // persistent personality band on the screens that keep it.
               // Full-bleed escape (`100vw` + negative margin) so we break
               // out of the host's `px` gutter - otherwise the scroll
               // container is inset and its scrollbar floats ~24px off the
@@ -468,6 +517,13 @@ export function CreatePersonalityModal({
               color: 'text.primary',
               display: 'flex',
               flexDirection: 'column',
+              // The host hides its bottom tab bar for as long as this form is
+              // up (an unguarded tab tap would destroy the draft), and that bar
+              // was the thing absorbing the home-indicator inset. We inherit
+              // the job, or the CTA plate below ends up under the indicator.
+              pb: LAYOUT.safeAreaBottom,
+              // Anchors the hero's own close button (below).
+              position: 'relative',
             }
           : {
               position: 'fixed',
@@ -482,9 +538,10 @@ export function CreatePersonalityModal({
             }
       }
     >
-      {/* Sticky header: title + close. Suppressed in embedded mode - the
-          personality band above owns the title and the close affordance
-          (its "+" morphs into a "✕"). */}
+      {/* Sticky header: title + close. Suppressed in embedded mode, where the
+          title + close come from whatever chrome is up: the personality band
+          (its "+" morphs into a "✕") on the screens that keep it, else the
+          hero's own button below. */}
       {!embedded && (
         <Stack
           direction="row"
@@ -505,12 +562,31 @@ export function CreatePersonalityModal({
               letterSpacing: '-0.3px',
             }}
           >
-            {isEdit ? 'Edit personality' : 'Create your own agent'}
+            {isEdit ? 'Edit personality' : 'Create your own personality'}
           </Typography>
           <IconButton aria-label="Cancel" onClick={onCancel} edge="end" color="primary">
             <CloseIcon />
           </IconButton>
         </Stack>
+      )}
+
+      {/* Hero's own close. Absolutely positioned rather than in a header row:
+          the hero centres itself with `my: auto`, so an in-flow row would push
+          its optical centre down.
+          Offsets are PIXELS, not spacing units: MUI's sx config leaves
+          `top`/`right` untransformed (unlike `p`/`m`), so a bare `2` here would
+          be 2px, not 16px. 16px + the IconButton's own 8px inner padding puts
+          the glyph 24px off each edge, which is the app's `px: 3` gutter - so
+          the button lines up with the content column it floats over. */}
+      {showOwnClose && (
+        <IconButton
+          aria-label="Cancel"
+          onClick={onCancel}
+          color="primary"
+          sx={{ position: 'absolute', top: '16px', right: '16px', zIndex: 2 }}
+        >
+          <CloseIcon />
+        </IconButton>
       )}
 
       {/* Scrollable form body. No avatar/identity preview at the top: the
@@ -528,9 +604,9 @@ export function CreatePersonalityModal({
           // Extra top breathing room in embedded mode: the personality band
           // above now lets its avatar disc spill downward, so the first
           // field needs clearance to not sit under the overflowing circle.
-          // The fullscreen Meet overlay has no band above it, so it drops back
-          // to the normal padding.
-          pt: embedded && !meetOverlay ? 7 : 3,
+          // The screens that hide the band have nothing to clear, so they drop
+          // back to the normal padding.
+          pt: embedded && !bandHidden ? 7 : 3,
           pb: 3,
         }}
       >
@@ -557,7 +633,6 @@ export function CreatePersonalityModal({
           />
         ) : (
           <CreatePersonalityFields
-            isEdit={isEdit}
             name={name}
             onNameChange={setName}
             tagline={tagline}
@@ -567,16 +642,23 @@ export function CreatePersonalityModal({
             instructions={instructions}
             onInstructionsChange={setInstructions}
             playingVoice={playingVoice}
-            onBack={() => setDetailsOpen(false)}
           />
         )}
       </Box>
 
-      {/* Sticky action plate. Hidden on the create landing: you can never
-          submit straight from the "describe it" view - generating, Surprise
-          me, or "set it up manually" all move you into the form first
-          (detailsOpen), where the CTA lives. */}
-      {detailsOpen && (
+      {/* Sticky action plate. Every screen that can act owns one, so the
+          primary button is always in the same place:
+            - hero  -> "Bring it to life" (hands off to the generation view)
+            - form  -> "Create & use" / the edit row's Delete + Save
+            - Meet  -> none. Generation can't be committed early and the
+              reveal commits itself, so the only affordance there is that
+              view's own "Cancel". */}
+      {heroPhase ? (
+        <CreatePersonalityHeroActions
+          disabled={generating || rolling || vibe.trim().length === 0}
+          onGenerate={handleGenerate}
+        />
+      ) : detailsOpen ? (
         <CreatePersonalityActions
           isEdit={isEdit}
           confirmingDelete={confirmingDelete}
@@ -586,7 +668,7 @@ export function CreatePersonalityModal({
           onDelete={handleDelete}
           onKeep={() => setConfirmingDelete(false)}
         />
-      )}
+      ) : null}
     </Box>
   );
 }

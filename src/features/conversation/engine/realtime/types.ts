@@ -84,6 +84,10 @@ export interface RealtimeBackend {
   getRobotMicTrack: (
     robotInstance: ReachyMiniInstance,
   ) => MediaStreamTrack | null;
+  /** Re-bind the conversation audio legs onto a freshly re-dialled peer
+   *  connection (see the bridge implementation). Returns false when the
+   *  new connection has no audio receiver yet. */
+  rebindRobotAudio: (robotInstance: ReachyMiniInstance) => boolean;
   setMicMuted: (muted: boolean) => void;
   getRealtimePort: () => RealtimePort;
 }

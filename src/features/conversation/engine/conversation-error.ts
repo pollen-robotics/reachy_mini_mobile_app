@@ -16,7 +16,17 @@
  * Everything else - a busy/cold backend, a rate limit, a dropped
  * transport - is transient, where "sign in" would be a dead end.
  */
-export function formatConversationError(detail: string): string {
+export function formatConversationError(
+  detail: string,
+  /**
+   * Copy for details that match none of the structured hints below.
+   * The conversation layer keeps the default; the CONNECTION layer
+   * passes a transport-flavored fallback, because every error routed
+   * through it is by definition a robot-link failure - "could not
+   * start the conversation" would be wrong (and alarming) mid-session.
+   */
+  fallback = "Could not start the conversation. Retry in a moment.",
+): string {
   // Pre-flight: no HF token to authenticate the session with.
   if (/no HF token|hf_token_missing/i.test(detail)) {
     return "Sign in to Hugging Face to start the conversation.";
@@ -45,5 +55,15 @@ export function formatConversationError(detail: string): string {
     return "Lost the realtime connection. Retry in a moment.";
   }
 
-  return "Could not start the conversation. Retry in a moment.";
+  // Central's concurrency gate: someone else (another phone, the web
+  // host, a local Python app) holds the robot's single session slot.
+  // Surfacing this as a generic "connection lost" would hide the one
+  // piece of information that makes the retry button useful: free the
+  // robot elsewhere first. Matches the SDK's `_failSessionRejected` /
+  // `_handleEndSession` wording (`Robot is busy: ...`).
+  if (/robot is busy|robot_busy/i.test(detail)) {
+    return "Your Reachy is busy with another app. Close it there, then try again.";
+  }
+
+  return fallback;
 }

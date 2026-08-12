@@ -294,6 +294,31 @@ function withoutPending(id: string): ReadonlyMap<string, number> {
   return next;
 }
 
+/**
+ * Reorder the custom personalities to match `orderedIds` (STORAGE
+ * order, i.e. the order persisted to localStorage - the picker rail
+ * displays customs reversed, newest first, and does that mapping
+ * itself). Refuses (no-op) unless `orderedIds` is an exact permutation
+ * of the current custom ids, so a stale drag result can never drop or
+ * duplicate a persona.
+ */
+export function reorderCustomPersonalities(orderedIds: string[]): void {
+  if (orderedIds.length !== state.customs.length) return;
+  const byId = new Map(state.customs.map((p) => [p.id, p]));
+  const next: Personality[] = [];
+  for (const id of orderedIds) {
+    const persona = byId.get(id);
+    if (!persona) {
+      console.warn(`[personalities] refusing reorder with unknown id: ${id}`);
+      return;
+    }
+    byId.delete(id);
+    next.push(persona);
+  }
+  writeCustomPersonalities(next);
+  update({ customs: next, catalog: mergeCatalog(next) });
+}
+
 /** Remove a custom personality. If it was the active one, fall back
  *  to the default so the engine doesn't end up with a dangling id. */
 export function removeCustomPersonality(id: string): void {

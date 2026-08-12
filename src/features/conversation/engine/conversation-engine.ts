@@ -21,7 +21,7 @@
  *   streaming  (listening / user-speaking / ai-speaking)
  *
  * Audio routing (robot = hub):
- *   robot mic track (received on robot._pc) ─▶ HF realtime input PCM
+ *   robot mic track (received on robot.peerConnection) ─▶ HF realtime input PCM
  *   HF output PCM track                     ─▶ robot audio sender (replaceTrack)
  *
  * Layered architecture
@@ -98,7 +98,9 @@
  *                              silent one-shot reconnect.
  *
  *     motion-control/
- *       wobbler-control.ts     `HeadWobbler` lifecycle + gates.
+ *       daemon-head-control.ts Face tracking + speech wobble, run on
+ *                              the robot, with the gates that park
+ *                              tracking when the app owns the head.
  *       antennas-control.ts    `AntennasOscillator` lifecycle.
  *       pose-dispatcher.ts     30 Hz coalescing tick to the daemon.
  *
@@ -122,7 +124,6 @@ import {
 } from "../background-audio-keeper";
 import { createAudioMonitorsControl } from "./audio-monitors-control";
 import { loadSettings, type Settings } from "./settings";
-import { readHfTokenFromStorage } from "./hf-token";
 import { memoryStore } from "./memory";
 import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
 import { RobotSession } from "@/features/robot-session/RobotSession";
@@ -158,6 +159,7 @@ import {
 import type {
   ConnectionState,
   ConversationState,
+  ConversationBringUpPhase,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -169,6 +171,7 @@ import type {
 // New code should pull these straight from `./types`.
 export type {
   ConnectionState,
+  ConversationBringUpPhase,
   ConversationConnectionAttempt,
   ConversationEngineHandle,
   ConversationEngineOptions,
@@ -316,6 +319,20 @@ const emitConnectionAttempt = (
   }
 };
 
+const onBringUpPhase: ((phase: ConversationBringUpPhase | null) => void) | null =
+  typeof options.onBringUpPhase === "function"
+    ? options.onBringUpPhase
+    : null;
+
+const emitBringUpPhase = (phase: ConversationBringUpPhase | null): void => {
+  if (!onBringUpPhase) return;
+  try {
+    onBringUpPhase(phase);
+  } catch (err) {
+    console.warn("[engine] onBringUpPhase callback threw:", err);
+  }
+};
+
 // ─── Engine core (shared mutable state) ─────────────────────────────────
 //
 // `EngineCore` bundles the FSM cursor + the four boolean gates that
@@ -423,15 +440,16 @@ const settings: Settings = loadSettings();
 // lazily so the null window before assignment degrades to a no-op.
 let backend: RealtimeBackendController | null = null;
 
-// Head-motion + antennas oscillator. The actual `HeadWobbler` and
-// `AntennasOscillator` instances live inside their respective
+// Head behaviour + antennas oscillator. The `AntennasOscillator`
+// instance and the daemon head commands live inside their respective
 // controllers, which expose a small `start / stop / freeze / resume`
 // surface so the engine doesn't have to manage their lifecycles
 // directly.
 //
-// Both controllers are stateless until first `start()`. Recreated
-// per session for the wobbler (it's bound to the assistant audio
-// track), reused across sessions for the antennas.
+// Both controllers are stateless until first `start()` and reused
+// across sessions: neither is bound to a session-specific object any
+// more, now that the head wobble comes from the audio the robot
+// receives rather than from an analyser on the assistant track.
 
 // Mic + AI level monitors moved to `audioMonitors` (created above
 // alongside the host-callback wrapping). They drive the orb's
@@ -465,6 +483,12 @@ const liveSession: LiveSession = createLiveSession(session);
 // `detachRobot`) without the conversation engine having to know
 // anything about candidate pairs.
 session.setTransportListener(onTransportChange);
+// Wire the live peer-id re-resolver so every bring-up dials the CURRENT
+// producer instead of a stale snapshot (the robot's peer id rotates on
+// each relay reconnect). No-op when the host didn't supply one.
+session.setResolvePeerId(
+  typeof options.resolvePeerId === "function" ? options.resolvePeerId : null,
+);
 
 // Reconnect bookkeeping (attempt counter + in-flight flag) is owned
 // by the realtime bridge. The engine reads it through
@@ -569,12 +593,22 @@ const connectionController: ConnectionController = createConnectionController({
   preselectedRobotId,
   shouldDeferInitialWakeUp: options.shouldDeferInitialWakeUp,
   emitConnectionAttempt,
+  emitBringUpPhase,
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
   onConnectionLost: (opts) => onConnectionLost(opts),
   resumeAudioContexts: () => resumeAudioContexts(),
   applyMicMuted: (muted) => applyMicMuted(muted),
+  // Deferred through a closure: `motion` is created further down (the
+  // orchestrator needs `recordSend`, which the controller provides),
+  // and the gate only fires on SDK resilience events long after boot.
+  setPoseSendGate: (gated) => motion.setSendGate(gated),
+  // Same deferred-closure trick: `backend` is built further down, and
+  // this only fires on an SDK re-dial, long after boot.
+  rebindRobotAudio: (robotInstance) => {
+    backend?.bridge().rebindRobotAudio(robotInstance);
+  },
 });
 
 // Motion's pose dispatcher feeds the controller's data-channel health
@@ -706,8 +740,9 @@ async function onConnectionLive(): Promise<void> {
 }
 
 /**
- * The conversation pipeline proper: antenna oscillator, head wobbler,
- * HF realtime client, mic plumbing. Split out of `doStart` so the
+ * The conversation pipeline proper: antenna oscillator, daemon-side
+ * head behaviour, HF realtime client, mic plumbing. Split out of
+ * `doStart` so the
  * mobile app can defer it until the user is in the right view (the
  * SDK / DataChannel is brought up earlier because it doubles as the
  * daemon proxy transport during wake-up).
@@ -763,7 +798,7 @@ async function runConversationParts(): Promise<void> {
     const w = window as unknown as Record<string, unknown>;
     const prevTimer = w.__micDiagTimer as ReturnType<typeof setInterval> | undefined;
     if (prevTimer) clearInterval(prevTimer);
-    w.__robotPc = robot._pc;
+    w.__robotPc = robot.peerConnection;
     w.__robotMicTrack = robotMicTrack;
     console.info("[MIC-DIAG] robot mic track:", {
       id: robotMicTrack.id,
@@ -773,7 +808,7 @@ async function runConversationParts(): Promise<void> {
     });
     let lastBytes = 0;
     w.__micDiagTimer = setInterval(() => {
-      const pc = robot?._pc;
+      const pc = robot?.peerConnection;
       if (!pc) return;
       void pc.getStats().then((stats) => {
         stats.forEach((report) => {
@@ -799,11 +834,10 @@ async function runConversationParts(): Promise<void> {
     console.warn("[MIC-DIAG] setup failed", err);
   }
 
-  // Bring the motion stack up (pose dispatcher + antennas
-  // oscillator). The wobbler waits for its AI track via the
-  // bridge's `onOutputTrack` callback, which forwards into
-  // `motion.attachAiOutput`. Idempotent on re-acquire paths: a
-  // running dispatcher / oscillator stays running.
+  // Bring the motion stack up: pose dispatcher + antennas oscillator
+  // on our side, then face tracking + speech wobble handed to the
+  // daemon. Idempotent on re-acquire paths: a running dispatcher /
+  // oscillator stays running and the daemon commands are not resent.
   motion.startSession();
   // Spin up the silent keepalive AudioContext so iOS treats us as
   // an actively-playing audio app and grants background time when
@@ -884,8 +918,8 @@ async function recoverConversationStartFailure(err: unknown): Promise<void> {
 // (`move_head`, `play_move`, `remember`, `forget`), the lazily-created
 // `MovePlayer`, and the head-pose restore timer. We feed it the
 // engine state it needs through getters and listen to its
-// `onMoveStart` / `onMoveEnd` callbacks so the wobbler + antennas
-// pause cleanly during a choreography.
+// `onMoveStart` / `onMoveEnd` callbacks so the antennas and the
+// daemon's face tracking pause cleanly during a choreography.
 
 const toolCallHandler = createToolCallHandler({
   getRobot: liveSession.getRobot,
@@ -909,8 +943,8 @@ const toolCallHandler = createToolCallHandler({
   onToolToast: onToolToast ?? undefined,
   // Late-bound onto the `vision` handle declared further down (same
   // forward-reference pattern as the bridge): the `look` tool calls
-  // through here. When vision is inert (no HF token) `vision` is null
-  // and we return a graceful "unavailable" result rather than throw.
+  // through here. Before the backend is built `vision` is null and we
+  // return a graceful "unavailable" result rather than throw.
   look: () =>
     backend?.vision()?.look() ??
     Promise.resolve({
@@ -924,7 +958,7 @@ const toolCallHandler = createToolCallHandler({
 // Browsers throttle JS timers and may suspend AudioContexts in hidden
 // tabs. The WebRTC media stack itself is native and keeps running, so
 // the voice conversation continues to flow - but:
-//   - our VAD / wobbler / mic-level analysers stop updating
+//   - our VAD / mic-level analysers stop updating
 //   - AudioContexts can end up suspended on return (Safari, mobile)
 //   - a device sleep during silence can kill everything
 //
@@ -933,12 +967,11 @@ const toolCallHandler = createToolCallHandler({
 // the audio-context resume on visibility return, below.
 
 function resumeAudioContexts(): void {
-  // HeadWobbler, MicLevelMonitor and AiLevelMonitor each own a private
-  // AudioContext that some browsers (notably Safari / iOS) suspend
-  // when the tab goes into the background. Wake them back up.
-  // (AntennasOscillator has no AudioContext - it's purely time-based,
-  // hence no resume on the motion side beyond `motion.resumeAudio()`.)
-  motion.resumeAudio();
+  // MicLevelMonitor and AiLevelMonitor each own a private AudioContext
+  // that some browsers (notably Safari / iOS) suspend when the tab goes
+  // into the background. Wake them back up. Nothing to do on the motion
+  // side: the antennas oscillator is purely time-based, and the head is
+  // animated by the daemon from audio we never touch.
   audioMonitors.resumeAudio();
 }
 
@@ -950,23 +983,26 @@ function resumeAudioContexts(): void {
 // ─── Motion stack ──────────────────────────────────────────────────────
 //
 // `motion-control/orchestrator.ts` bundles the three low-level motion
-// controllers - pose dispatcher, head wobbler, antennas oscillator -
-// behind a single named API the engine drives from FSM transitions
-// and lifecycle events:
+// controllers - pose dispatcher, daemon head control, antennas
+// oscillator - behind a single named API the engine drives from FSM
+// transitions and lifecycle events:
 //
-//   - `startSession()` / `attachAiOutput(track)` / `stop({ glide })`
-//     for the conversation-pipeline lifecycle.
+//   - `startSession()` / `stop({ glide })` for the
+//     conversation-pipeline lifecycle.
 //   - `onUserSpeak()` / `onAiSpeak()` / `onListening()` /
 //     `onProcessing()` / `onReconnecting()` for per-FSM-event hooks
 //     (each captures "the right thing to do on the motion side in
 //     state X" in exactly one place).
-//   - `resumeAudio()` to wake the wobbler's private AudioContext on
-//     visibility return.
 //
-// The dispatcher coalesces the wobbler's 20 Hz head writes + the
-// antennas oscillator's 30 Hz writes into ONE `set_full_target` per
-// 30 Hz tick (with SCTP backpressure throttling). See the
-// orchestrator file's docstring for the full rationale.
+// The head itself is animated on the robot: the daemon follows the
+// user's face and wobbles the head in time with the speech it plays,
+// which is both better synchronised and unavoidable, since at full
+// tracking weight the daemon discards any head pose we send. The
+// dispatcher is therefore left carrying the antennas oscillator's
+// 30 Hz writes (with SCTP backpressure throttling), plus the head
+// during tool-call gestures and choreographies, when tracking parks
+// and hands it back to us. See the orchestrator file's docstring for
+// the full rationale.
 const motion = createMotionOrchestrator({
   getRobot: liveSession.getRobot,
   isPoseLocked: () => toolCallHandler.isPoseLocked(),
@@ -1122,7 +1158,9 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
     }
   },
   onOutputTrack: (track) => {
-    motion.attachAiOutput(track);
+    // The motion side doesn't need this track: the head wobble is
+    // derived on the robot from the audio it receives, so only the orb
+    // visualisation consumes it here.
     audioMonitors.startAi(track);
   },
   onToolCall: (call) => {
@@ -1148,30 +1186,23 @@ const realtimeBackendDeps: RealtimeBackendDeps = {
 // personality, language or tool change apply on the next conversation
 // start without rebuilding it.
 //
-// Vision side-channel (see `docs/VISION.md`)
-// ──────────────────────────────────────────
+// Vision side-channel
+// ───────────────────
 // On-demand scene awareness: the camera is read ONLY when the model
-// calls the `look` tool (no passive/periodic capture). The result is
-// mirrored into the realtime context as a `<scene_observation>` block.
-// `attachVision` returns null when no HF token is available, and every
-// call site degrades to a no-op via optional chaining. Vision lives on
-// the bridge's `RealtimePort`; the controller keeps the build + attach
-// in one place so the engine can't forget to wire it.
-//
-// The VLM provider (`vision/providers/hf-vlm-provider.ts`) hits Hugging
-// Face's Inference Providers router with the USER'S OWN HF token (the
-// same token in `sessionStorage.hf_token` used by the realtime
-// allocator), deliberately decoupling vision from the voice pipeline:
-//   - no master model-provider key on the wire (no server-side proxy, no shared bill);
-//   - per-user billing (each user's calls land on their own HF tier);
-//   - changing the VLM model is a one-line edit in `vision/config.ts`.
+// calls the `look` tool (no passive/periodic capture). The captured
+// frame is attached straight to the realtime conversation as an
+// `input_image` user item - the S2S backend is natively multimodal, so
+// the model sees the actual photo. No separate VLM call, no extra
+// credential or billing tier (mirrors the on-robot conversation app's
+// `camera` tool flow). Vision lives on the bridge's `RealtimePort`;
+// the controller keeps the build + attach in one place so the engine
+// can't forget to wire it.
 backend = createRealtimeBackendController({
   bridgeDeps: realtimeBackendDeps,
   attachVision: (bridge) =>
     attachVision({
       realtime: bridge.getRealtimePort(),
       getVideoStream: liveSession.getVideoStream,
-      getHfToken: readHfTokenFromStorage,
     }),
 });
 

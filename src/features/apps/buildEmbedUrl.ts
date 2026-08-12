@@ -73,6 +73,14 @@ export interface AppEmbedContext {
    * complete inside an iframe). */
   hfUsername: string | null;
   robotPeerId: string;
+  /**
+   * Stable hardware id of the robot (central `meta.hardware_id`), or
+   * `null` for a daemon too old to expose one. Threaded through so the
+   * embed can re-resolve the live `robotPeerId` from central right
+   * before `startSession()` - the bare peer id rotates on every relay
+   * reconnect and is frequently dead after a Space cold-start.
+   */
+  robotHardwareId?: string | null;
   robotName: string;
   theme: 'dark' | 'light';
   /**
@@ -152,6 +160,9 @@ export interface EmbedCredsBundle {
   hfToken: string;
   userName: string;
   robotPeerId: string;
+  /** Stable hardware id (central `meta.hardware_id`) so the embed can
+   *  re-resolve the live peer id before dialing. `null` when unknown. */
+  robotHardwareId: string | null;
   signalingUrl: string;
   theme: 'dark' | 'light';
   config: unknown;
@@ -184,6 +195,7 @@ export function buildEmbedCreds(
     hfToken: ctx.hfToken,
     userName: ctx.hfUsername ?? 'user',
     robotPeerId: ctx.robotPeerId,
+    robotHardwareId: ctx.robotHardwareId ?? null,
     signalingUrl: ctx.signalingUrl ?? DEFAULT_SIGNALING_URL,
     theme: ctx.theme,
     config: ctx.config ?? null,

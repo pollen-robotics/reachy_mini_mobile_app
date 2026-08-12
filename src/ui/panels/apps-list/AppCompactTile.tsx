@@ -443,7 +443,7 @@ function AppCompactTileImpl({
           variant="outlined"
           color="primary"
           size="small"
-          aria-label={`Launch ${app.name}`}
+          aria-label={`Try ${app.name}`}
           startIcon={<PlayArrowOutlinedIcon sx={{ fontSize: TYPO.lg }} />}
           onClick={() => onOpen(app)}
           sx={{
@@ -466,7 +466,7 @@ function AppCompactTileImpl({
             '& .MuiButton-startIcon': { mr: 0.5 },
           }}
         >
-          Launch
+          Try
         </Button>
       </Box>
     </Box>

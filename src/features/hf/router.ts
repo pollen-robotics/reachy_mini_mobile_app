@@ -42,6 +42,7 @@
  */
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { HF_MODEL_CHAIN, HF_ROUTER_POLICY } from "@/shared/env";
+import { notifyHfTokenInvalid } from "@/features/auth/tokenInvalidation";
 import {
   fetchModelCatalog,
   modelSupportsStructuredOutput,
@@ -119,6 +120,10 @@ export class HfRouterError extends Error {
   readonly body: string;
   readonly overloaded: boolean;
   readonly modelUnsupported: boolean;
+  /** Hard credentials rejection (HTTP 401): the bearer is bad/expired or
+   *  its signature no longer verifies. Not fixable by another model - the
+   *  app shell reacts by evicting the token and re-prompting sign-in. */
+  readonly authInvalid: boolean;
 
   constructor(status: number, body: string) {
     super(
@@ -131,6 +136,7 @@ export class HfRouterError extends Error {
     this.body = body;
     this.overloaded = isOverloadStatus(status, body);
     this.modelUnsupported = isModelUnsupported(status, body);
+    this.authInvalid = status === 401;
   }
 }
 
@@ -305,7 +311,13 @@ export async function routerChatCompletion(
     lastError = error;
 
     // Fail fast on genuine client errors; only fall back on retryable ones.
-    if (!isRetryable(response.status, text)) throw error;
+    if (!isRetryable(response.status, text)) {
+      // A hard 401 means HF rejected the bearer itself (bad/expired token or
+      // a signature that no longer verifies). No other model would fix it, so
+      // signal the app shell to evict the token and re-prompt sign-in.
+      if (error.authInvalid) notifyHfTokenInvalid();
+      throw error;
+    }
     if (i < models.length - 1) {
       // Back off only for overloads / 5xx; an unsupported model is instant.
       if (error.overloaded || response.status >= 500) {

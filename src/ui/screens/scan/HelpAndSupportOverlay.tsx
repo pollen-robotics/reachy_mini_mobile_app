@@ -369,6 +369,7 @@ export default function HelpAndSupportOverlay({
               </Typography>
               {hiddenAuthors.ids.length > 1 && (
                 <Button
+                  variant="text"
                   size="small"
                   onClick={() => hiddenAuthors.clear()}
                   sx={{

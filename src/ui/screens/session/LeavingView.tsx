@@ -52,13 +52,12 @@ export default function LeavingView() {
         px: 3,
       }}
     >
-      {/* Discreet, thin-stroked spinner. Size + thickness tuned to
-          read as "a small ambient activity indicator" rather than
-          "the focal point of the screen". `text.secondary`
-          colouring keeps it muted against both light and dark
-          backgrounds; the underlying CSS animation already gives
-          enough motion to register as a loading state. */}
-      <CircularProgress size={22} thickness={2.4} sx={{ color: 'text.secondary' }} />
+      {/* Same 32px grey spinner as the app's other full-screen wait
+          states (tab-switch cover, apps loading, setup busy views) so
+          every "please wait" beat shares one visual voice.
+          `text.secondary` colouring keeps it muted against both light
+          and dark backgrounds. */}
+      <CircularProgress size={32} sx={{ color: 'text.secondary' }} />
       <Typography
         sx={{
           fontSize: TYPO.md,
