@@ -14,12 +14,11 @@ import { Box, MenuItem, Stack, TextField } from '@mui/material';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
 import { AVAILABLE_VOICES, VOICE_DESCRIPTIONS } from '@/features/personalities';
-import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
+import { LAYOUT, RADIUS } from '@/ui/design/tokens';
 
 import { NAME_MAX, TAGLINE_MAX, shrinkLabelSlotProps } from './constants';
 
 export interface CreatePersonalityFieldsProps {
-  isEdit: boolean;
   name: string;
   onNameChange: (value: string) => void;
   tagline: string;
@@ -34,7 +33,6 @@ export interface CreatePersonalityFieldsProps {
 }
 
 export function CreatePersonalityFields({
-  isEdit,
   name,
   onNameChange,
   tagline,

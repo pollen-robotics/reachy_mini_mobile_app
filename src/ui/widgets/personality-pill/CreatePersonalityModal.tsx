@@ -633,7 +633,6 @@ export function CreatePersonalityModal({
           />
         ) : (
           <CreatePersonalityFields
-            isEdit={isEdit}
             name={name}
             onNameChange={setName}
             tagline={tagline}
