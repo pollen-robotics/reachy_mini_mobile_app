@@ -35,7 +35,7 @@
     "@noble/ciphers": "^1.0.0",
     "@noble/curves": "^1.6.0",
     "@noble/hashes": "^1.5.0",
-    "@pollen-robotics/reachy-mini-sdk": "file:vendor/reachy-mini-sdk-986276b50-1786208085.tgz",
+    "@pollen-robotics/reachy-mini-sdk": "file:vendor/reachy-mini-sdk-4143b6664-1786510210.tgz",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
     "@tanstack/react-query": "^5.100.9",
