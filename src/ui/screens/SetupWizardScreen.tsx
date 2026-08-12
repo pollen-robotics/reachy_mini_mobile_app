@@ -1065,9 +1065,13 @@ function DeviceCodeView({
   verificationUri: string | null;
 }) {
   const [copied, setCopied] = useState(false);
-  // Spinner only once the user actually went to the browser: before that
-  // nothing is "in progress" from their point of view (the background polling
-  // is invisible plumbing), and a spinner next to a copy step reads as "wait".
+  // Once the user actually went to the browser, the code has done its job:
+  // rather than lingering here with a spinner bolted onto the copy step, we
+  // render the SAME "Almost there / Registering…" screen the next phase
+  // (central-waiting) shows, so approving on HF lands back on a screen that
+  // doesn't visibly change. Purely presentational - the FSM still sits in
+  // device-code-waiting, polling in the background. The escape hatch below
+  // brings the code back for users who return without having entered it.
   const [opened, setOpened] = useState(false);
 
   const copyCode = async () => {
@@ -1081,16 +1085,36 @@ function DeviceCodeView({
     }
   };
 
+  if (opened) {
+    return (
+      <SetupScaffold
+        hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />}
+        title="Almost there"
+        caption="Registering with Hugging Face…"
+        actions={
+          <Button
+            variant="text"
+            fullWidth
+            onClick={() => setOpened(false)}
+            sx={{
+              textTransform: 'none',
+              fontSize: TYPO.sm,
+              color: 'text.secondary',
+            }}
+          >
+            I need the code again
+          </Button>
+        }
+      />
+    );
+  }
+
   return (
     <SetupScaffold
       hero={
-        opened ? (
-          <CircularProgress size={32} sx={{ color: 'text.secondary' }} />
-        ) : (
-          <IconHero>
-            <LockOutlinedIcon sx={{ fontSize: 32 }} />
-          </IconHero>
-        )
+        <IconHero>
+          <LockOutlinedIcon sx={{ fontSize: 32 }} />
+        </IconHero>
       }
       title="Confirm this code on Hugging Face"
       caption="Copy the code below, then sign in on Hugging Face and enter it. Keep this app open — setup finishes on its own once you approve."
