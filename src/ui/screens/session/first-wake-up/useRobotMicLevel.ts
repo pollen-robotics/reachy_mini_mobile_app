@@ -27,6 +27,7 @@
 import { useEffect, useState } from 'react';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import { getPlatform } from '@/shared/platform';
 
 // A high-pass filter in front of the analyser kills low-frequency rumble /
 // mains hum / DC offset that otherwise leaks constant energy into silence.
@@ -84,6 +85,22 @@ export function useRobotMicLevel(
 
     const buildGraph = (track: MediaStreamTrack): (() => void) => {
       const ctx = new AudioCtx();
+      // Android-only: the WebView feeds a remote WebRTC track into Web
+      // Audio only if the track is ALSO attached to a playing media
+      // element (crbug.com/121673). Without this muted pump the analyser
+      // reads flat silence, so the tap never registers and the step sits
+      // there looking connected. The conversation path has its own pump
+      // (`PcmInputStreamer`), which is why talking to the robot works
+      // while this step doesn't - the wizard runs with no conversation,
+      // so nothing else is holding the track open.
+      let pump: HTMLAudioElement | null = null;
+      if (getPlatform() === 'android') {
+        pump = document.createElement('audio');
+        pump.autoplay = true;
+        pump.muted = true;
+        pump.srcObject = new MediaStream([track]);
+        document.body.appendChild(pump);
+      }
       const source = ctx.createMediaStreamSource(new MediaStream([track]));
       const highpass = ctx.createBiquadFilter();
       highpass.type = 'highpass';
@@ -155,6 +172,11 @@ export function useRobotMicLevel(
         try {
           source.disconnect();
           highpass.disconnect();
+          if (pump) {
+            pump.srcObject = null;
+            pump.remove();
+            pump = null;
+          }
         } catch {
           // ignore
         }
