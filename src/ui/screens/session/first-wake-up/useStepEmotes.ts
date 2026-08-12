@@ -29,7 +29,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { STEP_EMOTES, type Step } from './constants';
-import { resetToDefaultPose } from './motion';
+import { RESET_HOLD_MS, resetToDefaultPose } from './motion';
 
 // Extra time past a move's nominal length (`spec.playMs`) before the safety
 // ceiling force-reveals. The event-driven `is_move_running` edge normally fires
@@ -54,6 +54,23 @@ export interface StepEmotes {
    * on the daemon side if a move is already running (`is_move_running`).
    */
   play: (step: Step) => void;
+  /**
+   * Ms until the last end-of-emote neutral reset goto has finished on the
+   * robot (0 when settled). Anything that plays a recorded move outside this
+   * controller (the closing celebration) must wait this out first - the
+   * daemon does NOT serialize a goto against a recorded move (see
+   * `RESET_HOLD_MS` in `./motion`), so firing early makes the two trajectories
+   * fight and the robot tremble.
+   */
+  msUntilResetSettled: () => number;
+  /**
+   * Interrupt the in-flight emote (if any): tear down its watcher/timers and
+   * stop the move (and its bundled sound) on the daemon, WITHOUT the
+   * end-of-move side effects (no reveal, no neutral reset goto). Used by the
+   * global Skip and on unmount so a long move never outlives the wizard.
+   * A no-op when nothing is playing.
+   */
+  stop: () => void;
 }
 
 /**
@@ -82,6 +99,13 @@ export function useStepEmotes(
   // timer) and releases its pose subscription. Set while a move plays, cleared
   // on completion; invoked before starting a new emote and on unmount.
   const stopWatch = useRef<(() => void) | null>(null);
+  // Timestamp (ms epoch) until which the last end-of-emote reset goto still
+  // owns the motors. The next `play` holds its `playRecordedMove` until then:
+  // the daemon does NOT serialize a goto against a recorded move (see
+  // `RESET_HOLD_MS` in `./motion`), so an early play overlaps the reset and
+  // the robot trembles - the exact bug seen on the camera -> speaker
+  // transition, where the confirm button reveals the instant the reset fires.
+  const resetSettleAt = useRef(0);
 
   const play = useCallback(
     (step: Step) => {
@@ -105,77 +129,125 @@ export function useStepEmotes(
         robot.setMotorMode('enabled');
         onMotorWake();
       }
-      // Subscribe so `is_move_running` arrives at ~30 Hz (a crisp move-end edge)
-      // even on steps without the 3D mirror. Refcounted in the SDK, so it
-      // composes with the mirror's own subscription.
-      robot.subscribePose();
-      // Ease into the wake move's start (sleep) pose only when the robot isn't
-      // already there, so a replay-while-awake glides in instead of jumping.
-      const initialGotoDuration =
-        step === 'motor' && !isInSleepPose() ? WAKE_EASE_IN_S : 0;
-      robot.playRecordedMove(spec.move.name, {
-        ...(spec.move.dataset ? { dataset: spec.move.dataset } : {}),
-        ...(initialGotoDuration > 0 ? { initialGotoDuration } : {}),
-      });
+      // Lock the UI ("playing") right away, even when the actual dispatch is
+      // held below - to the user the step's emote starts on the tap.
       setPlayedStep(null);
       setPlayingStep(step);
 
-      // Watch the move to completion: `is_move_running` first rises (the daemon
-      // picked up our play), then falls (the move ended). We reveal on that fall
-      // - not on the initial idle frames before the move starts, hence the
-      // `sawRunning` latch.
-      let sawRunning = false;
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        robot.removeEventListener('state', onState);
-        if (revealTimer.current !== null) {
-          window.clearTimeout(revealTimer.current);
-          revealTimer.current = null;
-        }
-        stopWatch.current = null;
-        setPlayingStep(cur => (cur === step ? null : cur));
-        setPlayedStep(step);
-        // The move just ended, so a single daemon-side goto lands cleanly.
-        cancelReset.current = resetToDefaultPose(session, { retries: 0 });
-        robot.unsubscribePose();
-      };
-      const onState = (e: Event) => {
-        const running = (e as CustomEvent<{ is_move_running?: boolean }>).detail
-          ?.is_move_running;
-        if (running) sawRunning = true;
-        else if (sawRunning) finish();
-      };
-      robot.addEventListener('state', onState);
+      const start = () => {
+        // Subscribe so `is_move_running` arrives at ~30 Hz (a crisp move-end edge)
+        // even on steps without the 3D mirror. Refcounted in the SDK, so it
+        // composes with the mirror's own subscription.
+        robot.subscribePose();
+        // Ease into the wake move's start (sleep) pose only when the robot isn't
+        // already there, so a replay-while-awake glides in instead of jumping.
+        const initialGotoDuration =
+          step === 'motor' && !isInSleepPose() ? WAKE_EASE_IN_S : 0;
+        // Belt-and-braces: clear any straggler move before dispatching ours
+        // (idempotent daemon-side no-op when nothing is running), so the new
+        // emote always starts from a clean slate. Optional chaining: older
+        // vendored SDKs don't ship `stopMove`.
+        robot.stopMove?.();
+        robot.playRecordedMove(spec.move.name, {
+          ...(spec.move.dataset ? { dataset: spec.move.dataset } : {}),
+          ...(initialGotoDuration > 0 ? { initialGotoDuration } : {}),
+        });
 
-      // Safety ceiling (see MOVE_END_FALLBACK_MS): if the edge is missed, reveal
-      // anyway so the step never hangs on "playing".
-      revealTimer.current = window.setTimeout(
-        finish,
-        spec.playMs + MOVE_END_FALLBACK_MS,
-      );
+        // Watch the move to completion: `is_move_running` first rises (the daemon
+        // picked up our play), then falls (the move ended). We reveal on that fall
+        // - not on the initial idle frames before the move starts, hence the
+        // `sawRunning` latch.
+        let sawRunning = false;
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          robot.removeEventListener('state', onState);
+          if (revealTimer.current !== null) {
+            window.clearTimeout(revealTimer.current);
+            revealTimer.current = null;
+          }
+          stopWatch.current = null;
+          setPlayingStep(cur => (cur === step ? null : cur));
+          setPlayedStep(step);
+          // The move just ended, so a single daemon-side goto lands cleanly.
+          cancelReset.current = resetToDefaultPose(session, { retries: 0 });
+          resetSettleAt.current = Date.now() + RESET_HOLD_MS;
+          robot.unsubscribePose();
+        };
+        const onState = (e: Event) => {
+          const running = (e as CustomEvent<{ is_move_running?: boolean }>)
+            .detail?.is_move_running;
+          if (running) sawRunning = true;
+          else if (sawRunning) finish();
+        };
+        robot.addEventListener('state', onState);
 
-      stopWatch.current = () => {
-        done = true;
-        robot.removeEventListener('state', onState);
-        if (revealTimer.current !== null) {
-          window.clearTimeout(revealTimer.current);
-          revealTimer.current = null;
-        }
-        robot.unsubscribePose();
+        // Safety ceiling (see MOVE_END_FALLBACK_MS): if the edge is missed, reveal
+        // anyway so the step never hangs on "playing".
+        revealTimer.current = window.setTimeout(
+          finish,
+          spec.playMs + MOVE_END_FALLBACK_MS,
+        );
+
+        stopWatch.current = () => {
+          done = true;
+          robot.removeEventListener('state', onState);
+          if (revealTimer.current !== null) {
+            window.clearTimeout(revealTimer.current);
+            revealTimer.current = null;
+          }
+          robot.unsubscribePose();
+        };
       };
+
+      // Hold the dispatch until the previous step's end-of-emote reset goto
+      // has landed: the confirm button reveals the instant that goto fires, so
+      // a quick tap would otherwise send the next move while the goto is still
+      // driving the motors - and the daemon plays both concurrently (its move
+      // guard is a same-thread reentrant lock), making the robot tremble.
+      const holdMs = Math.max(0, resetSettleAt.current - Date.now());
+      if (holdMs === 0) {
+        start();
+      } else {
+        const pending = window.setTimeout(start, holdMs);
+        stopWatch.current = () => window.clearTimeout(pending);
+      }
     },
     [session, onMotorWake, isInSleepPose],
   );
 
+  const msUntilResetSettled = useCallback(
+    () => Math.max(0, resetSettleAt.current - Date.now()),
+    [],
+  );
+
+  const stop = useCallback(() => {
+    if (stopWatch.current === null) return; // nothing in flight
+    // Tear the watcher down BEFORE stopping the move, so the falling
+    // `is_move_running` edge the stop produces is never mistaken for a
+    // natural move end (which would fire finish(): reveal + reset goto).
+    stopWatch.current();
+    stopWatch.current = null;
+    session.getRobot()?.stopMove?.();
+    setPlayingStep(null);
+  }, [session]);
+
+  // Latest `stop` mirrored into a ref so the one-shot unmount cleanup below
+  // reaches the current session without re-running on every render (the
+  // session handle is re-created by the parent each render).
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+
   useEffect(
     () => () => {
-      stopWatch.current?.();
+      // Unmounting mid-emote (skip / session death): don't leave a long move
+      // playing on the robot with no UI behind it.
+      stopRef.current();
       cancelReset.current?.();
     },
     [],
   );
 
-  return { playingStep, playedStep, play };
+  return { playingStep, playedStep, play, msUntilResetSettled, stop };
 }

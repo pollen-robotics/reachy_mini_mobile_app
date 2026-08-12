@@ -59,6 +59,26 @@ const RESET_RETRY_INTERVAL_MS = 400;
 /** Duration (s) of the daemon-side interpolation back to neutral. */
 const RESET_GOTO_DURATION_S = 0.5;
 
+/** Margin (ms) for data-channel dispatch jitter between two commands: the
+ *  reset goto and a follow-up move ride the same channel, so their latencies
+ *  mostly cancel out; this only absorbs the variance between the two sends. */
+const RESET_DISPATCH_JITTER_MS = 250;
+
+/**
+ * How long (ms) after dispatching a reset goto it can still be driving the
+ * motors: the goto's own daemon-side interpolation plus dispatch jitter.
+ *
+ * Why callers must wait this out before playing a recorded move: the daemon's
+ * move guard (`_try_start_move`) is a reentrant `threading.RLock` and every
+ * command runs as an asyncio task on the SAME event-loop thread - so a
+ * `goto_target` (itself a `GotoMove` through `play_move`) does NOT block a
+ * concurrent `play_recorded_move`. Both playback loops then interleave
+ * `set_target_*` at ~100 Hz and the robot trembles as the two trajectories
+ * fight. Sequencing on the app side is the only reliable guard.
+ */
+export const RESET_HOLD_MS =
+  RESET_GOTO_DURATION_S * 1000 + RESET_DISPATCH_JITTER_MS;
+
 /**
  * Neutral "end of wake-up" pose, in the daemon's wire format:
  *  - head: identity 4x4 (flat, row-major) = level head (roll/pitch/yaw 0),

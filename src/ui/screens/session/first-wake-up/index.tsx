@@ -234,24 +234,25 @@ export default function FirstWakeUpWizard({
   // navigation EVENT (see `goNext`), never from a step's mount
   // effect - so StrictMode can't double-fire it and no lifecycle race can start
   // two overlapping moves. Steps render off `playingStep` / `playedStep`.
-  const { playingStep, playedStep, play: playStepEmote } = useStepEmotes(
-    session,
-    markWoken,
-    isInSleepPose,
-  );
-
-  // A blocking emote is playing => lock the Skip header action so the user
-  // can't bail mid-move. Only motor/camera/speaker set a playing step, so this
-  // clears automatically on every other step.
-  const navLocked = playingStep !== null;
+  const {
+    playingStep,
+    playedStep,
+    play: playStepEmote,
+    msUntilResetSettled,
+    stop: stopStepEmote,
+  } = useStepEmotes(session, markWoken, isInSleepPose);
 
   const handleFinish = useCallback(() => {
+    // Skip stays available mid-emote: interrupt the move (and its sound) and
+    // tear down its watcher first, so no end-of-move side effect (reveal /
+    // reset goto) fires after the handoff. A no-op when nothing is playing.
+    stopStepEmote();
     if (!wokenRef.current) {
       // Best-effort: a slow ack must never trap the user on the wizard.
       void session.getRobot()?.wakeUp({ timeoutMs: 6000 }).catch(() => {});
     }
     onFinish();
-  }, [session, onFinish]);
+  }, [session, onFinish, stopStepEmote]);
 
   // Confirming the last step plays the closing emotion IN PLACE: the live 3D viz
   // stays on screen, the step UI fades away, and the robot is dressed (a light
@@ -266,14 +267,31 @@ export default function FirstWakeUpWizard({
   // the no-wizard path and would double up with the celebration.
   const resetTimer = useRef<number | null>(null);
   const finishTimer = useRef<number | null>(null);
+  // Holds the closing move while the last step's end-of-emote reset goto is
+  // still running (see `finishWithCelebration`).
+  const playFinishTimer = useRef<number | null>(null);
   // Cancels the pending neutral-pose retries (see `resetToDefaultPose`), so
   // none bleed into the conversation UI after handoff.
   const cancelResetRef = useRef<(() => void) | null>(null);
+  // True while the closing move may still be driving the robot: from the
+  // moment `finishWithCelebration` schedules it until the reset goto takes
+  // over. If the wizard unmounts inside that window (session death
+  // mid-finale), the cleanup below stops the move so it doesn't keep playing
+  // with no UI behind it. On the normal handoff (`finishTimer`) the window
+  // has already closed, so no stop is sent into the conversation UI.
+  const finishMoveActiveRef = useRef(false);
+  // Latest session mirrored into a ref so the one-shot unmount cleanup can
+  // reach the robot (the session handle is re-created by the parent each
+  // render, so it can't be an effect dep).
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   useEffect(
     () => () => {
       if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
       if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
+      if (playFinishTimer.current !== null) window.clearTimeout(playFinishTimer.current);
       cancelResetRef.current?.();
+      if (finishMoveActiveRef.current) sessionRef.current.getRobot()?.stopMove?.();
     },
     [],
   );
@@ -292,21 +310,37 @@ export default function FirstWakeUpWizard({
 
   const finishWithCelebration = useCallback(() => {
     wokenRef.current = true;
-    // Fire the closing greeting immediately, then reset to the neutral pose
-    // once the move has finished (see RESET_AFTER_MOVE_MS - resetting mid-move
-    // is a no-op). The robot stays on screen throughout, so the reset reads as
-    // a smooth settle into the neutral pose rather than happening under cover.
-    session.getRobot()?.playRecordedMove(FINISH_MOVE);
+    // When the naming step is skipped, the speaker step is the last one and
+    // its end-of-emote reset goto may still be running on a quick confirm.
+    // Hold the closing move until that goto has landed - the daemon plays a
+    // goto and a recorded move concurrently (see `RESET_HOLD_MS` in
+    // `./motion`), so firing early makes the two fight and the robot tremble.
+    const holdMs = msUntilResetSettled();
+    // Fire the closing greeting (after the hold), then reset to the neutral
+    // pose once the move has finished (see RESET_AFTER_MOVE_MS - resetting
+    // mid-move is a no-op). The robot stays on screen throughout, so the reset
+    // reads as a smooth settle into the neutral pose rather than happening
+    // under cover.
+    if (playFinishTimer.current !== null) window.clearTimeout(playFinishTimer.current);
+    finishMoveActiveRef.current = true;
+    if (holdMs === 0) {
+      session.getRobot()?.playRecordedMove(FINISH_MOVE);
+    } else {
+      playFinishTimer.current = window.setTimeout(() => {
+        session.getRobot()?.playRecordedMove(FINISH_MOVE);
+      }, holdMs);
+    }
     if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
     resetTimer.current = window.setTimeout(() => {
+      finishMoveActiveRef.current = false;
       cancelResetRef.current = resetToDefaultPose(session);
-    }, FINISH_MOVE_MS + RESET_AFTER_MOVE_MS);
+    }, holdMs + FINISH_MOVE_MS + RESET_AFTER_MOVE_MS);
     // Hand back once the move + settle have played out, via an explicit timer
     // (the staging keeps the live viz, there's no overlay with an onDone).
     if (finishTimer.current !== null) window.clearTimeout(finishTimer.current);
-    finishTimer.current = window.setTimeout(handleFinish, FINISH_CELEBRATION_MS);
+    finishTimer.current = window.setTimeout(handleFinish, holdMs + FINISH_CELEBRATION_MS);
     setFinishing(true);
-  }, [session, handleFinish]);
+  }, [session, handleFinish, msUntilResetSettled]);
 
   const goNext = useCallback(() => {
     const i = steps.indexOf(step);
@@ -372,10 +406,12 @@ export default function FirstWakeUpWizard({
           transition: 'opacity 0.4s ease',
         }}
       >
+        {/* Always enabled, even mid-emote: `handleFinish` interrupts the
+            playing move via `stopMove` so skipping never means sitting
+            through a long emote (the wake move alone is ~15.7 s). */}
         <Button
           variant="text"
           onClick={handleFinish}
-          disabled={navLocked}
           sx={{
             color: 'primary.main',
             textTransform: 'none',
