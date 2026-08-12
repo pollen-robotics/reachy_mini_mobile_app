@@ -105,6 +105,18 @@ export interface ReachyMiniInstance extends EventTarget {
    */
   readonly peerConnection: RTCPeerConnection | null;
 
+  /**
+   * Latest robot telemetry mirrored by the SDK from `state` events. Only as
+   * fresh as the last state received: hold a `subscribePose()` while you need
+   * `head` to be current (see `DaemonHeadControl`'s tracking handoff).
+   * `head` is the flat row-major 4x4 head pose (16 numbers).
+   */
+  readonly robotState: {
+    head?: number[];
+    antennas?: number[];
+    head_joint_positions?: number[];
+  };
+
   authenticate(): Promise<boolean>;
   login(): Promise<void>;
   logout(): void;

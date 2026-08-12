@@ -27,6 +27,7 @@ interface SentCmd {
   enabled?: boolean;
   weight?: number;
   offsets?: number[];
+  head?: number[];
 }
 
 let sendRaw: ReturnType<typeof vi.fn>;
@@ -127,7 +128,8 @@ describe("giving the head back", () => {
 
     // The order is what matters: while tracking holds full weight the
     // daemon drops every head target it receives, so the disable has to
-    // be the first thing on the wire.
+    // hit the wire before any landing (only the pose pin - see the
+    // handoff suite below - may legitimately precede it).
     const types = sent().map((cmd) => cmd.type);
     expect(types[0]).toBe("set_head_tracking");
     expect(sent()[0]?.enabled).toBe(false);
@@ -152,6 +154,71 @@ describe("giving the head back", () => {
     control.disable();
 
     expect(sendRaw.mock.calls.length).toBe(before);
+  });
+});
+
+describe("tracking handoff (flicker guard)", () => {
+  // The daemon zeroes the blend weight in ONE control tick on
+  // `set_head_tracking false` - no ramp. If the app's streamed pose
+  // differs from where tracking put the head, the target steps and the
+  // head lurches. The guard: pin the CURRENT pose as the app target
+  // first, so removing the blend changes nothing.
+  const currentHead = [
+    0.9, 0, 0.1, 0,
+    0, 1, 0, 0.02,
+    -0.1, 0, 0.9, 0,
+    0, 0, 0, 1,
+  ];
+  let subscribePose: ReturnType<typeof vi.fn>;
+  let unsubscribePose: ReturnType<typeof vi.fn>;
+  let statefulControl: DaemonHeadControl;
+
+  beforeEach(() => {
+    subscribePose = vi.fn().mockReturnValue(true);
+    unsubscribePose = vi.fn().mockReturnValue(true);
+    statefulControl = createDaemonHeadControl({
+      getRobot: () =>
+        ({
+          sendRaw,
+          subscribePose,
+          unsubscribePose,
+          robotState: { head: currentHead },
+        }) as unknown as ReachyMiniInstance,
+      isPoseLocked: () => poseLocked,
+      isMovePlaying: () => movePlaying,
+      recordSend,
+    });
+  });
+
+  it("pins the current head pose BEFORE pulling the blend", () => {
+    statefulControl.enable();
+    sendRaw.mockClear();
+    statefulControl.disable();
+
+    const types = sent().map((cmd) => cmd.type);
+    expect(types.indexOf("set_target")).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf("set_target")).toBeLessThan(
+      types.indexOf("set_head_tracking"),
+    );
+    expect(sentOfType("set_target")[0]?.head).toEqual(currentHead);
+  });
+
+  it("holds a pose subscription for the conversation so the pin is fresh", () => {
+    statefulControl.enable();
+    expect(subscribePose).toHaveBeenCalledTimes(1);
+    expect(unsubscribePose).not.toHaveBeenCalled();
+
+    statefulControl.disable();
+    expect(unsubscribePose).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the pin when no current pose is known (never sends a stale target)", () => {
+    // The default `control` stub exposes no robotState at all.
+    control.enable();
+    sendRaw.mockClear();
+    control.disable();
+
+    expect(sentOfType("set_target")).toEqual([]);
   });
 });
 

@@ -31,6 +31,17 @@
  * so a slow reconcile loop watches them and only emits a command when
  * the wanted weight actually changes - roughly one message per
  * transition rather than a stream.
+ *
+ * Handoff on disable
+ * ──────────────────
+ * The daemon cuts the blend weight to 0 in a single control tick when
+ * tracking is disabled (no ramp-down), so the composed head target
+ * would jump from the tracking aim to the last app-streamed pose - a
+ * visible lurch at conversation stop. `disable()` therefore pins the
+ * app target to the head's CURRENT pose first (read from
+ * `robotState.head`, kept fresh by holding a pose subscription for the
+ * conversation), making the blend removal a no-op; the orchestrator's
+ * `gotoNeutral` then does the actual eased landing.
  */
 
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
@@ -113,6 +124,11 @@ export function createDaemonHeadControl(
 ): DaemonHeadControl {
   let running = false;
   let reconcileTimer: { clear: () => void } | null = null;
+  // Held for the whole conversation so `robotState.head` is current
+  // (~30 Hz) when `disable()` needs it for the tracking handoff below.
+  // Refcounted in the SDK, so it composes with the 3D mirror's own
+  // subscription.
+  let poseSubscribed = false;
   // What we believe the daemon is currently applying. Both are only
   // updated on an ACKNOWLEDGED send, so a command refused by a
   // not-yet-open data channel is retried by the next reconcile instead
@@ -167,6 +183,13 @@ export function createDaemonHeadControl(
       running = true;
       sentWeight = null;
       wobblingOn = false;
+      // Keep the pose stream flowing for the whole conversation so the
+      // handoff in `disable()` has a CURRENT head pose to pin - a stale
+      // one would send the head there, which is worse than no pin.
+      const robot = deps.getRobot();
+      if (robot && typeof robot.subscribePose === "function") {
+        poseSubscribed = robot.subscribePose();
+      }
       // The daemon answers `{"status": "unavailable"}` when it has no
       // camera to track with. `sendRaw` is fire-and-forget so we never
       // see that reply, and we deliberately don't care: wobbling is
@@ -182,6 +205,20 @@ export function createDaemonHeadControl(
       reconcileTimer = null;
       sentWeight = null;
       wobblingOn = false;
+      // Tracking handoff: pin the app-side target to the head's CURRENT
+      // pose BEFORE pulling the blend. Disabling tracking zeroes the
+      // daemon's blend weight in one control tick (`clear_tracking_aim`,
+      // no ramp), so the composed target would otherwise jump from the
+      // tracking aim straight to whatever the app last streamed - a
+      // visible lurch. With the current pose pinned, removing the blend
+      // changes nothing, and the caller's `gotoNeutral` does the actual
+      // (eased) landing from here. Data-channel ordering guarantees the
+      // pin lands before the tracking-off.
+      const robot = deps.getRobot();
+      const head = robot?.robotState?.head;
+      if (head && head.length === 16) {
+        send({ type: "set_target", head: [...head] }, "daemon-head-handoff");
+      }
       send(
         { type: "set_head_tracking", enabled: false },
         "daemon-head-tracking",
@@ -194,6 +231,11 @@ export function createDaemonHeadControl(
         { type: "set_speech_offsets", offsets: ZERO_SPEECH_OFFSETS },
         "daemon-head-offsets",
       );
+      if (poseSubscribed) {
+        poseSubscribed = false;
+        const r = deps.getRobot();
+        if (r && typeof r.unsubscribePose === "function") r.unsubscribePose();
+      }
     },
     clearSpeechOffsets() {
       if (!running) return;
