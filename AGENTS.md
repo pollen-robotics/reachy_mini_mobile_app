@@ -39,8 +39,7 @@ src/
 ├── theme.ts        MUI theme (light + dark)
 ├── queryClient.ts  TanStack Query setup
 ├── vite-env.d.ts   Vite env type augmentation
-├── assets/         Static SVGs / images
-└── vendor/         Vendored Reachy Mini SDK + types
+└── assets/         Static SVGs / images
 ```
 
 ### `features/` - the logic layer

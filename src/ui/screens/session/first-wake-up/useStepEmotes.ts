@@ -145,8 +145,7 @@ export function useStepEmotes(
           step === 'motor' && !isInSleepPose() ? WAKE_EASE_IN_S : 0;
         // Belt-and-braces: clear any straggler move before dispatching ours
         // (idempotent daemon-side no-op when nothing is running), so the new
-        // emote always starts from a clean slate. Optional chaining: older
-        // vendored SDKs don't ship `stopMove`.
+        // emote always starts from a clean slate.
         robot.stopMove?.();
         robot.playRecordedMove(spec.move.name, {
           ...(spec.move.dataset ? { dataset: spec.move.dataset } : {}),
