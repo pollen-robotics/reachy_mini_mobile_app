@@ -1,0 +1,52 @@
+name: App Store Connect probe
+
+# Throwaway diagnostic. `altool --validate-app` and `--upload-app` both
+# die with "Cannot determine the Apple ID from Bundle ID
+# 'com.pollen-robotics.reachy-mini' and platform 'IOS' (19)", which is a
+# lookup failure, not a build failure. This asks App Store Connect what
+# the CI key can actually see, without paying for a 10-minute iOS build.
+# Delete once the question is settled.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Ask App Store Connect what the key sees
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: List the apps this API key is entitled to
+        # `bash {0}` instead of the default `bash -e {0}`: every altool
+        # call here is expected to be able to fail, and one failure must
+        # not hide the answers from the others.
+        shell: bash {0}
+        env:
+          API_KEY_B64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+          # Mirrors `identifier` in src-tauri/tauri.conf.json.
+          BUNDLE_ID: com.pollen-robotics.reachy-mini
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$API_KEY_B64" | base64 --decode \
+            > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
+          echo "key bytes: $(wc -c < ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8)"
+          echo "issuer id length: ${#API_ISSUER_ID}"
+
+          echo '=== every iOS app the key can see ==='
+          xcrun altool --list-apps \
+            --filter-platform ios \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          echo "exit=$?"
+
+          echo '=== filtered on our bundle id ==='
+          xcrun altool --list-apps \
+            --filter-bundle-id "$BUNDLE_ID" \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          echo "exit=$?"
+
+          echo '=== unfiltered, in case the platform filter is the problem ==='
+          xcrun altool --list-apps \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          echo "exit=$?"
