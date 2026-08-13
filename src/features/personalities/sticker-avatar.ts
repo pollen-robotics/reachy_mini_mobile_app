@@ -9,8 +9,11 @@
  *                     instructions) into a short, concrete VISUAL theme
  *                     ("noir detective in a trench coat"), which is a
  *                     far better sticker prompt than the raw system
- *                     prompt. Best-effort: falls back to the name when
- *                     no HF token is present or the call fails.
+ *                     prompt. Goes through `routerChatCompletion`, so it
+ *                     lands on the same Space's text proxy by default
+ *                     (see `features/hf/router.ts`). Best-effort: falls
+ *                     back to the name when no HF token is present or
+ *                     the call fails.
  *   2. `queued` /
  *      `generating` - the sticker Space renders the character (~1 min,
  *                     2 concurrent slots server-side). We expose the

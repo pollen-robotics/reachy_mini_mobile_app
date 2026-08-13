@@ -121,6 +121,10 @@ export const WEBSITE_API_URL: string =
  *   - `GET  /api/queue` -> `{ queue_size }` (waiting-position hint).
  *   - `GET  /api/community/<file>` -> the generated image bytes.
  *
+ * The same Space also proxies TEXT generation (`POST /api/chat/completions`,
+ * OpenAI-compatible, streaming) on the Space's own HF credentials - see
+ * {@link TEXT_GEN_BACKEND} and `features/hf/router.ts`.
+ *
  * Calls are routed through `@tauri-apps/plugin-http` (the Space serves
  * no `Access-Control-Allow-Origin`), so the host must also be allowed
  * in `src-tauri/capabilities/default.json`.
@@ -130,6 +134,41 @@ export const WEBSITE_API_URL: string =
 export const STICKER_API_URL: string =
   (import.meta.env.VITE_REACHY_STICKER_URL as string | undefined) ??
   'https://pollen-robotics-reachy-sticker-generator.hf.space';
+
+/**
+ * Where chat-completions requests are sent.
+ *
+ * `space` (default) routes them through the sticker Space's
+ * OpenAI-compatible proxy (`POST /api/chat/completions` on
+ * {@link STICKER_API_URL}), which spends the SPACE's own provider
+ * credentials (fal, the same key its image pipeline runs on). That
+ * matters because the direct path dead-ends for any user who has never
+ * enabled an Inference Provider on their HF account: the router answers
+ * `400 model_not_supported` and persona authoring - a headline feature -
+ * is simply unavailable to them.
+ *
+ * `router` keeps the historical behaviour (device -> `router.huggingface.co`
+ * with the USER's token, per-user billing). Kept as an escape hatch, and
+ * used automatically as a fallback when the Space itself is unreachable
+ * (sleeping / restarting / misconfigured) - see `features/hf/router.ts`.
+ *
+ * Override at build time via `VITE_TEXT_GEN_BACKEND`.
+ *
+ * Consumers:
+ *   - `features/hf/router.ts`
+ */
+export const TEXT_GEN_BACKEND: 'space' | 'router' = (() => {
+  const raw = (import.meta.env.VITE_TEXT_GEN_BACKEND as string | undefined)
+    ?.trim()
+    .toLowerCase();
+  if (raw === 'space' || raw === 'router') return raw;
+  if (raw) {
+    console.warn(
+      `[env] invalid VITE_TEXT_GEN_BACKEND=${JSON.stringify(raw)}; using "space"`,
+    );
+  }
+  return 'space';
+})();
 
 /**
  * Dev-only Hugging Face token used to skip the OAuth sign-in screen

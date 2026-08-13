@@ -1,5 +1,22 @@
 /**
- * Hugging Face Inference Providers router client - smart model routing.
+ * Chat-completions client - two transports, one OpenAI-compatible dialect.
+ *
+ * 1. The sticker Space's text proxy (`POST /api/chat/completions`), used by
+ *    default (`TEXT_GEN_BACKEND === 'space'`). The Space spends its OWN
+ *    provider credentials, which is the whole point: a user who never
+ *    enabled an Inference Provider on their account gets
+ *    `model_not_supported` from the direct router, so persona authoring
+ *    would be dead on arrival for them. Model choice + fallback live
+ *    server-side there (on fal today, hence a model vocabulary that has
+ *    nothing to do with our HF ids).
+ * 2. The HF Inference Providers router, called straight from the device with
+ *    the USER's token. The historical path, kept as a build-time escape
+ *    hatch AND as an automatic fallback when the Space is unreachable
+ *    (Spaces sleep after inactivity, restart on deploy, and 404 until the
+ *    route ships). Everything below documents this path.
+ *
+ * Both speak the same request/response shape, so callers hand us the same
+ * options either way and read the same `Response`.
  *
  * The OpenAI-compatible router (`router.huggingface.co/v1/chat/completions`)
  * already picks an Inference Provider for a model server-side and fails over
@@ -41,7 +58,12 @@
  * already pinned to `https://router.huggingface.co/*`.
  */
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { HF_MODEL_CHAIN, HF_ROUTER_POLICY } from "@/shared/env";
+import {
+  HF_MODEL_CHAIN,
+  HF_ROUTER_POLICY,
+  STICKER_API_URL,
+  TEXT_GEN_BACKEND,
+} from "@/shared/env";
 import { notifyHfTokenInvalid } from "@/features/auth/tokenInvalidation";
 import {
   fetchModelCatalog,
@@ -52,6 +74,11 @@ import {
 
 export const HF_ROUTER_CHAT_URL =
   "https://router.huggingface.co/v1/chat/completions";
+
+/** The sticker Space's OpenAI-compatible text proxy. Same request/response
+ *  dialect as the HF router (that's the point), but billed to the Space so
+ *  the feature works for users with no Inference Provider enabled. */
+export const SPACE_CHAT_URL = `${STICKER_API_URL.replace(/\/$/, "")}/api/chat/completions`;
 
 /** Server-side provider-selection policy appended to the model id.
  *  - `auto`      : router default (fastest available), no suffix sent.
@@ -207,14 +234,17 @@ export interface RouterChatOptions {
   onAttempt?: (info: { index: number; model: string; total: number }) => void;
 }
 
-/** Single POST to the router for one resolved model, optionally with the
- *  structured-output `response_format` attached. */
-function postChat(
-  model: string,
+/** Chat-completions body, optionally carrying the structured-output
+ *  `response_format`. Shared by both transports - the Space proxy speaks the
+ *  same dialect as the router. A null `model` omits the field entirely,
+ *  which is how we let the proxy pick from its own catalog. */
+function buildChatBody(
+  model: string | null,
   structured: boolean,
   opts: RouterChatOptions,
-): Promise<Response> {
-  const body: Record<string, unknown> = { ...opts.body, model };
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...opts.body };
+  if (model !== null) body.model = model;
   if (structured && opts.structuredOutput) {
     body.response_format = {
       type: "json_schema",
@@ -225,6 +255,16 @@ function postChat(
       },
     };
   }
+  return body;
+}
+
+/** Single POST to the router for one resolved model, optionally with the
+ *  structured-output `response_format` attached. */
+function postChat(
+  model: string,
+  structured: boolean,
+  opts: RouterChatOptions,
+): Promise<Response> {
   return tauriFetch(HF_ROUTER_CHAT_URL, {
     method: "POST",
     headers: {
@@ -232,8 +272,82 @@ function postChat(
       Authorization: `Bearer ${opts.hfToken}`,
     },
     signal: opts.signal,
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildChatBody(model, structured, opts)),
   });
+}
+
+/** A Space response that means "the proxy isn't there right now" rather
+ *  than "your request was wrong": Spaces sleep after inactivity, restart on
+ *  deploy, and don't answer the route at all until it ships. Each of those
+ *  is worth degrading to the user's own token for; a 400/401/429 is not.
+ *
+ *  405 counts, and is in fact what an older Space actually replies: the
+ *  backend mounts its React build with `StaticFiles` at `/`, which claims
+ *  every unmatched path and rejects a POST with "Method Not Allowed"
+ *  instead of a 404. Reading that as a client error would strand the app on
+ *  a hard failure for the entire rollout window. */
+function isSpaceUnavailable(status: number): boolean {
+  return status === 404 || status === 405 || status >= 500;
+}
+
+/**
+ * Try the Space's text proxy for this request.
+ *
+ * Returns the OK `Response` on success, or `null` when the Space itself is
+ * unavailable - the caller then degrades to the direct router with the
+ * user's own token, which is exactly today's behaviour. Definitive
+ * failures (malformed request, rejected token, rate limit) throw
+ * `HfRouterError` instead, so they surface with the same vocabulary as the
+ * direct path rather than silently costing the user a second round-trip.
+ *
+ * No model, no chain and no catalog discovery here: the Space owns all
+ * three. It knows which models ITS credentials can reach, which is not
+ * something the user's `/v1/models` view can answer - and the two don't
+ * even share a vocabulary (the proxy runs on fal/OpenRouter ids, our
+ * `baseModel` defaults are HF ids). Sending ours would just earn a 400, so
+ * `baseModel` stays what it has always been: the preference for the direct
+ * router fallback below.
+ */
+async function trySpaceChatCompletion(
+  opts: RouterChatOptions,
+): Promise<Response | null> {
+  const body = buildChatBody(null, Boolean(opts.structuredOutput), opts);
+
+  let response: Response;
+  try {
+    response = await tauriFetch(SPACE_CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // For HF's access proxy in front of a private Space, not for
+        // inference: the backend spends its own credentials. Harmless
+        // while the Space is public.
+        ...(opts.hfToken ? { Authorization: `Bearer ${opts.hfToken}` } : {}),
+      },
+      signal: opts.signal,
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (opts.signal?.aborted) throw err;
+    console.warn("[hf] text proxy unreachable, falling back to router:", err);
+    return null;
+  }
+
+  if (response.ok) return response;
+
+  const text = await response.text().catch(() => "");
+  if (isSpaceUnavailable(response.status)) {
+    console.warn(
+      `[hf] text proxy returned ${response.status}, falling back to router`,
+    );
+    return null;
+  }
+
+  const error = new HfRouterError(response.status, text);
+  // A 401 here is HF's access proxy rejecting the USER's token (the Space's
+  // own credential problems come back as 503), so the eviction is right.
+  if (error.authInvalid) notifyHfTokenInvalid();
+  throw error;
 }
 
 /**
@@ -249,6 +363,14 @@ function postChat(
 export async function routerChatCompletion(
   opts: RouterChatOptions,
 ): Promise<Response> {
+  // Preferred transport: the Space proxy (see `TEXT_GEN_BACKEND`). It only
+  // returns null when the Space is unavailable, in which case we carry on to
+  // the direct router below with the user's own token.
+  if (TEXT_GEN_BACKEND === "space") {
+    const viaSpace = await trySpaceChatCompletion(opts);
+    if (viaSpace) return viaSpace;
+  }
+
   const policy = opts.policy ?? DEFAULT_POLICY;
   const backoff = opts.backoffMs ?? 600;
   const wantStructured = Boolean(opts.structuredOutput);

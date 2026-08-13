@@ -17,15 +17,19 @@
  * How it talks to a model
  * -----------------------
  *
- *   - Hugging Face Inference Providers router
- *     (`router.huggingface.co/v1/chat/completions`), OpenAI-compatible.
- *   - Authenticated with the user's OWN HF token, read from the single
- *     source of truth `readHfTokenFromStorage()` (sessionStorage). No
- *     master key on the wire, per-user billing.
+ *   - Through `routerChatCompletion` (`features/hf`), which by default
+ *     posts to the sticker Space's OpenAI-compatible text proxy - billed
+ *     to the SPACE, so authoring works even for users who never enabled
+ *     an Inference Provider on their HF account. It degrades to a direct
+ *     `router.huggingface.co` call with the user's own token when the
+ *     Space is unreachable. See `features/hf/router.ts`.
+ *   - A user HF token is still required and still read from the single
+ *     source of truth `readHfTokenFromStorage()` (sessionStorage): it
+ *     gates the app itself and gets the request past HF's Space access
+ *     proxy, and it's what pays for the fallback path.
  *   - Routed through `@tauri-apps/plugin-http` (`tauriFetch`) so the
- *     call isn't subject to browser CORS enforcement (the router does
- *     not serve `Access-Control-Allow-Origin: *`). The capability is
- *     already pinned to `https://router.huggingface.co/*` in
+ *     call isn't subject to browser CORS enforcement (neither host
+ *     serves `Access-Control-Allow-Origin: *`). Both are allow-listed in
  *     `src-tauri/capabilities/default.json`.
  *
  * Output contract
