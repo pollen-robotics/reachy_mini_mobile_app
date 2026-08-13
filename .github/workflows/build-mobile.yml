@@ -1247,11 +1247,41 @@ jobs:
           echo "Found IPA at: $IPA_PATH"
           echo "ipa=$IPA_PATH" >> "$GITHUB_OUTPUT"
 
+      - name: Report what the API key can see
+        # Both altool app commands resolve the app record from the IPA's
+        # bundle id, and that lookup is what fails with "Cannot determine
+        # the Apple ID from Bundle ID 'com.pollen-robotics.reachy-mini'
+        # and platform 'IOS' (19)". Listing the providers and apps the
+        # key is entitled to separates the two candidate causes: an app
+        # record this key cannot see (access or scope), versus a lookup
+        # that is simply broken. Evidence only, never fatal.
+        continue-on-error: true
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+          # Mirrors `identifier` in src-tauri/tauri.conf.json.
+          BUNDLE_ID: com.pollen-robotics.reachy-mini
+        run: |
+          set -uxo pipefail
+          xcrun altool --list-providers \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          xcrun altool --list-apps \
+            --filter-bundle-id "$BUNDLE_ID" \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          xcrun altool --list-apps \
+            --filter-platform ios \
+            --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+
       - name: Validate IPA before upload
         # `xcrun altool --validate-app` runs the same pre-flight that
         # App Store Connect runs server-side. Catching format errors
         # here is faster (~30 s) than waiting for App Store Connect's
         # Activity tab to surface them after the upload (~5 min).
+        #
+        # Non-fatal on purpose: it is a convenience, and the upload runs
+        # the same checks server-side. A pre-flight that cannot resolve
+        # the app record must not be what stops a release from shipping.
+        continue-on-error: true
         env:
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
@@ -1281,6 +1311,13 @@ jobs:
             --apiIssuer "$API_ISSUER_ID"
 
       - name: Upload IPA as workflow artifact (backup)
+        # Runs even when the upload failed, so a botched TestFlight leg
+        # still leaves a signed IPA to ship by hand through Transporter
+        # instead of throwing away a 10-minute build. Guarded on the
+        # pack step having produced something, otherwise
+        # `if-no-files-found: error` would just add noise to jobs that
+        # died before the export.
+        if: always() && steps.pack.outputs.ipa != ''
         uses: actions/upload-artifact@v4
         with:
           name: reachy-mini-mobile-ios-signed-${{ github.sha }}
