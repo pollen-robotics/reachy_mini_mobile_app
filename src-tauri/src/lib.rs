@@ -86,6 +86,7 @@ pub fn run() {
             commands::local_ips,
             oauth::start_oauth_bridge,
             oauth::cancel_oauth_bridge,
+            oauth::take_oauth_callback,
         ]);
 
     builder
