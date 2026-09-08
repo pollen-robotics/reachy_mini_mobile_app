@@ -194,6 +194,15 @@ Conventional Commits (`feat`, `fix`, `refactor`, `chore`, `docs`):
 Scopes used in this repo: `session`, `engine`, `arch`, `apps`,
 `auth`, `ble`, `wifi`, `ci`, `release`, `eslint`, etc.
 
+### Pull requests
+
+Read [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) before opening a
+PR and structure the description with the template in
+`.github/pull_request_template.md` (Issue / Description / Testing /
+Tested on / AI assistance). Title the PR like a commit
+(`type(scope): what it does`), label it, add the `Assisted-by:` trailer
+to assisted commits, and never add `Signed-off-by` yourself.
+
 ### Validation cycle
 
 After substantive changes:
@@ -295,6 +304,7 @@ truth because `gen/` is regenerated.
 
 | File | What |
 |------|------|
+| `docs/CONTRIBUTING.md` | PR / issue conventions (mirrors the daemon's) + AI assistance rules |
 | `docs/APP_STORE_COMPLIANCE.md` | Apple / Google review policy framework + pre-submission action plan |
 | `docs/APP_STORE_AUDIT_2026-05.md` | Submission-readiness gap analysis (what actually blocks a build today) |
 | `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
