@@ -258,14 +258,20 @@ only a loopback redirect URI (`http://localhost:8000/api/hf-auth/oauth/callback`
 and we did not want to ask HF to add a custom scheme, we keep the
 loopback alive as a *bridge*: HF redirects to localhost, the Rust
 listener responds with `HTTP/1.1 302` to `reachymini://oauth/callback?<query>`,
-the auth session intercepts the custom scheme and resolves. See
+the auth session intercepts the custom scheme and resolves. On iOS the
+interception happens on the `Location` header, before any rendering. On
+Android the browser may block a gesture-less scheme launch (e.g. a
+silent re-auth), so the 302 body is a tappable interstitial re-firing
+the scheme URL, and the bridge keeps the relayed callback
+(`take_oauth_callback`) so the frontend can finish the token exchange
+even if the user just closes the tab. See
 [`src-tauri/src/oauth.rs`](../src-tauri/src/oauth.rs) and
 [`src/features/auth/oauthLoopback.ts`](../src/features/auth/oauthLoopback.ts).
 
-**Verdict on 2.7**: in-app sign-in is in place on iOS and macOS. The
-Android intent filter for the `reachymini` scheme still needs to be
-declared in `AndroidManifest.xml` once `src-tauri/gen/android/` is
-generated (the plugin's README documents the snippet).
+**Verdict on 2.7**: in-app sign-in is in place on iOS, macOS and
+Android. The Android intent filter for the `reachymini` scheme is
+injected by CI into the regenerated `AndroidManifest.xml` (see the
+"Patch AndroidManifest" steps in `build-mobile.yml`).
 
 ### 2.7 Privacy (5.1.x)
 
