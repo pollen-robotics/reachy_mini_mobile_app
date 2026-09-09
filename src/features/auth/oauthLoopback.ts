@@ -20,14 +20,6 @@
  *   6. Resolve the token (and the username we fetch from
  *      `/oauth/userinfo`) so `useRemoteHfToken` can persist it.
  *
- * Android caveat: Chrome only follows the loopback's 302 onto the
- * custom scheme when the redirect chain carries a user gesture made
- * inside the tab. On a silent re-auth it blocks the launch and renders
- * the bridge's interstitial instead (button = gesture = launch works);
- * if the user closes that tab, we recover the callback the bridge
- * captured via `take_oauth_callback` (see the catch in
- * `loginWithHuggingFace`).
- *
  * Why an in-app session and not the system browser
  * ────────────────────────────────────────────────
  * Apple App Review (and increasingly Google) rejects flows that bounce
@@ -113,17 +105,9 @@ export async function loginWithHuggingFace(): Promise<{
     try {
       callbackUrl = await startAuthSession(authorizeUrl, CALLBACK_URL_SCHEME);
     } catch (raw) {
-      // Android rescue path. Chrome refuses to launch the app from a
-      // gesture-less redirect chain (silent re-auth: HF session still
-      // valid + consent already granted = zero taps inside the Custom
-      // Tab), leaving the tab stuck on the bridge's interstitial. If the
-      // user closes that tab instead of tapping its "Open Reachy Mini"
-      // button, the plugin reports `user_cancelled` -- yet HF DID hit
-      // the loopback with a valid `code`. The bridge kept that captured
-      // callback URL; recover it and continue instead of failing. The
-      // `state` check below still guards the rescued URL, so a stale or
-      // forged callback can't complete the flow.
-      const rescued = await takeBridgeCallback();
+      // Android rescue: the browser blocked the scheme launch and the
+      // user closed the tab; the bridge kept HF's callback (see oauth.rs).
+      const rescued = await invoke<string | null>('take_oauth_callback').catch(() => null);
       if (rescued) {
         callbackUrl = rescued;
       } else {
@@ -171,21 +155,6 @@ export async function loginWithHuggingFace(): Promise<{
     } catch {
       /* best-effort */
     }
-  }
-}
-
-/**
- * Consume the callback URL the Rust bridge captured, if any. Rescue
- * path for Android's blocked-scheme-launch case (see the catch around
- * `startAuthSession`). Take-semantics on the Rust side: a second call
- * returns null, so one captured URL can never complete two flows.
- * Best-effort: any invoke error just means "nothing to rescue".
- */
-async function takeBridgeCallback(): Promise<string | null> {
-  try {
-    return await invoke<string | null>('take_oauth_callback');
-  } catch {
-    return null;
   }
 }
 

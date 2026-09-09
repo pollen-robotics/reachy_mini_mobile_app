@@ -39,26 +39,14 @@
 //!
 //! Android and the user-gesture rule
 //! ─────────────────────────────────
-//! Step 5 is NOT guaranteed on Android. Chrome only launches an external
-//! app from a navigation if the redirect chain carries a user gesture
-//! made *inside the tab* (Chromium `components/external_intents`). On a
-//! silent re-auth -- HF web session still valid and consent already
-//! granted, so the whole authorize → localhost → scheme chain runs with
-//! zero taps -- Chrome blocks the scheme launch and renders the 302 body
-//! instead. Two mitigations, both below:
-//!
-//!   - The 302 body is an interstitial with a visible "Open Reachy Mini"
-//!     button re-firing the same scheme URL (query included): a tap is a
-//!     real gesture, so Chrome then allows the launch.
-//!   - The bridge stores the relayed callback URL in [`CAPTURED_CALLBACK`]
-//!     and exposes it via [`take_oauth_callback`]. If the user closes the
-//!     stuck tab instead of tapping the button, the auth-session plugin
-//!     reports `user_cancelled` -- but the frontend can still recover the
-//!     captured URL and finish the token exchange.
-//!
-//! On iOS/macOS none of this is reachable: `ASWebAuthenticationSession`
-//! intercepts the `Location` header before any rendering, so the body
-//! never displays and the rescue path is never needed.
+//! Step 5 is NOT guaranteed on Android: browsers may block a gesture-less
+//! scheme launch (e.g. a silent re-auth runs the whole redirect chain
+//! with zero taps in the tab) and render the 302 body instead. So the
+//! body is a tappable interstitial re-firing the scheme URL (a tap is a
+//! real gesture), and the bridge keeps the relayed callback for
+//! [`take_oauth_callback`] so the frontend can finish the exchange even
+//! if the user just closes the tab. iOS/macOS never see any of this:
+//! `ASWebAuthenticationSession` intercepts `Location` before rendering.
 //!
 //! Lifecycle
 //! ─────────
@@ -114,13 +102,7 @@ pub enum OAuthError {
 /// just drops the slot's content for that effect.
 static IN_FLIGHT: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
-/// Last callback URL the bridge relayed (full `reachymini://...?query`
-/// form). Written right before the 302 is sent, cleared when a new flow
-/// starts. This is the Android rescue path: when Chrome blocks the
-/// scheme launch (gesture-less redirect chain) and the user closes the
-/// tab, the auth-session plugin reports `user_cancelled` even though HF
-/// DID deliver a valid `code` to the loopback. [`take_oauth_callback`]
-/// lets the frontend recover it instead of failing the sign-in.
+/// Last relayed callback URL; Android rescue path, see module docs.
 static CAPTURED_CALLBACK: Mutex<Option<String>> = Mutex::new(None);
 
 /// Bind the loopback bridge and spawn its listener task.
@@ -132,9 +114,6 @@ static CAPTURED_CALLBACK: Mutex<Option<String>> = Mutex::new(None);
 ///   - drop of the in-flight sender (cancellation),
 ///   - `FLOW_TIMEOUT` elapsing without a hit.
 ///
-/// The auth-session plugin delivering the full URL to JS stays the
-/// primary path; the bridge additionally stashes the relayed URL in
-/// [`CAPTURED_CALLBACK`] as the Android rescue path (see module docs).
 #[tauri::command]
 pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
     let cancel_rx = {
@@ -149,9 +128,7 @@ pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
         rx
     };
 
-    // A fresh flow must never see a stale callback from a previous run:
-    // the rescue path would then complete with an old `state` (rejected
-    // by the frontend's state check, but noisy). Clear it up front.
+    // Clear any stale capture from a previous flow.
     if let Ok(mut captured) = CAPTURED_CALLBACK.lock() {
         *captured = None;
     }
@@ -204,15 +181,9 @@ pub fn cancel_oauth_bridge() -> Result<(), OAuthError> {
     Ok(())
 }
 
-/// Consume the callback URL captured by the last bridge relay, if any.
-///
-/// Called by the frontend when the auth-session plugin errors (most
-/// notably `user_cancelled` on Android after Chrome blocked the scheme
-/// launch and the user closed the tab). Take-semantics: a second call
-/// returns `None`, so a stale URL can never complete two flows. Note
-/// that `cancel_oauth_bridge` deliberately does NOT clear this value --
-/// the frontend's cleanup `finally` runs cancel unconditionally, and
-/// the rescue read may happen after it.
+/// Consume the captured callback URL (take-once). `cancel_oauth_bridge`
+/// deliberately leaves it: the frontend's `finally` runs before the
+/// rescue read.
 #[tauri::command]
 pub fn take_oauth_callback() -> Option<String> {
     CAPTURED_CALLBACK
@@ -281,9 +252,8 @@ async fn run_bridge(
                     format!("{SCHEME_REDIRECT_PREFIX}?{query}")
                 };
 
-                // Stash the relayed URL BEFORE answering the browser, so
-                // the rescue path can never race a user who closes the
-                // tab the instant the interstitial renders.
+                // Capture before responding so a fast tab-close can't
+                // race it.
                 if let Ok(mut captured) = CAPTURED_CALLBACK.lock() {
                     *captured = Some(location.clone());
                 }
@@ -320,30 +290,15 @@ fn parse_request_target(request_line: &str) -> Option<String> {
 }
 
 async fn write_302(socket: &mut tokio::net::TcpStream, location: &str) -> IoResult<()> {
-    // The `Location` header is the primary path: ASWebAuthenticationSession
-    // (iOS/macOS) intercepts the scheme navigation BEFORE any rendering, so
-    // this body never displays there and the flow is byte-identical to the
-    // pre-interstitial behaviour.
-    //
-    // Chrome on Android, however, refuses to launch an external app from a
-    // redirect chain with no user gesture inside the tab (the silent
-    // re-auth case, see module docs) and renders this body instead. So the
-    // body must hand the user a REAL gesture: a visible button re-firing
-    // the same scheme URL, query included. An automatic JS redirect would
-    // be exactly as gesture-less as the 302 it replaces and equally
-    // blocked, which is why there deliberately isn't one.
+    // Body = the Android interstitial (see module docs). No JS
+    // auto-redirect: it would be as gesture-less as the 302 it replaces.
     let href = html_escape_attr(location);
     let body = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>Reachy Mini</title><style>\
-body{{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;\
-align-items:center;justify-content:center;min-height:85vh;margin:0;padding:24px;\
-text-align:center;color:#1f2937;background:#fff}}\
-h1{{font-size:22px;margin:0 0 8px}}\
-p{{color:#6b7280;font-size:15px;max-width:32em;margin:0 0 8px}}\
-a{{display:inline-block;margin-top:16px;padding:14px 28px;border-radius:999px;\
-background:#ff9d00;color:#fff;text-decoration:none;font-weight:600;font-size:17px}}\
+body{{font-family:sans-serif;text-align:center;padding:20vh 24px}}\
+a{{display:inline-block;padding:14px 28px;background:#ff9d00;color:#fff;border-radius:999px;text-decoration:none}}\
 </style></head><body>\
 <h1>Almost done</h1>\
 <p>Tap the button below to return to the app and finish signing in.</p>\
@@ -357,9 +312,8 @@ background:#ff9d00;color:#fff;text-decoration:none;font-weight:600;font-size:17p
     socket.write_all(response.as_bytes()).await
 }
 
-/// Minimal HTML attribute escaping for the interstitial's `href`. The
-/// query string comes straight from HF's redirect, so treat it as
-/// untrusted input even though `code`/`state` are URL-safe in practice.
+/// HTML attribute escaping for the interstitial's `href` (the query
+/// comes straight from HF's redirect, so treat it as untrusted).
 fn html_escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
