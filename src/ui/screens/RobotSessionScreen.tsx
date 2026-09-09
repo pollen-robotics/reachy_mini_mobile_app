@@ -291,13 +291,12 @@ function ConnectedSession({
         if (robot) {
           // Grey out End-session for the duration of the wake animation.
           // Bounded by timeoutMs so a missed motion-done edge can't trap it.
+          // No `cancelled` guard: setWizardGate('done') above re-runs this effect first.
           setWaking(true);
           void robot
             .wakeUp({ timeoutMs: 8000 })
             .catch(() => {})
-            .finally(() => {
-              if (!cancelled) setWaking(false);
-            });
+            .finally(() => setWaking(false));
         }
       }
     })();
