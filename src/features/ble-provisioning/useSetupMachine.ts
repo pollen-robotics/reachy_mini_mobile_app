@@ -62,6 +62,8 @@ import {
 } from './protocol';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+
+import { ensureDaemonRunning } from './ensureDaemonRunning';
 import type { RobotIdentity, SetupError, SetupPhase, SetupResult } from './types';
 
 // Wi-Fi join polling: nmcli connect + DHCP can take a while; the daemon
@@ -185,6 +187,7 @@ async function probeDaemonFault(ip: string): Promise<string | null> {
     const data = (await resp.json()) as { state?: string; error?: string | null };
     if (data.error) return data.error;
     if (data.state === 'error') return 'The robot software is in an error state.';
+    if (data.state === 'stopped') return 'The robot software is stopped.';
     return null;
   } catch {
     return null;
@@ -814,6 +817,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     // (a robot whose backend never started can't register on central no matter
     // how well the sign-in went, and "try signing in again" would be a lie).
     const confirmOnlineAndFinish = async (ip: string): Promise<void> => {
+      await ensureDaemonRunning(ip);
+      if (runId !== runIdRef.current || !mountedRef.current) return;
       const matched = await waitForCentral(token, hwid, runId, runIdRef, mountedRef);
       if (runId !== runIdRef.current || !mountedRef.current) return;
       if (!matched) {
