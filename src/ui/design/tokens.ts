@@ -74,21 +74,23 @@ export const LAYOUT = {
    * Top padding that respects the OS-reported safe area (notch / status
    * bar). Resolves to the actual inset on iOS (notch devices ~44-50px,
    * non-notch ~20px), and the system-bars + cutout union on Android
-   * via a CSS variable injected by `MainActivity.kt` from
-   * `WindowInsets`. Falls back to `env()` (works on iOS) and then `0px`
-   * on platforms where neither is set (Tauri desktop, plain web).
+   * via the `--inset-*` CSS variables set by `shared/android-insets.ts`
+   * from the host activity's `WindowInsets` (the native half is patched
+   * into the generated MainActivity by `scripts/patch-android-insets.py`,
+   * which CI runs after `tauri android init`). Falls back to `env()`
+   * (works on iOS) and then `0px` on platforms where neither is set
+   * (Tauri desktop, plain web).
    *
    * Plumbed through MUI `sx` as a raw CSS string, which `pt`/`py`
    * accept verbatim. `viewport-fit=cover` is set in `index.html`, which
-   * is required for iOS to expose `env(safe-area-inset-top)`. The
-   * `--inset-*` family is what the Android host injects — see the
-   * `setOnApplyWindowInsetsListener` block in `MainActivity.kt`.
+   * is required for iOS to expose `env(safe-area-inset-top)`.
    */
   safeAreaTop: 'var(--inset-top, env(safe-area-inset-top, 0px))',
   /**
    * Bottom equivalent. Critical on Android 15+ where edge-to-edge is
-   * enforced (`enableEdgeToEdge()` in `MainActivity.kt`) and the
-   * 3-button nav bar / gesture indicator would otherwise overlap the
+   * enforced (and the generated MainActivity calls `enableEdgeToEdge()`
+   * on every Android version): without the injected `--inset-bottom`
+   * the 3-button nav bar / gesture indicator overlaps the
    * `BottomNavigation`.
    */
   safeAreaBottom: 'var(--inset-bottom, env(safe-area-inset-bottom, 0px))',

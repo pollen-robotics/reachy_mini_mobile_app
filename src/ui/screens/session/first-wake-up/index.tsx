@@ -434,7 +434,11 @@ export default function FirstWakeUpWizard({
             width: '100%',
             maxWidth: STAGE_MAX_WIDTH,
             px: COLUMN_PX,
-            py: 3,
+            pt: 3,
+            // Steps dock their actions at the bottom of this column, so the
+            // safe-area inset must be folded into the column padding or the
+            // Android nav bar / iOS home indicator covers them.
+            pb: `calc(${LAYOUT.safeAreaBottom} + 24px)`,
             display: 'flex',
             flexDirection: 'column',
           }}

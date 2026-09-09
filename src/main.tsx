@@ -7,6 +7,7 @@ import App from './App';
 import { ErrorBoundary } from '@/ui/design/ErrorBoundary';
 import { useResolvedThemeMode } from '@/features/theme-preference';
 import { installDesktopMicShim } from '@/shared/desktop-mic-shim';
+import { installAndroidInsetsBridge } from '@/shared/android-insets';
 import { queryClient } from './queryClient';
 import { lightTheme, darkTheme } from './theme';
 
@@ -15,6 +16,11 @@ import { lightTheme, darkTheme } from './theme';
 // apps (Discord, Zoom, ...). No-op on iOS / Android. See
 // `shared/desktop-mic-shim.ts` for the full rationale.
 installDesktopMicShim();
+
+// Populate `--inset-top/--inset-bottom/...` from the Android host activity
+// so bottom bars clear the system navigation bar under edge-to-edge. No-op
+// everywhere else. See `shared/android-insets.ts`.
+installAndroidInsetsBridge();
 
 function Root() {
   // Resolved theme = user pick collapsed to a concrete palette
