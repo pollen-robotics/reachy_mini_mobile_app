@@ -37,6 +37,17 @@
 //! mirrors them onto the scheme. That keeps the surface tiny and avoids
 //! the "validate twice, drift between languages" trap.
 //!
+//! Android and the user-gesture rule
+//! ─────────────────────────────────
+//! Step 5 is NOT guaranteed on Android: browsers may block a gesture-less
+//! scheme launch (e.g. a silent re-auth runs the whole redirect chain
+//! with zero taps in the tab) and render the 302 body instead. So the
+//! body is a tappable interstitial re-firing the scheme URL (a tap is a
+//! real gesture), and the bridge keeps the relayed callback for
+//! [`take_oauth_callback`] so the frontend can finish the exchange even
+//! if the user just closes the tab. iOS/macOS never see any of this:
+//! `ASWebAuthenticationSession` intercepts `Location` before rendering.
+//!
 //! Lifecycle
 //! ─────────
 //! `start_oauth_bridge` returns once the bind succeeded, then the
@@ -91,6 +102,9 @@ pub enum OAuthError {
 /// just drops the slot's content for that effect.
 static IN_FLIGHT: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
+/// Last relayed callback URL; Android rescue path, see module docs.
+static CAPTURED_CALLBACK: Mutex<Option<String>> = Mutex::new(None);
+
 /// Bind the loopback bridge and spawn its listener task.
 ///
 /// Returns synchronously after the bind succeeds so the caller can
@@ -100,11 +114,6 @@ static IN_FLIGHT: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 ///   - drop of the in-flight sender (cancellation),
 ///   - `FLOW_TIMEOUT` elapsing without a hit.
 ///
-/// We don't surface the captured `code`/`state` to the frontend here:
-/// `ASWebAuthenticationSession` already delivers the full URL to the
-/// auth-session plugin once it sees the `reachymini://` redirect we
-/// emit in the 302. Letting that path be the single source of truth
-/// avoids parsing the same params twice in two languages.
 #[tauri::command]
 pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
     let cancel_rx = {
@@ -118,6 +127,11 @@ pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
         *slot = Some(tx);
         rx
     };
+
+    // Clear any stale capture from a previous flow.
+    if let Ok(mut captured) = CAPTURED_CALLBACK.lock() {
+        *captured = None;
+    }
 
     // Bind synchronously: callers want immediate feedback if port 8000
     // is taken (another sign-in racing, or some other localhost service
@@ -165,6 +179,17 @@ pub async fn start_oauth_bridge() -> Result<(), OAuthError> {
 pub fn cancel_oauth_bridge() -> Result<(), OAuthError> {
     release_slot();
     Ok(())
+}
+
+/// Consume the captured callback URL (take-once). `cancel_oauth_bridge`
+/// deliberately leaves it: the frontend's `finally` runs before the
+/// rescue read.
+#[tauri::command]
+pub fn take_oauth_callback() -> Option<String> {
+    CAPTURED_CALLBACK
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
 }
 
 fn release_slot() {
@@ -227,6 +252,12 @@ async fn run_bridge(
                     format!("{SCHEME_REDIRECT_PREFIX}?{query}")
                 };
 
+                // Capture before responding so a fast tab-close can't
+                // race it.
+                if let Ok(mut captured) = CAPTURED_CALLBACK.lock() {
+                    *captured = Some(location.clone());
+                }
+
                 let _ = write_302(&mut socket, &location).await;
                 let _ = socket.shutdown().await;
                 return Ok(());
@@ -259,16 +290,35 @@ fn parse_request_target(request_line: &str) -> Option<String> {
 }
 
 async fn write_302(socket: &mut tokio::net::TcpStream, location: &str) -> IoResult<()> {
-    // No body: the WebView only needs the Location header to switch
-    // navigation to the custom scheme. We still include a tiny noscript
-    // fallback so a curious human hitting the URL manually sees what's
-    // going on instead of a blank page.
-    let body = "<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=reachymini://oauth/callback\"><p>Returning to Reachy Mini...</p>";
+    // Body = the Android interstitial (see module docs). No JS
+    // auto-redirect: it would be as gesture-less as the 302 it replaces.
+    let href = html_escape_attr(location);
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>Reachy Mini</title><style>\
+body{{font-family:sans-serif;text-align:center;padding:20vh 24px}}\
+a{{display:inline-block;padding:14px 28px;background:#ff9d00;color:#fff;border-radius:999px;text-decoration:none}}\
+</style></head><body>\
+<h1>Almost done</h1>\
+<p>Tap the button below to return to the app and finish signing in.</p>\
+<a href=\"{href}\">Open Reachy Mini</a>\
+</body></html>"
+    );
     let response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
         len = body.len()
     );
     socket.write_all(response.as_bytes()).await
+}
+
+/// HTML attribute escaping for the interstitial's `href` (the query
+/// comes straight from HF's redirect, so treat it as untrusted).
+fn html_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 async fn write_404(socket: &mut tokio::net::TcpStream) -> IoResult<()> {

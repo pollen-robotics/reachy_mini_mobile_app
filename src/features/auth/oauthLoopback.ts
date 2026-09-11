@@ -105,7 +105,14 @@ export async function loginWithHuggingFace(): Promise<{
     try {
       callbackUrl = await startAuthSession(authorizeUrl, CALLBACK_URL_SCHEME);
     } catch (raw) {
-      throw mapAuthSessionError(raw);
+      // Android rescue: the browser blocked the scheme launch and the
+      // user closed the tab; the bridge kept HF's callback (see oauth.rs).
+      const rescued = await invoke<string | null>('take_oauth_callback').catch(() => null);
+      if (rescued) {
+        callbackUrl = rescued;
+      } else {
+        throw mapAuthSessionError(raw);
+      }
     }
 
     const url = new URL(callbackUrl);

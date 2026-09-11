@@ -283,6 +283,14 @@ Fix: bump the regenerated `gen/android/app/build.gradle.kts` to
 debug job ("Patch Android Gradle config (minSdk)") and the release job
 ("Patch Android Gradle config (minSdk, applicationId, signing)").
 
+### Android: two installs both claim `reachymini://`
+
+Installing the Play build and a local debug build side by side leaves
+two apps claiming the OAuth scheme: instead of launching straight back
+into the app, the browser stops on a disambiguation prompt/chooser
+during HF sign-in. Expected on dev devices; uninstall one build (or pick
+from the chooser) rather than chasing a phantom OAuth bug.
+
 ### Rule of thumb
 
 Adding/upgrading any Rust crate with a native platform backend
