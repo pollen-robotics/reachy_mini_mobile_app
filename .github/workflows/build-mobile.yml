@@ -1801,7 +1801,14 @@ jobs:
           # No whatsNewDirectory: Play falls back to the previous
           # release's notes. Acceptable for internal testing; switch
           # to a per-tag changelog later if testers ask for it.
-          changesNotSentForReview: false
+          # `true` because Play currently refuses to auto-submit
+          # changes for review on commit ("Changes cannot be sent
+          # for review automatically"); the release lands in the
+          # Console as an unpublished change to send for review /
+          # roll out manually. If Play later rejects `true` with the
+          # mirror-image error, the app has graduated out of that
+          # state: set back to `false`.
+          changesNotSentForReview: true
 
       - name: Clean up keystore
         if: always()
