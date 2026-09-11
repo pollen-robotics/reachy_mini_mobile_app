@@ -186,7 +186,13 @@ export default function SetupWizardScreen({ token, onCancel, onComplete }: Setup
                 maxWidth: LAYOUT.contentMaxWidth,
                 mx: 'auto',
                 px: 3,
-                py: 3,
+                pt: 3,
+                // The scaffold docks its actions (CTAs, "still searching"
+                // indicator) at the very bottom of this column, so under
+                // edge-to-edge the safe-area inset must be part of the
+                // column's own padding or the Android nav bar / iOS home
+                // indicator covers them.
+                pb: `calc(${LAYOUT.safeAreaBottom} + 24px)`,
                 display: 'flex',
                 flexDirection: 'column',
               }}

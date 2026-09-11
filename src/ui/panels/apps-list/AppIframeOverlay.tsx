@@ -819,6 +819,11 @@ export default function AppIframeOverlay({
         display: 'flex',
         flexDirection: 'column',
         zIndex: 1300,
+        // The embedded Space can't see the device's safe areas (env() is
+        // always 0 inside an iframe), so the shell reserves the bottom
+        // inset: without this the Space's own bottom controls sit under
+        // the Android nav bar / iOS home indicator.
+        pb: LAYOUT.safeAreaBottom,
       }}
     >
       {/* Top toolbar.

@@ -340,7 +340,7 @@ export default function ScanScreen({
         <Box
           sx={{
             position: 'fixed',
-            top: 'max(64px, calc(env(safe-area-inset-top, 0px) + 64px))',
+            top: `max(64px, calc(${LAYOUT.safeAreaTop} + 64px))`,
             left: 0,
             right: 0,
             bottom: 0,

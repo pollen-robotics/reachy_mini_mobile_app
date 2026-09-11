@@ -1138,7 +1138,7 @@ function ConnectedSession({
           <Box
             sx={{
               position: 'fixed',
-              top: 'max(68px, calc(env(safe-area-inset-top, 0px) + 62px))',
+              top: `max(68px, calc(${LAYOUT.safeAreaTop} + 62px))`,
               left: 0,
               right: 0,
               bottom: 0,

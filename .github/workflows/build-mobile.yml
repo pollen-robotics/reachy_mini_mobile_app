@@ -570,6 +570,16 @@ jobs:
           print(f"Patched minSdk -> 26 ({n} match)")
           PY
 
+      - name: Patch MainActivity (safe-area inset bridge)
+        # The generated MainActivity enables edge-to-edge (and Android 15+
+        # enforces it with targetSdk >= 35) but never reports the system-bar
+        # insets to the page: Android's WebView resolves
+        # env(safe-area-inset-*) to 0, so every bottom bar ends up under the
+        # navigation buttons. The tracked script rewrites MainActivity.kt
+        # with a WindowInsets -> CSS-variable bridge consumed by
+        # src/shared/android-insets.ts. Idempotent.
+        run: python3 scripts/patch-android-insets.py
+
       - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
         # Two patches, applied together:
         #
@@ -1580,6 +1590,11 @@ jobs:
           print("--- patched build.gradle.kts ---")
           print(s)
           PY
+
+      - name: Patch MainActivity (safe-area inset bridge)
+        # Mirror of the debug job's step of the same name; see it for the
+        # rationale. Idempotent.
+        run: python3 scripts/patch-android-insets.py
 
       - name: Patch AndroidManifest (app permissions + strip GPS injected by blec)
         # Mirror of the debug job's "Patch AndroidManifest
