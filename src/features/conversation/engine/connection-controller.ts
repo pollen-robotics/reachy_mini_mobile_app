@@ -83,26 +83,12 @@ export interface ConnectionControllerDeps {
   /** Connection reached `live`: the conversation layer decides whether
    *  to auto-start the AI pipeline. */
   onConnectionLive: () => Promise<void>;
-  /** Connection going down: the conversation layer tears its pipeline
-   *  (glide:false on the power-off path) and parks its FSM on `idle`. */
+  /** Connection going down: the conversation layer stops the app on the
+   *  robot and parks its FSM on `idle`. */
   onConnectionLost: (opts: { glide: boolean }) => Promise<void>;
-  /** Resume the conversation's private AudioContexts on visibility
-   *  return (wobbler + mic/ai level monitors). */
-  resumeAudioContexts: () => void;
   /** Gate the robot mic forwarded to the backend. Used by the
    *  unsolicited-drop recovery path to re-sync the host's mute button. */
   applyMicMuted: (muted: boolean) => void;
-  /** Gate / ungate the conversation's 30 Hz pose writes while the
-   *  transport is degraded (SDK `iceStateChange === 'disconnected' |
-   *  'failed'`, `networkOffline`). Wired by the engine to the motion
-   *  orchestrator's send gate so degraded-link frames stay staged
-   *  instead of piling up in the SCTP send buffer. */
-  setPoseSendGate: (gated: boolean) => void;
-  /** Re-bind the conversation audio legs after the SDK re-dialled the
-   *  session. The re-dial swaps the whole `RTCPeerConnection`, so the
-   *  realtime bridge's mic track and output sender both belong to a
-   *  dead connection until this runs. */
-  rebindRobotAudio: (robotInstance: ReachyMiniInstance) => void;
 }
 
 export interface ConnectionController {
@@ -173,10 +159,7 @@ export function createConnectionController(
     emitDaemonVersion,
     onConnectionLive,
     onConnectionLost,
-    resumeAudioContexts,
     applyMicMuted,
-    setPoseSendGate,
-    rebindRobotAudio,
   } = deps;
 
   const { connection, conversation } = core;
@@ -230,7 +213,6 @@ export function createConnectionController(
    */
   let transportDegraded = false;
   const onTransportDegraded = (cause: string): void => {
-    setPoseSendGate(true);
     // Stop dc-health judging the link while we're deliberately not
     // using it. Without this the gate is self-defeating: every gated
     // flush reports `recordSend(false)` at 30 Hz, so 4 s of degradation
@@ -249,7 +231,6 @@ export function createConnectionController(
   const onTransportRecovered = (cause: string): void => {
     if (!transportDegraded) return;
     transportDegraded = false;
-    setPoseSendGate(false);
     // Resuming also zeroes the counter, which is the point: the frames
     // that failed against the dying transport must not be held against
     // the recovered one, and the send buffer needs a moment to drain
@@ -298,13 +279,6 @@ export function createConnectionController(
     dcHealth.setSuspended(false);
     onTransportRecovered("redial");
     emitErrorMessage(null);
-    // The re-dial built a NEW RTCPeerConnection, so the realtime
-    // bridge's mic track (a receiver of the old PC) is dead and the AI
-    // voice is routed to the old sender. Nothing else re-announces
-    // audio - the SDK's `ontrack` only re-emits `videoTrack` - so
-    // without this the session comes back "connected" while the
-    // conversation is deaf and mute.
-    if (robot) rebindRobotAudio(robot);
     // Promote back to `live`. A phone-side network drop also kills the
     // SDK's central SSE feed, and its `disconnected` event demotes the
     // FSM to `authenticated` (see `robot-events.ts`). That demotion
@@ -762,7 +736,6 @@ export function createConnectionController(
       centralSendUrl: `${CENTRAL_SIGNALING_URL}/send`,
       onResume: () => {
         if (isConversationActive()) {
-          resumeAudioContexts();
           void probeRobotLink();
           return;
         }
