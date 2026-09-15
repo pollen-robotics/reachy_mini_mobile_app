@@ -37,6 +37,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
+import { applySettingsToRobot } from './sync-settings';
 
 /** How long the app may take from `apps.start` to a connected backend. */
 const READY_TIMEOUT_MS = 60_000;
@@ -218,7 +219,10 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     }
   };
 
-  /** Poll `conversation.status` until the backend is connected. */
+  /**
+   * Poll `conversation.status` until the backend is connected, then hand the
+   * robot the settings the phone owns (see `sync-settings.ts`).
+   */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
     const deadline = performance.now() + READY_TIMEOUT_MS;
     let lastError: string | null = null;
@@ -236,7 +240,10 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (status) {
         if (!status.has_hf_connection)
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
-        if (status.backend_connected) return null;
+        if (status.backend_connected) {
+          await applySettingsToRobot(activeClient, status);
+          return null;
+        }
         if (status.backend_error) lastError = status.backend_error;
       }
       await sleep(READY_POLL_MS);

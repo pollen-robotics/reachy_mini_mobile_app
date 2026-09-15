@@ -54,7 +54,14 @@ function harness(robot: ReachyMiniInstance) {
   return { conversation: createRobotConversation(deps), states, errors, deps };
 }
 
-const READY = { backend_connected: true, has_hf_connection: true, backend_error: null };
+const READY = {
+  backend_connected: true,
+  has_hf_connection: true,
+  backend_error: null,
+  language: 'en',
+  memory_enabled: true,
+  vision_enabled: true,
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -73,12 +80,14 @@ describe('start', () => {
       'apps.status': { state: 'idle' },
       'apps.start': {},
       'conversation.status': READY,
+      'memory.list': { facts: [] },
     });
     const { conversation, states } = harness(robot);
 
     await expect(conversation.start()).resolves.toBe(true);
 
-    expect(calls).toEqual(['apps.status', 'apps.start', 'conversation.status']);
+    // memory.list is the settings sync refreshing the phone's cache.
+    expect(calls).toEqual(['apps.status', 'apps.start', 'conversation.status', 'memory.list']);
     expect(states).toEqual(['starting', 'listening']);
   });
 
@@ -119,6 +128,7 @@ describe('start', () => {
         return { installed: true };
       },
       'conversation.status': READY,
+      'memory.list': { facts: [] },
     });
     const { conversation } = harness(robot);
 
@@ -129,6 +139,7 @@ describe('start', () => {
       'apps.install',
       'apps.start',
       'conversation.status',
+      'memory.list',
     ]);
   });
 
@@ -185,6 +196,7 @@ describe('following the robot', () => {
       'apps.start': {},
       'apps.stop': {},
       'conversation.status': READY,
+      'memory.list': { facts: [] },
       'conversation.mic': (params: Record<string, unknown>) => ({ muted: params.muted }),
     });
     const h = harness(fake.robot);

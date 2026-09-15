@@ -46,7 +46,7 @@ import {
   useMemoryEnabled,
   useVisionEnabled,
 } from '@/features/conversation-settings';
-import { useMemoryStore } from '@/features/conversation/hooks/useMemoryStore';
+import { useRobotMemory } from '@/features/conv-app/memory-cache';
 import { useDaemonState } from '@/features/daemon-state';
 import { MAX_ROBOT_NAME_LENGTH } from '@/features/robot-session/sdk-types';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
@@ -108,7 +108,7 @@ export function ConversationSettingsPanel({
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
-  const { facts, clear } = useMemoryStore();
+  const { facts, clear } = useRobotMemory();
 
   // Daemon-side audio state (volumes + mute toggles). Read here so the
   // speaker / microphone sliders live alongside the other conversation

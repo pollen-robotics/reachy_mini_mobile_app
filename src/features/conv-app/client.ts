@@ -26,7 +26,14 @@ const INSTALL_TIMEOUT_MS = 300_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
 
-/** The readiness fields of `conversation.status` (it carries more). */
+/** One remembered fact, as the robot stores it. */
+export interface MemoryFact {
+  id: string;
+  text: string;
+  createdAt: number;
+}
+
+/** The fields of `conversation.status` the phone reads (it carries more). */
 export interface ConvAppStatus {
   /** False until the app's own voice backend is up: the real readiness. */
   backend_connected: boolean;
@@ -34,6 +41,12 @@ export interface ConvAppStatus {
   backend_error: string | null;
   /** False when the robot itself is not signed in to Hugging Face. */
   has_hf_connection: boolean;
+  /** Speech transcription language, e.g. `en`. */
+  language: string;
+  /** Whether remembered facts reach the model. */
+  memory_enabled: boolean;
+  /** Whether the camera tool will answer. */
+  vision_enabled: boolean;
 }
 
 /** `apps.status`: `state` is `idle` when the robot runs nothing. */
@@ -54,6 +67,13 @@ export interface ConvAppClient {
   // The running conversation app.
   getStatus(): Promise<ConvAppStatus>;
   setMicMuted(muted: boolean): Promise<boolean>;
+
+  // Settings the phone owns and pushes at conversation start.
+  setLanguage(language: string): Promise<string>;
+  setMemoryEnabled(enabled: boolean): Promise<boolean>;
+  setVisionEnabled(enabled: boolean): Promise<boolean>;
+  listMemory(): Promise<MemoryFact[]>;
+  clearMemory(): Promise<void>;
 
   /** Subscribe to a notification; returns an unsubscribe function. */
   on(event: string, handler: RpcNotificationHandler): () => void;
@@ -83,6 +103,22 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     },
     async setMicMuted(muted) {
       return (await robot.rpcCall<{ muted: boolean }>('conversation.mic', { muted })).muted;
+    },
+
+    async setLanguage(language) {
+      return (await robot.rpcCall<{ language: string }>('language.set', { language })).language;
+    },
+    async setMemoryEnabled(enabled) {
+      return (await robot.rpcCall<{ enabled: boolean }>('memory.set_enabled', { enabled })).enabled;
+    },
+    async setVisionEnabled(enabled) {
+      return (await robot.rpcCall<{ enabled: boolean }>('vision.set', { enabled })).enabled;
+    },
+    async listMemory() {
+      return (await robot.rpcCall<{ facts: MemoryFact[] }>('memory.list')).facts;
+    },
+    async clearMemory() {
+      await robot.rpcCall('memory.clear');
     },
 
     on(event, handler) {
