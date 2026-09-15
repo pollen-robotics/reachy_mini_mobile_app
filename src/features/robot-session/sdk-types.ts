@@ -67,18 +67,16 @@ export const MAX_ROBOT_NAME_LENGTH = 64;
 export type RpcNotificationHandler = (params: Record<string, unknown>) => void;
 
 /**
- * What a rejected `rpcCall` looks like when the robot answered with a JSON-RPC
- * error: a plain `Error` whose `reason` carries the wire `error.data.reason`
- * (`not_running`, `already_running`, `app_unavailable`, ...). A timeout or a
- * closed data channel rejects without a `reason`, so callers that branch on it
- * must treat `undefined` as "transport problem", not "robot said no".
+ * Read the stable `reason` off a rejected `rpcCall`.
+ *
+ * A JSON-RPC error carries the wire `error.data.reason` (`not_running`,
+ * `already_running`, `app_unavailable`, ...). A timeout or a closed data
+ * channel rejects without one, so callers branching on this must treat
+ * `undefined` as "transport problem", not "the robot said no".
  */
-export type RpcError = Error & { reason?: string };
-
-/** Read the stable `reason` off a rejected `rpcCall`, if it carries one. */
 export function rpcErrorReason(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null
-    ? (error as RpcError).reason
+    ? (error as { reason?: string }).reason
     : undefined;
 }
 

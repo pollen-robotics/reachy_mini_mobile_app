@@ -108,29 +108,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     return false;
   };
 
-  const writeLevels = (now: number): void => {
+  // The robot sends one level per side, so the bars differ only by a fixed
+  // profile. `bands` stays null: a synthesised spectrum would be invented data.
+  const writeLevels = (): void => {
     const style = deps.getLevelsTarget()?.style;
     if (style) {
       style.setProperty('--audio-level', userLevel.toFixed(3));
       style.setProperty('--ai-audio-level', aiLevel.toFixed(3));
+      for (let i = 0; i < 5; i++) {
+        style.setProperty(`--bar${i}`, (userLevel * BAR_PROFILE[i]).toFixed(3));
+      }
     }
-    const bands: [number, number, number, number, number] = [0, 0, 0, 0, 0];
-    for (let i = 0; i < 5; i++) {
-      const wobble = 1 + 0.25 * Math.sin(now / 90 + i * 1.3);
-      bands[i] = Math.min(1, userLevel * BAR_PROFILE[i] * wobble);
-      style?.setProperty(`--bar${i}`, bands[i].toFixed(3));
-    }
-    deps.onLevels?.({ user: userLevel, ai: aiLevel, bands });
-  };
-
-  const clearLevels = (): void => {
-    userLevel = 0;
-    aiLevel = 0;
-    const style = deps.getLevelsTarget()?.style;
-    if (!style) return;
-    style.setProperty('--audio-level', '0');
-    style.setProperty('--ai-audio-level', '0');
-    for (let i = 0; i < 5; i++) style.setProperty(`--bar${i}`, '0');
+    deps.onLevels?.({ user: userLevel, ai: aiLevel, bands: null });
   };
 
   // The robot has no `user-speaking` turn: it reports `listening` for the
@@ -151,7 +140,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     if (!running) return;
     userLevel *= LEVEL_DECAY;
     aiLevel *= LEVEL_DECAY;
-    writeLevels(now);
+    writeLevels();
     updateUserSpeaking(now);
     raf = requestAnimationFrame(tick);
   };
@@ -189,7 +178,9 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   const unfollow = (): void => {
     for (const off of unsubscribes.splice(0)) off();
     cancelAnimationFrame(raf);
-    clearLevels();
+    userLevel = 0;
+    aiLevel = 0;
+    writeLevels();
   };
 
   /**
