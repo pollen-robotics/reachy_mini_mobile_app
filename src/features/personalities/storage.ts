@@ -7,25 +7,37 @@
  *       Currently active personality id. Read on every conversation
  *       (re)connect to compose the realtime session.
  *
- *   - `reachyMini.personalities.custom` (JSON array)
- *       User-authored personalities. Each entry is a `Personality`
- *       record with `kind: 'custom'` and the `custom:<slug>` id form.
+ *   - `reachyMini.personalities.catalog` (JSON array)
+ *       The last catalog the robot reported, mapped to `Personality`
+ *       records. It is a cache: the robot owns the list, this lets the
+ *       picker draw something before the first conversation of a session.
+ *
+ *   - `reachyMini.personalities.pending` (JSON object)
+ *       Authoring the robot has not heard yet. The personality editor is
+ *       reachable while the conversation app is stopped, so a create, an
+ *       edit or a delete has to wait for the next start to be pushed.
  *
  * Storage failures (private mode, quota, etc.) are swallowed with a
  * single warn log: persistence is a UX nicety, not a correctness
  * requirement, so the app stays usable even when the host browser
  * refuses to store anything.
  */
-import {
-  DEFAULT_AVATAR_URL,
-  DEFAULT_GLOW,
-  DEFAULT_PERSONALITY_ID,
-  snapVoice,
-} from './builtin';
+import { DEFAULT_AVATAR_URL, DEFAULT_GLOW, DEFAULT_PERSONALITY_ID, snapVoice } from './builtin';
 import type { Personality } from './types';
 
 const ACTIVE_KEY = 'reachyMini.personalities.activeId';
-const CUSTOM_KEY = 'reachyMini.personalities.custom';
+const CATALOG_KEY = 'reachyMini.personalities.catalog';
+const PENDING_KEY = 'reachyMini.personalities.pending';
+
+/** Authoring waiting for a robot to push it to. */
+export interface PendingWrites {
+  /** Ids created or edited on the phone, to `personalities.save`. */
+  dirty: string[];
+  /** Ids deleted on the phone, to `personalities.delete`. */
+  deleted: string[];
+}
+
+export const NO_PENDING_WRITES: PendingWrites = { dirty: [], deleted: [] };
 
 /**
  * Resolve a usable Storage instance, or `null` when the host has no
@@ -82,36 +94,65 @@ export function writeActivePersonalityId(id: string): void {
 }
 
 /**
- * Read the user-authored personalities. Returns an empty array on
- * any failure (missing key, bad JSON, schema drift) so the caller
- * never has to handle a `null` distinct from "no customs yet".
+ * Read the cached catalog. Returns an empty array on any failure
+ * (missing key, bad JSON, schema drift) so the caller never has to
+ * handle a `null` distinct from "no robot seen yet".
  */
-export function readCustomPersonalities(): Personality[] {
+export function readCachedCatalog(): Personality[] {
   const storage = safeStorage();
   if (!storage) return [];
   try {
-    const raw = storage.getItem(CUSTOM_KEY);
+    const raw = storage.getItem(CATALOG_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isValidCustom).map(normaliseCustom);
+    return parsed.filter(isValidPersonality).map(normalisePersonality);
   } catch (err) {
-    console.warn('[personalities] failed to read customs:', err);
+    console.warn('[personalities] failed to read the cached catalog:', err);
     return [];
   }
 }
 
-/**
- * Persist the user-authored personalities. Best-effort.
- */
-export function writeCustomPersonalities(list: Personality[]): void {
+/** Persist the cached catalog. Best-effort. */
+export function writeCachedCatalog(list: Personality[]): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(CUSTOM_KEY, JSON.stringify(list));
+    storage.setItem(CATALOG_KEY, JSON.stringify(list));
   } catch (err) {
-    console.warn('[personalities] failed to write customs:', err);
+    console.warn('[personalities] failed to write the cached catalog:', err);
   }
+}
+
+export function readPendingWrites(): PendingWrites {
+  const storage = safeStorage();
+  if (!storage) return NO_PENDING_WRITES;
+  try {
+    const raw = storage.getItem(PENDING_KEY);
+    if (!raw) return NO_PENDING_WRITES;
+    const parsed = JSON.parse(raw) as Partial<PendingWrites>;
+    return {
+      dirty: ids(parsed.dirty),
+      deleted: ids(parsed.deleted),
+    };
+  } catch (err) {
+    console.warn('[personalities] failed to read pending writes:', err);
+    return NO_PENDING_WRITES;
+  }
+}
+
+export function writePendingWrites(pending: PendingWrites): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(PENDING_KEY, JSON.stringify(pending));
+  } catch (err) {
+    console.warn('[personalities] failed to write pending writes:', err);
+  }
+}
+
+function ids(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
 /**
@@ -120,7 +161,7 @@ export function writeCustomPersonalities(list: Personality[]): void {
  * but the bare minimum (id + name + instructions) MUST be present
  * otherwise the entry is dropped.
  */
-function isValidCustom(value: unknown): value is Partial<Personality> & {
+function isValidPersonality(value: unknown): value is Partial<Personality> & {
   id: string;
   name: string;
   instructions: string;
@@ -129,7 +170,7 @@ function isValidCustom(value: unknown): value is Partial<Personality> & {
   const v = value as Record<string, unknown>;
   return (
     typeof v.id === 'string' &&
-    v.id.startsWith('custom:') &&
+    v.id.length > 0 &&
     typeof v.name === 'string' &&
     v.name.length > 0 &&
     typeof v.instructions === 'string' &&
@@ -137,12 +178,12 @@ function isValidCustom(value: unknown): value is Partial<Personality> & {
   );
 }
 
-function normaliseCustom(
-  raw: Partial<Personality> & { id: string; name: string; instructions: string },
+function normalisePersonality(
+  raw: Partial<Personality> & { id: string; name: string; instructions: string }
 ): Personality {
   return {
     id: raw.id,
-    kind: 'custom',
+    kind: raw.kind === 'builtin' ? 'builtin' : 'custom',
     name: raw.name,
     tagline: typeof raw.tagline === 'string' ? raw.tagline : '',
     instructions: raw.instructions,

@@ -14,6 +14,7 @@
  */
 import { getActiveLanguageId } from '@/features/conversation-language';
 import { isMemoryEnabled, isVisionEnabled } from '@/features/conversation-settings';
+import { getActivePersonalityId, syncPersonalitiesToRobot } from '@/features/personalities';
 
 import type { ConvAppClient, ConvAppStatus } from './client';
 import { cacheFacts, consumeClearPending, isClearPending } from './memory-cache';
@@ -27,6 +28,11 @@ export async function applySettingsToRobot(
   const vision = isVisionEnabled();
 
   try {
+    // Personalities first: the robot owns the catalog, and the phone's active
+    // id is only meaningful once the two have been reconciled.
+    await syncPersonalitiesToRobot(client);
+    const personality = getActivePersonalityId();
+    if (status.personality !== personality) await client.applyPersonality(personality);
     if (status.language !== language) await client.setLanguage(language);
     if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory);
     if (status.vision_enabled !== vision) await client.setVisionEnabled(vision);

@@ -26,6 +26,14 @@ const INSTALL_TIMEOUT_MS = 300_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
 
+/** One personality as the robot stores it. `name` is its canonical id. */
+export interface RobotPersonality {
+  name: string;
+  instructions: string;
+  greeting: string;
+  voice: string;
+}
+
 /** One remembered fact, as the robot stores it. */
 export interface MemoryFact {
   id: string;
@@ -41,6 +49,8 @@ export interface ConvAppStatus {
   backend_error: string | null;
   /** False when the robot itself is not signed in to Hugging Face. */
   has_hf_connection: boolean;
+  /** Canonical name of the active profile, `null` for the robot's default. */
+  personality: string | null;
   /** Speech transcription language, e.g. `en`. */
   language: string;
   /** Whether remembered facts reach the model. */
@@ -69,6 +79,10 @@ export interface ConvAppClient {
   setMicMuted(muted: boolean): Promise<boolean>;
 
   // Settings the phone owns and pushes at conversation start.
+  getPersonalities(): Promise<RobotPersonality[]>;
+  applyPersonality(name: string): Promise<void>;
+  savePersonality(personality: RobotPersonality): Promise<void>;
+  deletePersonality(name: string): Promise<void>;
   setLanguage(language: string): Promise<string>;
   setMemoryEnabled(enabled: boolean): Promise<boolean>;
   setVisionEnabled(enabled: boolean): Promise<boolean>;
@@ -105,6 +119,27 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
       return (await robot.rpcCall<{ muted: boolean }>('conversation.mic', { muted })).muted;
     },
 
+    async getPersonalities() {
+      return (await robot.rpcCall<{ personalities: RobotPersonality[] }>('personalities.all'))
+        .personalities;
+    },
+    async applyPersonality(name) {
+      await robot.rpcCall('personalities.apply', { name, persist: true });
+    },
+    async savePersonality({ name, instructions, greeting, voice }) {
+      // `overwrite` covers the edit case; a create on a free name is the
+      // same call, so the phone does not have to know which one it is.
+      await robot.rpcCall('personalities.save', {
+        name,
+        instructions,
+        greeting,
+        voice,
+        overwrite: true,
+      });
+    },
+    async deletePersonality(name) {
+      await robot.rpcCall('personalities.delete', { name });
+    },
     async setLanguage(language) {
       return (await robot.rpcCall<{ language: string }>('language.set', { language })).language;
     },

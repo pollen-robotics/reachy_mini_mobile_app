@@ -2,8 +2,14 @@
  * Personalities runtime store.
  *
  * Tiny pub/sub holding:
- *   - the merged catalog (built-in + custom),
- *   - the active personality id.
+ *   - the catalog, which the robot owns,
+ *   - the active personality id,
+ *   - the authoring the robot has not heard yet.
+ *
+ * The robot is the source of truth: `cacheCatalog` adopts what it reports at
+ * every conversation start. localStorage is a cache, so the picker can draw
+ * something before the first conversation of a session, and a queue, because
+ * the personality editor is reachable while the conversation app is stopped.
  *
  * Why a module-level store (and not React state) for the active id:
  *
@@ -35,21 +41,29 @@ import {
 } from './builtin';
 import {
   readActivePersonalityId,
-  readCustomPersonalities,
+  readCachedCatalog,
+  readPendingWrites,
   writeActivePersonalityId,
-  writeCustomPersonalities,
+  writeCachedCatalog,
+  writePendingWrites,
 } from './storage';
+import type { PendingWrites } from './storage';
+import type { RobotPersonality } from '@/features/conv-app/client';
+import { getLiveClient } from '@/features/conv-app/live-client';
+
+import { ROBOT_DEFAULT_PROFILE, USER_PREFIX, toCatalog } from './from-robot';
 import type { CustomPersonalityInput, Personality } from './types';
 
 type Listener = () => void;
 
 interface State {
-  customs: Personality[];
-  activeId: string;
-  /** Catalog snapshot (builtin + customs). Recomputed on every
-   *  mutation so consumers can rely on referential equality of the
-   *  array to skip work. */
+  /** The robot's catalog, plus any authoring it has not heard yet.
+   *  Recomputed on every mutation so consumers can rely on referential
+   *  equality of the array to skip work. */
   catalog: Personality[];
+  activeId: string;
+  /** Authoring queued for the next conversation start. */
+  pending: PendingWrites;
   /**
    * Map of personaId -> generation START timestamp (epoch ms) for
    * avatars (stickers) currently baking in the background. Lets surfaces
@@ -72,23 +86,116 @@ interface State {
 }
 
 /**
- * Initial bootstrap: read both slots from localStorage. Validation
- * of `activeId` against the resolved catalog happens here so a stale
- * id (e.g. a custom personality removed in another tab) silently
- * falls back to the default instead of pointing nowhere.
+ * Initial bootstrap from localStorage: the last catalog a robot reported,
+ * the active id, and anything still waiting to be pushed. The active id is
+ * not validated here; `cacheCatalog` reconciles it against the real catalog
+ * as soon as a robot answers.
  */
 function bootstrapState(): State {
-  const customs = readCustomPersonalities();
-  const catalog = mergeCatalog(customs);
-  const requested = readActivePersonalityId();
-  const activeId = catalog.some((p) => p.id === requested)
-    ? requested
-    : DEFAULT_PERSONALITY_ID;
-  return { customs, activeId, catalog, pendingAvatars: new Map() };
+  const cached = readCachedCatalog();
+  return {
+    catalog: cached.length > 0 ? cached : [...BUILTIN_PERSONALITIES],
+    activeId: readActivePersonalityId(),
+    pending: readPendingWrites(),
+    pendingAvatars: new Map(),
+  };
 }
 
-function mergeCatalog(customs: Personality[]): Personality[] {
-  return [...BUILTIN_PERSONALITIES, ...customs];
+/**
+ * Adopt the catalog the robot just reported.
+ *
+ * The robot owns the list, so its entries win outright. Two things are the
+ * phone's and survive: an avatar it generated for a profile it does not ship a
+ * drawing for, and the order the user dragged the tiles into. Authoring the
+ * robot has not heard yet is appended rather than dropped, so a persona created
+ * while the conversation app was stopped stays visible until the next start
+ * pushes it.
+ */
+export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
+  const previous = new Map(state.catalog.map(p => [p.id, p]));
+  const adopted = toCatalog(fromRobot)
+    .filter(p => !state.pending.deleted.includes(p.id))
+    .map(p => reuseLocalLook(p, previous.get(p.id)));
+  const unpushed = state.catalog.filter(
+    p => state.pending.dirty.includes(p.id) && !adopted.some(a => a.id === p.id)
+  );
+  const catalog = inLocalOrder([...adopted, ...unpushed]);
+  if (catalog.length === 0) return;
+
+  const activeId = catalog.some(p => p.id === state.activeId)
+    ? state.activeId
+    : (catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ?? catalog[0].id);
+  writeCachedCatalog(catalog);
+  if (activeId !== state.activeId) writeActivePersonalityId(activeId);
+  update({ catalog, activeId });
+}
+
+/**
+ * Keep the avatar the phone generated for a profile it ships no drawing for.
+ * The robot stores its own SVG, but the phone never downloads it, so without
+ * this a generated sticker would be replaced by the placeholder on reconnect.
+ */
+function reuseLocalLook(next: Personality, cached: Personality | undefined): Personality {
+  if (!cached || next.avatar !== getDefaultPersonality().avatar) return next;
+  return { ...next, avatar: cached.avatar, glow: cached.glow };
+}
+
+/** Restore the tile order the user dragged, appending anything new. */
+function inLocalOrder(list: Personality[]): Personality[] {
+  const rank = new Map(state.catalog.map((p, index) => [p.id, index]));
+  return [...list].sort(
+    (a, b) =>
+      (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+  );
+}
+
+/** The active id as the robot names it, for `personalities.apply`. */
+export function getActivePersonalityId(): string {
+  return state.activeId;
+}
+
+/** Authoring the robot has not heard yet. Drained by `syncPersonalitiesToRobot`. */
+export function getPendingWrites(): PendingWrites {
+  return state.pending;
+}
+
+/** Forget pushed authoring. Ids still failing stay queued for the next start. */
+export function clearPendingWrites(pushed: PendingWrites): void {
+  const pending: PendingWrites = {
+    dirty: state.pending.dirty.filter(id => !pushed.dirty.includes(id)),
+    deleted: state.pending.deleted.filter(id => !pushed.deleted.includes(id)),
+  };
+  writePendingWrites(pending);
+  update({ pending });
+}
+
+/** Queue an id for `personalities.save` at the next conversation start. */
+function markDirty(id: string): void {
+  if (state.pending.dirty.includes(id)) return;
+  const pending: PendingWrites = {
+    dirty: [...state.pending.dirty, id],
+    deleted: state.pending.deleted.filter(deleted => deleted !== id),
+  };
+  writePendingWrites(pending);
+  update({ pending });
+}
+
+/** Queue an id for `personalities.delete`, dropping any unpushed save. */
+function markDeleted(id: string): void {
+  const pending: PendingWrites = {
+    dirty: state.pending.dirty.filter(dirty => dirty !== id),
+    deleted: state.pending.deleted.includes(id)
+      ? state.pending.deleted
+      : [...state.pending.deleted, id],
+  };
+  writePendingWrites(pending);
+  update({ pending });
+}
+
+/** Replace one entry in the catalog, persisting the new snapshot. */
+function replaceInCatalog(catalog: Personality[]): void {
+  writeCachedCatalog(catalog);
+  update({ catalog });
 }
 
 let state: State = bootstrapState();
@@ -137,13 +244,11 @@ export function getActivePersonality(): Personality {
   return found ?? getDefaultPersonality();
 }
 
-/** Resolve a personality by id. Looks at customs first (allows users
- *  to override a built-in id, though the UI doesn't expose that
- *  today) then falls back to built-ins. Returns null on miss. */
+/** Resolve a personality by id. The robot's catalog wins; the bundled
+ *  set is the fallback before the first conversation of a session.
+ *  Returns null on miss. */
 export function resolvePersonalityById(id: string): Personality | null {
-  const fromCustom = state.customs.find((p) => p.id === id);
-  if (fromCustom) return fromCustom;
-  return BUILTIN_BY_ID.get(id) ?? null;
+  return state.catalog.find(p => p.id === id) ?? BUILTIN_BY_ID.get(id) ?? null;
 }
 
 /** Switch the active personality. Persists to localStorage in the
@@ -159,22 +264,30 @@ export function setActivePersonality(id: string): void {
   }
   writeActivePersonalityId(id);
   update({ activeId: id });
+  // Tell the robot now when it is listening; otherwise the next conversation
+  // start carries it (see `sync-settings.ts`).
+  getLiveClient()
+    ?.applyPersonality(id)
+    .catch((err: unknown) => {
+      console.warn('[personalities] could not apply on the robot:', err);
+    });
 }
 
-/** Add a custom personality. Generates the `custom:<slug>` id from
- *  the input name (lowercased, non-alphanumerics → underscore).
- *  Auto-suffixes a counter when the slug clashes with an existing
- *  custom. Returns the resulting personality. */
+/** Add a custom personality. Its id is the robot's own naming for what
+ *  a user wrote, `user_personalities/<slug>`, derived from the input
+ *  name (lowercased, non-alphanumerics → underscore) and auto-suffixed
+ *  with a counter on a clash. It lands on the robot at the next
+ *  conversation start. Returns the resulting personality. */
 export function addCustomPersonality(input: CustomPersonalityInput): Personality {
   const baseSlug = slugify(input.name) || 'custom';
   let slug = baseSlug;
   let counter = 2;
-  while (state.customs.some((p) => p.id === `custom:${slug}`)) {
+  while (state.catalog.some(p => p.id === `${USER_PREFIX}${slug}`)) {
     slug = `${baseSlug}_${counter}`;
     counter += 1;
   }
   const next: Personality = {
-    id: `custom:${slug}`,
+    id: `${USER_PREFIX}${slug}`,
     kind: 'custom',
     name: input.name.trim(),
     tagline: (input.tagline ?? '').trim(),
@@ -183,9 +296,8 @@ export function addCustomPersonality(input: CustomPersonalityInput): Personality
     glow: input.glow ?? DEFAULT_GLOW,
     avatar: input.avatar?.trim() || DEFAULT_AVATAR_URL,
   };
-  const customs = [...state.customs, next];
-  writeCustomPersonalities(customs);
-  update({ customs, catalog: mergeCatalog(customs) });
+  replaceInCatalog([...state.catalog, next]);
+  markDirty(next.id);
   return next;
 }
 
@@ -196,12 +308,11 @@ export function addCustomPersonality(input: CustomPersonalityInput): Personality
  *  updated personality, or null when the id isn't a known custom. */
 export function updateCustomPersonality(
   id: string,
-  input: CustomPersonalityInput,
+  input: CustomPersonalityInput
 ): Personality | null {
-  if (!id.startsWith('custom:')) return null;
-  const idx = state.customs.findIndex((p) => p.id === id);
+  const idx = state.catalog.findIndex(p => p.id === id && p.kind === 'custom');
   if (idx === -1) return null;
-  const prev = state.customs[idx];
+  const prev = state.catalog[idx];
   const next: Personality = {
     ...prev,
     name: input.name.trim(),
@@ -216,10 +327,10 @@ export function updateCustomPersonality(
     // previously generated sticker survives an instructions edit).
     avatar: input.avatar?.trim() || prev.avatar,
   };
-  const customs = [...state.customs];
-  customs[idx] = next;
-  writeCustomPersonalities(customs);
-  update({ customs, catalog: mergeCatalog(customs) });
+  const catalog = [...state.catalog];
+  catalog[idx] = next;
+  replaceInCatalog(catalog);
+  markDirty(id);
   return next;
 }
 
@@ -238,25 +349,18 @@ export function updateCustomPersonality(
  * persona deleted before its sticker finished generating is handled
  * gracefully.
  */
-export function setCustomPersonalityAvatar(
-  id: string,
-  avatar: string,
-): Personality | null {
-  if (!id.startsWith('custom:')) return null;
+export function setCustomPersonalityAvatar(id: string, avatar: string): Personality | null {
   const trimmed = avatar.trim();
   if (!trimmed) return null;
-  const idx = state.customs.findIndex((p) => p.id === id);
+  const idx = state.catalog.findIndex(p => p.id === id && p.kind === 'custom');
   if (idx === -1) return null;
-  const next: Personality = { ...state.customs[idx], avatar: trimmed };
-  const customs = [...state.customs];
-  customs[idx] = next;
-  writeCustomPersonalities(customs);
-  // The avatar has landed - the persona is no longer "cooking".
-  update({
-    customs,
-    catalog: mergeCatalog(customs),
-    pendingAvatars: withoutPending(id),
-  });
+  const next: Personality = { ...state.catalog[idx], avatar: trimmed };
+  const catalog = [...state.catalog];
+  catalog[idx] = next;
+  writeCachedCatalog(catalog);
+  // The avatar is the phone's own drawing, so it stays here: the robot
+  // has its own and never asked for this one.
+  update({ catalog, pendingAvatars: withoutPending(id) });
   return next;
 }
 
@@ -303,9 +407,10 @@ function withoutPending(id: string): ReadonlyMap<string, number> {
  * duplicate a persona.
  */
 export function reorderCustomPersonalities(orderedIds: string[]): void {
-  if (orderedIds.length !== state.customs.length) return;
-  const byId = new Map(state.customs.map((p) => [p.id, p]));
-  const next: Personality[] = [];
+  const customs = state.catalog.filter(p => p.kind === 'custom');
+  if (orderedIds.length !== customs.length) return;
+  const byId = new Map(customs.map(p => [p.id, p]));
+  const reordered: Personality[] = [];
   for (const id of orderedIds) {
     const persona = byId.get(id);
     if (!persona) {
@@ -313,28 +418,28 @@ export function reorderCustomPersonalities(orderedIds: string[]): void {
       return;
     }
     byId.delete(id);
-    next.push(persona);
+    reordered.push(persona);
   }
-  writeCustomPersonalities(next);
-  update({ customs: next, catalog: mergeCatalog(next) });
+  const next = state.catalog.map(p =>
+    p.kind === 'custom' ? (reordered.shift() as Personality) : p
+  );
+  replaceInCatalog(next);
 }
 
-/** Remove a custom personality. If it was the active one, fall back
- *  to the default so the engine doesn't end up with a dangling id. */
+/** Remove a custom personality, on the phone now and on the robot at the
+ *  next conversation start. If it was the active one, fall back to the
+ *  default so the engine doesn't end up with a dangling id. */
 export function removeCustomPersonality(id: string): void {
-  if (!id.startsWith('custom:')) return;
-  const customs = state.customs.filter((p) => p.id !== id);
-  if (customs.length === state.customs.length) return;
-  writeCustomPersonalities(customs);
+  const catalog = state.catalog.filter(p => p.id !== id || p.kind !== 'custom');
+  if (catalog.length === state.catalog.length) return;
+  writeCachedCatalog(catalog);
   const nextActive =
-    state.activeId === id ? DEFAULT_PERSONALITY_ID : state.activeId;
+    state.activeId === id
+      ? (catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ?? DEFAULT_PERSONALITY_ID)
+      : state.activeId;
   if (nextActive !== state.activeId) writeActivePersonalityId(nextActive);
-  update({
-    customs,
-    catalog: mergeCatalog(customs),
-    activeId: nextActive,
-    pendingAvatars: withoutPending(id),
-  });
+  update({ catalog, activeId: nextActive, pendingAvatars: withoutPending(id) });
+  markDeleted(id);
 }
 
 /** React hook reading the merged catalog. Re-renders on every store
@@ -354,10 +459,7 @@ export function useIsAvatarPending(id: string): boolean {
  *  marked pending, or `null` if it isn't baking. Lets a progress cue anchor to
  *  the real elapsed time (surviving remounts) instead of its own mount. */
 export function useAvatarPendingSince(id: string): number | null {
-  return useSyncExternalStore(
-    subscribe,
-    () => state.pendingAvatars.get(id) ?? null,
-  );
+  return useSyncExternalStore(subscribe, () => state.pendingAvatars.get(id) ?? null);
 }
 
 /** React hook reading the currently active personality. Re-renders

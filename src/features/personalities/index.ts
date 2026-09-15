@@ -37,10 +37,12 @@ export type {
   GeneratePersonalityReason,
   StreamPersonalityOptions,
 } from './generate';
+export { syncPersonalitiesToRobot } from './sync';
 export {
   addCustomPersonality,
   clearAvatarPending,
   getActivePersonality,
+  getActivePersonalityId,
   markAvatarPending,
   removeCustomPersonality,
   reorderCustomPersonalities,

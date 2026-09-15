@@ -88,8 +88,14 @@ describe('start', () => {
 
     await expect(conversation.start()).resolves.toBe(true);
 
-    // memory.list is the settings sync refreshing the phone's cache.
-    expect(calls).toEqual(['apps.status', 'apps.start', 'conversation.status', 'memory.list']);
+    // The last two are the settings sync: the robot's catalog, then its memory.
+    expect(calls).toEqual([
+      'apps.status',
+      'apps.start',
+      'conversation.status',
+      'personalities.all',
+      'memory.list',
+    ]);
     expect(states).toEqual(['starting', 'listening']);
   });
 
@@ -141,6 +147,7 @@ describe('start', () => {
       'apps.install',
       'apps.start',
       'conversation.status',
+      'personalities.all',
       'memory.list',
     ]);
   });

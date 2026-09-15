@@ -30,12 +30,16 @@ function fakeClient(facts = [FACT]) {
     setVisionEnabled: vi.fn().mockResolvedValue(false),
     listMemory: vi.fn().mockResolvedValue(facts),
     clearMemory: vi.fn().mockResolvedValue(undefined),
+    getPersonalities: vi.fn().mockResolvedValue([]),
+    applyPersonality: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConvAppClient & {
     setLanguage: ReturnType<typeof vi.fn>;
     setMemoryEnabled: ReturnType<typeof vi.fn>;
     setVisionEnabled: ReturnType<typeof vi.fn>;
     listMemory: ReturnType<typeof vi.fn>;
     clearMemory: ReturnType<typeof vi.fn>;
+    getPersonalities: ReturnType<typeof vi.fn>;
+    applyPersonality: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -44,6 +48,7 @@ function status(overrides: Partial<ConvAppStatus> = {}): ConvAppStatus {
     backend_connected: true,
     backend_error: null,
     has_hf_connection: true,
+    personality: 'default',
     language: 'en',
     memory_enabled: true,
     vision_enabled: true,

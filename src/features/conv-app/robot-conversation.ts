@@ -37,6 +37,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
+import { setLiveRobot } from './live-client';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
 
@@ -293,6 +294,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       }
 
       robotTurn = 'ready';
+      setLiveRobot(robot);
       follow(activeClient);
       deps.setConversationState('listening');
       return true;
@@ -301,6 +303,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     async stop() {
       if (!running && client === null) return;
       running = false;
+      setLiveRobot(null);
       unfollow();
       const activeClient = client;
       client = null;
