@@ -63,6 +63,25 @@
  */
 export const MAX_ROBOT_NAME_LENGTH = 64;
 
+/** Handler for a one-way JSON-RPC notification pushed by the robot/app. */
+export type RpcNotificationHandler = (params: Record<string, unknown>) => void;
+
+/**
+ * What a rejected `rpcCall` looks like when the robot answered with a JSON-RPC
+ * error: a plain `Error` whose `reason` carries the wire `error.data.reason`
+ * (`not_running`, `already_running`, `app_unavailable`, ...). A timeout or a
+ * closed data channel rejects without a `reason`, so callers that branch on it
+ * must treat `undefined` as "transport problem", not "robot said no".
+ */
+export type RpcError = Error & { reason?: string };
+
+/** Read the stable `reason` off a rejected `rpcCall`, if it carries one. */
+export function rpcErrorReason(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null
+    ? (error as RpcError).reason
+    : undefined;
+}
+
 export interface RobotInfo {
   id: string;
   meta?: { name?: string };
@@ -359,6 +378,27 @@ export interface ReachyMiniInstance extends EventTarget {
    * daemon predates the `get_version` Cmd.
    */
   getVersion(): Promise<string | null>;
+
+  /**
+   * Call a JSON-RPC method on the robot/app over the data channel and await
+   * its result. The daemon relays `apps.*` (app lifecycle) locally and any
+   * other namespace (e.g. `conversation.*`) to the running app's `/rpc`.
+   * Rejects on the JSON-RPC error, a closed channel, or timeout. A JSON-RPC
+   * error rejects with a plain `Error` carrying the wire `reason` in
+   * `.reason` (see `RpcError`); a timeout or closed channel does not.
+   */
+  rpcCall<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
+
+  /**
+   * Subscribe to a one-way JSON-RPC notification pushed by the robot/app,
+   * e.g. `conversation.turn` / `conversation.level`. Returns an unsubscribe
+   * function.
+   */
+  onNotification(method: string, handler: RpcNotificationHandler): () => void;
 
   /**
    * Subscribe to the daemon's `journalctl -u reachy-mini-daemon`
