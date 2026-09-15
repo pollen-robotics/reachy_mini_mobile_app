@@ -34,6 +34,7 @@
 
 import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
+import { isAnotherAppDrivingRobot } from "@/features/conv-app/app-slot";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
@@ -516,11 +517,17 @@ export function createConnectionController(
     // (waking an already-awake robot is a daemon no-op, which is why the
     // motor test looked dead when bring-up had already woken it). The
     // wizard guarantees the robot ends up awake on finish / skip.
+    //
+    // EXCEPTION: a Hub app already driving the robot owns the motors. Waking
+    // under it would fight its trajectory on the bus, so we reach `live` and
+    // leave the robot exactly as the app is posing it.
     if (shouldDeferInitialWakeUp?.()) {
       console.log(
         `[DIAG] doStart: deferring initial wake-up to host (first-wake-up ` +
           `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`,
       );
+    } else if (robot && (await isAnotherAppDrivingRobot(robot))) {
+      console.log("[DIAG] doStart: skipping wake-up, an app is driving the robot");
     } else {
       const tBeforeWake = performance.now();
       await session.wakeUp();
@@ -586,7 +593,9 @@ export function createConnectionController(
     // Self-contained: play the goto-sleep trajectory + release motors
     // BEFORE we tear the WebRTC session. Sending the command after
     // `stopSession()` would race the data channel close.
-    if (wasSessionEstablished && robot) {
+    // Same reasoning as the bring-up wake: the goodbye trajectory is ours to
+    // play only when nothing else is driving.
+    if (wasSessionEstablished && robot && !(await isAnotherAppDrivingRobot(robot))) {
       // `session.sleepAndDisable()` plays the goto-sleep trajectory,
       // hard-bounded by a JS timeout, then forces motor mode to
       // `'disabled'` deterministically. Both steps run BEFORE

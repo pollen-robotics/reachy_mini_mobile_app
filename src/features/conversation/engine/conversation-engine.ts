@@ -191,7 +191,10 @@ const onDaemonVersionChange: ((version: string | null) => void) | null =
     ? options.onDaemonVersionChange
     : null;
 
+let lastDaemonVersion: string | null = null;
+
 const emitDaemonVersion = (version: string | null): void => {
+  lastDaemonVersion = version;
   if (!onDaemonVersionChange) return;
   try {
     onDaemonVersionChange(version);
@@ -457,6 +460,7 @@ const connectionController: ConnectionController = createConnectionController({
 // events into the conversation FSM and the orb.
 const robotConversation = createRobotConversation({
   getRobot: liveSession.getRobot,
+  getDaemonVersion: () => lastDaemonVersion,
   isUnmounted: unmounted.get,
   setConversationState,
   currentConversationState: conversation.current,

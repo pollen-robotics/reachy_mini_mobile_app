@@ -23,6 +23,7 @@
  * Readiness is `conversation.status.backend_connected`: `apps.status` says
  * `running` the moment the process forks, long before the app can talk.
  */
+import { compareSemver, parseSemver } from '@/features/daemon-update/latestRelease';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import { rpcErrorReason } from '@/features/robot-session/sdk-types';
 import type {
@@ -40,6 +41,14 @@ import {
 import { setLiveRobot } from './live-client';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
+
+/**
+ * First daemon release that relays JSON-RPC over the WebRTC data channel
+ * (reachy_mini#1266, landed in v1.10.0). Everything the phone does with the
+ * conversation goes through that relay, so an older robot cannot host it at
+ * all and the user is sent to the update gate instead of a timeout.
+ */
+const MIN_DAEMON_VERSION = '1.10.0';
 
 /** How long the app may take from `apps.start` to a connected backend. */
 const READY_TIMEOUT_MS = 60_000;
@@ -64,6 +73,8 @@ const TURN_TO_STATE: Record<RobotTurn, ConversationState> = {
 
 export interface RobotConversationDeps {
   getRobot: () => ReachyMiniInstance | null;
+  /** Daemon version read at bring-up, `null` when it never answered. */
+  getDaemonVersion: () => string | null;
   isUnmounted: () => boolean;
   setConversationState: (state: ConversationState) => void;
   currentConversationState: () => ConversationState;
@@ -206,6 +217,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
    * started). Never takes the robot away from another app: that is an
    * explicit user action in the Apps tab, not a side effect of a tap.
    */
+  /**
+   * A daemon we could read and that predates the relay cannot host the
+   * conversation. One we could not read is let through: the bring-up version
+   * probe is best-effort, and failing there is not evidence of an old robot.
+   */
+  const daemonTooOld = (version: string | null): string | null => {
+    const current = parseSemver(version);
+    const min = parseSemver(MIN_DAEMON_VERSION);
+    if (!current || !min || compareSemver(current, min) >= 0) return null;
+    return `Reachy needs version v${MIN_DAEMON_VERSION} or newer to talk. Update it, then try again.`;
+  };
+
   const ensureAppRunning = async (activeClient: ConvAppClient): Promise<string | null> => {
     const app = await activeClient.getCurrentAppStatus();
     if (app.state === 'running' || app.state === 'starting') {
@@ -279,6 +302,11 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       deps.emitErrorMessage(null);
       deps.setConversationState('starting');
 
+      const tooOld = daemonTooOld(deps.getDaemonVersion());
+      if (tooOld) {
+        running = false;
+        return fail(tooOld);
+      }
       const blocked = await ensureAppRunning(activeClient).catch((err: unknown) => {
         console.warn('[robot-conversation] apps.status failed:', err);
         return 'Could not reach Reachy. Retry in a moment.' as string;

@@ -35,12 +35,13 @@ function fakeRobot(
   return { robot, calls, emit, handlers };
 }
 
-function harness(robot: ReachyMiniInstance) {
+function harness(robot: ReachyMiniInstance, daemonVersion: string | null = '1.10.0') {
   const states: ConversationState[] = [];
   let state: ConversationState = 'idle';
   const errors: Array<string | null> = [];
   const deps: RobotConversationDeps = {
     getRobot: () => robot,
+    getDaemonVersion: () => daemonVersion,
     isUnmounted: () => false,
     setConversationState: next => {
       state = next;
@@ -77,6 +78,15 @@ afterEach(() => {
 });
 
 describe('start', () => {
+  it('refuses a daemon too old to relay JSON-RPC', async () => {
+    const { robot, calls } = fakeRobot({});
+    const { conversation, errors } = harness(robot, '1.9.3');
+
+    await expect(conversation.start()).resolves.toBe(false);
+    expect(calls).toEqual([]);
+    expect(errors.at(-1)).toContain('v1.10.0');
+  });
+
   it('starts the app on an idle robot, waits for its backend, then listens', async () => {
     const { robot, calls } = fakeRobot({
       'apps.status': { state: 'idle' },
