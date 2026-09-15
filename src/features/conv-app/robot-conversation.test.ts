@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationState } from '@/features/conversation/engine/types';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
+import { cacheFacts, getFacts } from './memory-cache';
 import { createRobotConversation, type RobotConversationDeps } from './robot-conversation';
 
 type Handler = (params: Record<string, unknown>) => void;
@@ -64,6 +65,7 @@ const READY = {
 };
 
 beforeEach(() => {
+  cacheFacts([]);
   vi.useFakeTimers();
   vi.stubGlobal('requestAnimationFrame', () => 1);
   vi.stubGlobal('cancelAnimationFrame', () => {});
@@ -223,6 +225,29 @@ describe('following the robot', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(calls.at(-1)).toBe('conversation.mic');
+  });
+
+  it('re-reads the memory after a tool call, so the counter follows', async () => {
+    // The robot's `remember` tool writes a fact mid-conversation; the phone
+    // only learns about it by asking again.
+    let reads = 0;
+    const { robot, calls, emit } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      'conversation.status': READY,
+      'memory.list': () => ({
+        facts: reads++ === 0 ? [] : [{ id: 'm_1', text: 'Has a dog', createdAt: 1 }],
+      }),
+    });
+    const { conversation } = harness(robot);
+    await conversation.start();
+    expect(getFacts()).toEqual([]);
+
+    emit('conversation.activity', { reason: 'tool_result_ready' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(calls.at(-1)).toBe('memory.list');
+    expect(getFacts()).toHaveLength(1);
   });
 
   it('stops the app and unsubscribes on stop', async () => {

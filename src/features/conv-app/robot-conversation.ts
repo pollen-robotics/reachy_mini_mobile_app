@@ -37,6 +37,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
+import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
 
 /** How long the app may take from `apps.start` to a connected backend. */
@@ -164,6 +165,20 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   const onActivity = (params: Record<string, unknown>): void => {
     if (params.reason === 'tool_call_received') {
       deps.onToolToast?.({ label: 'Using a tool…', durationMs: 4_000 });
+    }
+    // `remember` and `forget` are tools, and the robot has no memory-specific
+    // event, so any finished tool call is the cue to re-read the list. It is
+    // one small call, a few times per conversation.
+    if (params.reason === 'tool_result_ready') void refreshMemory();
+  };
+
+  const refreshMemory = async (): Promise<void> => {
+    const activeClient = client;
+    if (!activeClient) return;
+    try {
+      cacheFacts(await activeClient.listMemory());
+    } catch (err) {
+      console.warn('[robot-conversation] could not re-read the robot memory:', err);
     }
   };
 
