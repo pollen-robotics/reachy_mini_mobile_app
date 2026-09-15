@@ -1,3 +1,9 @@
+> **Superseded.** This describes the phone-side realtime pipeline, which has
+> been removed. The conversation now runs on the robot, in
+> `reachy_mini_conversation_app`, and the phone drives it over JSON-RPC
+> through `src/features/conv-app/`. Kept for the history of how the orb, the
+> FSM and the session layering came to be, which still hold.
+
 # Conversation module architecture - target design
 
 Status: draft. Owner: `@tfrere`. Implementation lives in
