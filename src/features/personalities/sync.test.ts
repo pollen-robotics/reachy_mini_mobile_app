@@ -60,7 +60,7 @@ describe('syncPersonalitiesToRobot', () => {
     await syncPersonalitiesToRobot(client);
 
     expect(client.savePersonality).toHaveBeenCalledWith(
-      expect.objectContaining({ name: created.id, instructions: 'Be a guide.' })
+      expect.objectContaining({ name: created.id, instructions: 'Be a guide.', greeting: '' })
     );
     expect(getPendingWrites().dirty).toEqual([]);
   });
@@ -88,14 +88,20 @@ describe('syncPersonalitiesToRobot', () => {
     expect(getPendingWrites().dirty).toEqual([created.id]);
   });
 
-  it('keeps the avatar the phone generated when the robot ships no drawing', async () => {
-    const created = addCustomPersonality({ name: 'Guide', instructions: 'Be a guide.' });
+  it('keeps the look the phone drew when the robot cannot describe it', async () => {
+    const created = addCustomPersonality({
+      name: 'Guide',
+      tagline: 'Knows the way',
+      instructions: 'Be a guide.',
+    });
     setCustomPersonalityAvatar(created.id, 'data:image/png;base64,AAAA');
 
     const client = fakeClient([DEFAULT, robotPersonality(created.id)]);
     await syncPersonalitiesToRobot(client);
 
-    expect(resolvePersonalityById(created.id)?.avatar).toBe('data:image/png;base64,AAAA');
+    const guide = resolvePersonalityById(created.id);
+    expect(guide?.avatar).toBe('data:image/png;base64,AAAA');
+    expect(guide?.tagline).toBe('Knows the way');
   });
 
   it('drops a persona the robot no longer has', async () => {

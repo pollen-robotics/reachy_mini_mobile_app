@@ -68,7 +68,8 @@ export function toPersonality(robot: RobotPersonality): Personality {
     id: robot.name,
     kind: robot.name.startsWith(USER_PREFIX) ? 'custom' : 'builtin',
     name: look?.name ?? humanise(robot.name.replace(USER_PREFIX, '')),
-    tagline: look?.tagline ?? robot.greeting ?? '',
+    // The robot has no teaser; its greeting is an opening-line prompt.
+    tagline: look?.tagline ?? '',
     instructions: robot.instructions,
     voice: robot.voice,
     glow: look?.glow ?? DEFAULT_GLOW,

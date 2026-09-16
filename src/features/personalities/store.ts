@@ -208,13 +208,16 @@ function missingBundled(known: Personality[]): Personality[] {
 }
 
 /**
- * Keep the avatar the phone generated for a profile it ships no drawing for.
- * The robot stores its own SVG, but the phone never downloads it, so without
- * this a generated sticker would be replaced by the placeholder on reconnect.
+ * Keep what the phone drew for a profile the robot cannot describe: the
+ * tagline, which the robot has no field for, and the avatar and glow it
+ * generated for a profile it ships no drawing for. The robot stores its own
+ * SVG, but the phone never downloads it, so without this a generated sticker
+ * would be replaced by the placeholder on reconnect.
  */
 function reuseLocalLook(next: Personality, cached: Personality | undefined): Personality {
-  if (!cached || next.avatar !== getDefaultPersonality().avatar) return next;
-  return { ...next, avatar: cached.avatar, glow: cached.glow };
+  if (!cached) return next;
+  const look = next.avatar === getDefaultPersonality().avatar ? cached : next;
+  return { ...next, tagline: next.tagline || cached.tagline, avatar: look.avatar, glow: look.glow };
 }
 
 /** Restore the tile order the user dragged, appending anything new. */

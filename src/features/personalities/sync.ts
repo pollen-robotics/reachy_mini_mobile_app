@@ -48,7 +48,10 @@ export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<v
       await client.savePersonality({
         name: id,
         instructions: personality.instructions,
-        greeting: personality.tagline,
+        // The robot's greeting is a prompt that drives the opening line; the
+        // phone's tagline is a teaser under the avatar. Not the same thing,
+        // so the robot keeps its default opening.
+        greeting: '',
         voice: personality.voice,
       });
       pushed.dirty.push(id);
