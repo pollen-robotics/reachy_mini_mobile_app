@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ConvAppClient, RobotPersonality } from '@/features/conv-app/client';
 
+import { getActivePersonalityId, setActivePersonality } from './store';
 import { syncPersonalitiesToRobot } from './sync';
 
 const DEFAULT: RobotPersonality = {
@@ -39,7 +40,9 @@ function savedNames(client: ReturnType<typeof fakeClient>): string[] {
 }
 
 describe('the bundled personalities a robot does not have', () => {
-  it('are offered to it once, in its user namespace', async () => {
+  it('are offered to it once, without moving the selection', async () => {
+    setActivePersonality('builtin:zen_guide');
+
     const client = fakeClient([DEFAULT]);
     await syncPersonalitiesToRobot(client);
 
@@ -48,6 +51,9 @@ describe('the bundled personalities a robot does not have', () => {
     expect(saved).toContain('user_personalities/bedtime_storyteller');
     // The robot already has this one, under its own name.
     expect(saved).not.toContain('user_personalities/default');
+    // The personality the user was talking to, under the name the robot
+    // will know it by.
+    expect(getActivePersonalityId()).toBe('user_personalities/zen_guide');
 
     // Second start: the robot has been offered them, so deleting one there
     // has to keep it deleted.

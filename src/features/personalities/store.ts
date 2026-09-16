@@ -156,9 +156,14 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
   const catalog = inLocalOrder([...adopted, ...unpushed, ...missingBundled(adopted)]);
   if (catalog.length === 0) return;
 
-  const activeId = catalog.some(p => p.id === state.activeId)
-    ? state.activeId
-    : (catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ?? catalog[0].id);
+  // A selection survives the personality being renamed under it: the phone's
+  // `builtin:zen_guide` and the robot's `user_personalities/zen_guide` are the
+  // same choice. Only a personality that is really gone falls back.
+  const activeId =
+    catalog.find(p => p.id === state.activeId)?.id ??
+    catalog.find(p => presentationKey(p.id) === presentationKey(state.activeId))?.id ??
+    catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ??
+    catalog[0].id;
   writeCachedCatalog(catalog);
   if (activeId !== state.activeId) writeActivePersonalityId(activeId);
   update({ catalog, activeId });
