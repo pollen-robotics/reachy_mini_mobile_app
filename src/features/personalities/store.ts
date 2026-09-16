@@ -94,9 +94,12 @@ interface State {
  * not validated here; `cacheCatalog` reconciles it against the real catalog
  * as soon as a robot answers.
  */
+/** Mirrors the stored flag, so the offer is one-shot within a run too. */
+let seeded = readSeeded();
+
 function bootstrapState(): State {
   const cached = readCachedCatalog();
-  const pending = readPendingWrites();
+  let pending = readPendingWrites();
   const base = cached.length > 0 ? cached : [...BUILTIN_PERSONALITIES];
 
   // Personalities the user wrote back when the phone owned them. They are
@@ -105,23 +108,23 @@ function bootstrapState(): State {
   const rescued = takeLegacyCustomPersonalities()
     .map(persona => ({ ...persona, id: `${USER_PREFIX}${legacySlug(persona.id)}` }))
     .filter(persona => !base.some(known => known.id === persona.id));
-  if (rescued.length === 0) {
+
+  // A cached catalog is a real robot's, so the bundled personalities it lacks
+  // can be queued now and shown in the picker at once, instead of appearing
+  // only after the next conversation start. With no cache the fallback IS the
+  // bundled set, and the comparison waits for the first robot to answer.
+  const seededNow = cached.length > 0 ? missingBundled(base) : [];
+
+  const added = [...rescued, ...seededNow];
+  if (added.length === 0) {
     return { catalog: base, activeId: readActivePersonalityId(), pending, pendingAvatars: new Map() };
   }
 
-  const catalog = [...base, ...rescued];
-  const restored: PendingWrites = {
-    dirty: [...pending.dirty, ...rescued.map(persona => persona.id)],
-    deleted: pending.deleted,
-  };
+  const catalog = [...base, ...added];
+  pending = { dirty: [...pending.dirty, ...added.map(p => p.id)], deleted: pending.deleted };
   writeCachedCatalog(catalog);
-  writePendingWrites(restored);
-  return {
-    catalog,
-    activeId: readActivePersonalityId(),
-    pending: restored,
-    pendingAvatars: new Map(),
-  };
+  writePendingWrites(pending);
+  return { catalog, activeId: readActivePersonalityId(), pending, pendingAvatars: new Map() };
 }
 
 /** `custom:night_owl` → `night_owl`. */
@@ -153,8 +156,17 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
   const unpushed = state.catalog.filter(
     p => state.pending.dirty.includes(p.id) && !adopted.some(a => a.id === p.id)
   );
-  const catalog = inLocalOrder([...adopted, ...unpushed, ...missingBundled(adopted)]);
+  const seededNow = missingBundled(adopted);
+  const catalog = inLocalOrder([...adopted, ...unpushed, ...seededNow]);
   if (catalog.length === 0) return;
+  if (seededNow.length > 0) {
+    const pending: PendingWrites = {
+      dirty: [...state.pending.dirty, ...seededNow.map(p => p.id)],
+      deleted: state.pending.deleted,
+    };
+    writePendingWrites(pending);
+    state = { ...state, pending };
+  }
 
   // A selection survives the personality being renamed under it: the phone's
   // `builtin:zen_guide` and the robot's `user_personalities/zen_guide` are the
@@ -178,26 +190,21 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
  * user may have been talking to every day. So they are handed to the robot
  * once, as personalities the user owns: from then on the robot is the only
  * source, and deleting one there keeps it deleted.
+ *
+ * Returns them renamed into the robot's namespace; the caller queues them.
+ * `known` must be a robot's catalog, never the bundled fallback, or the
+ * comparison finds nothing missing and burns the one shot for nothing.
  */
-function missingBundled(adopted: Personality[]): Personality[] {
+function missingBundled(known: Personality[]): Personality[] {
   if (seeded) return [];
   seeded = true;
   writeSeeded();
-  const known = new Set(adopted.map(p => presentationKey(p.id)));
-  const missing = BUILTIN_PERSONALITIES.filter(p => !known.has(presentationKey(p.id))).map(p => ({
+  const keys = new Set(known.map(p => presentationKey(p.id)));
+  return BUILTIN_PERSONALITIES.filter(p => !keys.has(presentationKey(p.id))).map(p => ({
     ...p,
     id: `${USER_PREFIX}${presentationKey(p.id)}`,
     kind: 'custom' as const,
   }));
-  if (missing.length > 0) {
-    const pending: PendingWrites = {
-      dirty: [...state.pending.dirty, ...missing.map(p => p.id)],
-      deleted: state.pending.deleted,
-    };
-    writePendingWrites(pending);
-    state = { ...state, pending };
-  }
-  return missing;
 }
 
 /**
@@ -267,9 +274,6 @@ function replaceInCatalog(catalog: Personality[]): void {
   writeCachedCatalog(catalog);
   update({ catalog });
 }
-
-/** Mirrors the stored flag, so the offer is one-shot within a run too. */
-let seeded = readSeeded();
 
 let state: State = bootstrapState();
 const listeners = new Set<Listener>();
