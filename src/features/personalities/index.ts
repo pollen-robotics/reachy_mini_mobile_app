@@ -37,6 +37,7 @@ export type {
   GeneratePersonalityReason,
   StreamPersonalityOptions,
 } from './generate';
+export { presentationKey } from './from-robot';
 export { syncPersonalitiesToRobot } from './sync';
 export {
   addCustomPersonality,
