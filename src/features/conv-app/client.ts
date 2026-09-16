@@ -18,6 +18,8 @@ import type {
 
 /** Entry-point name the daemon installs and starts the app under. */
 export const CONV_APP_NAME = 'reachy_mini_conversation_app';
+/** The robot's namespace for personalities a user wrote. */
+const USER_PREFIX = 'user_personalities/';
 
 /** `apps.start` covers a cold start of the app's Python process. */
 const START_TIMEOUT_MS = 60_000;
@@ -127,10 +129,13 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
       await robot.rpcCall('personalities.apply', { name, persist: true });
     },
     async savePersonality({ name, instructions, greeting, voice }) {
+      // `personalities.save` names a profile by its bare slug and puts it in
+      // the user namespace itself, unlike `apply` and `delete` which take the
+      // namespaced name `personalities.all` reports.
       // `overwrite` covers the edit case; a create on a free name is the
       // same call, so the phone does not have to know which one it is.
       await robot.rpcCall('personalities.save', {
-        name,
+        name: name.startsWith(USER_PREFIX) ? name.slice(USER_PREFIX.length) : name,
         instructions,
         greeting,
         voice,

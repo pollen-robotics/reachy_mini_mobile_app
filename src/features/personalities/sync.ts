@@ -3,8 +3,12 @@
  *
  * The robot owns the catalog, but the personality editor is reachable while the
  * conversation app is stopped and unreachable. So authoring is queued on the
- * phone and pushed here, at the one moment the robot can hear it, before the
- * catalog is read back and adopted.
+ * phone and pushed here, at the one moment the robot can hear it.
+ *
+ * The robot's list is read and adopted FIRST, because adopting is what decides
+ * what still has to be pushed: an edit made offline, a persona the robot has
+ * never seen, a bundled personality this robot does not ship. Then everything
+ * outstanding goes over in one pass.
  *
  * A push that fails stays queued rather than being lost: the id is only cleared
  * once the robot has acknowledged it.
@@ -19,6 +23,8 @@ import {
 } from './store';
 
 export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<void> {
+  cacheCatalog(await client.getPersonalities());
+
   const pending = getPendingWrites();
   const pushed = { dirty: [] as string[], deleted: [] as string[] };
 
@@ -52,5 +58,4 @@ export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<v
   }
 
   clearPendingWrites(pushed);
-  cacheCatalog(await client.getPersonalities());
 }

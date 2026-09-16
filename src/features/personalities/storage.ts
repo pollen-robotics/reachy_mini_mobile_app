@@ -28,6 +28,9 @@ import type { Personality } from './types';
 const ACTIVE_KEY = 'reachyMini.personalities.activeId';
 const CATALOG_KEY = 'reachyMini.personalities.catalog';
 const PENDING_KEY = 'reachyMini.personalities.pending';
+const SEEDED_KEY = 'reachyMini.personalities.seeded';
+/** Where phone-authored personalities lived before the robot owned them. */
+const LEGACY_CUSTOM_KEY = 'reachyMini.personalities.custom';
 
 /** Authoring waiting for a robot to push it to. */
 export interface PendingWrites {
@@ -148,6 +151,48 @@ export function writePendingWrites(pending: PendingWrites): void {
     storage.setItem(PENDING_KEY, JSON.stringify(pending));
   } catch (err) {
     console.warn('[personalities] failed to write pending writes:', err);
+  }
+}
+
+/**
+ * Read the personalities the user authored before the robot owned the catalog,
+ * and clear the slot so this only ever happens once. They still carry the old
+ * `custom:<slug>` ids; the store renames them into the robot's namespace.
+ */
+export function takeLegacyCustomPersonalities(): Personality[] {
+  const storage = safeStorage();
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(LEGACY_CUSTOM_KEY);
+    if (!raw) return [];
+    storage.removeItem(LEGACY_CUSTOM_KEY);
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isValidPersonality).map(normalisePersonality);
+  } catch (err) {
+    console.warn('[personalities] failed to read the legacy customs:', err);
+    return [];
+  }
+}
+
+/** Whether the bundled personalities have already been offered to a robot. */
+export function readSeeded(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(SEEDED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function writeSeeded(): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(SEEDED_KEY, 'true');
+  } catch (err) {
+    console.warn('[personalities] failed to record the seeding:', err);
   }
 }
 

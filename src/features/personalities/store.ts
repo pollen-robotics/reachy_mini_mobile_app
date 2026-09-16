@@ -43,15 +43,18 @@ import {
   readActivePersonalityId,
   readCachedCatalog,
   readPendingWrites,
+  readSeeded,
+  takeLegacyCustomPersonalities,
   writeActivePersonalityId,
   writeCachedCatalog,
   writePendingWrites,
+  writeSeeded,
 } from './storage';
 import type { PendingWrites } from './storage';
 import type { RobotPersonality } from '@/features/conv-app/client';
 import { getLiveClient } from '@/features/conv-app/live-client';
 
-import { ROBOT_DEFAULT_PROFILE, USER_PREFIX, toCatalog } from './from-robot';
+import { ROBOT_DEFAULT_PROFILE, USER_PREFIX, presentationKey, toCatalog } from './from-robot';
 import type { CustomPersonalityInput, Personality } from './types';
 
 type Listener = () => void;
@@ -93,33 +96,64 @@ interface State {
  */
 function bootstrapState(): State {
   const cached = readCachedCatalog();
+  const pending = readPendingWrites();
+  const base = cached.length > 0 ? cached : [...BUILTIN_PERSONALITIES];
+
+  // Personalities the user wrote back when the phone owned them. They are
+  // renamed into the robot's namespace and queued, so the next conversation
+  // start moves them where every other personality now lives.
+  const rescued = takeLegacyCustomPersonalities()
+    .map(persona => ({ ...persona, id: `${USER_PREFIX}${legacySlug(persona.id)}` }))
+    .filter(persona => !base.some(known => known.id === persona.id));
+  if (rescued.length === 0) {
+    return { catalog: base, activeId: readActivePersonalityId(), pending, pendingAvatars: new Map() };
+  }
+
+  const catalog = [...base, ...rescued];
+  const restored: PendingWrites = {
+    dirty: [...pending.dirty, ...rescued.map(persona => persona.id)],
+    deleted: pending.deleted,
+  };
+  writeCachedCatalog(catalog);
+  writePendingWrites(restored);
   return {
-    catalog: cached.length > 0 ? cached : [...BUILTIN_PERSONALITIES],
+    catalog,
     activeId: readActivePersonalityId(),
-    pending: readPendingWrites(),
+    pending: restored,
     pendingAvatars: new Map(),
   };
+}
+
+/** `custom:night_owl` → `night_owl`. */
+function legacySlug(id: string): string {
+  return id.startsWith('custom:') ? id.slice('custom:'.length) : id;
 }
 
 /**
  * Adopt the catalog the robot just reported.
  *
- * The robot owns the list, so its entries win outright. Two things are the
- * phone's and survive: an avatar it generated for a profile it does not ship a
- * drawing for, and the order the user dragged the tiles into. Authoring the
- * robot has not heard yet is appended rather than dropped, so a persona created
- * while the conversation app was stopped stays visible until the next start
- * pushes it.
+ * The robot owns the list, so its entries win by default. What survives is what
+ * the robot cannot know: an avatar the phone generated for a profile it ships
+ * no drawing for, the order the user dragged the tiles into, and any authoring
+ * still queued, which is newer than whatever the robot is reporting. A persona
+ * created while the conversation app was stopped is appended rather than
+ * dropped, so it stays visible until this same start pushes it.
  */
 export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
   const previous = new Map(state.catalog.map(p => [p.id, p]));
   const adopted = toCatalog(fromRobot)
     .filter(p => !state.pending.deleted.includes(p.id))
-    .map(p => reuseLocalLook(p, previous.get(p.id)));
+    .map(p =>
+      // An edit the robot has not heard yet is newer than what it reports,
+      // so it survives being adopted over.
+      state.pending.dirty.includes(p.id)
+        ? (previous.get(p.id) ?? p)
+        : reuseLocalLook(p, previous.get(p.id))
+    );
   const unpushed = state.catalog.filter(
     p => state.pending.dirty.includes(p.id) && !adopted.some(a => a.id === p.id)
   );
-  const catalog = inLocalOrder([...adopted, ...unpushed]);
+  const catalog = inLocalOrder([...adopted, ...unpushed, ...missingBundled(adopted)]);
   if (catalog.length === 0) return;
 
   const activeId = catalog.some(p => p.id === state.activeId)
@@ -128,6 +162,37 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
   writeCachedCatalog(catalog);
   if (activeId !== state.activeId) writeActivePersonalityId(activeId);
   update({ catalog, activeId });
+}
+
+/**
+ * The bundled personalities this robot has never been offered.
+ *
+ * The phone shipped sixteen; a stock robot has fourteen, and five of the
+ * phone's have no profile there at all. Left alone they would simply vanish
+ * the first time the robot's catalog was adopted, taking a personality the
+ * user may have been talking to every day. So they are handed to the robot
+ * once, as personalities the user owns: from then on the robot is the only
+ * source, and deleting one there keeps it deleted.
+ */
+function missingBundled(adopted: Personality[]): Personality[] {
+  if (seeded) return [];
+  seeded = true;
+  writeSeeded();
+  const known = new Set(adopted.map(p => presentationKey(p.id)));
+  const missing = BUILTIN_PERSONALITIES.filter(p => !known.has(presentationKey(p.id))).map(p => ({
+    ...p,
+    id: `${USER_PREFIX}${presentationKey(p.id)}`,
+    kind: 'custom' as const,
+  }));
+  if (missing.length > 0) {
+    const pending: PendingWrites = {
+      dirty: [...state.pending.dirty, ...missing.map(p => p.id)],
+      deleted: state.pending.deleted,
+    };
+    writePendingWrites(pending);
+    state = { ...state, pending };
+  }
+  return missing;
 }
 
 /**
@@ -197,6 +262,9 @@ function replaceInCatalog(catalog: Personality[]): void {
   writeCachedCatalog(catalog);
   update({ catalog });
 }
+
+/** Mirrors the stored flag, so the offer is one-shot within a run too. */
+let seeded = readSeeded();
 
 let state: State = bootstrapState();
 const listeners = new Set<Listener>();

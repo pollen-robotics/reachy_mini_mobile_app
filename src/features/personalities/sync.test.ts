@@ -46,8 +46,9 @@ function fakeClient(catalog: RobotPersonality[] = [DEFAULT]) {
 }
 
 beforeEach(() => {
-  clearPendingWrites(getPendingWrites());
+  // Burn the one-shot seeding so each case starts from a settled catalog.
   cacheCatalog([DEFAULT]);
+  clearPendingWrites(getPendingWrites());
 });
 
 describe('syncPersonalitiesToRobot', () => {

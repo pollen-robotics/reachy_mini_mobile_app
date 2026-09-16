@@ -23,18 +23,15 @@ export const USER_PREFIX = 'user_personalities/';
 /** The profile the robot falls back to, and the id of its bundled default. */
 export const ROBOT_DEFAULT_PROFILE = 'default';
 
-/**
- * Presentation by robot profile name. The phone's built-in ids are already
- * `builtin:<profile>`, so the map is the bundled catalog with the prefix
- * dropped, plus the one name the two sides spell differently.
- */
-const PRESENTATION = new Map<string, Personality>(
-  BUILTIN_PERSONALITIES.map(personality => [personality.id.replace(/^builtin:/, ''), personality])
-);
+/** The one profile the two sides spell differently. */
 const ALIASES: Record<string, string> = {
   // The robot calls it the assistant; the phone just the scientist.
   mad_scientist_assistant: 'mad_scientist',
 };
+/** How the phone draws each personality it ships, by presentation key. */
+const PRESENTATION = new Map<string, Personality>(
+  BUILTIN_PERSONALITIES.map(personality => [presentationKey(personality.id), personality])
+);
 
 /** Turn `cosmic_kitchen` into `Cosmic Kitchen` for a profile we do not ship. */
 function humanise(profile: string): string {
@@ -45,9 +42,20 @@ function humanise(profile: string): string {
     .join(' ');
 }
 
+/**
+ * The key a personality presents under, from either side: the bare profile,
+ * without the robot's user namespace or the phone's `builtin:` prefix, and
+ * through the alias table. It is what says that `user_personalities/zen_guide`,
+ * `builtin:zen_guide` and `zen_guide` are one personality, and that
+ * `mad_scientist_assistant` is the phone's `mad_scientist`.
+ */
+export function presentationKey(name: string): string {
+  const profile = name.replace(/^builtin:/, '').replace(USER_PREFIX, '');
+  return ALIASES[profile] ?? profile;
+}
+
 function presentationFor(name: string): Personality | undefined {
-  const profile = name.startsWith(USER_PREFIX) ? name.slice(USER_PREFIX.length) : name;
-  return PRESENTATION.get(ALIASES[profile] ?? profile);
+  return PRESENTATION.get(presentationKey(name));
 }
 
 /** Map one robot profile onto the shape the personality UI renders. */
