@@ -71,7 +71,6 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import SettingsBrightnessOutlinedIcon from '@mui/icons-material/SettingsBrightnessOutlined';
-import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
@@ -98,17 +97,10 @@ interface HelpAndSupportOverlayProps {
    * dismiss the overlay after completion can do so.
    */
   onClose: () => void;
-  /**
-   * Open the standalone "update over Bluetooth" maintenance tool.
-   * The host closes the overlay before navigating, so this is a
-   * plain hand-off (no `onClose` needed at the call site).
-   */
-  onStartBleUpdate: () => void;
 }
 
 export default function HelpAndSupportOverlay({
   onClose,
-  onStartBleUpdate,
 }: HelpAndSupportOverlayProps) {
   const hiddenAuthors = useHiddenAuthors();
   const themeMode = useThemeMode();
@@ -275,19 +267,6 @@ export default function HelpAndSupportOverlay({
             label="Documentation"
             external
             onTap={() => void handleOpenUrl('documentation', DOCUMENTATION_URL)}
-          />
-        </Section>
-
-        {/* Robot maintenance. Standalone, BLE-based tools that work
-            BEFORE (or instead of) a normal WebRTC session - useful when
-            a robot isn't on Wi-Fi yet or won't come online. Today: the
-            "update over Bluetooth" tool. */}
-        <Section label="Robot maintenance">
-          <ActionRow
-            icon={<SystemUpdateAltRoundedIcon fontSize="small" />}
-            label="Update over Bluetooth"
-            caption="Update or recover a robot nearby"
-            onTap={onStartBleUpdate}
           />
         </Section>
 

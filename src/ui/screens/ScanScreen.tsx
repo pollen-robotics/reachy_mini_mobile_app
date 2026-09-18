@@ -86,6 +86,7 @@ import {
 } from '@mui/material';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import AddIcon from '@mui/icons-material/Add';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
@@ -117,8 +118,8 @@ interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
   /** Open the first-time setup wizard (BLE Wi-Fi provisioning). */
   onStartSetup: () => void;
-  /** Open the standalone "update over Bluetooth" maintenance tool. */
-  onOpenBleUpdate: () => void;
+  /** Open the standalone "Bluetooth tools" maintenance hub. */
+  onOpenBleTools: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -133,7 +134,7 @@ interface ScanScreenProps {
 export default function ScanScreen({
   onRemotePicked,
   onStartSetup,
-  onOpenBleUpdate,
+  onOpenBleTools,
   onSignOutRemote,
   token,
   username,
@@ -209,6 +210,7 @@ export default function ScanScreen({
         onSignOut={onSignOutRemote}
         onToggleHelp={toggleHelp}
         isHelpOpen={helpOpen}
+        onOpenTools={onOpenBleTools}
       />
       {/* Inner scroll container. `m: 'auto'` on the column distributes
           free space equally on all four sides → fully centred (both
@@ -347,13 +349,7 @@ export default function ScanScreen({
             zIndex: 1200,
           }}
         >
-          <HelpAndSupportOverlay
-            onClose={closeHelp}
-            onStartBleUpdate={() => {
-              closeHelp();
-              onOpenBleUpdate();
-            }}
-          />
+          <HelpAndSupportOverlay onClose={closeHelp} />
         </Box>
       )}
     </Stack>
@@ -424,11 +420,19 @@ function HfAccountBar({
   onSignOut,
   onToggleHelp,
   isHelpOpen,
+  onOpenTools,
 }: {
   username: string | null;
   avatarUrl: string | null;
   onSignOut: () => void;
   onToggleHelp: () => void;
+  /**
+   * Open the "Bluetooth tools" maintenance hub (update, status,
+   * logs, recovery scripts over BLE). A wrench next to the `?`:
+   * "fix my robot" is a different intent from "get help", and
+   * burying it inside the help overlay made it hard to find.
+   */
+  onOpenTools: () => void;
   /**
    * Mirror of the host's `helpOpen` state. Drives the icon swap
    * (`?` -> `✕`) and the aria-label so the same button reads as
@@ -590,18 +594,28 @@ function HfAccountBar({
           states, so the only visual delta on toggle is the ring
           fading in / out alongside the `?` ↔ `✕` swap - no
           width / height jump. */}
-      <IconButton
-        aria-label={isHelpOpen ? 'Close help and support' : 'Open help and support'}
-        onClick={onToggleHelp}
-        color="primary"
-        sx={{ p: 1, flexShrink: 0 }}
-      >
-        {isHelpOpen ? (
-          <CloseIcon sx={{ fontSize: 22 }} />
-        ) : (
-          <HelpOutlineIcon sx={{ fontSize: 22 }} />
-        )}
-      </IconButton>
+      <Stack direction="row" spacing={0.25} sx={{ alignItems: 'center', flexShrink: 0 }}>
+        <IconButton
+          aria-label="Open Bluetooth tools"
+          onClick={onOpenTools}
+          color="primary"
+          sx={{ p: 1 }}
+        >
+          <BuildOutlinedIcon sx={{ fontSize: 22 }} />
+        </IconButton>
+        <IconButton
+          aria-label={isHelpOpen ? 'Close help and support' : 'Open help and support'}
+          onClick={onToggleHelp}
+          color="primary"
+          sx={{ p: 1 }}
+        >
+          {isHelpOpen ? (
+            <CloseIcon sx={{ fontSize: 22 }} />
+          ) : (
+            <HelpOutlineIcon sx={{ fontSize: 22 }} />
+          )}
+        </IconButton>
+      </Stack>
     </Stack>
   );
 }

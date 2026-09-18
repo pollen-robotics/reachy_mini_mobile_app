@@ -16,8 +16,8 @@ core testable.
   crypto) today
 - `src/features/ble-provisioning/useSetupMachine.ts` - setup wizard FSM,
   consumes the continuous scan
-- `src/ui/screens/BleUpdateScreen.tsx` - the "Update over Bluetooth" tool,
-  also consumes the continuous scan
+- `src/ui/screens/BleToolsScreen.tsx` - the "Bluetooth tools" hub (update,
+  status, logs, recovery), also consumes the continuous scan
 
 ## Current architecture
 
@@ -30,7 +30,7 @@ tauri_plugin_blec  (Rust, THIRD-PARTY: @mnlphlp/plugin-blec)
 bleWifi.ts  (our logic: parse + dedup + staleness + RSSI sort)
       │
       ├── useSetupMachine (wizard)
-      └── BleUpdateScreen (BLE updater)
+      └── BleToolsScreen (BLE tools hub)
 ```
 
 The Rust side of this app is deliberately thin (see

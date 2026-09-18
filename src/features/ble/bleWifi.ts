@@ -54,6 +54,7 @@ export const RESP_CHAR = '12345678-1234-5678-1234-56789abcdef2';
 // advert carries no per-robot identity (all robots advertise "ReachyMini"), so
 // the hardware id comes from the GATT characteristic below.
 export const NETWORK_STATUS_CHAR = '12345678-1234-5678-1234-56789abcdef4';
+export const AVAILABLE_COMMANDS_CHAR = '12345678-1234-5678-1234-56789abcdef6';
 export const HARDWARE_ID_CHAR = '12345678-1234-5678-1234-56789abcdef7';
 
 /** Connection mode reported by the daemon's NETWORK_STATUS characteristic. */
@@ -304,6 +305,58 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
+/** The native plugin rejects with plain strings/objects; callers expect an Error. */
+function toError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  if (typeof e === 'string') return new Error(e);
+  try {
+    return new Error(JSON.stringify(e) ?? 'unknown BLE error');
+  } catch {
+    return new Error('unknown BLE error');
+  }
+}
+
+/**
+ * blec's `connect` looks the address up in a device map it CLEARS at the
+ * start of every scan (plugin `handler.rs`). Our continuous scan re-arms a
+ * window every few seconds, so a tap that lands right after a re-arm -
+ * before the robot has re-advertised - fails with this error although the
+ * robot is right there. The plugin's own retries can't help: by then the
+ * scan is stopped and nothing refills the map.
+ */
+function isUnknownPeripheral(e: unknown): boolean {
+  return /no peripheral with id/i.test(toError(e).message);
+}
+
+/**
+ * Refill the plugin's device map with `address`: run a short scan and stop it
+ * as soon as the robot is seen again. Claims `_scanToken` so any continuous
+ * scan loop yields the single scanner. Resolves false on timeout.
+ */
+async function rediscover(address: string, timeoutMs: number, log: (s: string) => void): Promise<boolean> {
+  ++_scanToken;
+  try {
+    await stopScan();
+  } catch {
+    /* nothing was scanning */
+  }
+  return new Promise<boolean>(resolve => {
+    let done = false;
+    const finish = (found: boolean): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      log(`rediscover ${address}: ${found ? 'seen again' : 'timed out'}`);
+      void stopScan().catch(() => undefined);
+      resolve(found);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    startScan((msg: unknown) => {
+      if (parseScanMessage(msg).some(d => d.address === address)) finish(true);
+    }, timeoutMs).catch(() => finish(false));
+  });
+}
+
 let _connWatchStarted = false;
 // The latest connection-state handler. The plugin's getConnectionUpdates is
 // registered ONCE (calling it again would double-register), but callers — the
@@ -346,9 +399,8 @@ export async function connect(
   address: string,
   log: (s: string) => void = () => {},
 ): Promise<void> {
-  const attempt = async () => {
-    log(`connecting to ${address}…`);
-    await withTimeout(
+  const connectOnce = () =>
+    withTimeout(
       blecConnect(address, () => {
         log('plugin reported disconnect');
         _subscribed = false;
@@ -356,38 +408,55 @@ export async function connect(
       15000,
       'connect',
     );
-    log('blecConnect returned; subscribing…');
-    if (!_subscribed) {
-      await withTimeout(subscribeString(RESP_CHAR, _onNotification), 8000, 'subscribe');
-      _subscribed = true;
-      log('subscribed to RESPONSE notifications');
+  const link = async () => {
+    log(`connecting to ${address}…`);
+    try {
+      await connectOnce();
+    } catch (e) {
+      // Scan-window race (see `isUnknownPeripheral`): the robot is there, the
+      // plugin just lost it. Refill its map with a targeted scan and retry.
+      if (!isUnknownPeripheral(e)) throw toError(e);
+      log('plugin lost the peripheral; rediscovering…');
+      if (!(await rediscover(address, 8000, log))) throw toError(e);
+      await connectOnce();
     }
+    log('blecConnect returned');
+  };
+  const subscribe = async () => {
+    if (_subscribed) return;
+    await withTimeout(subscribeString(RESP_CHAR, _onNotification), 8000, 'subscribe');
+    _subscribed = true;
+    log('subscribed to RESPONSE notifications');
   };
 
   try {
-    await attempt();
+    await link();
+    await subscribe();
   } catch (e) {
     // A failed connect or subscribe right after connect usually means the
     // GATT discovery was stale or partial (classic after the app was killed
     // mid-connection: iOS serves a cached service table and every later
     // characteristic op dies with "not available"). One clean disconnect +
     // reconnect forces a fresh discovery.
-    log(`connect/subscribe failed (${(e as Error).message ?? e}); retrying with a fresh connection…`);
+    log(`connect/subscribe failed (${toError(e).message}); retrying with a fresh connection…`);
     _subscribed = false;
     try {
       await blecDisconnect();
     } catch {
       /* link already down */
     }
+    // A connect that fails twice is a real failure and MUST surface: the
+    // caller would otherwise walk into the PIN step with no link at all.
+    await link();
     try {
-      await attempt();
+      await subscribe();
     } catch (e2) {
       // Second subscribe failure: keep the old lenient behaviour instead of
       // failing the whole connect. Synchronous-reply commands still work
       // without the subscription (only async WIFI_* results need it), and an
       // OLD robot without notify support must still reach the PIN step to be
       // diagnosed as outdated (command echo) rather than "can't connect".
-      log(`retry failed too (continuing unsubscribed): ${(e2 as Error).message ?? e2}`);
+      log(`subscribe failed again (continuing unsubscribed): ${toError(e2).message}`);
     }
   }
 }
@@ -426,8 +495,13 @@ export async function sendCommand(cmd: string, timeoutMs = 20000): Promise<strin
   // Bound the write AND the synchronous read. Only the notification await below
   // was timed out before, so a wedged write/read here hung the caller forever
   // (e.g. the wizard stuck on "Linking"). 8s is generous for a local op.
-  await withTimeout(sendString(CMD_CHAR, cmd), 8000, `write ${_redactCmd(cmd)}`);
-  const sync = (await withTimeout(readString(RESP_CHAR), 8000, 'read RESPONSE')).trim();
+  let sync: string;
+  try {
+    await withTimeout(sendString(CMD_CHAR, cmd), 8000, `write ${_redactCmd(cmd)}`);
+    sync = (await withTimeout(readString(RESP_CHAR), 8000, 'read RESPONSE')).trim();
+  } catch (e) {
+    throw toError(e);
+  }
   _log(`RX sync ← ${JSON.stringify(sync)} (${sync.length}B)`);
   if (sync === WORKING_ACK) {
     const payload = await _awaitNotification(timeoutMs);
@@ -443,7 +517,12 @@ export async function sendCommand(cmd: string, timeoutMs = 20000): Promise<strin
  * trimmed UTF-8 value, or throws on timeout / read error.
  */
 export async function readCharacteristic(uuid: string, timeoutMs = 6000): Promise<string> {
-  const raw = await withTimeout(readString(uuid), timeoutMs, `read ${uuid}`);
+  let raw: string;
+  try {
+    raw = await withTimeout(readString(uuid), timeoutMs, `read ${uuid}`);
+  } catch (e) {
+    throw toError(e);
+  }
   const v = raw.trim();
   _log(`RX read ${uuid.slice(-4)} ← ${JSON.stringify(v)} (${v.length}B)`);
   return v;
