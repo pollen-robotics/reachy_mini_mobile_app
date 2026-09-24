@@ -20,7 +20,7 @@
  * the settings overlay (1200), below the connecting / reconnecting /
  * leaving / error covers (1300) so session-level events still win.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Box, Button, CircularProgress, IconButton, Stack, Typography } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import CenterFocusWeakOutlinedIcon from '@mui/icons-material/CenterFocusWeakOutlined';
@@ -37,6 +37,7 @@ import { LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import { glassIconButtonSx, glassSurfaceSx } from './glass';
 import { Joystick, MoveIcon } from './joystick';
+import LiveVideo, { type LiveVideoMode } from './LiveVideo';
 import SoundButton from './SoundButton';
 import TelepresenceSettingsSheet from './TelepresenceSettingsSheet';
 
@@ -73,26 +74,10 @@ export default function TelepresencePanel({
     getHeadDeflection: () => headRef.current?.current ?? null,
   });
 
-  // Camera feed. Re-attached whenever the session comes back to `live`
-  // (after a reacquire / recovery the cache replays the fresh stream).
-  // Forced muted: robot audio plays through the telepresence audio
-  // element, and the SDK would otherwise mirror its own mute flag here.
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { attachVideo } = session;
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el || !live) return;
-    const detach = attachVideo(el);
-    el.muted = true;
-    const keepMuted = () => {
-      if (!el.muted) el.muted = true;
-    };
-    el.addEventListener('volumechange', keepMuted);
-    return () => {
-      el.removeEventListener('volumechange', keepMuted);
-      detach();
-    };
-  }, [live, attachVideo]);
+  // Low-latency (WebCodecs) video on by default; switchable from the
+  // settings sheet so the difference can be felt side by side.
+  const [lowLatency, setLowLatency] = useState(true);
+  const [videoMode, setVideoMode] = useState<LiveVideoMode>('standard');
 
   const asleep = live && telepresence.robotAwake === false;
   const motionEnabled = live && allowMotion && telepresence.robotAwake === true;
@@ -117,13 +102,11 @@ export default function TelepresencePanel({
         WebkitUserSelect: 'none',
       }}
     >
-      <Box
-        component="video"
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      <LiveVideo
+        attachVideo={session.attachVideo}
+        live={live}
+        lowLatency={lowLatency}
+        onModeChange={setVideoMode}
       />
       {/* Top + bottom scrims keep the white controls readable over bright scenes. */}
       <Box
@@ -284,6 +267,9 @@ export default function TelepresencePanel({
         onClose={() => setSettingsOpen(false)}
         telepresence={telepresence}
         motionEnabled={motionEnabled}
+        lowLatency={lowLatency}
+        onLowLatencyChange={setLowLatency}
+        videoMode={videoMode}
         audioReady={session.hasReachedReady && live}
       />
     </Box>
