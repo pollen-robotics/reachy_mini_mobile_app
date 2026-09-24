@@ -41,8 +41,29 @@ export interface HoverboardStatus {
   telemetry: {
     state: HoverboardFirmwareState | string;
     tilt_deg: number;
+    /** Supply voltage, null until a firmware reports it. */
+    battery_v: number | null;
   } | null;
   telemetry_age_s: number | null;
+  /** Why the base last left Liftoff/Balancing; null on older daemons or before any stop. */
+  last_stop: { reason: StopReason | string; detail: string | null } | null;
+}
+
+/** `board` = the base stopped on its own (tilt cutoff, power, another link). */
+export type StopReason = 'stop_command' | 'sit_command' | 'disconnect' | 'link_lost' | 'board';
+
+/**
+ * Stops the user didn't ask for, worth explaining while the base rests.
+ * Clock-free on purpose (phone and robot clocks differ): it shows until
+ * the phase moves on or a newer stop replaces it.
+ */
+export function unexpectedStop(status: HoverboardStatus | null): string | null {
+  const stop = status?.last_stop;
+  if (!stop || (stop.reason !== 'board' && stop.reason !== 'link_lost')) return null;
+  const phase = basePhase(status);
+  if (phase !== 'sitting' && phase !== 'offline' && phase !== 'connecting') return null;
+  if (stop.reason === 'link_lost') return 'Stopped: link to the base lost';
+  return `Stopped by the base${stop.detail ? ` (${stop.detail})` : ''}`;
 }
 
 /**
@@ -107,8 +128,15 @@ export function parseStatus(raw: unknown): HoverboardStatus | null {
       zeroed_by_deadman: Boolean(s.drive.zeroed_by_deadman),
     },
     telemetry: s.telemetry
-      ? { state: String(s.telemetry.state), tilt_deg: Number(s.telemetry.tilt_deg) || 0 }
+      ? {
+          state: String(s.telemetry.state),
+          tilt_deg: Number(s.telemetry.tilt_deg) || 0,
+          battery_v: typeof s.telemetry.battery_v === 'number' ? s.telemetry.battery_v : null,
+        }
       : null,
     telemetry_age_s: typeof s.telemetry_age_s === 'number' ? s.telemetry_age_s : null,
+    last_stop: s.last_stop
+      ? { reason: String(s.last_stop.reason), detail: s.last_stop.detail ?? null }
+      : null,
   };
 }

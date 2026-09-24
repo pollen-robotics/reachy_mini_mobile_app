@@ -36,6 +36,11 @@ export interface OverboardDriveMessage {
   type: typeof OVERBOARD_DRIVE_MSG_TYPE;
   throttle: number;
   turn: number;
+  /**
+   * false = no reply on success (errors still come back): saves ten
+   * unread replies a second. Older daemons ignore the field and ack.
+   */
+  ack: false;
 }
 
 /** Link stats surfaced in the UI so the pipe can be eyeballed end-to-end. */

@@ -41,6 +41,21 @@ class FakeDaemon {
   lastDriveAt = 0;
   zeroedByDeadman = false;
   tilt = 3.7;
+  lastStop: { reason: string; at: number; detail: string | null } | null = null;
+  /** Replies the fake daemon sent for hoverboard_drive (should stay 0 with ack: false). */
+  driveAcks = 0;
+
+  stopped(reason: string, detail: string | null = null) {
+    if (this.state === 'Liftoff' || this.state === 'Balancing') this.lastStop = { reason, at: Date.now() / 1000, detail };
+  }
+
+  /** Simulate a tilt cutoff: `__harness.tip()` in the console. */
+  tip() {
+    this.stopped('board', 'board went Stopped on its own');
+    this.state = 'Stopped';
+    this.balancerRequested = false;
+    this.note('board stopped on its own');
+  }
   frames: { t: number; throttle: number; turn: number }[] = [];
   log: string[] = [];
 
@@ -79,8 +94,9 @@ class FakeDaemon {
         zeroed_by_deadman: this.zeroedByDeadman,
         last_drive_age_s: this.lastDriveAt ? (Date.now() - this.lastDriveAt) / 1000 : null,
       },
-      telemetry: silentFw ? null : { state: this.state, tilt_deg: this.tilt, wheel_velocity: [0, 0] },
+      telemetry: silentFw ? null : { state: this.state, tilt_deg: this.tilt, wheel_velocity: [0, 0], battery_v: 36.4 },
       telemetry_age_s: silentFw ? null : 0.1,
+      last_stop: this.lastStop,
       usb_ports: [],
       config: {},
     };
@@ -114,6 +130,7 @@ class FakeDaemon {
       case 'hoverboard_sit':
         if (!this.connected) return { reply: notConnected, delayMs: 20 };
         this.note('sit (S1)');
+        this.stopped('sit_command');
         this.balancerRequested = false;
         this.state = 'Stopping';
         setTimeout(() => this.state === 'Stopping' && (this.state = 'Stopped'), 1200);
@@ -121,6 +138,7 @@ class FakeDaemon {
       case 'hoverboard_stop':
         if (!this.connected) return { reply: notConnected, delayMs: 20 };
         this.note('STOP (E1)');
+        this.stopped('stop_command');
         this.balancerRequested = false;
         this.state = 'Stopped';
         this.throttle = 0;
@@ -133,6 +151,8 @@ class FakeDaemon {
         this.lastDriveAt = Date.now();
         this.zeroedByDeadman = false;
         this.frames = [...this.frames, { t: Date.now(), throttle: this.throttle, turn: this.turn }].slice(-200);
+        if (cmd.ack === false) return { reply: null, delayMs: 0 };
+        this.driveAcks += 1;
         return { reply: ok, delayMs: 20 };
       }
       default:

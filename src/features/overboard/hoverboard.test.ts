@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { basePhase, parseStatus } from './hoverboard';
+import { basePhase, parseStatus, unexpectedStop } from './hoverboard';
 import { toDriveMessage } from './webrtc-link';
 
 // Trimmed copy of a real `hoverboard_get_status` reply from the daemon.
@@ -48,13 +48,34 @@ describe('basePhase', () => {
   });
 });
 
+describe('unexpectedStop', () => {
+  it('explains board and link stops while the base rests', () => {
+    const board = { reason: 'board', at: 1, detail: 'board went Stopped on its own' };
+    expect(unexpectedStop(withPatch({ last_stop: board }))).toBe(
+      'Stopped by the base (board went Stopped on its own)',
+    );
+    expect(
+      unexpectedStop(withPatch({ last_stop: { reason: 'link_lost' }, link: { ...REAL.link, connected: false } })),
+    ).toBe('Stopped: link to the base lost');
+  });
+
+  it('stays quiet for user stops, older daemons and a balancing base', () => {
+    expect(unexpectedStop(withPatch({ last_stop: { reason: 'stop_command' } }))).toBeNull();
+    expect(unexpectedStop(parseStatus(REAL))).toBeNull();
+    expect(
+      unexpectedStop(withPatch({ last_stop: { reason: 'board' }, telemetry: { state: 'Balancing', tilt_deg: 0 } })),
+    ).toBeNull();
+  });
+});
+
 describe('toDriveMessage', () => {
   it('scales to the daemon range', () => {
     expect(toDriveMessage({ linear: 0.42, angular: -0.1 })).toEqual({
       type: 'hoverboard_drive',
       throttle: 42,
       turn: -10,
+      ack: false,
     });
-    expect(toDriveMessage({ linear: 1.5, angular: -0 })).toEqual({ type: 'hoverboard_drive', throttle: 100, turn: 0 });
+    expect(toDriveMessage({ linear: 1.5, angular: -0 })).toMatchObject({ throttle: 100, turn: 0 });
   });
 });

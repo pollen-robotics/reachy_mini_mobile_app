@@ -11,7 +11,7 @@
  */
 import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
 
-import type { BasePhase, HoverboardBaseHandle } from '@/features/overboard';
+import { unexpectedStop, type BasePhase, type HoverboardBaseHandle } from '@/features/overboard';
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
 import { glassSurfaceSx } from './glass';
@@ -55,6 +55,8 @@ export default function BaseControls({ base, disabled }: { base: HoverboardBaseH
   const phase = pending === 'connect' && base.phase === 'offline' ? 'connecting' : base.phase;
   const connected = status?.link.connected ?? false;
   const tilt = status?.telemetry?.tilt_deg;
+  const battery = status?.telemetry?.battery_v;
+  const notice = error ?? unexpectedStop(status);
   const busy = pending !== null || disabled;
 
   const action: { label: string; command: 'connect' | 'enable' | 'sit' } | null =
@@ -77,6 +79,7 @@ export default function BaseControls({ base, disabled }: { base: HoverboardBaseH
         <Typography sx={{ fontSize: TYPO.xs, fontWeight: FONT_WEIGHT.semibold, whiteSpace: 'nowrap' }}>
           {PHASE_LABEL[phase]}
           {connected && typeof tilt === 'number' ? ` · ${tilt.toFixed(1)}°` : ''}
+          {connected && typeof battery === 'number' ? ` · ${battery.toFixed(1)} V` : ''}
           {connected && status?.link.kind ? ` · ${status.link.kind === 'usb' ? 'USB' : 'BT'}` : ''}
         </Typography>
       </Stack>
@@ -107,9 +110,9 @@ export default function BaseControls({ base, disabled }: { base: HoverboardBaseH
           </Button>
         )}
       </Stack>
-      {error && (
+      {notice && (
         <Typography sx={[glassSurfaceSx, { fontSize: TYPO.tiny, borderRadius: 1.5, px: 1, py: 0.5 }]}>
-          {error}
+          {notice}
         </Typography>
       )}
     </Stack>

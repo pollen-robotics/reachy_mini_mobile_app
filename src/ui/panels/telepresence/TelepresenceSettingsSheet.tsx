@@ -216,6 +216,7 @@ function formatBaseStatus(stats: OverboardLinkStats, s: HoverboardStatus | null)
   lines.push(
     `drive · T${s.drive.throttle} R${s.drive.turn}${s.drive.zeroed_by_deadman ? ' · zeroed by deadman' : ''}`,
   );
+  if (s.last_stop) lines.push(`last stop · ${s.last_stop.reason}${s.last_stop.detail ? ` (${s.last_stop.detail})` : ''}`);
   return lines.join('\n');
 }
 
