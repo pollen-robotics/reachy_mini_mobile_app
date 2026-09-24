@@ -164,6 +164,22 @@ yarn tauri android init   # once
 yarn android:dev
 ```
 
+Or, without Android Studio, `scripts/android-local.sh` repeats the CI
+Android job locally (init, icons, gradle/manifest patches) and talks to
+a USB-connected phone with USB debugging on:
+
+```bash
+scripts/android-local.sh run    # arm64 debug APK (~3 min cold, ~25 s after) + adb install + launch
+scripts/android-local.sh dev    # hot-reload build on the phone
+scripts/android-local.sh logs   # WebView console + Rust logs
+```
+
+It expects JDK 17, the Android SDK with NDK 27.0.12077973 and the Rust
+Android targets; the defaults point at Homebrew's `openjdk@17` and
+`android-commandlinetools` (override `JAVA_HOME` / `ANDROID_HOME`). The
+debug build installs as "Reachy Mini Dev" (`<id>.dev`), next to the store
+build.
+
 Lock the activity to portrait so the orb / column layout doesn't get
 crushed in landscape, mirroring the iOS `UISupportedInterfaceOrientations`
 in `Info.plist`. On the `<activity>` tag inside `AndroidManifest.xml`:
