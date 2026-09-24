@@ -19,7 +19,7 @@ import { glassSurfaceSx } from './glass';
 const PHASE_LABEL: Record<BasePhase, string> = {
   unavailable: 'Base: not supported',
   offline: 'Base offline',
-  connecting: 'Connecting…',
+  connecting: 'Connecting…',  // also the daemon's own Bluetooth re-dial
   sitting: 'Base resting',
   lifting: 'Lifting off…',
   balancing: 'Balancing',

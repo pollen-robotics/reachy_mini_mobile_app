@@ -30,6 +30,9 @@ describe('basePhase', () => {
     expect(basePhase(withPatch({ link: { ...REAL.link, connected: false, connecting: true } }))).toBe(
       'connecting',
     );
+    expect(basePhase(withPatch({ link: { ...REAL.link, connected: false, reconnecting: true } }))).toBe(
+      'connecting',
+    );
   });
 
   it('falls back to the requested balancer on silent or stale telemetry', () => {

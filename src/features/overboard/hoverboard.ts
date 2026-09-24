@@ -26,6 +26,8 @@ export interface HoverboardStatus {
     target: string | null;
     connected: boolean;
     connecting: boolean;
+    /** Daemon is re-dialing Bluetooth by itself after a link drop. */
+    reconnecting: boolean;
     error: string | null;
   };
   firmware: { acks: boolean; telemetry: boolean };
@@ -68,7 +70,7 @@ const TELEMETRY_STALE_S = 2;
 
 export function basePhase(status: HoverboardStatus | null): BasePhase {
   if (!status || !status.enabled) return 'unavailable';
-  if (status.link.connecting) return 'connecting';
+  if (status.link.connecting || status.link.reconnecting) return 'connecting';
   if (!status.link.connected) return 'offline';
   const t = status.telemetry;
   const fresh = t !== null && (status.telemetry_age_s ?? Infinity) < TELEMETRY_STALE_S;
@@ -94,6 +96,7 @@ export function parseStatus(raw: unknown): HoverboardStatus | null {
       target: s.link.target ?? null,
       connected: Boolean(s.link.connected),
       connecting: Boolean(s.link.connecting),
+      reconnecting: Boolean(s.link.reconnecting),
       error: s.link.error ?? null,
     },
     firmware: { acks: Boolean(s.firmware?.acks), telemetry: Boolean(s.firmware?.telemetry) },
