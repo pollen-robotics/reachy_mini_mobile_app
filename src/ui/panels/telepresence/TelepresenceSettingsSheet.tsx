@@ -11,7 +11,7 @@
 import { Box, Button, Drawer, Slider, Stack, Typography } from '@mui/material';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 
-import type { OverboardLinkStats } from '@/features/overboard';
+import type { HoverboardStatus, OverboardLinkStats } from '@/features/overboard';
 import { TELEPRESENCE_LIMITS, type TelepresenceHandle } from '@/features/telepresence';
 import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
@@ -27,6 +27,8 @@ interface TelepresenceSettingsSheetProps {
   manualMode: boolean;
   onManualModeChange: (manual: boolean) => void;
   overboardStats: OverboardLinkStats;
+  /** Last daemon hoverboard status (null = no reply / unsupported). */
+  baseStatus: HoverboardStatus | null;
   audioReady: boolean;
   /** Robot awake + host allows motion. Pose controls are inert otherwise. */
   motionEnabled: boolean;
@@ -49,6 +51,7 @@ export default function TelepresenceSettingsSheet({
   manualMode,
   onManualModeChange,
   overboardStats,
+  baseStatus,
   audioReady,
   motionEnabled,
   lowLatency,
@@ -189,14 +192,31 @@ export default function TelepresenceSettingsSheet({
                 overflowWrap: 'anywhere',
               }}
             >
-              WebRTC pipe · sent {overboardStats.sent} · daemon replies {overboardStats.echoes}
-              {overboardStats.lastEcho ? `\n${overboardStats.lastEcho}` : ''}
+              {formatBaseStatus(overboardStats, baseStatus)}
             </Typography>
           )}
         </SheetSection>
       </Stack>
     </Drawer>
   );
+}
+
+function formatBaseStatus(stats: OverboardLinkStats, s: HoverboardStatus | null): string {
+  const lines = [`WebRTC · drive frames sent ${stats.sent}`];
+  if (!s) return [...lines, 'daemon: no hoverboard status (unsupported or no reply)'].join('\n');
+  const link = s.link.connected
+    ? `${s.link.kind ?? '?'} ${s.link.target ?? ''}`.trim()
+    : s.link.connecting
+      ? 'connecting…'
+      : `offline${s.link.error ? ` (${s.link.error})` : ''}`;
+  lines.push(`link · ${link}`);
+  lines.push(
+    `firmware · ${s.firmware.acks ? 'acks' : 'silent'}${s.telemetry ? ` · ${s.telemetry.state} · tilt ${s.telemetry.tilt_deg.toFixed(1)}°` : ''}`,
+  );
+  lines.push(
+    `drive · T${s.drive.throttle} R${s.drive.turn}${s.drive.zeroed_by_deadman ? ' · zeroed by deadman' : ''}`,
+  );
+  return lines.join('\n');
 }
 
 function SheetSection({

@@ -285,6 +285,17 @@ export interface ReachyMiniInstance extends EventTarget {
   sendRaw(data: unknown): boolean;
 
   /**
+   * Generic round-trip for daemon commands without a typed wrapper: sends
+   * `command` and resolves with the first robot message whose `command`
+   * field equals `command.type`, or `null` on timeout (daemon predates the
+   * command). Rejects when the data channel isn't open.
+   */
+  request(
+    command: { type: string } & Record<string, unknown>,
+    options?: { timeoutMs?: number; match?: (msg: Record<string, unknown>) => boolean },
+  ): Promise<Record<string, unknown> | null>;
+
+  /**
    * Sign this robot out of Hugging Face over the data channel: the daemon
    * deletes its stored HF token and de-registers from central, so the
    * robot disappears from its owner's list until it's set up again.

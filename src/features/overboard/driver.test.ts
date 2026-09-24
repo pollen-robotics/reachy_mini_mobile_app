@@ -27,13 +27,13 @@ describe('OverboardDriver', () => {
   it('sends changes at once, repeats a held command at the heartbeat rate', () => {
     const { sent, def, driver } = rig();
     def.y = -1;
-    for (let t = 0; t < 1000; t += 100) driver.tick(t);
-    // t=0, then heartbeats at 500
-    expect(sent).toHaveLength(2);
+    for (let t = 0; t < 1000; t += 50) driver.tick(t);
+    // t=0, then a heartbeat every 100 ms (under the daemon's 300 ms deadman)
+    expect(sent).toHaveLength(10);
     def.y = -0.5;
     driver.tick(1000);
-    expect(sent).toHaveLength(3);
-    expect(sent[2]).toEqual({ linear: 0.25, angular: 0 });
+    expect(sent).toHaveLength(11);
+    expect(sent[10]).toEqual({ linear: 0.25, angular: 0 });
   });
 
   it('sends a STOP burst on release', () => {

@@ -9,5 +9,5 @@ export interface OverboardLink {
 }
 
 export function emptyStats(): OverboardLinkStats {
-  return { sent: 0, echoes: 0, lastEcho: null, lastEchoAt: null };
+  return { sent: 0 };
 }

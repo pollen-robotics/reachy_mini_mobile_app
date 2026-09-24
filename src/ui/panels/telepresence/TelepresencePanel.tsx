@@ -34,11 +34,12 @@ import VolumeOffRoundedIcon from '@mui/icons-material/VolumeOffRounded';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 
 import { useDaemonState } from '@/features/daemon-state';
-import { useOverboard } from '@/features/overboard';
+import { useHoverboardBase, useOverboard } from '@/features/overboard';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { useTelepresence } from '@/features/telepresence';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
+import BaseControls from './BaseControls';
 import { WHEELS_COLOR, glassIconButtonSx, glassSurfaceSx } from './glass';
 import { Joystick, MoveIcon, WheelsIcon } from './joystick';
 import LiveVideo, { type LiveVideoMode } from './LiveVideo';
@@ -92,6 +93,15 @@ export default function TelepresencePanel({
     getRobot: session.getRobot,
     getDeflection: () => wheelsRef.current?.current ?? null,
   });
+  const base = useHoverboardBase({ active: live && !manualMode, getRobot: session.getRobot });
+  const wheelsEnabled = live && base.phase === 'balancing';
+  const wheelsDisabledLabel = !live
+    ? undefined
+    : base.phase === 'sitting' || base.phase === 'lifting'
+      ? 'Stand up first'
+      : base.phase === 'balancing'
+        ? undefined
+        : 'No base';
 
   // Low-latency (WebCodecs) video on by default; switchable from the
   // settings sheet so the difference can be felt side by side.
@@ -218,15 +228,19 @@ export default function TelepresencePanel({
               justifyContent: 'space-between',
             }}
           >
-            <Joystick
-              onDeflectionRef={onWheelsRef}
-              enabled={live}
-              size={128}
-              label="Wheels"
-              gamepadStick="left"
-              thumbIcon={<WheelsIcon />}
-              thumbColor={WHEELS_COLOR}
-            />
+            <Stack spacing={1.5} sx={{ alignItems: 'flex-start' }}>
+              <BaseControls base={base} disabled={!live} />
+              <Joystick
+                onDeflectionRef={onWheelsRef}
+                enabled={wheelsEnabled}
+                size={128}
+                label="Wheels"
+                disabledLabel={wheelsDisabledLabel}
+                gamepadStick="left"
+                thumbIcon={<WheelsIcon />}
+                thumbColor={WHEELS_COLOR}
+              />
+            </Stack>
             <Joystick
               onDeflectionRef={onHeadRef}
               enabled={motionEnabled}
@@ -347,6 +361,7 @@ export default function TelepresencePanel({
         onLowLatencyChange={setLowLatency}
         videoMode={videoMode}
         overboardStats={overboard.stats}
+        baseStatus={base.status}
         audioReady={session.hasReachedReady && live}
       />
     </Box>

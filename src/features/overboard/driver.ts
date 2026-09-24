@@ -4,17 +4,19 @@
  *
  * While the stick is deflected, a changed command goes out on the next
  * tick (≤ 10 Hz) and an unchanged one is repeated every
- * `HEARTBEAT_MS`: that heartbeat lets an overboard-side watchdog stop the
- * wheels when frames stop arriving (lost link, app killed) without
- * flooding the data channel. On release we send a short burst of
- * explicit STOPs, then go silent.
+ * `HEARTBEAT_MS`: that heartbeat keeps the daemon's deadman (it zeroes
+ * the drive 300 ms after the last frame) from firing while the stick is
+ * held, and lets it stop the wheels when frames stop arriving (lost
+ * link, app killed). On release we send a short burst of explicit STOPs,
+ * then go silent.
  */
 import { deflectionToDrive, isStop } from './drive-mapping';
 import type { OverboardLink } from './link';
 import { STOP, type OverboardDrive } from './types';
 
 export const DRIVE_TICK_MS = 100;
-export const HEARTBEAT_MS = 500;
+// Must stay well under the daemon's 300 ms deadman, Wi-Fi jitter included.
+export const HEARTBEAT_MS = 100;
 const STOP_BURST = 3;
 
 export class OverboardDriver {
