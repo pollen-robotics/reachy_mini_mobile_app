@@ -18,6 +18,8 @@ import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 
+import type { LiveVideoMode } from './LiveVideo';
+
 interface TelepresenceSettingsSheetProps {
   open: boolean;
   onClose: () => void;
@@ -28,7 +30,17 @@ interface TelepresenceSettingsSheetProps {
   audioReady: boolean;
   /** Robot awake + host allows motion. Pose controls are inert otherwise. */
   motionEnabled: boolean;
+  lowLatency: boolean;
+  onLowLatencyChange: (enabled: boolean) => void;
+  videoMode: LiveVideoMode;
 }
+
+const VIDEO_MODE_LABEL: Record<LiveVideoMode, string> = {
+  'low-latency': 'Active: frames are shown as soon as they are decoded.',
+  starting: 'Starting (waiting for a keyframe)…',
+  standard: 'Off: standard browser playback (adds buffering).',
+  unsupported: 'Not supported on this device: using standard playback.',
+};
 
 export default function TelepresenceSettingsSheet({
   open,
@@ -39,6 +51,9 @@ export default function TelepresenceSettingsSheet({
   overboardStats,
   audioReady,
   motionEnabled,
+  lowLatency,
+  onLowLatencyChange,
+  videoMode,
 }: TelepresenceSettingsSheetProps) {
   const poseDisabled = manualMode || !motionEnabled;
   const daemon = useDaemonState();
@@ -109,6 +124,25 @@ export default function TelepresenceSettingsSheet({
             onChange={(v) => telepresence.setAntennasTarget(v, targets.antennaLeft)}
             disabled={poseDisabled}
           />
+        </SheetSection>
+
+        <SheetSection title="Video">
+          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>
+                Low-latency video
+              </Typography>
+              <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+                {VIDEO_MODE_LABEL[videoMode]}
+              </Typography>
+            </Box>
+            <OutlinedSwitch
+              checked={lowLatency}
+              disabled={manualMode}
+              onChange={(_, checked) => onLowLatencyChange(checked)}
+              slotProps={{ input: { 'aria-label': 'Low-latency video' } }}
+            />
+          </Stack>
         </SheetSection>
 
         <SheetSection title="Robot audio" hint="Tip: long-press a sound button for quick volume.">
