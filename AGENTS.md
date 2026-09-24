@@ -11,7 +11,9 @@ signs in with Hugging Face, picks a robot from their account, and gets:
 
 1. A live conversation panel (orb + audio bridge + HF realtime backend).
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
-3. A robot tab with camera feed + audio sliders + manual head joystick.
+3. A native telepresence tab (full-screen camera, head + wheels
+   joysticks, two-way audio, pose sliders, overboard manual BLE mode).
+   It reuses the live `RobotSession`: no iframe, no handoff.
 
 The robot is assumed to be already provisioned (on Wi-Fi, advertising
 itself on the HF central signaling Space). First-time Wi-Fi setup is
@@ -49,7 +51,9 @@ features/
 ├── auth/           HF OAuth + token storage + central robot listing
 ├── apps/           HF Hub app catalog fetching + embed URL builder
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
-└── conversation/   HF realtime voice engine + audio bridge + motion + tools + memory
+├── conversation/   HF realtime voice engine + audio bridge + motion + tools + memory
+├── telepresence/   motion controller (head leash + base + antennas) + phone/robot audio legs
+└── overboard/      wheeled-base drive: WebRTC `overboard_drive` stub + BLE manual-mode stub
 ```
 
 Each feature folder contains its own `types.ts`, services, React
@@ -109,7 +113,7 @@ lifecycle and the iframe handoff lives in
 ui/
 ├── design/        Tokens + atomic primitives (TransportChip, RobotAvatar, ScreenTransition, ErrorBoundary, ...)
 ├── widgets/       Composable bricks reused across panels (video-feed, audio-controls, head-control, camera-overlay)
-├── panels/        Feature compositions mounted into screens (conversation, apps-list, robot)
+├── panels/        Feature compositions mounted into screens (conversation, apps-list, telepresence)
 └── screens/       Top-level routes (Splash, RemoteSignIn, WelcomeBack, Scan, RobotSession)
 ```
 
@@ -318,6 +322,7 @@ truth because `gen/` is regenerated.
 | `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
 | `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
+| `docs/OVERBOARD.md` | Overboard (wheeled base) drive: `overboard_drive` wire format, heartbeat, BLE manual-mode stub |
 
 ## Notes for HF Space authors
 
