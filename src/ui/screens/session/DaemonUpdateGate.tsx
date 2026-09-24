@@ -8,7 +8,7 @@
  * in-session update end to end:
  *
  *   prompt → updating → rebooting → done
- *                    ↘ failed
+ *                    ↘ failed   ↘ lost (never came back online)
  *
  * Transport model
  * ───────────────
@@ -19,6 +19,9 @@
  *   - show the live daemon log tail (`subscribeLogs`) while it runs,
  *   - treat the session dropping out of `live` as "the restart began"
  *     (→ rebooting),
+ *   - DRIVE the reconnection while rebooting: re-run `session.recover()`
+ *     every time the session lands on `error`, until it's `live` again or
+ *     `REBOOT_RECONNECT_TIMEOUT_MS` runs out (→ lost),
  *   - re-read the version when the session comes back to confirm.
  *
  * The restart often outlasts the engine's auto-reconnect budget, so we
@@ -45,6 +48,18 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
 /** If the daemon never restarts within this window after we asked it to
  *  update, something went wrong silently → surface a failure. */
 const UPDATE_STALL_TIMEOUT_MS = 180_000;
+
+/**
+ * Reboot reconnect loop. The screen's own auto-recover is ONE-shot and
+ * fires the instant the session drops - i.e. while the daemon is still
+ * going down and central still lists its old peer id - so it always burns
+ * its attempt ~20 s before the restarted robot is reachable. While the
+ * gate says "rebooting" we keep re-dialing ourselves (each `recover()`
+ * re-resolves the fresh peer id from central) with a short pause between
+ * attempts, and give up after the window below.
+ */
+const REBOOT_RETRY_DELAY_MS = 5_000;
+const REBOOT_RECONNECT_TIMEOUT_MS = 240_000;
 
 /**
  * First daemon release that understands the in-app WebRTC `start_update`
@@ -89,7 +104,7 @@ function supportsSelfUpdate(current: string | null): boolean {
   return !!c && !!min && compareSemver(c, min) >= 0;
 }
 
-type Phase = 'idle' | 'prompt' | 'updating' | 'rebooting' | 'done' | 'failed';
+type Phase = 'idle' | 'prompt' | 'updating' | 'rebooting' | 'done' | 'failed' | 'lost';
 
 interface DaemonUpdateGateProps {
   /** Live session handle (version read, update trigger, log stream). */
@@ -111,7 +126,8 @@ export default function DaemonUpdateGate({
   // rest of this session even if a version read momentarily lags.
   const completedRef = useRef(false);
 
-  const { getDaemonVersion } = session;
+  const { getDaemonVersion, recover } = session;
+  const sessionPhase = session.phase;
 
   // Initial detection reads the version the connection layer resolved
   // DURING bring-up (`session.daemonVersion`), emitted just before the
@@ -165,6 +181,25 @@ export default function DaemonUpdateGate({
     };
   }, [phase, live, getDaemonVersion]);
 
+  // Keep re-dialing while the robot restarts. Re-armed by every
+  // `recovering → error` transition, so a failed attempt schedules the
+  // next one; stops as soon as the session is back (`live` flips the
+  // phase to `done` above) or the window below expires.
+  useEffect(() => {
+    if (phase !== 'rebooting' || sessionPhase !== 'error') return;
+    const t = window.setTimeout(() => {
+      console.log('[update-gate] robot restarting: re-dialing');
+      void recover();
+    }, REBOOT_RETRY_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [phase, sessionPhase, recover]);
+
+  useEffect(() => {
+    if (phase !== 'rebooting') return;
+    const t = window.setTimeout(() => setPhase('lost'), REBOOT_RECONNECT_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [phase]);
+
   // Safety net: the daemon acked but never restarted within the window.
   useEffect(() => {
     if (phase !== 'updating') return;
@@ -213,7 +248,8 @@ export default function DaemonUpdateGate({
           success screen (Continue is the natural next step). */}
       {(effectivePhase === 'prompt' ||
         effectivePhase === 'rebooting' ||
-        effectivePhase === 'failed') && (
+        effectivePhase === 'failed' ||
+        effectivePhase === 'lost') && (
         <Button
           variant="text"
           onClick={onBackToRobots}
@@ -280,6 +316,9 @@ export default function DaemonUpdateGate({
           {effectivePhase === 'failed' && canSelfUpdate && (
             <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>
           )}
+          {effectivePhase === 'lost' && (
+            <PrimaryButton onClick={() => setPhase('rebooting')}>Keep waiting</PrimaryButton>
+          )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) || effectivePhase === 'failed') && (
             <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
               Get the desktop app ↗
@@ -303,7 +342,7 @@ function PhaseIcon({ phase }: { phase: Phase }) {
   if (phase === 'done') {
     return <CheckCircleRoundedIcon sx={{ fontSize: 56, color: 'success.main' }} />;
   }
-  if (phase === 'failed') {
+  if (phase === 'failed' || phase === 'lost') {
     return <ErrorOutlineRoundedIcon sx={{ fontSize: 56, color: 'error.main' }} />;
   }
   return <Box component="img" src={updateBoxUrl} alt="" aria-hidden sx={{ width: 200, height: 200 }} />;
@@ -319,6 +358,8 @@ function titleFor(phase: Phase, canSelfUpdate: boolean): string {
       return 'Reachy is up to date';
     case 'failed':
       return "Update couldn't start";
+    case 'lost':
+      return "Reachy didn't come back online";
     default:
       return canSelfUpdate ? 'Update required' : 'Update from the desktop app';
   }
@@ -337,6 +378,8 @@ function bodyFor(
       return 'Reachy is restarting to finish the update. This usually takes a minute or two - keep the app open and stay nearby while it comes back online.';
     case 'done':
       return current ? `Now running v${current}.` : 'Your Reachy is now up to date.';
+    case 'lost':
+      return 'The update may have finished, but the robot has not reconnected yet. Check that it is powered on and on Wi-Fi, then keep waiting or go back to your robots and reconnect.';
     case 'failed':
       return 'The robot did not respond to the update request. Make sure you are close to it and it is online, then try again - or update it from the Reachy desktop app.';
     default:
