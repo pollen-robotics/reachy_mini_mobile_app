@@ -99,9 +99,11 @@ export default function TelepresencePanel({
     ? undefined
     : base.phase === 'sitting' || base.phase === 'lifting'
       ? 'Stand up first'
-      : base.phase === 'balancing'
-        ? undefined
-        : 'No base';
+      : base.phase === 'stopping'
+        ? 'Sitting down'
+        : base.phase === 'balancing'
+          ? undefined
+          : 'No base';
 
   // Low-latency (WebCodecs) video on by default; switchable from the
   // settings sheet so the difference can be felt side by side.

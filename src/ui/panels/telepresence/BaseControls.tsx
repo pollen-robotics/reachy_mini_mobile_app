@@ -50,7 +50,9 @@ const glassButtonSx = {
 } as const;
 
 export default function BaseControls({ base, disabled }: { base: HoverboardBaseHandle; disabled: boolean }) {
-  const { phase, pending, status, error } = base;
+  const { pending, status, error } = base;
+  // The link only reports `connecting` once the daemon starts on it.
+  const phase = pending === 'connect' && base.phase === 'offline' ? 'connecting' : base.phase;
   const connected = status?.link.connected ?? false;
   const tilt = status?.telemetry?.tilt_deg;
   const busy = pending !== null || disabled;

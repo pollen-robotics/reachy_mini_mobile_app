@@ -5,54 +5,72 @@ add-on. There are two command paths with the same command shape.
 
 | Mode | Path | Status |
 |---|---|---|
-| Normal telepresence | Robot WebRTC data channel → daemon → overboard | App side done; daemon side not written yet |
+| Normal telepresence | Robot WebRTC data channel → daemon `HoverboardManager` → base (USB, else Bluetooth SPP) | Wired to the daemon's `hoverboard_*` commands |
 | Manual (settings → "Manual mode") | Phone → overboard over Bluetooth LE | Stub (`src/features/overboard/ble-link.ts`) |
 
-## WebRTC wire format
+The daemon side lives on the private branch `feat/hoverboard` of
+`RemiFabre/reachy_mini-hoverboard` (not released, keep it out of public
+repos). Its spec is `docs/superpowers/specs/2026-09-24-hoverboard-daemon-design.md`.
 
-This is a legacy `{"type": …}` command on the same data channel as
-`set_full_target`:
+## WebRTC commands
+
+Legacy `{"type": …}` commands on the same data channel as
+`set_full_target`. Each one replies `{"status": "ok", "command": <type>}`
+or `{"error": "...", "command": <type>}` ("hoverboard not connected"
+without a link, "hoverboard support is disabled" with `--no-hoverboard`).
+
+| Command | Effect |
+|---|---|
+| `hoverboard_connect` `{link?: "auto"\|"usb"\|"bluetooth"}` | Bring the link up (USB first, else the remembered MAC). Takes seconds. |
+| `hoverboard_enable` | Lift off and balance (firmware `S0`). In the air the wheels spin up to saturation. |
+| `hoverboard_sit` | Controlled sit-down (`S1`). Needs the wheels on the ground. |
+| `hoverboard_stop` | Motors off at once (`E1`). The STOP button. |
+| `hoverboard_drive` `{throttle, turn}` | -100..100, forward and left positive. |
+| `hoverboard_get_status` | `{"command": ..., "hoverboard": {enabled, link, firmware, drive, telemetry, ...}}` |
 
 ```json
-{"type": "overboard_drive", "linear": 0.42, "angular": -0.1, "seq": 17}
+{"type": "hoverboard_drive", "throttle": 42, "turn": -10}
 ```
 
-- `linear` is in [-1, 1]. Positive means forward.
-- `angular` is in [-1, 1]. Positive means turn left (counter-clockwise from
-  above, ROS REP-103).
-- Both values are normalised. A quadratic curve is already applied (fine
-  control near centre) and they are rounded to 3 decimals. The add-on maps
-  them to real speeds.
-- `seq` is a monotonic counter per link, so drops and reordering are
-  detectable.
+- The joystick output is normalised to [-1, 1] with a quadratic curve
+  (fine control near centre), then scaled to -100..100 with one decimal
+  (`webrtc-link.ts`). The daemon applies the base's sign conventions and
+  caps (`invert_throttle`, `max_throttle`, `max_turn`).
+- **Deadman:** the daemon zeroes the drive 300 ms after the last
+  `hoverboard_drive`, and when the WebRTC peer drops.
 
 Rate (`src/features/overboard/driver.ts`):
 
-- A **changed** command goes out on the next 100 ms tick (≤ 10 Hz).
-- A **held** command is repeated every 500 ms as a heartbeat. The add-on
-  should run a watchdog (for example, stop if nothing arrives for about
-  1 s).
-- On release, the app sends **3 explicit STOPs** (`linear = angular = 0`),
-  then nothing.
+- A changed command goes out on the next 100 ms tick (≤ 10 Hz).
+- A held command is repeated every tick (100 ms heartbeat) so the deadman
+  never fires while the stick is held.
+- On release, the app sends **3 explicit STOPs**, then nothing.
 
-### Today (no add-on yet)
+## Base controls in the tab
 
-The daemon doesn't know the type, so `_handle_webrtc_message` logs this in
-`journalctl -u reachy-mini-daemon`:
+`useHoverboardBase` polls `hoverboard_get_status` at 2 Hz while the tab
+is live (the pose stream's `hoverboard` summary is dropped by the SDK),
+backing off to 5 s when the daemon doesn't answer. `BaseControls` shows
+the link and firmware state and the matching action:
 
-```
-WebRTC invalid command: … Input tag 'overboard_drive' found using 'type' does not match any of the expected tags …
-```
+| Phase | Shown when | Action |
+|---|---|---|
+| offline | no link | Connect |
+| connecting | link coming up | none |
+| sitting | connected, firmware `Stopped` | Stand up |
+| lifting / balancing | `Liftoff` / `Balancing` | Sit |
+| stopping | `Stopping` | none |
 
-It replies `{"error": "Invalid command: …"}`. The app counts those replies
-as "daemon replies" in the telepresence settings sheet (Overboard section,
-`sent N · daemon replies M`). The count proves the phone → daemon half of
-the pipe works end-to-end. The engine only logs the reply, so it is
-harmless.
+STOP is shown whenever the base is connected. The wheels joystick is
+only live while the base balances. On the stock (silent) firmware there
+is no telemetry, so the phase follows what was last requested.
 
-To wire the add-on: add an `OverboardDriveCmd` to the command union in
-`reachy_mini/io/protocol.py` (discriminator `type`) and handle it in
-`process_command`.
+## Dev harness
+
+`yarn dev`, then open `http://localhost:1422/telepresence-harness.html`
+(`?fw=silent`, `?link=up`, `?hb=off`). It renders the real panel against
+a fake daemon with the same state machine, replies and deadman, plus a
+debug overlay (drive frames per second, deadman events).
 
 ## Manual mode (BLE)
 

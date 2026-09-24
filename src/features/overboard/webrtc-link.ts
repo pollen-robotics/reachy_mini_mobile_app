@@ -26,19 +26,18 @@ export function createOverboardWebRtcLink(
   getRobot: () => ReachyMiniInstance | null,
 ): OverboardLink {
   const stats = emptyStats();
-  let disposed = false;
 
   return {
     mode: 'webrtc',
     send(drive) {
-      if (disposed) return;
       const robot = getRobot();
       if (!robot) return;
       if (robot.sendRaw(toDriveMessage(drive))) stats.sent += 1;
     },
     getStats: () => ({ ...stats }),
-    dispose() {
-      disposed = true;
-    },
+    // Nothing to release, and deliberately no "disposed" latch: React
+    // StrictMode runs the owner's unmount cleanup once in dev and keeps
+    // the same link instance, which a latch would silence for good.
+    dispose() {},
   };
 }

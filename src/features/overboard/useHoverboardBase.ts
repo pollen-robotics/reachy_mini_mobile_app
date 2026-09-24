@@ -14,6 +14,8 @@ import { basePhase, parseStatus, type BasePhase, type HoverboardStatus } from '.
 
 const POLL_MS = 500;
 const STATUS_TIMEOUT_MS = 1500;
+/** Poll slower against a daemon without the hoverboard commands (each poll is logged as invalid there). */
+const UNSUPPORTED_POLL_MS = 5000;
 /** Bluetooth connect can take several seconds (rfcomm bind + first ack). */
 const CONNECT_TIMEOUT_MS = 20_000;
 const COMMAND_TIMEOUT_MS = 3000;
@@ -55,16 +57,19 @@ export function useHoverboardBase({
     if (!active) return;
     let cancelled = false;
     let inFlight = false;
-    const poll = async () => {
+    let skipUntil = 0;
+    const poll = async (force = false) => {
       const robot = getRobotRef.current();
-      if (!robot || inFlight) return;
+      if (!robot || inFlight || (!force && Date.now() < skipUntil)) return;
       inFlight = true;
       try {
         const reply = await robot.request({ type: 'hoverboard_get_status' }, { timeoutMs: STATUS_TIMEOUT_MS });
         if (cancelled) return;
         // null = timeout (daemon without the command); an `error` reply =
         // hoverboard support disabled. Both read as "unavailable".
-        setStatus(reply ? parseStatus(reply.hoverboard) : null);
+        const parsed = reply ? parseStatus(reply.hoverboard) : null;
+        skipUntil = parsed ? 0 : Date.now() + UNSUPPORTED_POLL_MS;
+        setStatus(parsed);
       } catch {
         // Channel closed mid-flight: keep the last status, the session
         // layer handles the reconnect.
@@ -72,7 +77,7 @@ export function useHoverboardBase({
         inFlight = false;
       }
     };
-    pollNow.current = () => void poll();
+    pollNow.current = () => void poll(true);
     void poll();
     const timer = setInterval(() => void poll(), POLL_MS);
     return () => {

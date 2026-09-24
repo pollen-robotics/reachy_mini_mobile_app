@@ -60,7 +60,9 @@ export class OverboardDriver {
       this.stopsLeft = STOP_BURST;
       const same =
         this.lastSent?.linear === drive.linear && this.lastSent?.angular === drive.angular;
-      if (same && now - this.lastSentAt < HEARTBEAT_MS) return;
+      // Half a tick of slack: setInterval jitter (a 99 ms tick) must not
+      // push the heartbeat to the next tick, 200 ms after the last frame.
+      if (same && now - this.lastSentAt < HEARTBEAT_MS - DRIVE_TICK_MS / 2) return;
       link?.send(drive);
       this.lastSent = drive;
       this.lastSentAt = now;
