@@ -121,13 +121,33 @@ export function useGamepadDeflection({
       }
     };
 
-    rafId = window.requestAnimationFrame(tick);
+    // Only poll while a pad is actually connected. An always-on 60 Hz
+    // rAF loop per joystick kept the WebView producing frames for
+    // nothing (measured: ~120 rAF callbacks/s with no controller),
+    // competing with video decode + compositing on the phone.
+    const start = () => {
+      if (rafId === 0) rafId = window.requestAnimationFrame(tick);
+    };
+    const stop = () => {
+      if (rafId !== 0) window.cancelAnimationFrame(rafId);
+      rafId = 0;
+      if (wasDriving) setDeflectionRef.current(0, 0);
+      wasDriving = false;
+    };
+    const anyPadConnected = () =>
+      Array.from(navigator.getGamepads()).some((pad) => pad?.connected);
+    const onPadsChanged = () => (anyPadConnected() ? start() : stop());
+
+    window.addEventListener('gamepadconnected', onPadsChanged);
+    window.addEventListener('gamepaddisconnected', onPadsChanged);
+    onPadsChanged();
 
     return () => {
-      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('gamepadconnected', onPadsChanged);
+      window.removeEventListener('gamepaddisconnected', onPadsChanged);
       // Loop torn down (disabled, stick remapped, unmount) while the pad
       // was holding the puck: don't leave a stale deflection behind.
-      if (wasDriving) setDeflectionRef.current(0, 0);
+      stop();
     };
   }, [enabled, isPointerActiveRef, stick]);
 }
