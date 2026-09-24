@@ -1,7 +1,9 @@
 /**
  * Robot session screen.
  *
- * Two-tab shell hosted on a single connected robot:
+ * Three-tab shell hosted on a single connected robot
+ * (Conversation | Apps | Telepresence; the telepresence tab takes the
+ * whole screen, see `<TelepresencePanel>`):
  *
  *   ┌──────────────────────────────────────────────┐
  *   │ Header (name + chips + [ⓘ info] + [⏻ off])   │
@@ -75,6 +77,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 
 import AppsIcon from '@/ui/design/icons/AppsIcon';
 import ChatBubbleIcon from '@/ui/design/icons/ChatBubbleIcon';
@@ -95,6 +98,7 @@ import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
+import TelepresencePanel from '@/ui/panels/telepresence/TelepresencePanel';
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
@@ -123,7 +127,7 @@ interface RobotSessionScreenProps {
   onBack: () => void;
 }
 
-type Tab = 'conv' | 'apps';
+type Tab = 'conv' | 'apps' | 'tele';
 
 export default function RobotSessionScreen({
   target,
@@ -396,6 +400,18 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // Tab to return to when the immersive telepresence view is exited.
+  const lastNonTeleTabRef = useRef<Exclude<Tab, 'tele'>>('conv');
+  useEffect(() => {
+    if (tab !== 'tele') lastNonTeleTabRef.current = tab;
+  }, [tab]);
+  // Overboard manual (Bluetooth) mode, toggled from the telepresence
+  // settings. Releases the robot session entirely (see the handoff effect
+  // below); only meaningful while the telepresence tab is up.
+  const [overboardManual, setOverboardManual] = useState(false);
+  useEffect(() => {
+    if (tab !== 'tele') setOverboardManual(false);
+  }, [tab]);
   // True while the conversation tab has a persona authoring form open. The
   // bottom tab bar is pulled for the duration - see the `BottomNavigation`
   // below for why.
@@ -541,6 +557,22 @@ function ConnectedSession({
     }
   }, [openedApp, leaving, session]);
 
+  // Same release / reacquire handoff for overboard manual mode: the
+  // phone drives the base over BLE, so the WebRTC slot (video, audio,
+  // head control) is released for the duration and brought back on exit.
+  const previousManualRef = useRef(false);
+  useEffect(() => {
+    const previous = previousManualRef.current;
+    previousManualRef.current = overboardManual;
+    if (!previous && overboardManual) {
+      console.log('[shell-webrtc] overboard manual mode: releasing session');
+      void session.releaseForHandoff();
+    } else if (previous && !overboardManual && !leaving) {
+      console.log('[shell-webrtc] overboard manual mode off: reacquiring session');
+      void session.reacquire();
+    }
+  }, [overboardManual, leaving, session]);
+
   // Tab-switch lifecycle for the conversation parts.
   //
   // Leaving the conversation tab stops the HF realtime pipeline,
@@ -610,11 +642,13 @@ function ConnectedSession({
     // While an iframe app owns the slot, the close-path reacquire is
     // the recovery mechanism - don't fight it from underneath.
     if (openedApp !== null) return;
+    // Manual overboard mode released the slot on purpose.
+    if (overboardManual) return;
     if (autoRecoverTriedRef.current) return;
     autoRecoverTriedRef.current = true;
     console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
     void session.recover();
-  }, [session, leaving, openedApp]);
+  }, [session, leaving, openedApp, overboardManual]);
 
   // Keep-screen-on rule. We only ask the OS to suppress the idle
   // timer while the user is engaged with the robot in a way that
@@ -650,7 +684,7 @@ function ConnectedSession({
     session.connectionState === 'selecting' ||
     session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
-  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
+  useKeepScreenOn(isConversing || isBringingUp || isAppOpen || tab === 'tele');
 
   return (
     /* `DaemonStateProvider` is the single source of truth for
@@ -1106,6 +1140,9 @@ function ConnectedSession({
               `MicIcon` - same `1.8 px` stroke weight, same
               outline-only treatment, same 24×24 viewBox. */}
           <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
+          {/* Telepresence: live camera + head / wheels joysticks, native
+              counterpart of the telepresence Space (no iframe handoff). */}
+          <BottomNavigationAction value="tele" label="Telepresence" icon={<VideocamOutlinedIcon />} />
         </BottomNavigation>
 
         {/* Settings overlay. The single topbar sheet, pinned BELOW the
@@ -1175,6 +1212,23 @@ function ConnectedSession({
               />
             )}
           </Box>
+        )}
+
+        {/* Telepresence tab: immersive full-screen layer (zIndex 1250)
+            covering the topbar + tab bar, exited via its own back
+            button. Mounted only while the tab is active so its motion,
+            audio and overboard loops live exactly as long as the view. */}
+        {/* Stays mounted while `leaving` (the leaving cover sits above it)
+            so it sees `allowMotion` drop and never glides the head while
+            the teardown puts the robot to sleep. */}
+        {tab === 'tele' && !isError && (
+          <TelepresencePanel
+            session={session}
+            manualMode={overboardManual}
+            onManualModeChange={setOverboardManual}
+            onExit={() => handleTabChange(lastNonTeleTabRef.current)}
+            allowMotion={!leaving && !waking && wizardGate !== 'show'}
+          />
         )}
 
         {openedApp && (
