@@ -201,9 +201,20 @@ function createFakeRobot(): ReachyMiniInstance {
     robotState: { motor_mode: 'enabled', head: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], body_yaw: 0 },
     isAwake: () => true,
     wakeUp: async () => {},
-    subscribePose: () => {},
     unsubscribePose: () => {},
     sendRaw: (data: unknown) => send(data as Record<string, unknown>),
+    playRecordedMove: (move: string, opts?: { dataset?: string }) => {
+      const state = robot.robotState as { is_move_running?: boolean };
+      if (state.is_move_running) return true;
+      daemon.note(`move ${move} (${opts?.dataset?.split('/')[1] ?? 'emotions'})`);
+      state.is_move_running = true;
+      setTimeout(() => {
+        state.is_move_running = false;
+        daemon.note(`move ${move} done`);
+      }, move === 'simple_nod' ? 1800 : 3500);
+      return true;
+    },
+    subscribePose: () => true,
     request: (cmd: { type: string } & Record<string, unknown>, opts?: { timeoutMs?: number }) =>
       new Promise<Record<string, unknown> | null>((resolve) => {
         const waiter = { match: (m: Record<string, unknown>) => m.command === cmd.type, resolve };

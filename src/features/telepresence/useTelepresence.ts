@@ -33,6 +33,12 @@ import {
   type MotionSnapshot,
   type ReportedPose,
 } from './motion-controller';
+import type { TelepresenceEmotion } from './emotions';
+
+/** Poll period while waiting for an emotion to finish. */
+const EMOTION_POLL_MS = 150;
+/** Give up waiting for `is_move_running` to clear this long after the nominal end. */
+const EMOTION_GRACE_MS = 4000;
 
 const POLL_MS = 1000;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -71,6 +77,11 @@ export interface TelepresenceHandle {
   /** Robot mic → phone speaker. */
   listenEnabled: boolean;
   setListenEnabled(enabled: boolean): void;
+
+  /** Play a recorded emotion; head control is handed to it until it ends. */
+  playEmotion(emotion: TelepresenceEmotion): void;
+  /** Id of the emotion playing, or null. */
+  emotionPlaying: string | null;
 }
 
 function readRobotPose(robot: ReachyMiniInstance | null): ReportedPose | null {
@@ -98,6 +109,9 @@ export function useTelepresence({
   getDeflectionRef.current = getHeadDeflection;
   const allowMotionRef = useRef(allowMotion);
   allowMotionRef.current = allowMotion;
+  // While an emotion plays the daemon's move player owns the head: the
+  // controller stops sending and follows the reported pose instead.
+  const emotionBusyRef = useRef(false);
 
   const [controller] = useState(
     () =>
@@ -105,7 +119,8 @@ export function useTelepresence({
         getSink: () => getRobotRef.current(),
         getDeflection: () => getDeflectionRef.current(),
         getRobotPose: () => readRobotPose(getRobotRef.current()),
-        canMove: () => allowMotionRef.current && getRobotRef.current()?.isAwake() === true,
+        canMove: () =>
+          allowMotionRef.current && !emotionBusyRef.current && getRobotRef.current()?.isAwake() === true,
       }),
   );
   const motion = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
@@ -240,6 +255,36 @@ export function useTelepresence({
       });
   }, []);
 
+  // ─── Emotions ────────────────────────────────────────────────────
+  const [emotionPlaying, setEmotionPlaying] = useState<string | null>(null);
+  const emotionCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => emotionCleanupRef.current?.(), []);
+
+  const playEmotion = useCallback((emotion: TelepresenceEmotion) => {
+    const robot = getRobotRef.current();
+    if (!robot || emotionBusyRef.current) return;
+    if (!robot.playRecordedMove(emotion.move, { dataset: emotion.dataset })) return;
+    emotionBusyRef.current = true;
+    setEmotionPlaying(emotion.id);
+    // The pose stream keeps `is_move_running` and the followed pose fresh.
+    const subscribed = robot.subscribePose();
+    const startedAt = Date.now();
+    const nominalMs = emotion.durationS * 1000;
+    const finish = () => {
+      clearInterval(poll);
+      if (subscribed) robot.unsubscribePose();
+      emotionCleanupRef.current = null;
+      emotionBusyRef.current = false;
+      setEmotionPlaying(null);
+    };
+    const poll = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const running = (robot.robotState as { is_move_running?: boolean }).is_move_running === true;
+      if ((elapsed > nominalMs && !running) || elapsed > nominalMs + EMOTION_GRACE_MS) finish();
+    }, EMOTION_POLL_MS);
+    emotionCleanupRef.current = finish;
+  }, []);
+
   return {
     motion,
     setRollTarget: (deg) => controller.setRollTarget(deg),
@@ -257,5 +302,7 @@ export function useTelepresence({
     setTalkEnabled,
     listenEnabled,
     setListenEnabled,
+    playEmotion,
+    emotionPlaying,
   };
 }

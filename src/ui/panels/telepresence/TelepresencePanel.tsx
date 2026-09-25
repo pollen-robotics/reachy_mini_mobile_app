@@ -40,6 +40,7 @@ import { useTelepresence } from '@/features/telepresence';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import BaseControls from './BaseControls';
+import EmotionButton from './EmotionButton';
 import { WHEELS_COLOR, glassIconButtonSx, glassSurfaceSx } from './glass';
 import { Joystick, MoveIcon, WheelsIcon } from './joystick';
 import LiveVideo, { type LiveVideoMode } from './LiveVideo';
@@ -301,6 +302,7 @@ export default function TelepresencePanel({
         <Box sx={{ flex: 1 }} />
         {!manualMode && (
           <>
+            <EmotionButton telepresence={telepresence} disabled={!motionEnabled} />
             <SoundButton
               on={telepresence.talkEnabled}
               pending={telepresence.talkPending}
