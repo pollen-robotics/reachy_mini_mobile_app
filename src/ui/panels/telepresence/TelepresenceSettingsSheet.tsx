@@ -29,6 +29,9 @@ interface TelepresenceSettingsSheetProps {
   overboardStats: OverboardLinkStats;
   /** Last daemon hoverboard status (null = no reply / unsupported). */
   baseStatus: HoverboardStatus | null;
+  /** Close the robot's link to the base (hoverboard_disconnect), freeing its Bluetooth. */
+  onDisconnectBase: () => void;
+  baseBusy: boolean;
   audioReady: boolean;
   /** Robot awake + host allows motion. Pose controls are inert otherwise. */
   motionEnabled: boolean;
@@ -52,6 +55,8 @@ export default function TelepresenceSettingsSheet({
   onManualModeChange,
   overboardStats,
   baseStatus,
+  onDisconnectBase,
+  baseBusy,
   audioReady,
   motionEnabled,
   lowLatency,
@@ -182,6 +187,22 @@ export default function TelepresenceSettingsSheet({
               slotProps={{ input: { 'aria-label': 'Overboard manual mode' } }}
             />
           </Stack>
+          {!manualMode && baseStatus && (baseStatus.link.connected || baseStatus.link.connecting) && (
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>
+                  Disconnect the base
+                </Typography>
+                <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+                  Cuts the motors and frees Reachy Mini's Bluetooth. Reconnect from the
+                  telepresence view.
+                </Typography>
+              </Box>
+              <Button variant="outlined" size="small" disabled={baseBusy} onClick={onDisconnectBase}>
+                Disconnect
+              </Button>
+            </Stack>
+          )}
           {!manualMode && (
             <Typography
               sx={{

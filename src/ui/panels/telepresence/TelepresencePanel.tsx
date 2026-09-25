@@ -121,13 +121,15 @@ export default function TelepresencePanel({
         : undefined;
 
   // Manual mode releases the session: glide the pose home first so the
-  // release doesn't cut a head / base motion mid-way.
+  // release doesn't cut a head / base motion mid-way, and drop the
+  // robot's link to the base so its Bluetooth is free for the phone.
   const [switchingMode, setSwitchingMode] = useState(false);
   const handleManualModeChange = async (manual: boolean) => {
     if (switchingMode) return;
     if (manual) {
       setSwitchingMode(true);
       try {
+        if (base.status?.link.connected || base.status?.link.connecting) await base.runAsync('disconnect');
         await telepresence.park();
       } finally {
         setSwitchingMode(false);
@@ -364,6 +366,8 @@ export default function TelepresencePanel({
         videoMode={videoMode}
         overboardStats={overboard.stats}
         baseStatus={base.status}
+        onDisconnectBase={() => base.run('disconnect')}
+        baseBusy={base.pending !== null}
         audioReady={session.hasReachedReady && live}
       />
     </Box>

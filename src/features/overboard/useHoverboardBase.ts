@@ -20,7 +20,7 @@ const UNSUPPORTED_POLL_MS = 5000;
 const CONNECT_TIMEOUT_MS = 20_000;
 const COMMAND_TIMEOUT_MS = 3000;
 
-export type BaseCommand = 'connect' | 'enable' | 'sit' | 'stop';
+export type BaseCommand = 'connect' | 'enable' | 'sit' | 'stop' | 'disconnect';
 
 export interface HoverboardBaseHandle {
   status: HoverboardStatus | null;
@@ -30,6 +30,8 @@ export interface HoverboardBaseHandle {
   /** Last command or link error, cleared by the next success. */
   error: string | null;
   run(command: BaseCommand): void;
+  /** Same as `run`, resolved once the daemon answered (or gave up). */
+  runAsync(command: BaseCommand): Promise<void>;
 }
 
 const COMMAND_TYPE: Record<BaseCommand, string> = {
@@ -37,6 +39,8 @@ const COMMAND_TYPE: Record<BaseCommand, string> = {
   enable: 'hoverboard_enable',
   sit: 'hoverboard_sit',
   stop: 'hoverboard_stop',
+  // Zeroes the drive and closes the link, freeing the robot's Bluetooth.
+  disconnect: 'hoverboard_disconnect',
 };
 
 export function useHoverboardBase({
@@ -87,13 +91,13 @@ export function useHoverboardBase({
     };
   }, [active]);
 
-  const run = useCallback((command: BaseCommand) => {
+  const runAsync = useCallback(async (command: BaseCommand) => {
     const robot = getRobotRef.current();
     if (!robot) return;
     // STOP never waits behind another command.
     if (command !== 'stop') setPending(command);
     const timeoutMs = command === 'connect' ? CONNECT_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
-    robot
+    await robot
       .request({ type: COMMAND_TYPE[command] }, { timeoutMs })
       .then((reply) => {
         if (reply === null) setError(`${command}: no reply from the robot`);
@@ -106,6 +110,14 @@ export function useHoverboardBase({
         pollNow.current();
       });
   }, []);
+  const run = useCallback((command: BaseCommand) => void runAsync(command), [runAsync]);
 
-  return { status, phase: basePhase(status), pending, error: error ?? status?.link.error ?? null, run };
+  return {
+    status,
+    phase: basePhase(status),
+    pending,
+    error: error ?? status?.link.error ?? null,
+    run,
+    runAsync,
+  };
 }

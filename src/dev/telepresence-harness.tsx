@@ -144,6 +144,15 @@ class FakeDaemon {
         this.throttle = 0;
         this.turn = 0;
         return { reply: ok, delayMs: 20 };
+      case 'hoverboard_disconnect':
+        this.note('disconnect');
+        this.stopped('disconnect');
+        this.connected = false;
+        this.state = 'Stopped';
+        this.balancerRequested = false;
+        this.throttle = 0;
+        this.turn = 0;
+        return { reply: ok, delayMs: 20 };
       case 'hoverboard_drive': {
         if (!this.connected) return { reply: notConnected, delayMs: 20 };
         this.throttle = Number(cmd.throttle);
