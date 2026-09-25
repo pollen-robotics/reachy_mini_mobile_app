@@ -9,9 +9,10 @@
 #   scripts/android-local.sh dev       # hot-reload: tauri android dev on the phone
 #   scripts/android-local.sh logs      # WebView console + Rust logs from the phone
 #
-# The dev build uses its own applicationId (`<id>.dev`, label "Reachy Mini
-# Dev") so it installs next to the store / CI build instead of clashing with
-# its signing key. Set ANDROID_DEV_APP_ID_SUFFIX= to drop the suffix.
+# The local build keeps the Tauri identifier (com.pollen_robotics.reachy_mini),
+# which is not the store app's id (com.pollenrobotics.reachymini): both
+# install side by side. `tauri android build` rewrites build.gradle.kts'
+# build types, so an applicationIdSuffix patch would not survive anyway.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,7 +21,6 @@ cd "$(dirname "$0")/.."
 : "${NDK_HOME:=$ANDROID_HOME/ndk/27.0.12077973}"
 export JAVA_HOME ANDROID_HOME NDK_HOME ANDROID_SDK_ROOT="$ANDROID_HOME" ANDROID_NDK_HOME="$NDK_HOME"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
-SUFFIX="${ANDROID_DEV_APP_ID_SUFFIX-.dev}"
 GEN=src-tauri/gen/android
 
 init_and_patch() {
@@ -35,30 +35,13 @@ init_and_patch() {
     done
   fi
   python3 scripts/patch-android-insets.py
-  SUFFIX="$SUFFIX" python3 - <<'PY'
-import os, pathlib, re, sys
+  python3 - <<'PY'
+import pathlib, re, sys
 
 gradle = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
 s = gradle.read_text()
 s = re.sub(r'minSdk\s*=\s*\d+', 'minSdk = 26', s, count=1)
-suffix = os.environ.get("SUFFIX", "")
-if suffix and "applicationIdSuffix" not in s:
-    s, n = re.subn(r'(getByName\("debug"\)\s*\{)', r'\1\n            applicationIdSuffix = "%s"\n            resValue("string", "app_name", "Reachy Mini Dev")' % suffix, s, count=1)
-    if n == 0:
-        sys.exit("debug buildType not found in build.gradle.kts")
 gradle.write_text(s)
-
-# The generated strings.xml declares app_name; the debug resValue above would
-# clash with it, so move the default into the release build type instead.
-strings = pathlib.Path("src-tauri/gen/android/app/src/main/res/values/strings.xml")
-if suffix and strings.exists():
-    t = strings.read_text()
-    t2 = re.sub(r'\s*<string name="app_name">[^<]*</string>', '', t)
-    if t2 != t:
-        strings.write_text(t2)
-        s = gradle.read_text()
-        s = re.sub(r'(getByName\("release"\)\s*\{)', r'\1\n            resValue("string", "app_name", "Reachy Mini")', s, count=1)
-        gradle.write_text(s)
 
 m = pathlib.Path("src-tauri/gen/android/app/src/main/AndroidManifest.xml")
 s = m.read_text()
@@ -107,7 +90,7 @@ apk_path() {
 }
 
 app_id() {
-  echo "$(python3 -c 'import json;print(json.load(open("src-tauri/tauri.conf.json"))["identifier"].replace("-","_"))')$SUFFIX"
+  python3 -c 'import json;print(json.load(open("src-tauri/tauri.conf.json"))["identifier"].replace("-","_"))'
 }
 
 cmd_build() {
@@ -120,7 +103,7 @@ cmd_build() {
 cmd_install() {
   local apk; apk="$(apk_path)"
   [ -n "$apk" ] || { echo "no APK, run build first" >&2; exit 1; }
-  adb install -r "$apk"
+  adb install -r "$apk" | tail -1
   adb shell monkey -p "$(app_id)" -c android.intent.category.LAUNCHER 1 >/dev/null
   echo "installed + launched $(app_id)"
 }
