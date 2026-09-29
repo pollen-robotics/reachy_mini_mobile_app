@@ -14,6 +14,7 @@
  */
 import type { RobotPersonality } from '@/features/conv-app/client';
 
+import { getCachedAvatar } from './avatar-cache';
 import { BUILTIN_PERSONALITIES, DEFAULT_GLOW, getDefaultPersonality } from './builtin';
 import type { Personality } from './types';
 
@@ -58,10 +59,25 @@ function presentationFor(name: string): Personality | undefined {
   return PRESENTATION.get(presentationKey(name));
 }
 
+/** The robot's `avatar_id` for its own default drawing: nothing to fetch. */
+const ROBOT_DEFAULT_AVATAR_ID = 'default';
+
+/**
+ * The robot drawing worth fetching for a profile the phone ships no drawing
+ * for, or null. The robot's default is skipped: the phone has its own, and a
+ * sticker the phone generated must not be replaced by it.
+ */
+export function robotAvatarId(robot: RobotPersonality): string | null {
+  if (presentationFor(robot.name)) return null;
+  const id = robot.avatar_id;
+  return id && id !== ROBOT_DEFAULT_AVATAR_ID ? id : null;
+}
+
 /** Map one robot profile onto the shape the personality UI renders. */
 export function toPersonality(robot: RobotPersonality): Personality {
   const look = presentationFor(robot.name);
   const fallback = getDefaultPersonality();
+  const fetchedId = robotAvatarId(robot);
   return {
     // The robot's canonical name IS the id: it is what `personalities.apply`
     // takes, so nothing has to translate back.
@@ -73,7 +89,7 @@ export function toPersonality(robot: RobotPersonality): Personality {
     instructions: robot.instructions,
     voice: robot.voice,
     glow: look?.glow ?? DEFAULT_GLOW,
-    avatar: look?.avatar ?? fallback.avatar,
+    avatar: look?.avatar ?? (fetchedId ? getCachedAvatar(fetchedId) : null) ?? fallback.avatar,
   };
 }
 
