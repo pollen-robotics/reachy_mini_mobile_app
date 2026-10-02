@@ -11,6 +11,7 @@
     "os:allow-os-type",
     "auth-session:default",
     "keep-screen-on:default",
+    "spp:default",
     "blec:default",
     "blec:allow-check-permissions",
     "sharekit:allow-share-file",

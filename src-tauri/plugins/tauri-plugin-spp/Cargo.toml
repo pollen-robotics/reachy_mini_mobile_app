@@ -1,0 +1,14 @@
+[package]
+name = "tauri-plugin-spp"
+version = "0.1.0"
+edition = "2021"
+description = "Bluetooth Classic serial (SPP / RFCOMM) for Android: talk to the Reachy Mini wheeled base without the robot"
+links = "tauri-plugin-spp"
+publish = false
+
+[dependencies]
+tauri = { version = "2" }
+serde = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

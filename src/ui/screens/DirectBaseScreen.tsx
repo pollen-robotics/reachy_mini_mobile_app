@@ -1,0 +1,153 @@
+/**
+ * Drive the wheeled base straight from the phone over Bluetooth, without
+ * Reachy Mini. Reached from the robot list; same base controls and wheels
+ * joystick as the telepresence tab, over `useDirectBase` instead of the
+ * robot's daemon.
+ */
+import { useCallback, useEffect, useRef } from 'react';
+import { Box, Button, IconButton, MenuItem, Select, Stack, Typography } from '@mui/material';
+import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
+
+import { OverboardDriver } from '@/features/overboard/driver';
+import { BASE_DEVICE_NAME } from '@/features/overboard/direct-link';
+import { useDirectBase } from '@/features/overboard/useDirectBase';
+import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
+import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
+import BaseControls from '@/ui/panels/telepresence/BaseControls';
+import { WHEELS_COLOR, glassIconButtonSx, glassSurfaceSx } from '@/ui/panels/telepresence/glass';
+import { Joystick, WheelsIcon } from '@/ui/panels/telepresence/joystick';
+
+type DeflectionRef = React.RefObject<{ x: number; y: number }>;
+
+export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
+  const direct = useDirectBase();
+  const { base, link, devices, devicesError, address } = direct;
+  const connected = base.status?.link.connected ?? false;
+  const wheelsEnabled = base.phase === 'balancing';
+
+  const wheelsRef = useRef<DeflectionRef | null>(null);
+  const onWheelsRef = useCallback((ref: DeflectionRef) => {
+    wheelsRef.current = ref;
+  }, []);
+
+  // Drive loop only while the base balances; stopping it sends a STOP burst.
+  useEffect(() => {
+    if (!wheelsEnabled) return;
+    const driver = new OverboardDriver(
+      () => wheelsRef.current?.current ?? null,
+      () => link,
+    );
+    driver.start();
+    return () => driver.stop();
+  }, [wheelsEnabled, link]);
+
+  useKeepScreenOn(true);
+
+  const noBasePaired = devices !== null && devices.length === 0;
+
+  return (
+    <Box
+      sx={{
+        position: 'fixed',
+        inset: 0,
+        bgcolor: '#000',
+        color: '#fff',
+        overflow: 'hidden',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
+    >
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{ position: 'absolute', top: `calc(${LAYOUT.safeAreaTop} + 12px)`, left: 16, right: 16, alignItems: 'center' }}
+      >
+        <IconButton aria-label="Back" onClick={onBack} sx={glassIconButtonSx}>
+          <ArrowBackRoundedIcon />
+        </IconButton>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>Wheeled base</Typography>
+          <Typography sx={{ fontSize: TYPO.xs, color: 'rgba(255,255,255,0.7)' }}>
+            Direct Bluetooth, without Reachy Mini
+          </Typography>
+        </Box>
+      </Stack>
+
+      <Stack
+        spacing={1.5}
+        sx={{ position: 'absolute', top: `calc(${LAYOUT.safeAreaTop} + 84px)`, left: 16, right: 16 }}
+      >
+        {devicesError && (
+          <Typography sx={[glassSurfaceSx, { fontSize: TYPO.xs, borderRadius: 2, px: 1.5, py: 1 }]}>
+            {devicesError}
+          </Typography>
+        )}
+        {noBasePaired && (
+          <Typography sx={[glassSurfaceSx, { fontSize: TYPO.xs, borderRadius: 2, px: 1.5, py: 1 }]}>
+            No paired Bluetooth device. Pair "{BASE_DEVICE_NAME}" in Android Bluetooth settings, then come back.
+          </Typography>
+        )}
+        {devices && devices.length > 0 && !connected && (
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Select
+              size="small"
+              value={address ?? ''}
+              displayEmpty
+              onChange={(e) => direct.setAddress(String(e.target.value))}
+              sx={[glassSurfaceSx, { flex: 1, color: '#fff', borderRadius: 2, '.MuiSvgIcon-root': { color: '#fff' } }]}
+              MenuProps={{ sx: { zIndex: 1400 } }}
+            >
+              <MenuItem value="" disabled>
+                Choose the base
+              </MenuItem>
+              {devices.map((d) => (
+                <MenuItem key={d.address} value={d.address}>
+                  {d.name || d.address}
+                </MenuItem>
+              ))}
+            </Select>
+            <Button size="small" onClick={direct.refreshDevices} sx={{ color: '#fff' }}>
+              Refresh
+            </Button>
+          </Stack>
+        )}
+        {connected && (
+          <Box>
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={base.pending !== null}
+              onClick={() => base.run('disconnect')}
+              sx={{ color: '#fff', borderColor: 'rgba(255,255,255,0.5)' }}
+            >
+              Disconnect
+            </Button>
+          </Box>
+        )}
+      </Stack>
+
+      <Stack
+        spacing={1.5}
+        sx={{
+          position: 'absolute',
+          left: 20,
+          right: 20,
+          bottom: `calc(${LAYOUT.safeAreaBottom} + 28px)`,
+          alignItems: 'center',
+        }}
+      >
+        <BaseControls base={base} disabled={false} />
+        <Joystick
+          onDeflectionRef={onWheelsRef}
+          enabled={wheelsEnabled}
+          size={180}
+          label="Wheels"
+          disabledLabel={connected ? 'Stand up first' : 'Not connected'}
+          gamepadStick="left"
+          thumbIcon={<WheelsIcon />}
+          thumbColor={WHEELS_COLOR}
+        />
+      </Stack>
+    </Box>
+  );
+}

@@ -87,6 +87,7 @@ import {
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import AddIcon from '@mui/icons-material/Add';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import SportsEsportsOutlinedIcon from '@mui/icons-material/SportsEsportsOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
@@ -120,6 +121,8 @@ interface ScanScreenProps {
   onStartSetup: () => void;
   /** Open the standalone "Bluetooth tools" maintenance hub. */
   onOpenBleTools: () => void;
+  /** Drive the wheeled base over Bluetooth, without a robot. */
+  onOpenDirectBase: () => void;
   onSignOutRemote: () => void;
   /**
    * HF token is guaranteed to be present here (the App-level auth
@@ -135,6 +138,7 @@ export default function ScanScreen({
   onRemotePicked,
   onStartSetup,
   onOpenBleTools,
+  onOpenDirectBase,
   onSignOutRemote,
   token,
   username,
@@ -211,6 +215,7 @@ export default function ScanScreen({
         onToggleHelp={toggleHelp}
         isHelpOpen={helpOpen}
         onOpenTools={onOpenBleTools}
+        onOpenDirectBase={onOpenDirectBase}
       />
       {/* Inner scroll container. `m: 'auto'` on the column distributes
           free space equally on all four sides → fully centred (both
@@ -421,6 +426,7 @@ function HfAccountBar({
   onToggleHelp,
   isHelpOpen,
   onOpenTools,
+  onOpenDirectBase,
 }: {
   username: string | null;
   avatarUrl: string | null;
@@ -433,6 +439,8 @@ function HfAccountBar({
    * burying it inside the help overlay made it hard to find.
    */
   onOpenTools: () => void;
+  /** Drive the wheeled base straight over Bluetooth (no robot needed). */
+  onOpenDirectBase: () => void;
   /**
    * Mirror of the host's `helpOpen` state. Drives the icon swap
    * (`?` -> `✕`) and the aria-label so the same button reads as
@@ -595,6 +603,14 @@ function HfAccountBar({
           fading in / out alongside the `?` ↔ `✕` swap - no
           width / height jump. */}
       <Stack direction="row" spacing={0.25} sx={{ alignItems: 'center', flexShrink: 0 }}>
+        <IconButton
+          aria-label="Drive the wheeled base"
+          onClick={onOpenDirectBase}
+          color="primary"
+          sx={{ p: 1 }}
+        >
+          <SportsEsportsOutlinedIcon sx={{ fontSize: 22 }} />
+        </IconButton>
         <IconButton
           aria-label="Open Bluetooth tools"
           onClick={onOpenTools}

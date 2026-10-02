@@ -52,6 +52,7 @@ pub fn run() {
         // No-op on desktop; the JS wrapper falls back to the Web
         // Wake Lock API for the macOS / Linux preview builds.
         .plugin(tauri_plugin_keep_screen_on::init())
+        .plugin(tauri_plugin_spp::init())
         // BLE central for WiFi provisioning (scan/connect/notify against the
         // robot's GATT command service). Handles the Android BLE runtime +
         // permission plumbing; the JS side lives in `features/ble/bleWifi.ts`.

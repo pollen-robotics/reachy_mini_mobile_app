@@ -3713,6 +3713,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-os",
  "tauri-plugin-sharekit",
+ "tauri-plugin-spp",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4910,6 +4911,15 @@ dependencies = [
  "thiserror 2.0.18",
  "windows",
  "windows-collections",
+]
+
+[[package]]
+name = "tauri-plugin-spp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

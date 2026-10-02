@@ -68,6 +68,9 @@ tauri-plugin-auth-session = "0.2"
 # while the user is actively interacting with the robot (live
 # conversation or open iframe app) - see `useKeepScreenOn` consumers.
 tauri-plugin-keep-screen-on = "0.1"
+# Bluetooth Classic serial (SPP) to drive the wheeled base straight from the
+# phone, without the robot. In-repo plugin: src-tauri/plugins/tauri-plugin-spp.
+tauri-plugin-spp = { path = "plugins/tauri-plugin-spp" }
 
 # Native share sheet (Android Sharesheet / iOS Share Pane). Used as the
 # Android fallback for embedded apps that export a file: the Android
