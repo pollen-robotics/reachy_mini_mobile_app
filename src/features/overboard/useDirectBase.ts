@@ -11,12 +11,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   BASE_DEVICE_NAME,
+  defaultWireSigns,
   encodeDrive,
+  errorText,
   parseStatusLine,
   sppNative,
   WIRE,
   type BondedDevice,
   type DirectTelemetry,
+  type WireSigns,
 } from './direct-link';
 import { basePhase, type HoverboardStatus } from './hoverboard';
 import { emptyStats, type OverboardLink } from './link';
@@ -26,6 +29,19 @@ const ADDRESS_KEY = 'overboard.direct.address';
 /** A stop within this window of our own sit/STOP is ours, not the board's. */
 const CLIENT_STOP_WINDOW_MS = 1500;
 const TICK_MS = 500;
+/** No ack or status line this long after connecting = stock (silent) firmware. */
+const SILENT_AFTER_MS = 3000;
+const SIGNS_KEY = 'overboard.direct.signs.';
+
+function readSigns(address: string | null): WireSigns {
+  try {
+    const raw = address ? localStorage.getItem(SIGNS_KEY + address) : null;
+    if (raw) return JSON.parse(raw) as WireSigns;
+  } catch {
+    // Fall back to the default for this base.
+  }
+  return defaultWireSigns(address);
+}
 
 function readSavedAddress(): string | null {
   try {
@@ -51,6 +67,11 @@ export interface DirectBaseHandle {
   address: string | null;
   setAddress(address: string): void;
   refreshDevices(): void;
+  /** How forward / left map to the wire for the selected base. */
+  signs: WireSigns;
+  setSigns(signs: WireSigns): void;
+  /** Connected for a while without a single ack or status line: stock firmware. */
+  firmwareSilent: boolean;
 }
 
 export function useDirectBase(): DirectBaseHandle {
@@ -66,6 +87,11 @@ export function useDirectBase(): DirectBaseHandle {
   const [balancerRequested, setBalancerRequested] = useState(false);
   const [lastStop, setLastStop] = useState<HoverboardStatus['last_stop']>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [signs, setSignsState] = useState<WireSigns>(() => readSigns(address));
+  const signsRef = useRef(signs);
+  signsRef.current = signs;
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [heardFromBase, setHeardFromBase] = useState(false);
 
   const connectedRef = useRef(false);
   connectedRef.current = connected;
@@ -75,7 +101,20 @@ export function useDirectBase(): DirectBaseHandle {
   const setAddress = useCallback((a: string) => {
     setAddressState(a);
     saveAddress(a);
+    setSignsState(readSigns(a));
   }, []);
+
+  const setSigns = useCallback(
+    (s: WireSigns) => {
+      setSignsState(s);
+      try {
+        if (address) localStorage.setItem(SIGNS_KEY + address, JSON.stringify(s));
+      } catch {
+        // Remembered per base for convenience only.
+      }
+    },
+    [address],
+  );
 
   const refreshDevices = useCallback(() => {
     setDevicesError(null);
@@ -86,12 +125,18 @@ export function useDirectBase(): DirectBaseHandle {
         // First visit: pick the base if it's paired.
         setAddressState((current) => {
           if (current && list.some((d) => d.address === current)) return current;
-          const base = list.find((d) => d.name === BASE_DEVICE_NAME);
-          if (base) saveAddress(base.address);
-          return base?.address ?? current;
+          // Only auto-pick when there's a single base: several paired
+          // rmini_wheels look identical, the user has to choose.
+          const bases = list.filter((d) => d.name === BASE_DEVICE_NAME);
+          const base = bases.length === 1 ? bases[0] : undefined;
+          if (base) {
+            saveAddress(base.address);
+            setSignsState(readSigns(base.address));
+          }
+          return base?.address ?? null;
         });
       })
-      .catch((e: unknown) => setDevicesError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => setDevicesError(errorText(e)));
   }, []);
 
   // Native events: status lines, acks, link loss.
@@ -109,6 +154,7 @@ export function useDirectBase(): DirectBaseHandle {
           return;
         }
         const line = event.line;
+        setHeardFromBase(true);
         if (line.startsWith('ok ')) {
           setAcks(true);
           return;
@@ -124,7 +170,7 @@ export function useDirectBase(): DirectBaseHandle {
         prevState.current = t.state;
         setTelemetry(t);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => setError(errorText(e)));
     refreshDevices();
   }, [refreshDevices]);
 
@@ -164,13 +210,15 @@ export function useDirectBase(): DirectBaseHandle {
           try {
             await sppNative.connect(address);
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            // The ESP32 takes one client: the robot may be holding it.
-            throw new Error(`${msg}. Is Reachy Mini (or the Mac) connected to the base?`);
+            // The ESP32 takes one client: the robot or the Mac may be holding
+            // it, or this paired base is simply off.
+            throw new Error(`${errorText(e)}. Is this base on, and not connected to Reachy Mini or the Mac?`);
           } finally {
             setConnecting(false);
           }
           setConnected(true);
+          setConnectedAt(Date.now());
+          setHeardFromBase(false);
           setAcks(false);
           setLastStop(null);
           await write(WIRE.zero);
@@ -194,7 +242,7 @@ export function useDirectBase(): DirectBaseHandle {
         }
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
       } finally {
         setPending((p) => (p === command ? null : p));
       }
@@ -233,7 +281,7 @@ export function useDirectBase(): DirectBaseHandle {
       send(drive) {
         if (!connectedRef.current) return;
         stats.sent += 1;
-        void sppNative.write(encodeDrive(drive)).catch(() => {});
+        void sppNative.write(encodeDrive(drive, signsRef.current)).catch(() => {});
       },
       getStats: () => ({ ...stats }),
       dispose() {},
@@ -248,5 +296,8 @@ export function useDirectBase(): DirectBaseHandle {
     address,
     setAddress,
     refreshDevices,
+    signs,
+    setSigns,
+    firmwareSilent: connected && !heardFromBase && connectedAt !== null && now - connectedAt > SILENT_AFTER_MS,
   };
 }

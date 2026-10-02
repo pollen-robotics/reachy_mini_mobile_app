@@ -1,17 +1,34 @@
 import { describe, expect, it } from 'vitest';
 
-import { encodeDrive, parseStatusLine, WIRE } from './direct-link';
+import { defaultWireSigns, encodeDrive, errorText, parseStatusLine, WIRE } from './direct-link';
+
+const PROTO = defaultWireSigns('4C:75:25:E4:B1:D6');
 
 describe('encodeDrive', () => {
   it('flips throttle and turn like the daemon does for this base', () => {
     // App: forward + left positive. Wire (Rémi's proto): both negated.
-    expect(encodeDrive({ linear: 0.5, angular: 0 })).toBe('T-50\nR0\n');
-    expect(encodeDrive({ linear: 0, angular: 1 })).toBe('T0\nR-100\n');
-    expect(encodeDrive({ linear: -0.256, angular: -0.5 })).toBe('T26\nR50\n');
+    expect(encodeDrive({ linear: 0.5, angular: 0 }, PROTO)).toBe('T-50\nR0\n');
+    expect(encodeDrive({ linear: 0, angular: 1 }, PROTO)).toBe('T0\nR-100\n');
+    expect(encodeDrive({ linear: -0.256, angular: -0.5 }, PROTO)).toBe('T26\nR50\n');
   });
 
   it('clamps and never sends -0', () => {
-    expect(encodeDrive({ linear: 3, angular: -0 })).toBe('T-100\nR0\n');
+    expect(encodeDrive({ linear: 3, angular: -0 }, PROTO)).toBe('T-100\nR0\n');
+  });
+});
+
+describe('defaultWireSigns', () => {
+  it('flips only the turn on other bases (stock convention)', () => {
+    expect(encodeDrive({ linear: 0.5, angular: 0.5 }, defaultWireSigns('4C:75:25:E4:AE:2A'))).toBe('T50\nR-50\n');
+    expect(defaultWireSigns(null)).toEqual({ throttle: 1, turn: -1 });
+  });
+});
+
+describe('errorText', () => {
+  it('never shows [object Object]', () => {
+    expect(errorText({ message: 'Could not connect: read failed' })).toBe('Could not connect: read failed');
+    expect(errorText('Bluetooth is off')).toBe('Bluetooth is off');
+    expect(errorText({ code: 3 })).toBe('{"code":3}');
   });
 });
 

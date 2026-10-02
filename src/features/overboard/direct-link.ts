@@ -15,9 +15,9 @@
  * `ok <line>` acks. The stock firmware is silent: the link still drives,
  * the status just stays unknown.
  *
- * Signs: the app's drive is forward / left positive. Rémi's prototype
- * needs both flipped on the wire (the daemon's invert_throttle=True and
- * FIRMWARE_TURN_SIGN=-1), so do we.
+ * Signs: the app's drive is forward / left positive; what reaches the
+ * wheels depends on the base (wiring, INVERT_WHEEL flags). Defaults per
+ * base address in `defaultWireSigns`, switchable on the screen.
  *
  * Safety: the firmware has no link deadman and keeps the last T/R if the
  * link drops. The app zeroes the drive whenever it stops driving (release,
@@ -29,8 +29,33 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type { HoverboardFirmwareState } from './hoverboard';
 import type { OverboardDrive } from './types';
 
-export const THROTTLE_WIRE_SIGN = -1;
-export const TURN_WIRE_SIGN = -1;
+export interface WireSigns {
+  throttle: 1 | -1;
+  turn: 1 | -1;
+}
+
+/** Rémi's prototype: both flipped (the daemon's invert_throttle=True and FIRMWARE_TURN_SIGN=-1). */
+const REMI_PROTO_ADDRESS = '4C:75:25:E4:B1:D6';
+
+/**
+ * Other bases: the convention of Antun's wheels Space for the stock
+ * firmware (T+ forward, R+ turns right, so left is R-).
+ */
+export function defaultWireSigns(address: string | null): WireSigns {
+  return address?.toUpperCase() === REMI_PROTO_ADDRESS ? { throttle: -1, turn: -1 } : { throttle: 1, turn: -1 };
+}
+
+/** Plugin rejections arrive as strings or `{message}` objects, never Errors. */
+export function errorText(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message);
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
 
 /** Bluetooth name the base advertises. */
 export const BASE_DEVICE_NAME = 'rmini_wheels';
@@ -50,9 +75,9 @@ export interface DirectTelemetry {
 
 type PluginEvent = { type: 'line'; line: string } | { type: 'disconnected'; reason: string };
 
-export function encodeDrive(drive: OverboardDrive): string {
+export function encodeDrive(drive: OverboardDrive, signs: WireSigns): string {
   const pct = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 100) || 0;
-  return `T${pct(drive.linear) * THROTTLE_WIRE_SIGN || 0}\nR${pct(drive.angular) * TURN_WIRE_SIGN || 0}\n`;
+  return `T${pct(drive.linear) * signs.throttle || 0}\nR${pct(drive.angular) * signs.turn || 0}\n`;
 }
 
 export const WIRE = {

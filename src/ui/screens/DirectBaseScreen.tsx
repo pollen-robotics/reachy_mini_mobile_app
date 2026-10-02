@@ -5,7 +5,7 @@
  * robot's daemon.
  */
 import { useCallback, useEffect, useRef } from 'react';
-import { Box, Button, IconButton, MenuItem, Select, Stack, Typography } from '@mui/material';
+import { Box, Button, FormControlLabel, IconButton, MenuItem, Select, Stack, Switch, Typography } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 
 import { OverboardDriver } from '@/features/overboard/driver';
@@ -102,13 +102,44 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
               </MenuItem>
               {devices.map((d) => (
                 <MenuItem key={d.address} value={d.address}>
-                  {d.name || d.address}
+                  {/* Several bases share the name: the address tells them apart. */}
+                  {d.name || 'Unnamed'} · {d.address.slice(-5)}
                 </MenuItem>
               ))}
             </Select>
             <Button size="small" onClick={direct.refreshDevices} sx={{ color: '#fff' }}>
               Refresh
             </Button>
+          </Stack>
+        )}
+        {direct.firmwareSilent && (
+          <Typography sx={[glassSurfaceSx, { fontSize: TYPO.xs, borderRadius: 2, px: 1.5, py: 1 }]}>
+            This base runs the stock firmware: it never answers, so there is no live state, tilt or
+            battery, and STOP falls back to a sit-down (no instant motor cut). Drive with care.
+          </Typography>
+        )}
+        {address && (
+          <Stack direction="row" spacing={2}>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={direct.signs.throttle === -1}
+                  onChange={(_, on) => direct.setSigns({ ...direct.signs, throttle: on ? -1 : 1 })}
+                />
+              }
+              label={<Typography sx={{ fontSize: TYPO.xs }}>Reverse forward</Typography>}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={direct.signs.turn === 1}
+                  onChange={(_, on) => direct.setSigns({ ...direct.signs, turn: on ? 1 : -1 })}
+                />
+              }
+              label={<Typography sx={{ fontSize: TYPO.xs }}>Reverse turn</Typography>}
+            />
           </Stack>
         )}
         {connected && (
