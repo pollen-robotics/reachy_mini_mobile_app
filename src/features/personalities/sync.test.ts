@@ -38,7 +38,9 @@ function fakeClient(catalog: RobotPersonality[] = [DEFAULT]) {
     getPersonalities: vi.fn().mockResolvedValue(catalog),
     savePersonality: vi.fn().mockResolvedValue(undefined),
     deletePersonality: vi.fn().mockResolvedValue(undefined),
+    getAvatar: vi.fn().mockResolvedValue('<svg id="kitchen"/>'),
   } as unknown as ConvAppClient & {
+    getAvatar: ReturnType<typeof vi.fn>;
     getPersonalities: ReturnType<typeof vi.fn>;
     savePersonality: ReturnType<typeof vi.fn>;
     deletePersonality: ReturnType<typeof vi.fn>;
@@ -102,6 +104,24 @@ describe('syncPersonalitiesToRobot', () => {
     const guide = resolvePersonalityById(created.id);
     expect(guide?.avatar).toBe('data:image/png;base64,AAAA');
     expect(guide?.tagline).toBe('Knows the way');
+  });
+
+  it('fetches the drawing of a robot profile the phone does not ship, once', async () => {
+    const kitchen = { ...robotPersonality('cosmic_kitchen'), avatar_id: 'cosmic-kitchen' };
+    // The phone draws this one itself, so it is never fetched.
+    const teen = { ...robotPersonality('bored_teenager'), avatar_id: 'bored-teenager' };
+    // The robot's default drawing would only replace the phone's own.
+    const tedai = { ...robotPersonality('tedai'), avatar_id: 'default' };
+
+    const client = fakeClient([DEFAULT, kitchen, teen, tedai]);
+    await syncPersonalitiesToRobot(client);
+
+    expect(client.getAvatar.mock.calls).toEqual([['cosmic_kitchen']]);
+    expect(resolvePersonalityById('cosmic_kitchen')?.avatar).toContain('kitchen');
+
+    const later = fakeClient([DEFAULT, kitchen, teen, tedai]);
+    await syncPersonalitiesToRobot(later);
+    expect(later.getAvatar).not.toHaveBeenCalled();
   });
 
   it('drops a persona the robot no longer has', async () => {

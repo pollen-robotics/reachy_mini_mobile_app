@@ -34,6 +34,8 @@ export interface RobotPersonality {
   instructions: string;
   greeting: string;
   voice: string;
+  /** Stable per drawing: profiles sharing a file share an id. */
+  avatar_id?: string;
 }
 
 /** One remembered fact, as the robot stores it. */
@@ -82,6 +84,8 @@ export interface ConvAppClient {
 
   // Settings the phone owns and pushes at conversation start.
   getPersonalities(): Promise<RobotPersonality[]>;
+  /** The profile's avatar as SVG markup. */
+  getAvatar(name: string): Promise<string>;
   applyPersonality(name: string): Promise<void>;
   savePersonality(personality: RobotPersonality): Promise<void>;
   deletePersonality(name: string): Promise<void>;
@@ -124,6 +128,9 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     async getPersonalities() {
       return (await robot.rpcCall<{ personalities: RobotPersonality[] }>('personalities.all'))
         .personalities;
+    },
+    async getAvatar(name) {
+      return (await robot.rpcCall<{ svg: string }>('personalities.avatar', { name })).svg;
     },
     async applyPersonality(name) {
       await robot.rpcCall('personalities.apply', { name, persist: true });

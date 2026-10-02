@@ -13,7 +13,10 @@
  * A push that fails stays queued rather than being lost: the id is only cleared
  * once the robot has acknowledged it.
  */
-import type { ConvAppClient } from '@/features/conv-app/client';
+import type { ConvAppClient, RobotPersonality } from '@/features/conv-app/client';
+
+import { cacheAvatar, getCachedAvatar } from './avatar-cache';
+import { robotAvatarId } from './from-robot';
 
 import {
   cacheCatalog,
@@ -23,7 +26,8 @@ import {
 } from './store';
 
 export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<void> {
-  cacheCatalog(await client.getPersonalities());
+  const robots = await client.getPersonalities();
+  cacheCatalog(robots);
 
   const pending = getPendingWrites();
   const pushed = { dirty: [] as string[], deleted: [] as string[] };
@@ -61,4 +65,28 @@ export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<v
   }
 
   clearPendingWrites(pushed);
+
+  // Drawings the robot has and the phone does not; re-adopt so they show.
+  if (await fetchMissingAvatars(client, robots)) cacheCatalog(robots);
+}
+
+/** Fetch each missing robot drawing once. Resolves true if any landed. */
+async function fetchMissingAvatars(
+  client: ConvAppClient,
+  robots: readonly RobotPersonality[]
+): Promise<boolean> {
+  let fetched = false;
+  const seen = new Set<string>();
+  for (const robot of robots) {
+    const id = robotAvatarId(robot);
+    if (!id || seen.has(id) || getCachedAvatar(id)) continue;
+    seen.add(id);
+    try {
+      cacheAvatar(id, await client.getAvatar(robot.name));
+      fetched = true;
+    } catch (err) {
+      console.warn(`[personalities] could not fetch the avatar of ${robot.name}:`, err);
+    }
+  }
+  return fetched;
 }
