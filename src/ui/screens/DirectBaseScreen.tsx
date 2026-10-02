@@ -5,11 +5,21 @@
  * robot's daemon.
  */
 import { useCallback, useEffect, useRef } from 'react';
-import { Box, Button, FormControlLabel, IconButton, MenuItem, Select, Stack, Switch, Typography } from '@mui/material';
+import {
+  Box,
+  Button,
+  FormControlLabel,
+  IconButton,
+  MenuItem,
+  Select,
+  Stack,
+  Switch,
+  Typography,
+} from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 
 import { OverboardDriver } from '@/features/overboard/driver';
-import { BASE_DEVICE_NAME } from '@/features/overboard/direct-link';
+import { BASE_DEVICE_NAME, isBaseName } from '@/features/overboard/direct-link';
 import { useDirectBase } from '@/features/overboard/useDirectBase';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
@@ -35,7 +45,7 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
     if (!wheelsEnabled) return;
     const driver = new OverboardDriver(
       () => wheelsRef.current?.current ?? null,
-      () => link,
+      () => link
     );
     driver.start();
     return () => driver.stop();
@@ -43,7 +53,7 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
 
   useKeepScreenOn(true);
 
-  const noBasePaired = devices !== null && devices.length === 0;
+  const noBaseFound = devices !== null && !devices.some(d => isBaseName(d.name));
 
   return (
     <Box
@@ -60,13 +70,21 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
       <Stack
         direction="row"
         spacing={1.5}
-        sx={{ position: 'absolute', top: `calc(${LAYOUT.safeAreaTop} + 12px)`, left: 16, right: 16, alignItems: 'center' }}
+        sx={{
+          position: 'absolute',
+          top: `calc(${LAYOUT.safeAreaTop} + 12px)`,
+          left: 16,
+          right: 16,
+          alignItems: 'center',
+        }}
       >
         <IconButton aria-label="Back" onClick={onBack} sx={glassIconButtonSx}>
           <ArrowBackRoundedIcon />
         </IconButton>
         <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>Wheeled base</Typography>
+          <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>
+            Wheeled base
+          </Typography>
           <Typography sx={{ fontSize: TYPO.xs, color: 'rgba(255,255,255,0.7)' }}>
             Direct Bluetooth, without Reachy Mini
           </Typography>
@@ -75,40 +93,64 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
 
       <Stack
         spacing={1.5}
-        sx={{ position: 'absolute', top: `calc(${LAYOUT.safeAreaTop} + 84px)`, left: 16, right: 16 }}
+        sx={{
+          position: 'absolute',
+          top: `calc(${LAYOUT.safeAreaTop} + 84px)`,
+          left: 16,
+          right: 16,
+        }}
       >
         {devicesError && (
           <Typography sx={[glassSurfaceSx, { fontSize: TYPO.xs, borderRadius: 2, px: 1.5, py: 1 }]}>
             {devicesError}
           </Typography>
         )}
-        {noBasePaired && (
+        {noBaseFound && !connected && (
           <Typography sx={[glassSurfaceSx, { fontSize: TYPO.xs, borderRadius: 2, px: 1.5, py: 1 }]}>
-            No paired Bluetooth device. Pair "{BASE_DEVICE_NAME}" in Android Bluetooth settings, then come back.
+            {direct.scanning
+              ? 'Searching for bases nearby…'
+              : `No base found. Turn the base on, then tap Scan. A "${BASE_DEVICE_NAME}_<number>" in range shows up here without pairing it first.`}
           </Typography>
         )}
-        {devices && devices.length > 0 && !connected && (
+        {devices !== null && !connected && (
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <Select
-              size="small"
-              value={address ?? ''}
-              displayEmpty
-              onChange={(e) => direct.setAddress(String(e.target.value))}
-              sx={[glassSurfaceSx, { flex: 1, color: '#fff', borderRadius: 2, '.MuiSvgIcon-root': { color: '#fff' } }]}
-              MenuProps={{ sx: { zIndex: 1400 } }}
-            >
-              <MenuItem value="" disabled>
-                Choose the base
-              </MenuItem>
-              {devices.map((d) => (
-                <MenuItem key={d.address} value={d.address}>
-                  {/* Several bases share the name: the address tells them apart. */}
-                  {d.name || 'Unnamed'} · {d.address.slice(-5)}
+            {devices.length > 0 && (
+              <Select
+                size="small"
+                value={address ?? ''}
+                displayEmpty
+                onChange={e => direct.setAddress(String(e.target.value))}
+                sx={[
+                  glassSurfaceSx,
+                  {
+                    flex: 1,
+                    color: '#fff',
+                    borderRadius: 2,
+                    '.MuiSvgIcon-root': { color: '#fff' },
+                  },
+                ]}
+                MenuProps={{ sx: { zIndex: 1400 } }}
+              >
+                <MenuItem value="" disabled>
+                  Choose the base
                 </MenuItem>
-              ))}
-            </Select>
-            <Button size="small" onClick={direct.refreshDevices} sx={{ color: '#fff' }}>
-              Refresh
+                {devices.map(d => (
+                  <MenuItem key={d.address} value={d.address}>
+                    {/* Several bases share the name: the address tells them apart. */}
+                    {d.name || 'Unnamed'} · {d.address.slice(-5)}
+                    {d.bonded === false ? ' · new' : ''}
+                  </MenuItem>
+                ))}
+              </Select>
+            )}
+            <Box sx={{ flex: devices.length > 0 ? 0 : 1 }} />
+            <Button
+              size="small"
+              disabled={direct.scanning}
+              onClick={direct.refreshDevices}
+              sx={{ color: '#fff' }}
+            >
+              {direct.scanning ? 'Scanning…' : 'Scan'}
             </Button>
           </Stack>
         )}

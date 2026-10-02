@@ -67,6 +67,8 @@ export function isBaseName(name: string): boolean {
 export interface BondedDevice {
   name: string;
   address: string;
+  /** Paired with this phone; an unpaired base pairs on Connect. */
+  bonded?: boolean;
 }
 
 export interface DirectTelemetry {
@@ -114,6 +116,9 @@ export function parseStatusLine(line: string, now = Date.now()): DirectTelemetry
 export const sppNative = {
   bonded: async (): Promise<BondedDevice[]> =>
     (await invoke<{ devices: BondedDevice[] }>('plugin:spp|bonded')).devices,
+  /** Classic Bluetooth discovery; finds bases that aren't paired yet. */
+  scan: async (seconds = 8): Promise<BondedDevice[]> =>
+    (await invoke<{ devices: BondedDevice[] }>('plugin:spp|scan', { seconds })).devices,
   connect: (address: string) => invoke<void>('plugin:spp|connect', { address }),
   write: (data: string) => invoke<void>('plugin:spp|write', { data }),
   disconnect: () => invoke<void>('plugin:spp|disconnect'),

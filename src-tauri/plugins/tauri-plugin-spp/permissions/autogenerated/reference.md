@@ -6,6 +6,7 @@ Everything the direct base link needs
 
 - `allow-listen`
 - `allow-bonded`
+- `allow-scan`
 - `allow-connect`
 - `allow-write`
 - `allow-disconnect`
@@ -119,6 +120,32 @@ Enables the listen command without any pre-configured scope.
 <td>
 
 Denies the listen command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`spp:allow-scan`
+
+</td>
+<td>
+
+Enables the scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`spp:deny-scan`
+
+</td>
+<td>
+
+Denies the scan command without any pre-configured scope.
 
 </td>
 </tr>

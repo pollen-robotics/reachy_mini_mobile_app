@@ -343,6 +343,18 @@
           "markdownDescription": "Denies the listen command without any pre-configured scope."
         },
         {
+          "description": "Enables the scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scan",
+          "markdownDescription": "Enables the scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scan",
+          "markdownDescription": "Denies the scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the write command without any pre-configured scope.",
           "type": "string",
           "const": "allow-write",
@@ -355,10 +367,10 @@
           "markdownDescription": "Denies the write command without any pre-configured scope."
         },
         {
-          "description": "Everything the direct base link needs\n#### This default permission set includes:\n\n- `allow-listen`\n- `allow-bonded`\n- `allow-connect`\n- `allow-write`\n- `allow-disconnect`",
+          "description": "Everything the direct base link needs\n#### This default permission set includes:\n\n- `allow-listen`\n- `allow-bonded`\n- `allow-scan`\n- `allow-connect`\n- `allow-write`\n- `allow-disconnect`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Everything the direct base link needs\n#### This default permission set includes:\n\n- `allow-listen`\n- `allow-bonded`\n- `allow-connect`\n- `allow-write`\n- `allow-disconnect`"
+          "markdownDescription": "Everything the direct base link needs\n#### This default permission set includes:\n\n- `allow-listen`\n- `allow-bonded`\n- `allow-scan`\n- `allow-connect`\n- `allow-write`\n- `allow-disconnect`"
         }
       ]
     }

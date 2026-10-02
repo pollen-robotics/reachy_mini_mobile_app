@@ -1,3 +1,3 @@
 [default]
 description = "Everything the direct base link needs"
-permissions = ["allow-listen", "allow-bonded", "allow-connect", "allow-write", "allow-disconnect"]
+permissions = ["allow-listen", "allow-bonded", "allow-scan", "allow-connect", "allow-write", "allow-disconnect"]

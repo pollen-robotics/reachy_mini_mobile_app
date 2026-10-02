@@ -7,7 +7,10 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import app.tauri.PermissionState
 import app.tauri.annotation.Command
@@ -40,6 +43,11 @@ class WriteArgs {
     var data: String = ""
 }
 
+@InvokeArg
+class ScanArgs {
+    var seconds: Int = 8
+}
+
 /**
  * One Bluetooth Classic serial (SPP / RFCOMM) link, used to drive the Reachy
  * Mini wheeled base directly from the phone. Events go to the channel given
@@ -48,7 +56,9 @@ class WriteArgs {
  */
 @TauriPlugin(
     permissions = [
-        Permission(strings = [Manifest.permission.BLUETOOTH_CONNECT], alias = "bluetooth"),
+        // Android 12+: CONNECT to open sockets and read names, SCAN to discover
+        // (and even to cancel a discovery). Asked together, one prompt.
+        Permission(strings = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN], alias = "bluetooth"),
     ],
 )
 class SppPlugin(private val activity: Activity) : Plugin(activity) {
@@ -101,9 +111,68 @@ class SppPlugin(private val activity: Activity) : Plugin(activity) {
         if (!adapter.isEnabled) return invoke.reject("Bluetooth is off")
         val list = JSArray()
         for (d in adapter.bondedDevices) {
-            list.put(JSObject().put("name", d.name ?: "").put("address", d.address))
+            list.put(JSObject().put("name", d.name ?: "").put("address", d.address).put("bonded", true))
         }
         invoke.resolve(JSObject().put("devices", list))
+    }
+
+    /** Classic discovery for `seconds`; resolves every named device seen, paired or not. */
+    @Command
+    fun scan(invoke: Invoke) {
+        if (needsPermission()) {
+            requestPermissionForAlias("bluetooth", invoke, "scanAfterPermission")
+            return
+        }
+        startScan(invoke)
+    }
+
+    @PermissionCallback
+    fun scanAfterPermission(invoke: Invoke) {
+        if (needsPermission()) invoke.reject("Bluetooth permission denied") else startScan(invoke)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startScan(invoke: Invoke) {
+        val adapter = adapter() ?: return invoke.reject("No Bluetooth on this phone")
+        if (!adapter.isEnabled) return invoke.reject("Bluetooth is off")
+        val seconds = invoke.parseArgs(ScanArgs::class.java).seconds.coerceIn(2, 20)
+        val found = LinkedHashMap<String, JSObject>()
+        var finished = false
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != BluetoothDevice.ACTION_FOUND) return
+                val d: BluetoothDevice = (if (Build.VERSION.SDK_INT >= 33)
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                else
+                    @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)) ?: return
+                val name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME) ?: d.name ?: return
+                found[d.address] = JSObject().put("name", name).put("address", d.address)
+                    .put("bonded", d.bondState == BluetoothDevice.BOND_BONDED)
+            }
+        }
+        activity.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_FOUND))
+        val finish = Runnable {
+            if (finished) return@Runnable
+            finished = true
+            try { adapter.cancelDiscovery() } catch (_: SecurityException) {}
+            try { activity.unregisterReceiver(receiver) } catch (_: Exception) {}
+            val list = JSArray()
+            found.values.forEach { list.put(it) }
+            invoke.resolve(JSObject().put("devices", list))
+        }
+        try {
+            if (adapter.isDiscovering) adapter.cancelDiscovery()
+            if (!adapter.startDiscovery()) {
+                finished = true
+                activity.unregisterReceiver(receiver)
+                return invoke.reject("Could not start a Bluetooth scan")
+            }
+        } catch (e: SecurityException) {
+            finished = true
+            activity.unregisterReceiver(receiver)
+            return invoke.reject("Bluetooth permission missing: ${e.message}")
+        }
+        activity.window.decorView.postDelayed(finish, seconds * 1000L)
     }
 
     @Command
@@ -128,8 +197,11 @@ class SppPlugin(private val activity: Activity) : Plugin(activity) {
         io.execute {
             closeSocket()
             try {
-                adapter.cancelDiscovery()
+                // Discovery slows RFCOMM down; stopping it needs SCAN, which may
+                // be missing on a phone that only granted CONNECT. Not fatal.
+                try { adapter.cancelDiscovery() } catch (_: SecurityException) {}
                 val device = adapter.getRemoteDevice(address)
+                ensureBonded(device)
                 val s = openSocket(device)
                 socket = s
                 output = s.outputStream
@@ -140,6 +212,27 @@ class SppPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject("Could not connect: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Pair first when needed, so a base found by the scan connects without a
+     * trip to Android settings. Android may show its own "Pair?" prompt.
+     */
+    @SuppressLint("MissingPermission")
+    private fun ensureBonded(device: BluetoothDevice) {
+        if (device.bondState == BluetoothDevice.BOND_BONDED) return
+        if (device.bondState != BluetoothDevice.BOND_BONDING && !device.createBond()) {
+            throw IOException("pairing could not start")
+        }
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            when (device.bondState) {
+                BluetoothDevice.BOND_BONDED -> return
+                BluetoothDevice.BOND_NONE -> throw IOException("pairing refused or failed")
+            }
+            Thread.sleep(200)
+        }
+        throw IOException("pairing timed out")
     }
 
     /** Standard SPP UUID first; ESP32 BluetoothSerial also answers on RFCOMM channel 1. */

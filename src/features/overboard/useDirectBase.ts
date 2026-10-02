@@ -68,6 +68,8 @@ export interface DirectBaseHandle {
   address: string | null;
   setAddress(address: string): void;
   refreshDevices(): void;
+  /** Bluetooth discovery in progress. */
+  scanning: boolean;
   /** How forward / left map to the wire for the selected base. */
   signs: WireSigns;
   setSigns(signs: WireSigns): void;
@@ -117,11 +119,9 @@ export function useDirectBase(): DirectBaseHandle {
     [address],
   );
 
-  const refreshDevices = useCallback(() => {
-    setDevicesError(null);
-    sppNative
-      .bonded()
-      .then((list) => {
+  const [scanning, setScanning] = useState(false);
+
+  const showDevices = useCallback((list: BondedDevice[]) => {
         // Bases first, by number; other paired devices after.
         setDevices(
           [...list].sort(
@@ -143,9 +143,31 @@ export function useDirectBase(): DirectBaseHandle {
           }
           return base?.address ?? null;
         });
-      })
-      .catch((e: unknown) => setDevicesError(errorText(e)));
   }, []);
+
+  // Paired devices right away, then a scan that adds bases in range that
+  // aren't paired yet (they pair on Connect).
+  const refreshDevices = useCallback(() => {
+    setDevicesError(null);
+    let paired: BondedDevice[] = [];
+    sppNative
+      .bonded()
+      .then((list) => {
+        paired = list;
+        showDevices(list);
+        setScanning(true);
+        return sppNative.scan(8);
+      })
+      .then((seen) => {
+        const known = new Set(paired.map((d) => d.address));
+        const extra = seen.filter((d) => isBaseName(d.name) && !known.has(d.address));
+        // A paired base renamed by a reflash shows its new name in the scan.
+        const renamed = new Map(seen.filter((d) => isBaseName(d.name)).map((d) => [d.address, d.name]));
+        showDevices([...paired.map((d) => ({ ...d, name: renamed.get(d.address) ?? d.name })), ...extra]);
+      })
+      .catch((e: unknown) => setDevicesError(errorText(e)))
+      .finally(() => setScanning(false));
+  }, [showDevices]);
 
   // Native events: status lines, acks, link loss.
   useEffect(() => {
@@ -304,6 +326,7 @@ export function useDirectBase(): DirectBaseHandle {
     address,
     setAddress,
     refreshDevices,
+    scanning,
     signs,
     setSigns,
     firmwareSilent: connected && !heardFromBase && connectedAt !== null && now - connectedAt > SILENT_AFTER_MS,
