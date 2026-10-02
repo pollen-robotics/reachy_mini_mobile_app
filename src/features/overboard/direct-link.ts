@@ -35,14 +35,12 @@ export interface WireSigns {
 }
 
 /**
- * Both flipped on the wire, as measured on Rémi's prototype (the daemon's
- * invert_throttle=True and FIRMWARE_TURN_SIGN=-1). Used for every base: the
- * prototype's swapped INVERT_WHEEL flags compensate wiring that made it
- * unable to balance with the stock flags, so any base that balances maps
- * T and R to the wheels the same way. Overridable per base on the screen.
+ * Measured on base 1 (field firmware, 2026-10-02): T > 0 drives forward and
+ * R > 0 turns right, so only the app's left-positive turn is negated.
+ * "Reverse forward / Reverse turn" on the screen override it per base.
  */
 export function defaultWireSigns(_address: string | null): WireSigns {
-  return { throttle: -1, turn: -1 };
+  return { throttle: 1, turn: -1 };
 }
 
 /** Plugin rejections arrive as strings or `{message}` objects, never Errors. */
