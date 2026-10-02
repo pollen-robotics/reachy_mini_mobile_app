@@ -9,7 +9,7 @@ Read it before touching the codebase.
 Tauri 2 client (iOS / Android / desktop) for **Reachy Mini**. The user
 signs in with Hugging Face, picks a robot from their account, and gets:
 
-1. A live conversation panel (orb + audio bridge + HF realtime backend).
+1. A live conversation panel (orb + the conversation app running on the robot).
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
 3. A robot tab with camera feed + audio sliders + manual head joystick.
 
@@ -49,7 +49,8 @@ features/
 ├── auth/           HF OAuth + token storage + central robot listing
 ├── apps/           HF Hub app catalog fetching + embed URL builder
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
-└── conversation/   HF realtime voice engine + audio bridge + motion + tools + memory
+├── conv-app/       JSON-RPC client for the conversation app on the robot
+└── conversation/   session owner + connection FSM + the orb's host handle
 ```
 
 Each feature folder contains its own `types.ts`, services, React
@@ -80,23 +81,34 @@ Sibling modules in `features/robot-session/` provide the helpers
 
 The conversation engine instantiates ONE `RobotSession` per
 `mountConversation` and uses it as a building block for the
-high-level conversation flow (which it owns via the FSM + the
-HF realtime / motion / tools / audio pipeline).
+high-level conversation flow (which it owns via the FSM, driving the
+conversation app on the robot through `features/conv-app/`).
 
 #### `features/conversation/` - CONVERSATION layer (D)
 
-`engine/conversation-engine.ts` is the orchestrator. It owns the FSM,
-the conversation pipeline (HF realtime client, motion controllers,
-tool-call handler, audio level monitors), and the host-facing handle
-(`startConversation`, `setMicMuted`, `requestStop`, …). It DRIVES the
-session for everything session-related (start, wakeUp, release, …)
-and parks the FSM around the session's transitions.
+`engine/conversation-engine.ts` is the orchestrator. It owns the FSM
+and the host-facing handle (`startConversation`, `setMicMuted`,
+`requestStop`, …). It DRIVES the session for everything
+session-related (start, wakeUp, release, …) and parks the FSM around
+the session's transitions.
 
-**Extension point**: `tearDownConversationPipeline({ glide })` inside
-the engine is the single place every "stop the D layer" path goes
-through (`stopConversation`, `releaseSessionKeepAwake`, `teardown`).
-Adding a new pipeline actor (vision module, motion controller, audio
-helper) means wiring it there once instead of in three call-sites.
+The conversation itself runs ON THE ROBOT. The phone does not touch
+audio, motion, tools or the model: it starts the robot's conversation
+app through the daemon and observes it over JSON-RPC.
+`features/conv-app/robot-conversation.ts` is that half, and
+`features/conv-app/client.ts` is the typed surface it speaks. The
+robot owns the personalities, the language, the memory and the vision
+toggle; the phone pushes its own values at start
+(`features/conv-app/sync-settings.ts`), because the app is stopped and
+unreachable at the moment the user changes them. Anything below
+daemon v1.10.0 has no JSON-RPC relay and is refused with a caption
+pointing at the update gate.
+
+**Extension point**: `tearDownConversationPipeline()` inside the
+engine is the single place every "stop the D layer" path goes through
+(`stopConversation`, `releaseSessionKeepAwake`, `teardown`), and it
+stops the app on the robot. So stop, tab switch, Hub-app handoff and
+power-off all leave the robot with nothing running.
 
 **Audit point**: every timing budget that drives the session
 lifecycle and the iframe handoff lives in
@@ -163,6 +175,7 @@ Run `yarn lint` to check.
 | A new feature with its own state + hook + service | `features/<feature>/...` (mirror structure of `auth/` or `apps/`) |
 | A new robot/session lifecycle method | Add it to `RobotSession` class in `features/robot-session/RobotSession.ts` |
 | A new conversation orchestration step | Add it to the engine in `features/conversation/engine/conversation-engine.ts` (drives the session) |
+| A new conversation capability (tool, setting, model behaviour) | It belongs on the robot, in `reachy_mini_conversation_app`. Expose it over `/rpc` there, then add the call to `features/conv-app/client.ts` |
 | A pure helper used by 2+ features (Tauri plugin wrapper, browser API, etc.) | `shared/<area>/...` |
 | A new env var reader | `shared/env.ts` (centralised so we can grep all `import.meta.env` usage in one place) |
 | Static SVG / image | `src/assets/`, import via `@/assets/<file>.svg` |

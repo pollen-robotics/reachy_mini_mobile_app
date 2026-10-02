@@ -1,113 +1,43 @@
 /**
  * Reachy Mini · voice conversation engine.
  *
- * This file is the ORCHESTRATOR. It owns the conversation FSM and the
- * conversation pipeline (HF realtime, motion, tools, audio monitors),
- * and wires it to the `ConnectionController` (the transport layer:
- * SDK boot, WebRTC handshake, wake/sleep, the connection FSM). The two
- * sides are decoupled: they only talk through the lifecycle seam
- * (`onConnectionLive` / `onConnectionLost`), the `recordSend` feed, and
- * the `LiveSession` view of the live robot. The host-facing controls
- * (`handleOrbClick`, `handleHostStop`) live here and delegate transport
- * bits to the controller.
+ * This file is the ORCHESTRATOR. It owns the two state machines
+ * (connection + conversation) and wires the `ConnectionController` (the
+ * transport layer: SDK boot, WebRTC handshake, wake/sleep) to the
+ * conversation, which runs ON THE ROBOT in the conversation app and is
+ * started and observed over JSON-RPC (see
+ * `features/conv-app/robot-conversation.ts`). The phone no longer touches
+ * audio or motion: it starts the app through the daemon, follows its turn
+ * events into the conversation FSM, and stops it again.
  *
  * Flow driven by a single central circle button:
  *
- *   signed-out  → click → robot.login()  (HF OAuth redirect)
- *   authenticated → click → session.ensureConnected() / robot.connect()
- *   connected  → select a robot ⇒ ready
- *   ready      → click → session.start() + session.wakeUp() +
- *                        HF realtime WebSocket
- *   streaming  (listening / user-speaking / ai-speaking)
- *
- * Audio routing (robot = hub):
- *   robot mic track (received on robot.peerConnection) ─▶ HF realtime input PCM
- *   HF output PCM track                     ─▶ robot audio sender (replaceTrack)
+ *   signed-out    → tap → robot.login()  (HF OAuth redirect)
+ *   authenticated → tap → connect (SDK session + DataChannel, wake-up)
+ *   live + idle   → tap → apps.start on the robot, follow conversation.*
+ *   listening / user-speaking / processing / ai-speaking ← robot turn events
  *
  * Layered architecture
  * ────────────────────
  *
- *   features/robot-session/    ← SESSION layer (B + C in the
- *                                A/B/C/D model).
- *
- *     RobotSession.ts          The class. Owns the SDK robot ref,
- *                              selectedRobotId, knownRobots, the
- *                              `established` flag and the motor-mode
- *                              dedup cache. Exposes lifecycle methods
- *                              (start, wakeUp, sleepAndDisable, stop,
- *                              disconnect, ensureConnected, release,
- *                              reacquire, attachVideo) that wrap the
- *                              SDK + the helpers below with the right
- *                              preconditions and bookkeeping.
- *     start-session.ts         Per-attempt timeout + libnice retry
- *                              loop used by `session.start()` /
- *                              `session.reacquire()`.
- *     physical.ts              `wakeRobot` / `sleepAndDisableRobot`
- *                              with hard JS timeouts on top of the
- *                              SDK's own `timeoutMs`.
- *     session-guard.ts         Stop-intent counter (`expectedStop`).
- *     video-cache.ts           Cached `MediaStream` for late attachers.
- *     transport-monitor.ts     ICE candidate pair classifier.
- *     dc-health.ts             Data-channel failure streak monitor.
- *     background-resilience.ts visibility / audio-context resume.
- *     sdk-bootstrap.ts         Side-effect import of the vendored SDK.
- *     sdk-types.ts             `ReachyMiniInstance` shape.
- *     token-hash.ts            `#hf_token` URL-fragment plumbing.
- *     lifecycle-queue.ts       Module-level mount/unmount serialiser.
- *     phase.ts                 React-side phase derivation.
- *     useRobotSession.ts       React hook wrapper.
- *
- *   features/conversation/engine/  ← CONVERSATION layer (D).
- *
- *     conversation-engine.ts   ← THIS FILE. Conversation FSM, mount
- *                              lifecycle, the conversation pipeline
- *                              (runConversationParts /
- *                              tearDownConversationPipeline) and the
- *                              wiring that composes everything below.
- *     connection-controller.ts The TRANSPORT layer: SDK robot ref,
- *                              connection FSM (boot / doConnect /
- *                              doStart / teardown / renderRobotList),
- *                              dc-health, motor-mode sync, SDK event
- *                              wiring, background-tab resilience.
- *     conversation-error.ts    Shared realtime-failure → caption mapper.
- *     types.ts                 Public types (Handle, FSM states, …).
- *     settings.ts              Realtime voice / prompt defaults.
- *     memory.ts                Long-term memory (`remember` tool).
- *     audioLevelMonitor.ts     `MicLevelMonitor` + `AiLevelMonitor`
- *                              classes driving the orb visuals.
- *     audio-monitors-control.ts Engine-side wrapper over the two
- *                              monitor classes: lazy instantiation,
- *                              cached mic level, `waitForAiSilence`
- *                              fallback, audio-context resume.
- *     release-sdk-phone-mic.ts Releases the iOS phone-mic claim
- *                              after the realtime bridge has swapped
- *                              the WebRTC sender's track.
- *     robot-events.ts          SDK `addEventListener` wiring
- *                              (probes, robotsChanged, sessionStopped,
- *                              videoTrack, disconnected, error).
- *     host-handle.ts           `ConversationEngineHandle` factory:
- *                              every method the React host calls
- *                              (lifecycle, volume, joystick, …).
- *     trajectoryGate.ts        Daemon-trajectory yield flag.
- *     tools.ts                 Realtime tool descriptors + head poses.
- *
- *     bridge/huggingface-bridge.ts
- *                              HF realtime client lifecycle:
- *                              WebSocket handshake, audio sink, output
- *                              track routing to the robot speaker,
- *                              silent one-shot reconnect.
- *
- *     motion-control/
- *       daemon-head-control.ts Face tracking + speech wobble, run on
- *                              the robot, with the gates that park
- *                              tracking when the app owns the head.
- *       antennas-control.ts    `AntennasOscillator` lifecycle.
- *       pose-dispatcher.ts     30 Hz coalescing tick to the daemon.
- *
- *     tools/
- *       tool-call-handler.ts   Realtime tool dispatch (move_head,
- *                              play_move, remember, forget) + lazy
- *                              `MovePlayer` + pose-restore timer.
+ *   features/robot-session/       SESSION layer: `RobotSession`, the SDK
+ *                                 bring-up helpers, dc-health, transport
+ *                                 monitor, background resilience, the
+ *                                 `ReachyMiniInstance` shape.
+ *   features/conv-app/            The robot-side conversation: typed
+ *                                 JSON-RPC client + `RobotConversation`.
+ *   features/conversation/engine/ ← THIS layer.
+ *     conversation-engine.ts      Orchestrator (this file).
+ *     connection-controller.ts    Transport: SDK robot ref, connection FSM
+ *                                 (boot / connect / start / teardown),
+ *                                 dc-health, motor-mode sync, SDK events.
+ *     audio-startup-config.ts     XVF3800 tuning applied at bring-up.
+ *     robot-events.ts             SDK `addEventListener` wiring.
+ *     host-handle.ts              `ConversationEngineHandle` factory: every
+ *                                 method the React host calls.
+ *     engine-core/                The two FSMs + the boolean gates.
+ *     conversation-error.ts       Transport-failure → caption mapper.
+ *     types.ts                    Public types (Handle, FSM states, …).
  */
 
 // Side-effect import: attaches the bundled SDK to `window.ReachyMini`
@@ -118,46 +48,21 @@
 import "@/features/robot-session/sdk-bootstrap";
 
 import type { RobotInfo } from "@/features/robot-session/sdk-types";
-import {
-  createBackgroundAudioKeeper,
-  type BackgroundAudioKeeper,
-} from "../background-audio-keeper";
-import { createAudioMonitorsControl } from "./audio-monitors-control";
-import { loadSettings, type Settings } from "./settings";
-import { memoryStore } from "./memory";
-import { getActivePersonality, resolvePersonaVoice } from "@/features/personalities";
 import { RobotSession } from "@/features/robot-session/RobotSession";
 import {
   createLiveSession,
   type LiveSession,
 } from "@/features/robot-session/live-session";
-import { createToolCallHandler } from "./tools/tool-call-handler";
-import { createMotionOrchestrator } from "./motion-control/orchestrator";
-import {
-  createRealtimeBackendController,
-  type RealtimeBackendController,
-} from "./realtime/backend-controller";
-import type { RealtimeBackendDeps } from "./realtime/types";
-import { attachVision, getVisionPromptAppendix } from "../vision";
-import {
-  getActiveLanguageId,
-  getLanguagePromptAppendix,
-} from "../../conversation-language";
-import {
-  isMemoryEnabled,
-  isVisionEnabled,
-} from "../../conversation-settings";
-import { ROBOT_TOOLS } from "./tools";
-import { releaseSdkPhoneMic } from "./release-sdk-phone-mic";
 import { createConversationHandle } from "./host-handle";
+import { createRobotConversation } from "@/features/conv-app/robot-conversation";
 import { createEngineCore } from "./engine-core";
-import { formatConversationError } from "./conversation-error";
 import {
   createConnectionController,
   type ConnectionController,
 } from "./connection-controller";
 import type {
   ConnectionState,
+  ConversationLevelEvent,
   ConversationState,
   ConversationBringUpPhase,
   ConversationConnectionAttempt,
@@ -199,12 +104,6 @@ const preselectedRobotId: string | null =
   typeof options.preselectedRobotId === "string" && options.preselectedRobotId.length > 0
     ? options.preselectedRobotId
     : null;
-const getRobotHardwareId = (): string | null => {
-  const value = options.getRobotHardwareId?.();
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
 
 // Optional external state observers (mobile-side watchdog + orb).
 // `onConnectionStateChange` fires once per CONNECTION transition,
@@ -264,17 +163,10 @@ const getAudioLevelsTarget: () => HTMLElement | null = (() => {
   return () => null;
 })();
 
-// Audio-reactivity controller. Owns the lazy `MicLevelMonitor` +
-// `AiLevelMonitor` instances, captures the latest smoothed mic
-// level into a cached value (exposed through the handle's
-// `getMicLevel()` for rAF-driven visuals - no React re-render
-// per frame), and forwards every event to the host's optional
-// `onLevels` callback untouched. See `./audio-monitors-control.ts`.
-const audioMonitors = createAudioMonitorsControl({
-  getTarget: getAudioLevelsTarget,
-  onLevels:
-    typeof options.onLevels === "function" ? options.onLevels : null,
-});
+// Audio levels come from the robot (`conversation.level`); the
+// `RobotConversation` below writes them onto the orb and forwards them here.
+const onLevels: ((level: ConversationLevelEvent) => void) | null =
+  typeof options.onLevels === "function" ? options.onLevels : null;
 
 const onToolToast: ((toast: ConversationToolToastEvent) => void) | null =
   typeof options.onToolToast === "function" ? options.onToolToast : null;
@@ -299,7 +191,10 @@ const onDaemonVersionChange: ((version: string | null) => void) | null =
     ? options.onDaemonVersionChange
     : null;
 
+let lastDaemonVersion: string | null = null;
+
 const emitDaemonVersion = (version: string | null): void => {
+  lastDaemonVersion = version;
   if (!onDaemonVersionChange) return;
   try {
     onDaemonVersionChange(version);
@@ -359,7 +254,7 @@ const core = createEngineCore({
   convoActiveRequested: options.autoStartConversation !== false,
 });
 const { connection, conversation } = core;
-const { conversationStarted, convoActiveRequested, unmounted, movePlaying } =
+const { conversationStarted, convoActiveRequested, unmounted } =
   core.gates;
 // Terse aliases for the two FSM cursors. `setConnectionState` drives
 // the transport machine (connecting → live → released …);
@@ -411,58 +306,17 @@ void root;
 // The FSM cursor + the four boolean gates that used to live as `let`
 // variables here now live in `core` (see the engine-core block above).
 // Sub-systems below read/write them through `fsm.current()`,
-// `fsm.set(...)`, `conversationStarted.get()`, `movePlaying.on()`, etc.
+// `fsm.set(...)`, `conversationStarted.get()`, etc.
 
 // Selection state (`selectedRobotId`) and the SDK's robot list cache
 // (`knownRobots`) live in the `RobotSession` instance now. Use
 // `session.getSelectedRobotId()` / `session.setSelectedRobotId()` /
 // `session.setKnownRobots()` everywhere.
-const settings: Settings = loadSettings();
 
 // The SDK robot ref now lives in the `ConnectionController` (created
 // below). The conversation pipeline never touches it directly: it
 // reads the live robot through the `liveSession` transport seam, and
 // the host handle reads it through `connectionController.getRobot()`.
-
-// Realtime backend lifecycle is owned by the `RealtimeBackendController`
-// (see `./realtime/backend-controller.ts`): it holds the live
-// provider-specific bridge (client + audio sink + reconnect counters +
-// reconnecting flag), the vision side-channel wired onto that bridge,
-// and swaps both when the user picks a different provider in the
-// settings. The engine just observes the bridge's events and drives the
-// FSM + motion controllers in reaction.
-//
-// Declared as `let | null` because `toolCallHandler` is created EARLIER
-// in the closure (it has no dependency on the bridge) yet needs to
-// forward `sendToolResponse` / `look` calls at runtime. The late `=`
-// assignment below resolves the cycle without forward declarations or
-// class wrappers; the handlers read `backend?.bridge()` / `backend?.vision()`
-// lazily so the null window before assignment degrades to a no-op.
-let backend: RealtimeBackendController | null = null;
-
-// Head behaviour + antennas oscillator. The `AntennasOscillator`
-// instance and the daemon head commands live inside their respective
-// controllers, which expose a small `start / stop / freeze / resume`
-// surface so the engine doesn't have to manage their lifecycles
-// directly.
-//
-// Both controllers are stateless until first `start()` and reused
-// across sessions: neither is bound to a session-specific object any
-// more, now that the head wobble comes from the audio the robot
-// receives rather than from an analyser on the assistant track.
-
-// Mic + AI level monitors moved to `audioMonitors` (created above
-// alongside the host-callback wrapping). They drive the orb's
-// `--audio-level`, `--bar0..--bar4`, and `--ai-audio-level` CSS
-// custom properties from the inbound mic / assistant output tracks,
-// and expose the `waitForSilence` tail-end probe + the cached
-// `getMicLevel()` value used by the React orb.
-
-// `movePlaying` moved to `core.gates.movePlaying`. The
-// `tool-call-handler` module flips it through `onMoveStart` /
-// `onMoveEnd`; the wobbler + antennas controllers read it via
-// `isMovePlaying: movePlaying.get` so they can yield their 30 Hz
-// writes for the duration of a tool-driven choreography.
 
 // Session state holder. Owns the session-level state vars
 // (sessionEstablished, lastSetMotorMode), the stop-intent guard
@@ -597,24 +451,24 @@ const connectionController: ConnectionController = createConnectionController({
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
-  onConnectionLost: (opts) => onConnectionLost(opts),
-  resumeAudioContexts: () => resumeAudioContexts(),
+  onConnectionLost: () => onConnectionLost(),
   applyMicMuted: (muted) => applyMicMuted(muted),
-  // Deferred through a closure: `motion` is created further down (the
-  // orchestrator needs `recordSend`, which the controller provides),
-  // and the gate only fires on SDK resilience events long after boot.
-  setPoseSendGate: (gated) => motion.setSendGate(gated),
-  // Same deferred-closure trick: `backend` is built further down, and
-  // this only fires on an SDK re-dial, long after boot.
-  rebindRobotAudio: (robotInstance) => {
-    backend?.bridge().rebindRobotAudio(robotInstance);
-  },
 });
 
-// Motion's pose dispatcher feeds the controller's data-channel health
-// monitor through this sink (a failed-send streak escalates to a fatal
-// link error → full teardown).
-const recordSend = connectionController.recordSend;
+// The conversation runs on the robot. This starts the conversation app
+// through the daemon, waits for its backend, and follows its turn and level
+// events into the conversation FSM and the orb.
+const robotConversation = createRobotConversation({
+  getRobot: liveSession.getRobot,
+  getDaemonVersion: () => lastDaemonVersion,
+  isUnmounted: unmounted.get,
+  setConversationState,
+  currentConversationState: conversation.current,
+  emitErrorMessage,
+  getLevelsTarget: getAudioLevelsTarget,
+  onLevels,
+  onToolToast,
+});
 
 // ─── Host-driven controls ──────────────────────────────────────────────
 //
@@ -647,10 +501,9 @@ async function handleOrbClick(): Promise<void> {
         // while a conversation is already live / winding down.
         if (conversation.current() !== "idle") return;
         // Flip `convoActiveRequested` so re-entries do not bounce back
-        // to idle if the runner is interrupted, and run the
-        // conversation pipeline (HF backend handshake, audio pumps,
-        // motion modules). `runConversationParts` itself sets the
-        // conversation FSM to `starting` to keep the orb honest.
+        // to idle if the runner is interrupted, then start the app on
+        // the robot. `runConversationParts` flips the conversation FSM
+        // to `starting` itself so the orb reacts to the tap at once.
         convoActiveRequested.on();
         await runConversationParts();
         return;
@@ -673,19 +526,8 @@ async function handleOrbClick(): Promise<void> {
 }
 
 function applyMicMuted(next: boolean): void {
-  // Mute = gate the robot's mic track we forward to the HF backend, so the
-  // assistant stops HEARING the user (matches the MicOff button).
-  //
-  // This goes through the bridge, NOT `robot.setMicMuted()`: since
-  // SDK 1.8.0 the SDK no longer owns a getUserMedia stream, so its
-  // `setMicMuted` is a silent no-op (it gates a null `_micStream`).
-  // The bridge owns the robot-mic→backend routing, so the gate lives
-  // there and survives transparent reconnects.
-  try {
-    backend?.bridge().setMicMuted(next);
-  } catch (err) {
-    console.warn("[conversation-engine] setMicMuted failed:", err);
-  }
+  // The robot's app owns the mic; this is the same switch its own UI uses.
+  robotConversation.setMicMuted(next);
   if (onMicMutedChange) {
     try {
       onMicMutedChange(next);
@@ -740,563 +582,39 @@ async function onConnectionLive(): Promise<void> {
 }
 
 /**
- * The conversation pipeline proper: antenna oscillator, daemon-side
- * head behaviour, HF realtime client, mic plumbing. Split out of
- * `doStart` so the
- * mobile app can defer it until the user is in the right view (the
- * SDK / DataChannel is brought up earlier because it doubles as the
- * daemon proxy transport during wake-up).
+ * Bring the conversation up on the robot.
  *
- * Idempotent: repeated calls are safe. If the SDK isn't ready yet
- * (e.g. host called `startConversation()` before `startSession()`
- * resolved) the call is recorded via `convoActiveRequested` and
- * `doStart` will pick up where we left off.
+ * The connection (SDK + DataChannel) is already live; the robot's own
+ * conversation app does the talking. `robotConversation.start()` starts it
+ * through the daemon, waits for its backend, and follows its turn events
+ * into the conversation FSM. Idempotent: a second call while running is a
+ * no-op. On failure the caption already says why and the FSM is back on
+ * `idle`, so the orb shows "tap to start" again.
  */
 async function runConversationParts(): Promise<void> {
-  // The conversation pipeline depends ONLY on the transport seam
-  // (`LiveSession`), never on the connection layer's `robot` ref.
-  // Snapshot it once: if it's null the connection isn't live, so
-  // there's nothing to bring up.
-  const robot = liveSession.getRobot();
-  if (!robot || conversationStarted.get()) return;
-
-  emitErrorMessage(null);
+  if (!liveSession.getRobot() || conversationStarted.get()) return;
   conversationStarted.on();
-
-  // Arm the conversation `starting` state before the HF backend
-  // handshake so the orb flips to its connecting spinner the instant
-  // the user taps. The connection FSM is already `live` here (both the
-  // deferred tap-to-start path and the auto-start path reach this after
-  // `setConnectionState("live")` in `doStart`).
-  setConversationState("starting");
-
   if (unmounted.get()) {
     conversationStarted.off();
     return;
   }
-
-  // Grab the robot's incoming audio track (the robot's microphone).
-  const robotMicTrack = backend?.bridge().getRobotMicTrack(robot) ?? null;
-  if (!robotMicTrack) {
+  const live = await robotConversation.start();
+  if (!live) {
     conversationStarted.off();
-    connectionController.onFatalError(
-      new Error("Could not find the robot's microphone track"),
-    );
-    return;
-  }
-
-  audioMonitors.startMic(robotMicTrack);
-
-  // ─── TEMP MIC DIAGNOSTIC (remove once the no-input bug is solved) ──
-  // Answers one question: does the robot's *remote* audio track deliver
-  // RTP audio into this client? If `bytes`/`delta` grow while you speak
-  // near the robot, the daemon IS sending audio and the problem is the
-  // client reading it (WKWebView WebAudio on a remote track). If they
-  // stay flat, the daemon isn't transmitting mic audio on this peer.
-  // Read it in the app's devtools console, filter on "[MIC-DIAG]".
-  try {
-    const w = window as unknown as Record<string, unknown>;
-    const prevTimer = w.__micDiagTimer as ReturnType<typeof setInterval> | undefined;
-    if (prevTimer) clearInterval(prevTimer);
-    w.__robotPc = robot.peerConnection;
-    w.__robotMicTrack = robotMicTrack;
-    console.info("[MIC-DIAG] robot mic track:", {
-      id: robotMicTrack.id,
-      enabled: robotMicTrack.enabled,
-      muted: robotMicTrack.muted,
-      readyState: robotMicTrack.readyState,
-    });
-    let lastBytes = 0;
-    w.__micDiagTimer = setInterval(() => {
-      const pc = robot?.peerConnection;
-      if (!pc) return;
-      void pc.getStats().then((stats) => {
-        stats.forEach((report) => {
-          const r = report as unknown as Record<string, unknown>;
-          if (r.type === "inbound-rtp" && r.kind === "audio") {
-            const bytes = Number(r.bytesReceived ?? 0);
-            const delta = bytes - lastBytes;
-            lastBytes = bytes;
-            console.info(
-              "[MIC-DIAG] inbound audio",
-              "bytes=", bytes,
-              "delta=", delta,
-              "packets=", r.packetsReceived,
-              "audioLevel=", r.audioLevel,
-              "trackMuted=", robotMicTrack.muted,
-              "readyState=", robotMicTrack.readyState,
-            );
-          }
-        });
-      });
-    }, 1500);
-  } catch (err) {
-    console.warn("[MIC-DIAG] setup failed", err);
-  }
-
-  // Bring the motion stack up: pose dispatcher + antennas oscillator
-  // on our side, then face tracking + speech wobble handed to the
-  // daemon. Idempotent on re-acquire paths: a running dispatcher /
-  // oscillator stays running and the daemon commands are not resent.
-  motion.startSession();
-  // Spin up the silent keepalive AudioContext so iOS treats us as
-  // an actively-playing audio app and grants background time when
-  // the user locks the screen / switches apps mid-conversation.
-  // Idempotent (no-op if already running on a re-acquire path).
-  backgroundAudioKeeper.start();
-
-  // Reset the bridge's per-session retry budget so a stale failure
-  // from a previous run can't poison this fresh handshake.
-  backend?.bridge().resetReconnectCounter();
-  try {
-    await backend?.bridge().connect(robotMicTrack);
-  } catch (err) {
-    await recoverConversationStartFailure(err);
-    return;
-  }
-
-  // Vision is on-demand only (the `look` tool) - there is nothing to
-  // start here. The tool is gated on `isVisionEnabled()` at prompt /
-  // tool-list build time (see `composeInstructions` / `tools` below),
-  // so when scene-awareness is off the model never gets the `look`
-  // tool and no frame is ever captured.
-
-  // Every fresh conversation starts unmuted. Routed through the bridge
-  // (not the inert SDK `setMicMuted`) so it also clears any mute state
-  // a previous session left on the bridge — a new session must never
-  // inherit a stale mute. Transparent reconnects, by contrast, go
-  // through `bridge.connect()` which re-applies the live mute state.
-  backend?.bridge().setMicMuted(false);
-
-  // Release the iOS phone-microphone claim now that the bridge has
-  // replaced the SDK's outgoing audio sender with the assistant output
-  // track.
-  //
-  // Background. The vendored SDK calls `getUserMedia({audio:true})`
-  // during `startSession()` (`_enableMicrophone: true`) and stashes
-  // the resulting MediaStream as `_micStream`, then attaches its
-  // tracks to the WebRTC `_pc` as audio senders. Even though we
-  // immediately swap those senders' tracks for the assistant output via
-  // `audioSender.replaceTrack(...)` and the SDK's tracks have
-  // `enabled = false` from creation, iOS still considers the phone
-  // mic "captured" by the app for as long as a non-stopped
-  // MediaStreamTrack from `getUserMedia({audio})` is alive. Result:
-  // the orange mic indicator in the status bar stays lit while the
-  // user is on the Apps / Robot tab (or with the app
-  // backgrounded), even though no audio is actually being recorded
-  // from the phone.
-  //
-  // Stopping the captured tracks here releases the iOS audio
-  // session's mic claim. The WebRTC sender is unaffected because
-  // the bridge already swapped it for the assistant track above; the
-  // tracks we're stopping are dangling references the SDK no
-  // longer pumps data into. Idempotent against subsequent
-  // `runConversationParts()` calls (a re-acquire after release):
-  // the SDK regenerates `_micStream` on every `startSession`, so
-  // this stop runs exactly once per session.
-  releaseSdkPhoneMic(robot);
-}
-
-async function recoverConversationStartFailure(err: unknown): Promise<void> {
-  const detail = err instanceof Error ? err.message : String(err);
-  // Log the raw detail (allocator HTTP status / websocket close code+reason)
-  // so a prod failure is diagnosable from a single greppable line, even
-  // though the user only sees the friendly classification below.
-  console.warn("[conversation-engine] HF realtime startup failed:", detail);
-  emitErrorMessage(formatConversationError(detail));
-  await tearDownConversationPipeline({ glide: true });
-  if (!unmounted.get() && session.isEstablished()) {
-    // Transport stays `live`; just drop the conversation back to idle
-    // so the orb returns to its "tap to start" affordance.
-    setConversationState("idle");
+    convoActiveRequested.off();
   }
 }
-
-// ─── Tool-call handler ─────────────────────────────────────────────────
-//
-// `tools/tool-call-handler.ts` owns the realtime tool-call dispatch
-// (`move_head`, `play_move`, `remember`, `forget`), the lazily-created
-// `MovePlayer`, and the head-pose restore timer. We feed it the
-// engine state it needs through getters and listen to its
-// `onMoveStart` / `onMoveEnd` callbacks so the antennas and the
-// daemon's face tracking pause cleanly during a choreography.
-
-const toolCallHandler = createToolCallHandler({
-  getRobot: liveSession.getRobot,
-  // Late-bound through the bridge variable below: the bridge is
-  // created AFTER this handler so we can pass `handleToolCall` into
-  // its `onToolCall` deps without a circular reference. The `?? false`
-  // guard covers the brief window between the engine starting and
-  // the bridge being assigned (during which a tool call cannot
-  // realistically happen anyway), plus the post-teardown window
-  // after `unmount()`.
-  sendToolResponse: (callId, result) =>
-    backend?.bridge().sendToolResponse(callId, result) ?? false,
-  onMoveStart: () => {
-    movePlaying.on();
-  },
-  onMoveEnd: () => {
-    movePlaying.off();
-  },
-  // Coerce `null` (engine convention for "no observer") to `undefined`
-  // (handler convention from the optional callback shape).
-  onToolToast: onToolToast ?? undefined,
-  // Late-bound onto the `vision` handle declared further down (same
-  // forward-reference pattern as the bridge): the `look` tool calls
-  // through here. Before the backend is built `vision` is null and we
-  // return a graceful "unavailable" result rather than throw.
-  look: () =>
-    backend?.vision()?.look() ??
-    Promise.resolve({
-      ok: false,
-      message: "vision is not available in this session",
-    }),
-});
-
-// ─── Background-tab resilience ──────────────────────────────────────────
-//
-// Browsers throttle JS timers and may suspend AudioContexts in hidden
-// tabs. The WebRTC media stack itself is native and keeps running, so
-// the voice conversation continues to flow - but:
-//   - our VAD / mic-level analysers stop updating
-//   - AudioContexts can end up suspended on return (Safari, mobile)
-//   - a device sleep during silence can kill everything
-//
-// The keep-screen-on side of that mitigation lives in the host
-// (`RobotSessionScreen` via `useKeepScreenOn`). The engine only owns
-// the audio-context resume on visibility return, below.
-
-function resumeAudioContexts(): void {
-  // MicLevelMonitor and AiLevelMonitor each own a private AudioContext
-  // that some browsers (notably Safari / iOS) suspend when the tab goes
-  // into the background. Wake them back up. Nothing to do on the motion
-  // side: the antennas oscillator is purely time-based, and the head is
-  // animated by the daemon from audio we never touch.
-  audioMonitors.resumeAudio();
-}
-
-// `visibilitychange`, `pagehide` and `beforeunload` are all managed
-// from the `ConnectionController` (`installBackgroundResilience()`),
-// which wires this `resumeAudioContexts` hook for the audio-context
-// resume on visibility return.
-
-// ─── Motion stack ──────────────────────────────────────────────────────
-//
-// `motion-control/orchestrator.ts` bundles the three low-level motion
-// controllers - pose dispatcher, daemon head control, antennas
-// oscillator - behind a single named API the engine drives from FSM
-// transitions and lifecycle events:
-//
-//   - `startSession()` / `stop({ glide })` for the
-//     conversation-pipeline lifecycle.
-//   - `onUserSpeak()` / `onAiSpeak()` / `onListening()` /
-//     `onProcessing()` / `onReconnecting()` for per-FSM-event hooks
-//     (each captures "the right thing to do on the motion side in
-//     state X" in exactly one place).
-//
-// The head itself is animated on the robot: the daemon follows the
-// user's face and wobbles the head in time with the speech it plays,
-// which is both better synchronised and unavoidable, since at full
-// tracking weight the daemon discards any head pose we send. The
-// dispatcher is therefore left carrying the antennas oscillator's
-// 30 Hz writes (with SCTP backpressure throttling), plus the head
-// during tool-call gestures and choreographies, when tracking parks
-// and hands it back to us. See the orchestrator file's docstring for
-// the full rationale.
-const motion = createMotionOrchestrator({
-  getRobot: liveSession.getRobot,
-  isPoseLocked: () => toolCallHandler.isPoseLocked(),
-  isMovePlaying: movePlaying.get,
-  recordSend,
-});
-
-// Background-audio keepalive. Started alongside the conversation
-// pipeline so iOS keeps the WKWebView scheduled when the user puts
-// the phone in their pocket / locks the screen mid-conversation.
-// See `../background-audio-keeper.ts` for the rationale + the
-// matching `UIBackgroundModes = audio` declaration in the iOS
-// Info.plist (without which this runtime piece does nothing).
-const backgroundAudioKeeper: BackgroundAudioKeeper =
-  createBackgroundAudioKeeper();
-
-// ─── Hugging Face realtime bridge ──────────────────────────────────────
-//
-// `bridge/huggingface-bridge.ts` owns the realtime backend session:
-//   - Client construction + WebSocket handshake
-//   - Routing the AI output track to the robot's audio sender
-//   - Hidden `<audio>` sink so browsers actually pump the generated track
-//   - One-shot transparent reconnect on transient errors
-//   - Mic-track lookup helper
-//
-// The engine reacts to its events (`onStatus`, `onOutputTrack`,
-// `onToolCall`, `onReconnecting`, `onFatalError`) by driving the FSM,
-// motion controllers and audio analysers. The bridge itself stays
-// blissfully unaware of any of that.
-
-const realtimeBackendDeps: RealtimeBackendDeps = {
-  getRobot: liveSession.getRobot,
-  getRobotHardwareId,
-  // Resolve the voice lazily (re-read on every `buildClient()` so a
-  // personality switch picks up the right voice on the next reconnect,
-  // without rebuilding the bridge). `resolvePersonaVoice` snaps the
-  // persona's voice onto the HF catalog (falling back to the default
-  // for a stale/unknown id).
-  voice: () => {
-    const personality = getActivePersonality();
-    return resolvePersonaVoice(personality.voice);
-  },
-  // Keep the input transcriber's language in sync with the app-wide
-  // conversation-language preference (same id used for the prompt
-  // appendix below). Resolved lazily so a language switch is applied
-  // on the next connect / reconnect.
-  transcriptionLanguage: () => getActiveLanguageId(),
-  composeInstructions: () => {
-    // Snapshot the user's long-term memory ONCE per connection. We
-    // intentionally don't push live updates to the realtime session: a
-    // `remember` call mid-conversation already carries its fact in
-    // the tool-call transcript, so the model knows it's saved
-    // without needing the prompt to be re-pushed. The next session
-    // start (or an explicit reconnect) is when stale memories get
-    // refreshed.
-    //
-    // The base instructions come from the active personality (the
-    // built-in default when the user hasn't picked one) so a
-    // personality switch propagates here on the next reconnect
-    // without any explicit wiring beyond reading the store.
-    const personality = getActivePersonality();
-    const baseInstructions =
-      personality.instructions && personality.instructions.length > 0
-        ? personality.instructions
-        : settings.instructions;
-    // Memory + vision prompt fragments are each gated on the user's
-    // conversation setting (read lazily here, per reconnect). When a
-    // feature is off we drop its fragment entirely so the model isn't
-    // primed to use a capability it doesn't have this session (memory
-    // tools are also filtered out below at the bridge level).
-    const memoryFragment = isMemoryEnabled() ? memoryStore.formatForPrompt() : "";
-    const visionAppendix = isVisionEnabled() ? getVisionPromptAppendix() : "";
-    // Language nudge. Read lazily from the conversation-language
-    // store on every reconnect so a mid-session switch (user taps
-    // the flag picker -> ConversationPanel restarts the conv)
-    // propagates without any extra wiring. The fragment instructs
-    // the model to default to the selected language AND honour an
-    // explicit user request to switch, so the voice-driven
-    // "parle-moi en français" path keeps working on top of it.
-    const languageAppendix = getLanguagePromptAppendix(getActiveLanguageId());
-    const parts = [baseInstructions];
-    if (memoryFragment) parts.push(memoryFragment);
-    if (visionAppendix) parts.push(visionAppendix);
-    parts.push(languageAppendix);
-    return parts.join("\n\n");
-  },
-  // Tool set resolved lazily per connect so the memory toggle takes
-  // effect on the next conversation start without rebuilding the
-  // bridge. When long-term memory is off we drop the `remember` /
-  // `forget` tools so the model can't write to (or read intent about)
-  // a store the user has disabled; the matching prompt digest is also
-  // omitted in `composeInstructions` above.
-  tools: () => {
-    // Drop tools whose backing feature is off this session so the
-    // model isn't primed to call a capability it doesn't have:
-    //   - memory off → no `remember` / `forget`
-    //   - vision off → no `look` (camera is never read)
-    let list = ROBOT_TOOLS;
-    if (!isMemoryEnabled())
-      list = list.filter((t) => t.name !== "remember" && t.name !== "forget");
-    if (!isVisionEnabled()) list = list.filter((t) => t.name !== "look");
-    return list;
-  },
-  onStatus: (status) => {
-    // Once the user has tapped stop we park the orb in `stopping`
-    // (spinner) and run a gentle ~700 ms teardown. The HF bridge
-    // can still emit a trailing status as it closes (a final
-    // `connected` from the in-flight response completing, or a late
-    // activity flip) which would otherwise call
-    // `setConversationState("listening")` below and yank the orb
-    // straight back into a live look, swallowing the "ending" spinner.
-    // Ignore status events while we are deliberately winding down.
-    if (conversation.current() === "stopping") return;
-    switch (status) {
-      case "connected":
-        // The websocket backend marks `connected` after its queued
-        // PCM output has drained. We still use the analyser as a
-        // precise tail-end probe so the orb does not snap back to
-        // listening while Reachy's speaker is finishing the last
-        // syllable.
-        if (conversation.current() === "ai-speaking") {
-          audioMonitors.waitForAiSilence(400, () => {
-            // Another event may have moved us elsewhere in the
-            // meantime (user barge-in, error, teardown). Only
-            // transition if we're still the ones holding the mic.
-            if (conversation.current() === "ai-speaking") {
-              setConversationState("listening");
-              motion.onListening();
-            }
-          });
-        } else {
-          setConversationState("listening");
-          motion.onListening();
-        }
-        break;
-      case "user-speaking":
-        // Barge-in: cancel any queued "back to listening" from a
-        // previous response so it doesn't overwrite the new state a
-        // few hundred ms after the user started talking.
-        audioMonitors.cancelAiSilenceWait();
-        setConversationState("user-speaking");
-        motion.onUserSpeak();
-        break;
-      case "processing":
-        setConversationState("processing");
-        motion.onProcessing();
-        break;
-      case "ai-speaking":
-        audioMonitors.cancelAiSilenceWait();
-        setConversationState("ai-speaking");
-        motion.onAiSpeak();
-        break;
-    }
-  },
-  onOutputTrack: (track) => {
-    // The motion side doesn't need this track: the head wobble is
-    // derived on the robot from the audio it receives, so only the orb
-    // visualisation consumes it here.
-    audioMonitors.startAi(track);
-  },
-  onToolCall: (call) => {
-    void toolCallHandler.handleToolCall(call);
-  },
-  onReconnecting: () => {
-    // The bridge is rebuilding the realtime backend connection. Pause motion
-    // (their input track is about to go away) and drop the orb
-    // back to a transient conversation "starting" visual.
-    setConversationState("starting");
-    motion.onReconnecting();
-  },
-  onFatalError: (err) => {
-    void connectionController.onFatalError(err);
-  },
-};
-
-// ─── Realtime backend controller ───────────────────────────────────────
-//
-// Owns the live Hugging Face realtime bridge AND the vision side-channel
-// wired onto it. The bridge is built once here (there is a single
-// realtime backend); the lazily-read voice / prompt / tools let a
-// personality, language or tool change apply on the next conversation
-// start without rebuilding it.
-//
-// Vision side-channel
-// ───────────────────
-// On-demand scene awareness: the camera is read ONLY when the model
-// calls the `look` tool (no passive/periodic capture). The captured
-// frame is attached straight to the realtime conversation as an
-// `input_image` user item - the S2S backend is natively multimodal, so
-// the model sees the actual photo. No separate VLM call, no extra
-// credential or billing tier (mirrors the on-robot conversation app's
-// `camera` tool flow). Vision lives on the bridge's `RealtimePort`;
-// the controller keeps the build + attach in one place so the engine
-// can't forget to wire it.
-backend = createRealtimeBackendController({
-  bridgeDeps: realtimeBackendDeps,
-  attachVision: (bridge) =>
-    attachVision({
-      realtime: bridge.getRealtimePort(),
-      getVideoStream: liveSession.getVideoStream,
-    }),
-});
 
 /**
- * Common tear-down of the conversation pipeline (D layer).
- *
- * Three orchestration paths all need to stop the tool-call handler,
- * antennas / wobbler, realtime bridge, pose dispatcher, audio monitors
- * and background audio keeper in the exact same order:
- *
- *   - `stopConversation()`         park in `ready`, glide head to neutral
- *   - `releaseSessionKeepAwake()`  step 1, glide, then release + park `released`
- *   - `teardown()`                 no glide (gotoSleep owns the head trajectory)
- *
- * Before this helper existed the three blocks were copy-pasted and
- * drifted on every change (a new motion controller, a new gate to
- * reset). Centralising them here means a new actor in the pipeline
- * is added exactly once, in the right order, for every consumer.
- *
- * Behaviour
- * ─────────
- * Idempotent: no-op when `conversationStarted` is already false.
- *
- * `glide` controls whether we play the 700 ms ease-out to neutral
- * before stopping the pose dispatcher. `true` for the gentle stops
- * (the user sees the robot settle); `false` for the power-off path
- * where `gotoSleep` is about to take over the head + antennas
- * trajectory and any glide frame would just fight the daemon-side
- * sleep animation.
- *
- * Side effects (in order):
- *   1. clear `convoActiveRequested` so a concurrent
- *      `startConversation()` doesn't race the tear-down;
- *   2. stop vision / tools / wobbler / antennas synchronously;
- *   3. close the realtime bridge (awaited in parallel with the glide
- *      when `glide === true`);
- *   4. stop the pose dispatcher, level monitors, background keeper;
- *   5. mute the robot mic so any in-flight audio doesn't leak;
- *   6. clear `conversationStarted`.
- *
- * Post-pipeline tail (park ready / release / sleep+stopSession) is
- * the responsibility of each caller - this helper stays
- * agnostic of the surrounding orchestration.
+ * Stop the conversation on the robot and stop following it. Every path
+ * that used to wind the phone-side pipeline down (stop button, tab switch,
+ * Hub-app handoff, power-off) lands here, so "stop" always means the app on
+ * the robot stops too. Idempotent.
  */
-async function tearDownConversationPipeline({
-  glide,
-}: {
-  glide: boolean;
-}): Promise<void> {
+async function tearDownConversationPipeline(): Promise<void> {
   if (!conversationStarted.get()) return;
-
-  // Clear the convo-gate first: a stale `startConversation()` call
-  // racing the tear-down could otherwise resurrect the pipeline
-  // mid-shutdown. The other paths (teardown, release) also benefit
-  // from a clean slate for the next bring-up cycle.
   convoActiveRequested.off();
-
-  // Vision has no per-conversation lifecycle (on-demand `look` only),
-  // so nothing to stop here; it's released for good in `unmount`.
-  toolCallHandler.stop();
-  movePlaying.off();
-
-  // Tear the motion stack down. `glide: true` plays a 700 ms
-  // ease-out to neutral in parallel with the realtime bridge close
-  // so the next bring-up (or the iframe handover) inherits a
-  // calmly-posed robot. `glide: false` is the power-off path:
-  // `gotoSleep` is about to own the head + antennas trajectory
-  // and any glide frame here would just fight the daemon-side
-  // sleep animation. The orchestrator stops the dispatcher last,
-  // after the glide + bridge close have settled.
-  await motion.stop({
-    glide,
-    concurrentTask: backend?.bridge().close(),
-  });
-  backend?.bridge().resetReconnectCounter();
-
-  audioMonitors.stopMic();
-  audioMonitors.stopAi();
-  // Drop the keepalive AudioContext so iOS lets the audio session
-  // revert to `Ambient` and we go back to plain foreground-only
-  // behaviour. Safe to call when not running.
-  backgroundAudioKeeper.stop();
-
-  // Mute the robot mic so any in-flight audio frames don't leak
-  // through to the speakers while the realtime client is gone. Safe
-  // on the power-off path too - the session is about to be torn
-  // down anyway; `handleHostStop` unmutes again after `teardown()`
-  // returns when it's a stop-not-power-off.
-  try {
-    liveSession.getRobot()?.setMicMuted(true);
-  } catch {
-    // ignored
-  }
-
+  await robotConversation.stop();
   conversationStarted.off();
 }
 
@@ -1304,15 +622,12 @@ async function tearDownConversationPipeline({
  * Conversation-layer reaction to the connection going down.
  *
  * The connection → conversation seam's teardown half (mirror of
- * `onConnectionLive`). The connection teardown calls this so it
- * never has to know about the conversation pipeline internals: tear
- * the AI pipeline (`glide:false` on the power-off path where
- * `gotoSleep` owns the head trajectory) and drop the conversation
- * FSM to `idle`, so every teardown caller inherits a clean
+ * `onConnectionLive`): stop the app on the robot and drop the
+ * conversation FSM to `idle`, so every teardown caller inherits a clean
  * conversation cursor.
  */
-async function onConnectionLost({ glide }: { glide: boolean }): Promise<void> {
-  await tearDownConversationPipeline({ glide });
+async function onConnectionLost(): Promise<void> {
+  await tearDownConversationPipeline();
   setConversationState("idle");
 }
 
@@ -1372,9 +687,6 @@ const handle: ConversationEngineHandle = createConversationHandle({
   markUnmounted: unmounted.on,
   bootChain,
   disposeBackgroundResilience,
-  disposeVision: () => {
-    backend?.disposeVision();
-  },
   isConversationStarted: conversationStarted.get,
   isConvoActiveRequested: convoActiveRequested.get,
   setConvoActiveRequested: convoActiveRequested.set,
@@ -1388,7 +700,7 @@ const handle: ConversationEngineHandle = createConversationHandle({
   setConversationState,
   emitConnectionAttempt,
   onFatalError: connectionController.onFatalError,
-  getMicLevel: audioMonitors.getMicLevel,
+  getMicLevel: robotConversation.getMicLevel,
 });
 return handle;
 } // end of mountConversation

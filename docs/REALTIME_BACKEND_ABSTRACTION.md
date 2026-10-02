@@ -1,3 +1,8 @@
+> **Superseded.** The phone no longer talks to a realtime backend, so there is
+> nothing left to abstract on this side. The robot's conversation app owns that
+> choice now. Kept for the reasoning behind the backend seam, which moved with
+> it.
+
 # Realtime backend
 
 Status: **implemented**. Owner: `@tfrere`. Lives in

@@ -67,9 +67,6 @@ export interface ConversationHandleDeps {
   /** Dispose for the background-resilience module
    *  (`visibilitychange` / `pagehide` / `beforeunload` listeners). */
   disposeBackgroundResilience: () => void;
-  /** Dispose for the optional vision side-channel. No-op when
-   *  vision was never attached. */
-  disposeVision: () => void;
 
   // ─── Conversation gates (mutable) ─────────────────────────────────
   /** True once the conversation parts (antennas, backend, wobbler) are
@@ -83,11 +80,8 @@ export interface ConversationHandleDeps {
   // ─── Pipeline composites ──────────────────────────────────────────
   /** Bring the antennas oscillator + HF realtime + wobbler up. */
   runConversationParts: () => Promise<void>;
-  /** Tear the conversation pipeline down. `glide: true` adds a 700 ms
-   *  ease-out to neutral (`stopConversation` /
-   *  `releaseSessionKeepAwake` paths); `glide: false` skips it for
-   *  the power-off path where `gotoSleep` owns the head trajectory. */
-  tearDownConversationPipeline: (opts: { glide: boolean }) => Promise<void>;
+  /** Stop the conversation app on the robot and stop following it. */
+  tearDownConversationPipeline: () => Promise<void>;
   /** Full teardown: stop pipeline (no glide) + goto-sleep + stopSession. */
   teardown: () => Promise<void>;
 
@@ -123,7 +117,6 @@ export function createConversationHandle(
     markUnmounted,
     bootChain,
     disposeBackgroundResilience,
-    disposeVision,
     isConversationStarted,
     isConvoActiveRequested,
     setConvoActiveRequested,
@@ -182,11 +175,6 @@ export function createConversationHandle(
       } catch (err) {
         console.warn("[conversation-engine] teardown on unmount failed:", err);
       }
-      // Terminal release of the vision side-channel. `teardown()`
-      // above already stopped its timers; `dispose()` drops the
-      // in-memory state so a hypothetical late `start()` after
-      // unmount is a guaranteed no-op.
-      disposeVision();
       // The React layer decides whether to keep the robot instance
       // alive (e.g. to reuse the HF auth). For now we disconnect so
       // subsequent mounts get a fresh state.
@@ -243,7 +231,7 @@ export function createConversationHandle(
       // controllers, realtime bridge, audio monitors and gentle
       // ease-out to neutral. It is also idempotent when no
       // conversation is currently running.
-      await tearDownConversationPipeline({ glide: true });
+      await tearDownConversationPipeline();
       // Drop the conversation FSM back to `idle` so the host can call
       // `startConversation()` again later. The transport normally stays
       // `live` (SDK + DataChannel up, motors still enabled - the user
@@ -322,7 +310,7 @@ export function createConversationHandle(
       // the gentle ease-out so the iframe takes over a calmly-posed
       // robot. Helper is idempotent when no conversation is currently
       // active.
-      await tearDownConversationPipeline({ glide: true });
+      await tearDownConversationPipeline();
 
       // Step 2 - release the WebRTC session at central. The session
       // class encapsulates: setEstablished(false), reset motor cache,

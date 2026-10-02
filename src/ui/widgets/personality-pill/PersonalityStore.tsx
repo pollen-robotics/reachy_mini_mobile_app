@@ -64,6 +64,7 @@ import reachyCreateProfile from '@/assets/reachy-create-profile.svg';
 
 import {
   type Personality,
+  presentationKey,
   reorderCustomPersonalities,
   setActivePersonality,
   useActivePersonality,
@@ -235,15 +236,20 @@ export function PersonalityStore({
   useEffect(() => {
     if (customs.length === 0 && editMode) onEditModeChange(false);
   }, [customs.length, editMode, onEditModeChange]);
+  // The rails are keyed on the phone's own `builtin:<slug>` ids, while the
+  // catalog now carries the robot's names (`bored_teenager`,
+  // `mad_scientist_assistant`). `presentationKey` is the bridge. A robot
+  // profile the phone has no family for lands with the characters, last.
+  const familyKey = (p: Personality) => `builtin:${presentationKey(p.id)}`;
   const byFamily = (familyId: string) => {
     const order = FAMILY_ORDER[familyId] ?? [];
-    const rank = (id: string) => {
-      const i = order.indexOf(id);
+    const rank = (key: string) => {
+      const i = order.indexOf(key);
       return i === -1 ? Number.MAX_SAFE_INTEGER : i;
     };
     return catalog
-      .filter(p => p.kind === 'builtin' && FAMILY_BY_ID[p.id] === familyId)
-      .sort((a, b) => rank(a.id) - rank(b.id));
+      .filter(p => p.kind === 'builtin' && (FAMILY_BY_ID[familyKey(p)] ?? 'character') === familyId)
+      .sort((a, b) => rank(familyKey(a)) - rank(familyKey(b)));
   };
 
   // Apply the pick live, then let the host close the picker: tapping a
