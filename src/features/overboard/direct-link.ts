@@ -57,8 +57,12 @@ export function errorText(e: unknown): string {
   }
 }
 
-/** Bluetooth name the base advertises. */
+/** Bluetooth name the base advertises; the field firmware appends its number (rmini_wheels_3). */
 export const BASE_DEVICE_NAME = 'rmini_wheels';
+
+export function isBaseName(name: string): boolean {
+  return name === BASE_DEVICE_NAME || name.startsWith(`${BASE_DEVICE_NAME}_`);
+}
 
 export interface BondedDevice {
   name: string;

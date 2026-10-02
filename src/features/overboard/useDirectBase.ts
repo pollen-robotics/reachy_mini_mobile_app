@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BASE_DEVICE_NAME,
   defaultWireSigns,
+  isBaseName,
   encodeDrive,
   errorText,
   parseStatusLine,
@@ -121,13 +122,20 @@ export function useDirectBase(): DirectBaseHandle {
     sppNative
       .bonded()
       .then((list) => {
-        setDevices(list);
+        // Bases first, by number; other paired devices after.
+        setDevices(
+          [...list].sort(
+            (a, b) =>
+              Number(isBaseName(b.name)) - Number(isBaseName(a.name)) ||
+              a.name.localeCompare(b.name, undefined, { numeric: true }),
+          ),
+        );
         // First visit: pick the base if it's paired.
         setAddressState((current) => {
           if (current && list.some((d) => d.address === current)) return current;
           // Only auto-pick when there's a single base: several paired
           // rmini_wheels look identical, the user has to choose.
-          const bases = list.filter((d) => d.name === BASE_DEVICE_NAME);
+          const bases = list.filter((d) => isBaseName(d.name));
           const base = bases.length === 1 ? bases[0] : undefined;
           if (base) {
             saveAddress(base.address);
