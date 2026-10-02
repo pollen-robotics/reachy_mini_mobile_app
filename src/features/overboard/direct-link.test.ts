@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { defaultWireSigns, encodeDrive, errorText, parseStatusLine, WIRE } from './direct-link';
 
-const PROTO = defaultWireSigns('4C:75:25:E4:B1:D6');
+const PROTO = { throttle: -1, turn: -1 } as const;
 
 describe('encodeDrive', () => {
   it('flips throttle and turn like the daemon does for this base', () => {
@@ -18,9 +18,9 @@ describe('encodeDrive', () => {
 });
 
 describe('defaultWireSigns', () => {
-  it('uses the prototype mapping for every base', () => {
-    expect(encodeDrive({ linear: 0.5, angular: 0.5 }, defaultWireSigns('4C:75:25:E4:AE:2A'))).toBe('T-50\nR-50\n');
-    expect(defaultWireSigns(null)).toEqual({ throttle: -1, turn: -1 });
+  it('follows the field convention: T+ forward, R+ right', () => {
+    expect(encodeDrive({ linear: 0.5, angular: 0.5 }, defaultWireSigns('4C:75:25:E4:AE:2A'))).toBe('T50\nR-50\n');
+    expect(defaultWireSigns(null)).toEqual({ throttle: 1, turn: -1 });
   });
 });
 
