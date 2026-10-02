@@ -19,7 +19,7 @@ import {
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 
 import { OverboardDriver } from '@/features/overboard/driver';
-import { BASE_DEVICE_NAME, isBaseName } from '@/features/overboard/direct-link';
+import { BASE_DEVICE_NAME, defaultWireSigns, isBaseName } from '@/features/overboard/direct-link';
 import { useDirectBase } from '@/features/overboard/useDirectBase';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
@@ -53,6 +53,8 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
 
   useKeepScreenOn(true);
 
+  const defaults = defaultWireSigns(address);
+  const flip = (s: 1 | -1): 1 | -1 => (s === 1 ? -1 : 1);
   const noBaseFound = devices !== null && !devices.some(d => isBaseName(d.name));
 
   return (
@@ -166,8 +168,15 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
               control={
                 <Switch
                   size="small"
-                  checked={direct.signs.throttle === -1}
-                  onChange={(_, on) => direct.setSigns({ ...direct.signs, throttle: on ? -1 : 1 })}
+                  // On = reversed relative to the default mapping, so both
+                  // switches start off on every base.
+                  checked={direct.signs.throttle !== defaults.throttle}
+                  onChange={(_, on) =>
+                    direct.setSigns({
+                      ...direct.signs,
+                      throttle: on ? flip(defaults.throttle) : defaults.throttle,
+                    })
+                  }
                 />
               }
               label={<Typography sx={{ fontSize: TYPO.xs }}>Reverse forward</Typography>}
@@ -176,8 +185,13 @@ export default function DirectBaseScreen({ onBack }: { onBack: () => void }) {
               control={
                 <Switch
                   size="small"
-                  checked={direct.signs.turn === 1}
-                  onChange={(_, on) => direct.setSigns({ ...direct.signs, turn: on ? 1 : -1 })}
+                  checked={direct.signs.turn !== defaults.turn}
+                  onChange={(_, on) =>
+                    direct.setSigns({
+                      ...direct.signs,
+                      turn: on ? flip(defaults.turn) : defaults.turn,
+                    })
+                  }
                 />
               }
               label={<Typography sx={{ fontSize: TYPO.xs }}>Reverse turn</Typography>}
