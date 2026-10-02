@@ -34,15 +34,15 @@ export interface WireSigns {
   turn: 1 | -1;
 }
 
-/** Rémi's prototype: both flipped (the daemon's invert_throttle=True and FIRMWARE_TURN_SIGN=-1). */
-const REMI_PROTO_ADDRESS = '4C:75:25:E4:B1:D6';
-
 /**
- * Other bases: the convention of Antun's wheels Space for the stock
- * firmware (T+ forward, R+ turns right, so left is R-).
+ * Both flipped on the wire, as measured on Rémi's prototype (the daemon's
+ * invert_throttle=True and FIRMWARE_TURN_SIGN=-1). Used for every base: the
+ * prototype's swapped INVERT_WHEEL flags compensate wiring that made it
+ * unable to balance with the stock flags, so any base that balances maps
+ * T and R to the wheels the same way. Overridable per base on the screen.
  */
-export function defaultWireSigns(address: string | null): WireSigns {
-  return address?.toUpperCase() === REMI_PROTO_ADDRESS ? { throttle: -1, turn: -1 } : { throttle: 1, turn: -1 };
+export function defaultWireSigns(_address: string | null): WireSigns {
+  return { throttle: -1, turn: -1 };
 }
 
 /** Plugin rejections arrive as strings or `{message}` objects, never Errors. */

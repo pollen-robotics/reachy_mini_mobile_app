@@ -18,9 +18,9 @@ describe('encodeDrive', () => {
 });
 
 describe('defaultWireSigns', () => {
-  it('flips only the turn on other bases (stock convention)', () => {
-    expect(encodeDrive({ linear: 0.5, angular: 0.5 }, defaultWireSigns('4C:75:25:E4:AE:2A'))).toBe('T50\nR-50\n');
-    expect(defaultWireSigns(null)).toEqual({ throttle: 1, turn: -1 });
+  it('uses the prototype mapping for every base', () => {
+    expect(encodeDrive({ linear: 0.5, angular: 0.5 }, defaultWireSigns('4C:75:25:E4:AE:2A'))).toBe('T-50\nR-50\n');
+    expect(defaultWireSigns(null)).toEqual({ throttle: -1, turn: -1 });
   });
 });
 
