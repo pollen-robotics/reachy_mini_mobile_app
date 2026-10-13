@@ -82,6 +82,12 @@ const IP_POLL_TIMEOUT_MS = 12_000;
 // Phone→robot HTTP probe after the IP is known (the true "same network" test).
 const REACHABILITY_TIMEOUT_MS = 5_000;
 
+// iOS WKWebView: arming CoreBluetooth in the same frame as the wizard enter
+// animation leaves a white screen until the app is backgrounded. Defer the
+// first scan until after two animation frames + a short settle window so
+// "Find me" is painted before the system Bluetooth sheet appears.
+const BLE_SCAN_BOOT_DELAY_MS = 650;
+
 // Robot-side OAuth entry point: opening this in the system browser makes the
 // robot's daemon redirect to Hugging Face, handle the callback, store its own
 // token, and start the central relay. We reach the robot STRICTLY by the LAN
@@ -224,6 +230,8 @@ export interface SetupMachine {
   phase: SetupPhase;
   error: SetupError | null;
   scanning: boolean;
+  /** True during the post-mount settle window before the first BLE scan arms. */
+  scanBooting: boolean;
   devices: BleDevice[];
   networks: string[];
   selectedSsid: string | null;
@@ -274,12 +282,13 @@ export interface SetupMachine {
 }
 
 export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine {
-  // The wizard opens straight on the scan step: there's no separate intro or
-  // permission screen - the OS Bluetooth permission prompt is raised by the
-  // scan attempt itself (see `startScanning`'s error handling).
+  // The wizard opens on the scan step. The OS Bluetooth permission prompt is
+  // raised by the scan attempt itself; the first attempt is deferred briefly
+  // so iOS can finish painting the WebView (see `scheduleBleScanStart`).
   const [phase, setPhase] = useState<SetupPhase>('scanning');
   const [error, setError] = useState<SetupError | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanBooting, setScanBooting] = useState(true);
   const [devices, setDevices] = useState<BleDevice[]>([]);
   const [networks, setNetworks] = useState<string[]>([]);
   const [selectedSsid, setSelectedSsid] = useState<string | null>(null);
@@ -310,6 +319,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   // `resolvingIp` on exit, so a stale loop dying late can't wipe the flag a
   // newer loop just set.
   const ipResolveSeqRef = useRef(0);
+  const scanBootTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Set once the native scanner has been armed at least once (refocus resume). */
+  const bleScanEverStartedRef = useRef(false);
 
   const stopScanLoop = useCallback(async () => {
     const ctrl = scanCtrlRef.current;
@@ -321,6 +333,10 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (scanBootTimerRef.current) {
+        clearTimeout(scanBootTimerRef.current);
+        scanBootTimerRef.current = null;
+      }
       // Best-effort: stop scanning + drop the BLE link when the wizard unmounts.
       void scanCtrlRef.current?.stop();
       scanCtrlRef.current = null;
@@ -385,6 +401,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   // sweep. Restarted on refocus and explicit rescan; stopped before connect.
   const startScanning = useCallback(() => {
     const runId = (runIdRef.current += 1);
+    setScanBooting(false);
+    bleScanEverStartedRef.current = true;
     setError(null);
     setDevices([]);
     setScanning(true);
@@ -416,26 +434,70 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
   const rescan = useCallback(() => startScanning(), [startScanning]);
 
-  // Auto-start the BLE scan on mount: the wizard lands directly on the scan
-  // step now (no intro screen to tap through). Intentionally NO mount-guard
-  // ref: under StrictMode the effect is cleaned up + re-run, and a persisted
-  // guard would skip the restart and leave the view with a dead (stopped)
-  // scanner - which showed up as an empty list. `startScanning` is stable and
+  const scheduleBleScanStart = useCallback(
+    (mode: 'deferred' | 'immediate') => {
+      if (scanBootTimerRef.current) {
+        clearTimeout(scanBootTimerRef.current);
+        scanBootTimerRef.current = null;
+      }
+
+      const launch = (): void => {
+        scanBootTimerRef.current = null;
+        if (!mountedRef.current) return;
+        if (document.visibilityState !== 'visible') {
+          // Permission sheet or browser handoff can hide us; retry instead of
+          // skipping (skipping looked like a dead app).
+          scanBootTimerRef.current = window.setTimeout(launch, 150);
+          return;
+        }
+        startScanning();
+      };
+
+      if (mode === 'immediate') {
+        setScanBooting(false);
+        launch();
+        return;
+      }
+
+      setScanBooting(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scanBootTimerRef.current = window.setTimeout(launch, BLE_SCAN_BOOT_DELAY_MS);
+        });
+      });
+    },
+    [startScanning],
+  );
+
+  // Auto-start the BLE scan after the wizard paints (deferred). Intentionally
+  // NO mount-guard ref: under StrictMode the effect is cleaned up + re-run, and
+  // a persisted guard would skip the restart and leave the view with a dead
+  // (stopped) scanner. `scheduleBleScanStart` is stable and `startScanning`
   // bumps the shared scan token, so a dev double-invoke just supersedes its
   // own previous loop; on unmount the scanner is torn down by the cleanup
   // effect above.
   useEffect(() => {
-    startScanning();
-  }, [startScanning]);
+    scheduleBleScanStart('deferred');
+    return () => {
+      if (scanBootTimerRef.current) {
+        clearTimeout(scanBootTimerRef.current);
+        scanBootTimerRef.current = null;
+      }
+    };
+  }, [scheduleBleScanStart]);
 
   // Re-scan when the app comes back to the foreground while the scan view is
   // showing: mobile OSes kill an in-flight BLE scan when the app backgrounds,
-  // so without this the list would silently stop refreshing on return.
+  // so without this the list would silently stop refreshing on return. Only
+  // resume after the user has already entered the scan flow once (avoid firing
+  // BLE during the initial deferred window).
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && phaseRef.current === 'scanning') {
-        startScanning();
-      }
+      if (document.visibilityState !== 'visible') return;
+      if (phaseRef.current !== 'scanning') return;
+      if (!bleScanEverStartedRef.current) return;
+      if (scanBootTimerRef.current) return;
+      startScanning();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
@@ -969,7 +1031,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     const target = error?.recoverPhase ?? 'scanning';
     setError(null);
     if (target === 'scanning') {
-      startScanning();
+      scheduleBleScanStart('immediate');
       return;
     }
     if (target === 'wifi-scanning') {
@@ -984,7 +1046,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     // password, …). Bumping runId invalidates any stale chain.
     runIdRef.current += 1;
     setPhase(target);
-  }, [error, startScanning, rescanWifi]);
+  }, [error, scheduleBleScanStart, rescanWifi]);
 
   // Step back one logical stage instead of bailing out of the whole wizard.
   // Any in-flight async chain is aborted first (runId bump). Returning to the
@@ -999,7 +1061,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       case 'connecting':
       case 'pin':
         void bleDisconnect();
-        startScanning();
+        scheduleBleScanStart('immediate');
         return;
       case 'authenticating':
       case 'wifi-already-connected':
@@ -1034,7 +1096,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         // scanning / done / error: no in-flow previous step.
         return;
     }
-  }, [startScanning, resolveRobotIp]);
+  }, [scheduleBleScanStart, resolveRobotIp]);
 
   const canGoBack = phase !== 'scanning' && phase !== 'done' && phase !== 'error';
 
@@ -1059,13 +1121,15 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setNetworks([]);
     setSelectedSsid(null);
     setResult(null);
-    startScanning();
-  }, [stopScanLoop, startScanning]);
+    setScanBooting(true);
+    scheduleBleScanStart('deferred');
+  }, [stopScanLoop, scheduleBleScanStart]);
 
   return {
     phase,
     error,
     scanning,
+    scanBooting,
     devices,
     networks,
     selectedSsid,
