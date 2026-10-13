@@ -34,6 +34,7 @@ tauri-plugin-http = "2"
 # Keep it in lock-step with the npm `@mnlphlp/plugin-blec` version.
 tauri-plugin-blec = "0.17"
 
+
 # Opens a URL in the user's default browser. Used for non-auth flows
 # (e.g. opening the conversation Space `*.hf.space` directly in Safari
 # when the user explicitly asks to leave the app, or surfacing support
@@ -101,3 +102,11 @@ local-ip-address = "0.6"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Patched copies adding a native service filter to BLE scans: unfiltered,
+# Android runs the plugin's per-advertisement callback for every nearby
+# device on the main thread and the setup screen stalls. Drop once the
+# filter lands upstream (tauri-plugin-blec / blec 0.17.0 + scan `services`).
+[patch.crates-io]
+blec = { path = "vendor/blec" }
+tauri-plugin-blec = { path = "vendor/tauri-plugin-blec" }

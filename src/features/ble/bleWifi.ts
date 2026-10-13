@@ -21,7 +21,6 @@
  */
 
 import {
-  startScan,
   stopScan,
   checkPermissions,
   getConnectionUpdates,
@@ -31,6 +30,8 @@ import {
   readString,
   subscribeString,
 } from '@mnlphlp/plugin-blec';
+
+import { startReachyScan as startScan } from './reachyScan';
 
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';

@@ -22,6 +22,7 @@ const plugin = {
 async function load() {
   vi.resetModules();
   vi.doMock('@mnlphlp/plugin-blec', () => plugin);
+  vi.doMock('./reachyScan', () => ({ startReachyScan: plugin.startScan }));
   return import('./bleWifi');
 }
 
