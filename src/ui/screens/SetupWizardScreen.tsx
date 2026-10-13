@@ -245,7 +245,14 @@ function StepView({
   }
   switch (m.phase) {
     case 'scanning':
-      return <ScanView devices={m.devices} scanning={m.scanning} onPick={m.selectDevice} onRescan={m.rescan} />;
+      return (
+        <ScanView
+          devices={m.devices}
+          scanning={m.scanning || m.scanBooting}
+          onPick={m.selectDevice}
+          onRescan={m.rescan}
+        />
+      );
     case 'connecting':
       return <BusyView title="Saying hello" caption="Opening a Bluetooth link…" />;
     case 'pin':
