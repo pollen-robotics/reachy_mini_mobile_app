@@ -581,10 +581,10 @@
   resolved "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.17.tgz"
   integrity sha512-CZWV/q6TTe8ta61cZXjfnnHsfWIdFhms03M9T7Cnd5y2mdpylJM0rF1qRq+wsQVRMLz1OYPVEBU9ph2Bx8cxrg==
 
-"@mnlphlp/plugin-blec@^0.8.0":
-  version "0.8.0"
-  resolved "https://registry.npmjs.org/@mnlphlp/plugin-blec/-/plugin-blec-0.8.0.tgz"
-  integrity sha512-KFcjgHkNi7poymIGbF+9VpmB2D9iEmPJKERiVaw2jDFO2dO5Om7kQ0JoYJZts59iT3qpNYUy8t5vtA6UOYcgFw==
+"@mnlphlp/plugin-blec@^0.17.0":
+  version "0.17.0"
+  resolved "https://registry.yarnpkg.com/@mnlphlp/plugin-blec/-/plugin-blec-0.17.0.tgz#ee670eb138b8d093f4520a4b44b78a7fbbeaef15"
+  integrity sha512-e9oUTe9b2WJsGCt0iBv3DVt9jkOqVBt4BJzByVaE4qchDQm9tMJ2Clqyyn75KFPoJwI+9KO7DWl+DOn7DCyXCQ==
   dependencies:
     "@tauri-apps/api" ">=2.0.0-beta.6"
 

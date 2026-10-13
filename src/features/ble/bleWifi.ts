@@ -405,7 +405,8 @@ export async function connect(
         log('plugin reported disconnect');
         _subscribed = false;
       }),
-      15000,
+      // Above the plugin's own 20 s connect timeout, so its retries finish.
+      25000,
       'connect',
     );
   const link = async () => {
@@ -424,7 +425,7 @@ export async function connect(
   };
   const subscribe = async () => {
     if (_subscribed) return;
-    await withTimeout(subscribeString(RESP_CHAR, _onNotification), 8000, 'subscribe');
+    await withTimeout(subscribeString(RESP_CHAR, null, _onNotification), 8000, 'subscribe');
     _subscribed = true;
     log('subscribed to RESPONSE notifications');
   };
