@@ -1,0 +1,279 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use btleplug::api::BDAddr;
+use enumflags2::BitFlags;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::error;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BleDevice {
+    pub address: String,
+    pub name: String,
+    pub is_connected: bool,
+    pub is_bonded: bool,
+    pub manufacturer_data: HashMap<u16, Vec<u8>>,
+    pub service_data: HashMap<Uuid, Vec<u8>>,
+    pub services: Vec<Uuid>,
+    pub rssi: Option<i16>,
+    pub tx_power_level: Option<i16>,
+}
+
+impl Eq for BleDevice {}
+
+impl PartialOrd for BleDevice {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BleDevice {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.address.cmp(&other.address)
+    }
+}
+
+impl PartialEq for BleDevice {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address
+    }
+}
+
+#[async_trait::async_trait]
+pub trait BondingPeripheral: btleplug::api::Peripheral {
+    async fn is_bonded(&self) -> Result<bool, btleplug::Error> {
+        Err(btleplug::Error::NotSupported(
+            "Bonding is not implemented in btleplug".to_string(),
+        ))
+    }
+}
+
+// Default implementation for btleplug
+#[cfg(not(target_os = "android"))]
+impl<P: btleplug::api::Peripheral> BondingPeripheral for P {}
+
+impl BleDevice {
+    pub(crate) async fn from_peripheral<P: BondingPeripheral>(
+        peripheral: &P,
+    ) -> Result<Self, error::Error> {
+        #[cfg(target_vendor = "apple")]
+        let address = peripheral.id().to_string();
+        #[cfg(not(target_vendor = "apple"))]
+        let address = peripheral.address().to_string();
+        let properties = peripheral.properties().await?.unwrap_or_default();
+        let name = properties
+            .local_name
+            .unwrap_or_else(|| peripheral.id().to_string());
+        Ok(Self {
+            address,
+            name,
+            manufacturer_data: properties.manufacturer_data,
+            service_data: properties.service_data,
+            services: properties.services,
+            rssi: properties.rssi,
+            is_connected: peripheral.is_connected().await?,
+            // On Android `is_bonded()` performs a per-device plugin IPC call. During a
+            // scan this runs for every discovered peripheral, and if it errors (e.g. the
+            // `is_bonded` command isn't available) the `?` propagated the failure, causing
+            // `Handler::add_devices` to drop the *entire* device — so a scan silently
+            // returned no results. A failure to read bond state must not exclude the
+            // device from scan results, so default to `false` instead of propagating.
+            #[cfg(target_os = "android")]
+            is_bonded: peripheral.is_bonded().await.unwrap_or(false),
+            #[cfg(not(target_os = "android"))]
+            is_bonded: false,
+            tx_power_level: properties.tx_power_level,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Service {
+    pub uuid: Uuid,
+    pub characteristics: Vec<Characteristic>,
+}
+
+impl From<&btleplug::api::Service> for Service {
+    fn from(service: &btleplug::api::Service) -> Self {
+        Self {
+            uuid: service.uuid,
+            characteristics: service
+                .characteristics
+                .iter()
+                .map(Characteristic::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Characteristic {
+    pub uuid: Uuid,
+    pub descriptors: Vec<Uuid>,
+    pub properties: BitFlags<CharProps>,
+}
+
+impl From<&btleplug::api::Characteristic> for Characteristic {
+    fn from(characteristic: &btleplug::api::Characteristic) -> Self {
+        Self {
+            uuid: characteristic.uuid,
+            descriptors: characteristic.descriptors.iter().map(|d| d.uuid).collect(),
+            properties: get_flags(characteristic.properties),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[enumflags2::bitflags]
+#[repr(u8)]
+pub enum CharProps {
+    Broadcast,
+    Read,
+    WriteWithoutResponse,
+    Write,
+    Notify,
+    Indicate,
+    AuthenticatedSignedWrites,
+    ExtendedProperties,
+}
+
+impl From<btleplug::api::CharPropFlags> for CharProps {
+    fn from(flag: btleplug::api::CharPropFlags) -> Self {
+        match flag {
+            btleplug::api::CharPropFlags::BROADCAST => CharProps::Broadcast,
+            btleplug::api::CharPropFlags::READ => CharProps::Read,
+            btleplug::api::CharPropFlags::WRITE_WITHOUT_RESPONSE => CharProps::WriteWithoutResponse,
+            btleplug::api::CharPropFlags::WRITE => CharProps::Write,
+            btleplug::api::CharPropFlags::NOTIFY => CharProps::Notify,
+            btleplug::api::CharPropFlags::INDICATE => CharProps::Indicate,
+            btleplug::api::CharPropFlags::AUTHENTICATED_SIGNED_WRITES => {
+                CharProps::AuthenticatedSignedWrites
+            }
+            btleplug::api::CharPropFlags::EXTENDED_PROPERTIES => CharProps::ExtendedProperties,
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn get_flags(properties: btleplug::api::CharPropFlags) -> BitFlags<CharProps, u8> {
+    let mut flags = BitFlags::empty();
+    for flag in properties.iter() {
+        flags |= CharProps::from(flag);
+    }
+    flags
+}
+
+#[must_use]
+pub fn fmt_addr(addr: BDAddr) -> String {
+    let a = addr.into_inner();
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        a[0], a[1], a[2], a[3], a[4], a[5]
+    )
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteType {
+    /// aka request.
+    WithResponse,
+    /// aka command.
+    WithoutResponse,
+}
+
+impl From<WriteType> for btleplug::api::WriteType {
+    fn from(write_type: WriteType) -> Self {
+        match write_type {
+            WriteType::WithResponse => btleplug::api::WriteType::WithResponse,
+            WriteType::WithoutResponse => btleplug::api::WriteType::WithoutResponse,
+        }
+    }
+}
+
+/// Filter for discovering devices.
+/// Only devices matching the filter will be returned by the `handler::discover` method
+pub enum ScanFilter {
+    None,
+    /// Matches if the device advertises the specified service.
+    Service(Uuid),
+    /// Matches if the device advertises any of the specified services.
+    AnyService(Vec<Uuid>),
+    /// Matches if the device advertises all of the specified services.
+    AllServices(Vec<Uuid>),
+    /// Matches if the device advertises the specified manufacturer data.
+    ManufacturerData(u16, Vec<u8>),
+    /// Matches if the device advertises the specified manufacturer data, checking only the bits
+    /// that are 1 in the mask
+    ManufacturerDataMasked(u16, Vec<u8>, Vec<u8>),
+}
+
+/// State of the Bluetooth adapter
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum AdapterState {
+    Unknown,
+    Off,
+    On,
+}
+
+/// Timeouts for the GATT operations, see [`crate::Handler::set_timeouts`].
+///
+/// These are the timeouts of the operation as a whole (including any retries
+/// the platform implementation does internally), not of a single attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeouts {
+    pub connect: Duration,
+    pub discover_services: Duration,
+    pub read: Duration,
+    pub write: Duration,
+    pub subscribe: Duration,
+    pub disconnect: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            // Connecting on Android retries internally (4 x 350 ms) and a
+            // peripheral that only advertises slowly can take a while to
+            // answer, so this is deliberately generous.
+            connect: Duration::from_secs(20),
+            discover_services: Duration::from_secs(15),
+            read: Duration::from_secs(10),
+            write: Duration::from_secs(10),
+            subscribe: Duration::from_secs(10),
+            disconnect: Duration::from_secs(10),
+        }
+    }
+}
+
+/// Partial update of [`Timeouts`] in milliseconds, as accepted by the
+/// `set_timeouts` command. Fields left out keep their current value.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeoutsMs {
+    pub connect: Option<u64>,
+    pub discover_services: Option<u64>,
+    pub read: Option<u64>,
+    pub write: Option<u64>,
+    pub subscribe: Option<u64>,
+    pub disconnect: Option<u64>,
+}
+
+impl Timeouts {
+    /// Applies the milliseconds given in `update`, keeping every field that is
+    /// `None`.
+    #[must_use]
+    pub fn apply(self, update: TimeoutsMs) -> Self {
+        let or_keep = |value: Option<u64>, current| value.map_or(current, Duration::from_millis);
+        Self {
+            connect: or_keep(update.connect, self.connect),
+            discover_services: or_keep(update.discover_services, self.discover_services),
+            read: or_keep(update.read, self.read),
+            write: or_keep(update.write, self.write),
+            subscribe: or_keep(update.subscribe, self.subscribe),
+            disconnect: or_keep(update.disconnect, self.disconnect),
+        }
+    }
+}

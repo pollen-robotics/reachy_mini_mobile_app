@@ -1,0 +1,556 @@
+## Default Permission
+
+Default permissions for the plugin
+
+#### This default permission set includes the following:
+
+- `allow-scan`
+- `allow-stop-scan`
+- `allow-connect`
+- `allow-disconnect`
+- `allow-connection-state`
+- `allow-send`
+- `allow-recv`
+- `allow-send-string`
+- `allow-recv-string`
+- `allow-subscribe`
+- `allow-subscribe-string`
+- `allow-unsubscribe`
+- `allow-scanning-state`
+- `allow-list-services`
+- `allow-check-permissions`
+- `allow-get-adapter-state`
+- `allow-mtu`
+- `allow-set-write-behavior`
+- `allow-set-timeouts`
+- `allow-set-android-mtu`
+
+## Permission Table
+
+<table>
+<tr>
+<th>Identifier</th>
+<th>Description</th>
+</tr>
+
+
+<tr>
+<td>
+
+`blec:allow-check-permissions`
+
+</td>
+<td>
+
+Enables the check_permissions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-check-permissions`
+
+</td>
+<td>
+
+Denies the check_permissions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-connect`
+
+</td>
+<td>
+
+Enables the connect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-connect`
+
+</td>
+<td>
+
+Denies the connect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-connection-state`
+
+</td>
+<td>
+
+Enables the connection_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-connection-state`
+
+</td>
+<td>
+
+Denies the connection_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-disconnect`
+
+</td>
+<td>
+
+Enables the disconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-disconnect`
+
+</td>
+<td>
+
+Denies the disconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-get-adapter-state`
+
+</td>
+<td>
+
+Enables the get_adapter_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-get-adapter-state`
+
+</td>
+<td>
+
+Denies the get_adapter_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-list-services`
+
+</td>
+<td>
+
+Enables the list_services command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-list-services`
+
+</td>
+<td>
+
+Denies the list_services command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-mtu`
+
+</td>
+<td>
+
+Enables the mtu command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-mtu`
+
+</td>
+<td>
+
+Denies the mtu command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-recv`
+
+</td>
+<td>
+
+Enables the recv command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-recv`
+
+</td>
+<td>
+
+Denies the recv command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-recv-string`
+
+</td>
+<td>
+
+Enables the recv_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-recv-string`
+
+</td>
+<td>
+
+Denies the recv_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-scan`
+
+</td>
+<td>
+
+Enables the scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-scan`
+
+</td>
+<td>
+
+Denies the scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-scanning-state`
+
+</td>
+<td>
+
+Enables the scanning_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-scanning-state`
+
+</td>
+<td>
+
+Denies the scanning_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-send`
+
+</td>
+<td>
+
+Enables the send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-send`
+
+</td>
+<td>
+
+Denies the send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-send-string`
+
+</td>
+<td>
+
+Enables the send_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-send-string`
+
+</td>
+<td>
+
+Denies the send_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-set-android-mtu`
+
+</td>
+<td>
+
+Enables the set_android_mtu command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-set-android-mtu`
+
+</td>
+<td>
+
+Denies the set_android_mtu command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-set-timeouts`
+
+</td>
+<td>
+
+Enables the set_timeouts command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-set-timeouts`
+
+</td>
+<td>
+
+Denies the set_timeouts command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-set-write-behavior`
+
+</td>
+<td>
+
+Enables the set_write_behavior command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-set-write-behavior`
+
+</td>
+<td>
+
+Denies the set_write_behavior command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-stop-scan`
+
+</td>
+<td>
+
+Enables the stop_scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-stop-scan`
+
+</td>
+<td>
+
+Denies the stop_scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-subscribe`
+
+</td>
+<td>
+
+Enables the subscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-subscribe`
+
+</td>
+<td>
+
+Denies the subscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-subscribe-string`
+
+</td>
+<td>
+
+Enables the subscribe_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-subscribe-string`
+
+</td>
+<td>
+
+Denies the subscribe_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-unsubscribe`
+
+</td>
+<td>
+
+Enables the unsubscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-unsubscribe`
+
+</td>
+<td>
+
+Denies the unsubscribe command without any pre-configured scope.
+
+</td>
+</tr>
+</table>

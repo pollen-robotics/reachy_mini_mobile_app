@@ -291,7 +291,7 @@ Info.plist …" step of both the simulator and release jobs.
 
 ### Android: minSdk 26
 
-`tauri-plugin-blec` 0.8.1 declares `minSdk 26` in its library manifest.
+`tauri-plugin-blec` (0.17) declares `minSdk 26` in its library manifest.
 Tauri's `android init` generates the app with `minSdk = 24`, so the
 manifest merger aborts with:
 

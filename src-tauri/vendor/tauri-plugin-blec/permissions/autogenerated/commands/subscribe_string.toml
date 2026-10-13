@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-subscribe-string"
+description = "Enables the subscribe_string command without any pre-configured scope."
+commands.allow = ["subscribe_string"]
+
+[[permission]]
+identifier = "deny-subscribe-string"
+description = "Denies the subscribe_string command without any pre-configured scope."
+commands.deny = ["subscribe_string"]

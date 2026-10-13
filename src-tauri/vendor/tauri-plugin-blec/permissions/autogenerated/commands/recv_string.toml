@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-recv-string"
+description = "Enables the recv_string command without any pre-configured scope."
+commands.allow = ["recv_string"]
+
+[[permission]]
+identifier = "deny-recv-string"
+description = "Denies the recv_string command without any pre-configured scope."
+commands.deny = ["recv_string"]
