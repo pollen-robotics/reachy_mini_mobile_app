@@ -14,8 +14,9 @@ import type { CentralRobotEntry } from '@/features/auth/fetchRobotsFromCentral';
  * in the screen; the FSM itself tracks the finer-grained phase below.
  *
  * The OS Bluetooth permission is requested implicitly by the first scan (no
- * dedicated `permission` phase), and the Wi-Fi password is entered inline in
- * the `wifi-pick` step (no separate `wifi-password` phase).
+ * dedicated `permission` phase). That scan is deferred briefly after mount so
+ * iOS can paint the wizard before the system sheet appears. The Wi-Fi password
+ * is entered inline in the `wifi-pick` step (no separate `wifi-password` phase).
  */
 export type SetupPhase =
   | 'scanning' // BLE scan for advertising robots
