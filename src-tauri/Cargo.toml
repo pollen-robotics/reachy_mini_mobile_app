@@ -107,6 +107,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Android runs the plugin's per-advertisement callback for every nearby
 # device on the main thread and the setup screen stalls. Drop once the
 # filter lands upstream (tauri-plugin-blec / blec 0.17.0 + scan `services`).
+#
+# btleplug 0.13.5 fails CoreBluetooth service discovery with "Unknown
+# descriptor relationship" when the robot's BlueZ Device Information service
+# (0x180A / PnP ID 0x2A50) reports descriptors for a characteristic it has not
+# mapped, so every iOS / macOS connect fails. The vendored copy ignores those
+# descriptors instead; this app never reads GATT descriptors.
+# See: https://github.com/deviceplug/btleplug/issues/397
 [patch.crates-io]
 blec = { path = "vendor/blec" }
 tauri-plugin-blec = { path = "vendor/tauri-plugin-blec" }
+btleplug = { path = "vendor/btleplug" }
