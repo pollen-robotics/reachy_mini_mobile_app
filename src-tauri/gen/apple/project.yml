@@ -2,7 +2,7 @@ name: reachy_mini_mobile_app
 options:
   bundleIdPrefix: com.pollen-robotics
   deploymentTarget:
-    iOS: 14.0
+    iOS: 15.0
 fileGroups: [../../src]
 configs:
   debug: debug
