@@ -319,9 +319,24 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   // `resolvingIp` on exit, so a stale loop dying late can't wipe the flag a
   // newer loop just set.
   const ipResolveSeqRef = useRef(0);
+  const scanBootRafRef = useRef<number | null>(null);
   const scanBootTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Boot launch fired while the app was hidden; `visibilitychange` finishes it. */
+  const scanBootAwaitingVisibleRef = useRef(false);
   /** Set once the native scanner has been armed at least once (refocus resume). */
   const bleScanEverStartedRef = useRef(false);
+
+  const cancelScanBoot = useCallback(() => {
+    if (scanBootRafRef.current !== null) {
+      cancelAnimationFrame(scanBootRafRef.current);
+      scanBootRafRef.current = null;
+    }
+    if (scanBootTimerRef.current) {
+      clearTimeout(scanBootTimerRef.current);
+      scanBootTimerRef.current = null;
+    }
+    scanBootAwaitingVisibleRef.current = false;
+  }, []);
 
   const stopScanLoop = useCallback(async () => {
     const ctrl = scanCtrlRef.current;
@@ -333,16 +348,13 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (scanBootTimerRef.current) {
-        clearTimeout(scanBootTimerRef.current);
-        scanBootTimerRef.current = null;
-      }
+      cancelScanBoot();
       // Best-effort: stop scanning + drop the BLE link when the wizard unmounts.
       void scanCtrlRef.current?.stop();
       scanCtrlRef.current = null;
       void bleDisconnect();
     };
-  }, []);
+  }, [cancelScanBoot]);
 
   // Drive the BLE disconnect signal: if the link drops mid-flow (not on a
   // terminal phase), surface it as a recoverable error.
@@ -436,18 +448,16 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
 
   const scheduleBleScanStart = useCallback(
     (mode: 'deferred' | 'immediate') => {
-      if (scanBootTimerRef.current) {
-        clearTimeout(scanBootTimerRef.current);
-        scanBootTimerRef.current = null;
-      }
+      cancelScanBoot();
 
       const launch = (): void => {
         scanBootTimerRef.current = null;
         if (!mountedRef.current) return;
         if (document.visibilityState !== 'visible') {
-          // Permission sheet or browser handoff can hide us; retry instead of
-          // skipping (skipping looked like a dead app).
-          scanBootTimerRef.current = window.setTimeout(launch, 150);
+          // Permission sheet or browser handoff can hide us; defer to the
+          // next `visibilitychange` instead of skipping (skipping looked like
+          // a dead app).
+          scanBootAwaitingVisibleRef.current = true;
           return;
         }
         startScanning();
@@ -460,31 +470,26 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       }
 
       setScanBooting(true);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      scanBootRafRef.current = requestAnimationFrame(() => {
+        scanBootRafRef.current = requestAnimationFrame(() => {
+          scanBootRafRef.current = null;
           scanBootTimerRef.current = window.setTimeout(launch, BLE_SCAN_BOOT_DELAY_MS);
         });
       });
     },
-    [startScanning],
+    [cancelScanBoot, startScanning],
   );
 
   // Auto-start the BLE scan after the wizard paints (deferred). Intentionally
   // NO mount-guard ref: under StrictMode the effect is cleaned up + re-run, and
   // a persisted guard would skip the restart and leave the view with a dead
-  // (stopped) scanner. `scheduleBleScanStart` is stable and `startScanning`
-  // bumps the shared scan token, so a dev double-invoke just supersedes its
-  // own previous loop; on unmount the scanner is torn down by the cleanup
-  // effect above.
+  // (stopped) scanner. The cleanup cancels the pending boot (frames + timer),
+  // so a dev double-invoke schedules a single scan; on unmount the scanner is
+  // torn down by the cleanup effect above.
   useEffect(() => {
     scheduleBleScanStart('deferred');
-    return () => {
-      if (scanBootTimerRef.current) {
-        clearTimeout(scanBootTimerRef.current);
-        scanBootTimerRef.current = null;
-      }
-    };
-  }, [scheduleBleScanStart]);
+    return cancelScanBoot;
+  }, [scheduleBleScanStart, cancelScanBoot]);
 
   // Re-scan when the app comes back to the foreground while the scan view is
   // showing: mobile OSes kill an in-flight BLE scan when the app backgrounds,
@@ -494,9 +499,14 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
+      if (scanBootAwaitingVisibleRef.current) {
+        scanBootAwaitingVisibleRef.current = false;
+        startScanning();
+        return;
+      }
       if (phaseRef.current !== 'scanning') return;
       if (!bleScanEverStartedRef.current) return;
-      if (scanBootTimerRef.current) return;
+      if (scanBootRafRef.current !== null || scanBootTimerRef.current) return;
       startScanning();
     };
     document.addEventListener('visibilitychange', onVisible);
