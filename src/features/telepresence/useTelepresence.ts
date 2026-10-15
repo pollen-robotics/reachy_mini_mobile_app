@@ -105,7 +105,17 @@ export function useTelepresence({
         getSink: () => getRobotRef.current(),
         getDeflection: () => getDeflectionRef.current(),
         getRobotPose: () => readRobotPose(getRobotRef.current()),
-        canMove: () => allowMotionRef.current && getRobotRef.current()?.isAwake() === true,
+        // A daemon-side move (emotion, wake/sleep) owns the motors while it
+        // runs: hand ownership back so we neither fight it nor snap back
+        // to the pre-move pose on the next touch.
+        canMove: () => {
+          const robot = getRobotRef.current();
+          return (
+            allowMotionRef.current &&
+            robot?.isAwake() === true &&
+            robot.robotState?.is_move_running !== true
+          );
+        },
       }),
   );
   const motion = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
