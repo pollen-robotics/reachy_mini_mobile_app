@@ -103,7 +103,9 @@ Fixed on these branches:
    could hit a slot still `stopping`. The controller now waits for the slot to
    be free.
 
-Still open:
+Still open. Connection-level issues are tracked separately from this
+feature: the robot's periodic Wi-Fi stalls and gateway losses, re-dials to a
+stale central peer, and the libnice abort.
 1. **The robot slot stays `free` after a stop.** When an app exits, the
    daemon frees the slot instead of handing it back to the phone's
    `remote_session`. On device (2026-10-06), no idle-reset sleep fired after
@@ -174,3 +176,14 @@ Still open:
   - **Concurrent install** (REST job running): refused with `busy`.
   - **Phone leaves while an app runs:** the app keeps running; the phone
     reconnects as control-only, sees the app running, and can stop it.
+- Re-run on 2026-10-15 with the committed branches: this branch's release APK
+  on a Fairphone 4, against reachy_mini `feat/apps-rpc-relay` pip-installed on
+  the robot. The matrix above passed again, plus the link-drop handling:
+  - SDK re-dial: "Reconnecting to Reachy…", actions disabled, a tap never
+    reaches the robot, and everything comes back after the re-dial.
+  - A real Wi-Fi outage: the same banner, then a re-sync within 2 s of
+    reconnecting (a stale "Running" was cleared).
+  - Launching an app does not stall the daemon's data channel. In four trials
+    (warm, cold after reinstall, restart) the phone never saw more than ~1.6 s
+    of silence, against a re-dial threshold of 8 s; the gaps it did see were
+    the robot's periodic Wi-Fi stalls.
