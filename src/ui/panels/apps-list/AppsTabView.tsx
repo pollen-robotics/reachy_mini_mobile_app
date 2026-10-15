@@ -74,6 +74,8 @@ import {
   Snackbar,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   alpha,
 } from '@mui/material';
@@ -112,6 +114,12 @@ import { useFilteredApps } from '@/features/apps/useFilteredApps';
 import { useHiddenAuthors } from '@/features/apps/useHiddenAuthors';
 import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
+import {
+  displayNameFor,
+  findInstalled,
+  usePythonAppsCatalog,
+} from '@/features/robot-apps/catalog';
+import type { RobotAppsHandle } from '@/features/robot-apps/useRobotApps';
 import IllustratedState from '@/ui/design/IllustratedState';
 import { railActionButtonSx } from '@/ui/design/railActionButtonSx';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
@@ -125,6 +133,9 @@ import LazyMount from './LazyMount';
 import StoreIntroOverlay from './StoreIntroOverlay';
 import VirtualAppList from './VirtualAppList';
 import { COLUMN_SX } from './layout';
+import RobotAppSheet from './robot-apps/RobotAppSheet';
+import RobotAppsPanel from './robot-apps/RobotAppsPanel';
+import RobotAppsStore from './robot-apps/RobotAppsStore';
 
 /** Imperative surface the host shell can drive. */
 export interface AppsTabViewHandle {
@@ -135,8 +146,13 @@ export interface AppsTabViewHandle {
 
 interface AppsTabViewProps {
   onOpen: (app: AppEntry) => void;
+  /** The robot's Python apps (installed, running, jobs). */
+  robotApps: RobotAppsHandle;
   ref?: Ref<AppsTabViewHandle>;
 }
+
+/** Apps sub-pages: launcher, web (JS) store, robot (Python) store. */
+type AppsView = 'pinned' | 'store' | 'robot-store';
 
 /**
  * Number of tiles a browse rail renders as a *preview*. A horizontal
@@ -199,8 +215,24 @@ const RAIL_PANEL_FIRST_SX = {
   pb: 0,
 } as const;
 
-export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
+export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps) {
   const { state, refresh } = useApps();
+  const pythonCatalog = usePythonAppsCatalog(true);
+  // Python app whose sheet is open (install / start / stop / ...).
+  const [sheetApp, setSheetApp] = useState<AppEntry | null>(null);
+  const sheetInstalled = sheetApp ? findInstalled(sheetApp, robotApps.snapshot.installed) : null;
+  // Quick start from the launcher row. Replacing another running app needs
+  // the user's go-ahead, which the sheet asks for.
+  const handleQuickStart = useCallback(
+    (app: AppEntry, name: string) => {
+      const { running } = robotApps.snapshot;
+      const otherLive =
+        running.name !== name && (running.state === 'running' || running.state === 'starting');
+      if (otherLive) setSheetApp(app);
+      else void robotApps.controller.start(name);
+    },
+    [robotApps]
+  );
   const hiddenAuthors = useHiddenAuthors();
 
   // The scrollable body. Threaded into `VirtualAppList` so the
@@ -258,8 +290,8 @@ export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
   // vs the full store ('store'). Toggled from the bottom strip. The
   // launcher lands first so the user's apps (and the seeded official
   // ones) are the first thing they see when opening the tab.
-  const [view, setView] = useState<'pinned' | 'store'>('pinned');
-  const handleChangeView = useCallback((next: 'pinned' | 'store') => {
+  const [view, setView] = useState<AppsView>('pinned');
+  const handleChangeView = useCallback((next: AppsView) => {
     setView(next);
     // Leaving the store drops any drill-down so coming back starts on
     // the clean browse layout (and the bottom toggle stays visible).
@@ -492,13 +524,43 @@ export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
         }}
       >
         {initialPlaceholder ?? (view === 'pinned' ? (
-          <LauncherView
-            apps={filtered.pinned}
-            recentlyAddedId={pinnedApps.recentlyAddedId}
-            onOpen={onOpen}
-            onUnpin={app => pinnedApps.unpin(app.id)}
-            onReorder={pinnedApps.reorder}
-            onBrowseStore={() => handleChangeView('store')}
+          <>
+            <RobotAppsPanel
+              robotApps={robotApps}
+              catalog={pythonCatalog.data}
+              onOpenApp={setSheetApp}
+              onBrowse={() => handleChangeView('robot-store')}
+              onStart={handleQuickStart}
+            />
+            <LauncherView
+              apps={filtered.pinned}
+              recentlyAddedId={pinnedApps.recentlyAddedId}
+              onOpen={onOpen}
+              onUnpin={app => pinnedApps.unpin(app.id)}
+              onReorder={pinnedApps.reorder}
+              onBrowseStore={() => handleChangeView('store')}
+            />
+          </>
+        ) : view === 'robot-store' ? (
+          <RobotAppsStore
+            header={
+              <>
+                <CollapsingHeaderBar
+                  scrollRef={scrollRef}
+                  title="Discover apps"
+                  backLabel="Back to launcher"
+                  onBack={() => handleChangeView('pinned')}
+                />
+                <StoreSegmentSwitch value="robot-store" onChange={handleChangeView} />
+              </>
+            }
+            apps={pythonCatalog.data}
+            loading={pythonCatalog.isFetching}
+            failed={pythonCatalog.isError}
+            onRetry={() => void pythonCatalog.refetch()}
+            installed={robotApps.snapshot.installed}
+            scrollRef={scrollRef}
+            onOpenApp={setSheetApp}
           />
         ) : (
           <>
@@ -534,6 +596,7 @@ export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
                   backLabel="Back to launcher"
                   onBack={() => handleChangeView('pinned')}
                 />
+                <StoreSegmentSwitch value="store" onChange={handleChangeView} />
 
                 {/* Search panel: regular scrolling content (it used
                     to be sticky under the header bar, but the pinned
@@ -716,6 +779,15 @@ export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
       {view === 'store' && !introSeen && initialPlaceholder === null && (
         <StoreIntroOverlay onDismiss={dismissIntro} />
       )}
+      <RobotAppSheet
+        app={sheetApp}
+        installed={sheetInstalled}
+        robotApps={robotApps}
+        displayName={name =>
+          displayNameFor(name, robotApps.snapshot.installed, pythonCatalog.data)
+        }
+        onClose={() => setSheetApp(null)}
+      />
       <Snackbar
         open={snackbar !== null}
         autoHideDuration={3500}
@@ -739,6 +811,36 @@ export default function AppsTabView({ onOpen, ref }: AppsTabViewProps) {
 // ===========================================================================
 // Sub-components (file-local; not exported)
 // ===========================================================================
+
+/**
+ * Web / Robot switch under the store header. Web apps open in the phone
+ * (iframe); robot apps install and run on Reachy itself.
+ */
+function StoreSegmentSwitch({
+  value,
+  onChange,
+}: {
+  value: 'store' | 'robot-store';
+  onChange: (next: AppsView) => void;
+}) {
+  return (
+    <Box sx={{ ...COLUMN_SX, px: 2, pt: 1.5 }}>
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        size="small"
+        value={value}
+        onChange={(_, next: 'store' | 'robot-store' | null) => {
+          if (next) onChange(next);
+        }}
+        sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontSize: TYPO.sm, py: 0.5 } }}
+      >
+        <ToggleButton value="store">Web apps</ToggleButton>
+        <ToggleButton value="robot-store">Robot apps</ToggleButton>
+      </ToggleButtonGroup>
+    </Box>
+  );
+}
 
 /**
  * Collapsing sticky header bar, shared by the store's two "pages"

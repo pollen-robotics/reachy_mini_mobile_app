@@ -37,9 +37,11 @@ interface VirtualAppListProps {
   apps: AppEntry[];
   /** The Apps tab's scrollable body. The window is computed against it. */
   scrollRef: RefObject<HTMLElement | null>;
-  pinnedSet: ReadonlySet<string>;
+  /** Omit with `onTogglePin` for lists whose apps cannot be pinned. */
+  pinnedSet?: ReadonlySet<string>;
   onOpen: (app: AppEntry) => void;
-  onTogglePin: (app: AppEntry) => void;
+  onTogglePin?: (app: AppEntry) => void;
+  actionLabel?: (app: AppEntry) => string;
 }
 
 /**
@@ -55,6 +57,7 @@ export default function VirtualAppList({
   pinnedSet,
   onOpen,
   onTogglePin,
+  actionLabel,
 }: VirtualAppListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
@@ -115,9 +118,10 @@ export default function VirtualAppList({
             >
               <AppCompactTile
                 app={app}
-                isPinned={pinnedSet.has(app.id)}
+                isPinned={pinnedSet?.has(app.id) ?? false}
                 onOpen={onOpen}
                 onTogglePin={onTogglePin}
+                actionLabel={actionLabel?.(app)}
                 fullWidth
               />
             </Box>
