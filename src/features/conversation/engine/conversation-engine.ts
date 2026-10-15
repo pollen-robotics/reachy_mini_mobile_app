@@ -500,6 +500,10 @@ async function handleOrbClick(): Promise<void> {
         // conversation is running yet (conversation idle); ignore taps
         // while a conversation is already live / winding down.
         if (conversation.current() !== "idle") return;
+        // Mid re-dial there is no data channel to start the app over:
+        // the start would time out and drop the tap anyway. The
+        // "Reconnecting…" caption is already up; ignore the tap.
+        if (connectionController.isRedialing()) return;
         // Flip `convoActiveRequested` so re-entries do not bounce back
         // to idle if the runner is interrupted, then start the app on
         // the robot. `runConversationParts` flips the conversation FSM
