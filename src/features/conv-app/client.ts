@@ -74,8 +74,13 @@ export interface ConvAppClient {
   // Daemon-side app lifecycle.
   getCurrentAppStatus(): Promise<CurrentAppStatus>;
   startConvApp(): Promise<void>;
-  /** Stops whatever app holds the robot, not only the conversation app. */
-  stopRunningApp(): Promise<void>;
+  /**
+   * Stops the conversation app only: a no-op when the robot runs another
+   * app (one the user launched from the Apps tab) or nothing at all.
+   */
+  stopConvApp(): Promise<void>;
+  /** Stops whatever holds the slot. Only for clearing a crashed app. */
+  stopCurrentApp(): Promise<void>;
   installConvApp(): Promise<void>;
 
   // The running conversation app.
@@ -107,7 +112,12 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     async startConvApp() {
       await robot.rpcCall('apps.start', { name: CONV_APP_NAME }, { timeoutMs: START_TIMEOUT_MS });
     },
-    async stopRunningApp() {
+    async stopConvApp() {
+      const app = await robot.rpcCall<CurrentAppStatus>('apps.status');
+      if (app.info?.name !== CONV_APP_NAME) return;
+      await robot.rpcCall('apps.stop', {}, { timeoutMs: STOP_TIMEOUT_MS });
+    },
+    async stopCurrentApp() {
       await robot.rpcCall('apps.stop', {}, { timeoutMs: STOP_TIMEOUT_MS });
     },
     async installConvApp() {
