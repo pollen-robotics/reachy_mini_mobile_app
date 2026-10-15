@@ -69,7 +69,7 @@ export default function RobotAppsStore({
           size="small"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder={apps ? `Search ${apps.length} robot apps` : 'Search robot apps'}
+          placeholder={apps ? `Search ${apps.length} Reachy apps` : 'Search Reachy apps'}
           slotProps={{
             input: {
               startAdornment: (
@@ -90,7 +90,7 @@ export default function RobotAppsStore({
       {failed && !apps && (
         <Box sx={{ ...COLUMN_SX, py: 4, textAlign: 'center' }}>
           <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', mb: 1 }}>
-            Could not load the robot apps.
+            Could not load the Reachy apps.
           </Typography>
           <Button size="small" onClick={onRetry}>
             Retry
@@ -100,7 +100,7 @@ export default function RobotAppsStore({
       {apps && visible.length === 0 && (
         <Box sx={{ ...COLUMN_SX, pt: 2 }}>
           <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
-            No robot apps match "{query.trim()}".
+            No Reachy apps match "{query.trim()}".
           </Typography>
         </Box>
       )}
@@ -110,6 +110,7 @@ export default function RobotAppsStore({
           scrollRef={scrollRef}
           onOpen={onOpenApp}
           actionLabel={app => (findInstalled(app, installed) ? 'Open' : 'Get')}
+          runsOn="robot"
         />
       )}
     </>

@@ -62,6 +62,7 @@ import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
 import LikeButton from './LikeButton';
+import RunsOnChip, { type RunsOn } from './RunsOnChip';
 
 interface AppCompactTileProps {
   app: AppEntry;
@@ -71,6 +72,8 @@ interface AppCompactTileProps {
   onTogglePin?: (app: AppEntry) => void;
   /** Label of the open button; robot apps read "Get" / "Open". */
   actionLabel?: string;
+  /** Where the app runs, shown as a chip under the author line. */
+  runsOn?: RunsOn;
   /**
    * When true, the tile spans `width: 100%` of its parent
    * (used in search results and category-focus mode where the
@@ -88,6 +91,7 @@ function AppCompactTileImpl({
   onOpen,
   onTogglePin,
   actionLabel = 'Try',
+  runsOn,
   fullWidth = false,
 }: AppCompactTileProps) {
   const StarIcon = isPinned ? StarRoundedIcon : StarOutlineIcon;
@@ -321,6 +325,12 @@ function AppCompactTileImpl({
                   aria-label="Official"
                 />
               )}
+            </Box>
+          )}
+
+          {runsOn && (
+            <Box sx={{ display: 'flex', mt: 0.25 }}>
+              <RunsOnChip runsOn={runsOn} />
             </Box>
           )}
 

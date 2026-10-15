@@ -31,6 +31,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { AppEntry } from '@/features/apps/types';
 
 import AppCompactTile from './AppCompactTile';
+import type { RunsOn } from './RunsOnChip';
 import { COLUMN_SX, LIST_ROW_GAP_PX } from './layout';
 
 interface VirtualAppListProps {
@@ -42,6 +43,7 @@ interface VirtualAppListProps {
   onOpen: (app: AppEntry) => void;
   onTogglePin?: (app: AppEntry) => void;
   actionLabel?: (app: AppEntry) => string;
+  runsOn?: RunsOn;
 }
 
 /**
@@ -58,6 +60,7 @@ export default function VirtualAppList({
   onOpen,
   onTogglePin,
   actionLabel,
+  runsOn,
 }: VirtualAppListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
@@ -122,6 +125,7 @@ export default function VirtualAppList({
                 onOpen={onOpen}
                 onTogglePin={onTogglePin}
                 actionLabel={actionLabel?.(app)}
+                runsOn={runsOn}
                 fullWidth
               />
             </Box>

@@ -660,6 +660,7 @@ export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps
                             isPinned={pinnedApps.set.has(app.id)}
                             onOpen={onOpen}
                             onTogglePin={handleTogglePin}
+                            runsOn="phone"
                           />
                         ))}
                       </AppRail>
@@ -695,6 +696,7 @@ export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps
                               isPinned={pinnedApps.set.has(app.id)}
                               onOpen={onOpen}
                               onTogglePin={handleTogglePin}
+                              runsOn="phone"
                             />
                           ))}
                           {/* CTA tile pinned to the right of every
@@ -765,6 +767,7 @@ export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps
                 pinnedSet={pinnedApps.set}
                 onOpen={onOpen}
                 onTogglePin={handleTogglePin}
+                runsOn="phone"
               />
             )}
           </>
@@ -813,8 +816,9 @@ export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps
 // ===========================================================================
 
 /**
- * Web / Robot switch under the store header. Web apps open in the phone
- * (iframe); robot apps install and run on Reachy itself.
+ * Phone / Reachy switch under the store header: where the apps run. Phone
+ * apps open in this app (iframe); Reachy apps install and run on the robot.
+ * Same words as the tiles' `RunsOnChip`.
  */
 function StoreSegmentSwitch({
   value,
@@ -835,8 +839,8 @@ function StoreSegmentSwitch({
         }}
         sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontSize: TYPO.sm, py: 0.5 } }}
       >
-        <ToggleButton value="store">Web apps</ToggleButton>
-        <ToggleButton value="robot-store">Robot apps</ToggleButton>
+        <ToggleButton value="store">On your phone</ToggleButton>
+        <ToggleButton value="robot-store">On Reachy</ToggleButton>
       </ToggleButtonGroup>
     </Box>
   );

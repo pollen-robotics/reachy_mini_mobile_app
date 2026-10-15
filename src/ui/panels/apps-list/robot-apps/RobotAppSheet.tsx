@@ -40,6 +40,7 @@ import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 
 import AppIcon from '../AppIcon';
+import RunsOnChip from '../RunsOnChip';
 
 /** Log lines shown under the progress bar before "Show full log". */
 const LOG_TAIL_LINES = 4;
@@ -143,6 +144,9 @@ export default function RobotAppSheet({
                     by {app.author}
                   </Typography>
                 )}
+                <Box sx={{ display: 'flex', mt: 0.5 }}>
+                  <RunsOnChip runsOn="robot" />
+                </Box>
               </Box>
               <StatusChip
                 installed={installed !== null}

@@ -17,8 +17,9 @@ The Apps tab now covers both kinds of Reachy Mini app:
 Where it shows in the UI:
 - **Launcher**: an "On your robot" panel lists the installed apps with their
   run state, and offers one-tap start and stop.
-- **Store**: a "Web apps / Robot apps" switch. Robot apps form a searchable
-  list (403 today) with Get / Open buttons.
+- **Store**: an "On your phone / On Reachy" switch, and every tile carries a
+  "Runs on phone" or "Runs on Reachy" chip (also shown in the app sheet).
+  Reachy apps form a searchable list (403 today) with Get / Open buttons.
 - **App sheet**: install, start, stop, restart, update and uninstall. It shows
   live install logs and crash details. Replacing a running app or uninstalling
   asks for confirmation first.
