@@ -70,6 +70,18 @@ export interface CurrentAppStatus {
   info?: { name?: string } | null;
 }
 
+/** `apps.check_update`: the daemon compares the install with the app's Space. */
+export interface ConvAppUpdate {
+  installed: boolean;
+  /** Installed package version; absent on daemons predating it. */
+  version?: string | null;
+  update_available: boolean;
+  /** A background update started by `apps.update` is still running. */
+  updating: boolean;
+  /** Message of the last failed update, if any. */
+  error: string | null;
+}
+
 export interface ConvAppClient {
   // Daemon-side app lifecycle.
   getCurrentAppStatus(): Promise<CurrentAppStatus>;
@@ -77,6 +89,9 @@ export interface ConvAppClient {
   /** Stops whatever app holds the robot, not only the conversation app. */
   stopRunningApp(): Promise<void>;
   installConvApp(): Promise<void>;
+  checkConvAppUpdate(): Promise<ConvAppUpdate>;
+  /** Starts a background update (stopping the app if it runs); poll `checkConvAppUpdate`. */
+  updateConvApp(): Promise<void>;
 
   // The running conversation app.
   getStatus(): Promise<ConvAppStatus>;
@@ -116,6 +131,12 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
         { name: CONV_APP_NAME },
         { timeoutMs: INSTALL_TIMEOUT_MS }
       );
+    },
+    checkConvAppUpdate() {
+      return robot.rpcCall<ConvAppUpdate>('apps.check_update', { name: CONV_APP_NAME });
+    },
+    async updateConvApp() {
+      await robot.rpcCall('apps.update', { name: CONV_APP_NAME });
     },
 
     getStatus() {
