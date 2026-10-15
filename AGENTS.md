@@ -50,6 +50,7 @@ features/
 ├── apps/           HF Hub app catalog fetching + embed URL builder
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
 ├── conv-app/       JSON-RPC client for the conversation app on the robot
+├── robot-apps/     Python apps on the robot: catalog, install / start / stop over JSON-RPC
 └── conversation/   session owner + connection FSM + the orb's host handle
 ```
 
@@ -330,6 +331,7 @@ truth because `gen/` is regenerated.
 | `docs/APP_STORE_AUDIT_2026-05.md` | Submission-readiness gap analysis (what actually blocks a build today) |
 | `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
 | `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
+| `docs/ROBOT_APPS.md` | Python apps on the robot: install / start / stop over JSON-RPC, wire contract, known gaps |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
 
 ## Notes for HF Space authors
