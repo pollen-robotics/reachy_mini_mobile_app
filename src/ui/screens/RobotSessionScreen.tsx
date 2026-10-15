@@ -616,6 +616,13 @@ function ConnectedSession({
   const recoverIncidentStartRef = useRef<number | null>(null);
   useEffect(() => {
     if (session.phase === 'live') {
+      const startedAt = recoverIncidentStartRef.current;
+      if (startedAt !== null) {
+        recordConnectionEvent(
+          'auto-recovered',
+          `after ${Math.round((Date.now() - startedAt) / 1000)} s`,
+        );
+      }
       recoverIncidentStartRef.current = null;
       setAutoRecovering(false);
       return;
@@ -644,6 +651,10 @@ function ConnectedSession({
     }
     const t = window.setTimeout(() => {
       console.log('[shell-webrtc] auto-recover: retrying');
+      recordConnectionEvent(
+        'auto-recover-retry',
+        `${Math.round((Date.now() - startedAt) / 1000)} s into the incident`,
+      );
       void session.recover();
     }, SESSION_TIMINGS.autoRecoverRetryDelayMs);
     return () => window.clearTimeout(t);

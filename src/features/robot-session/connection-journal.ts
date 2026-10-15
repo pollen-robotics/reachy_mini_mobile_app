@@ -21,6 +21,8 @@ export type ConnectionEventKind =
   | 'redialed'
   | 'fatal'
   | 'auto-recover'
+  | 'auto-recover-retry'
+  | 'auto-recovered'
   | 'auto-recover-gave-up';
 
 export interface ConnectionEvent {
