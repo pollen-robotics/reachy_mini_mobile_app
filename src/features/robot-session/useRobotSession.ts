@@ -563,23 +563,33 @@ export function useRobotSession({
     }
   }, []);
 
-  const recover = useCallback(async (): Promise<void> => {
+  // Several drivers can ask for a recovery at once (the screen's retry
+  // loop, the update gate's reboot loop, the error view's Retry): share
+  // the in-flight attempt instead of queueing back-to-back full dials.
+  const recoverInFlightRef = useRef<Promise<void> | null>(null);
+  const recover = useCallback((): Promise<void> => {
+    if (recoverInFlightRef.current) return recoverInFlightRef.current;
     const handle = handleRef.current;
-    if (!handle) return;
+    if (!handle) return Promise.resolve();
     setPhaseHint('recovering');
-    try {
-      await chainLifecycle(async () => {
-        // Pass the host's robot identity: the engine's own selected id
-        // is nulled by the unsolicited-drop cleanup, and the id itself
-        // may be dead (daemon restart ⇒ fresh central peer id), so the
-        // engine re-resolves the dial target - by name if needed.
-        await handle.recoverSession({ robotId, robotName });
-      });
-    } finally {
-      // Back to engine-driven phase: `live` on success, `error` when
-      // the recovery attempt failed (the engine re-ran onFatalError).
-      setPhaseHint(null);
-    }
+    const attempt = (async () => {
+      try {
+        await chainLifecycle(async () => {
+          // Pass the host's robot identity: the engine's own selected id
+          // is nulled by the unsolicited-drop cleanup, and the id itself
+          // may be dead (daemon restart ⇒ fresh central peer id), so the
+          // engine re-resolves the dial target - by name if needed.
+          await handle.recoverSession({ robotId, robotName });
+        });
+      } finally {
+        recoverInFlightRef.current = null;
+        // Back to engine-driven phase: `live` on success, `error` when
+        // the recovery attempt failed (the engine re-ran onFatalError).
+        setPhaseHint(null);
+      }
+    })();
+    recoverInFlightRef.current = attempt;
+    return attempt;
   }, [robotId, robotName]);
 
   const tearDown = useCallback(async (): Promise<void> => {

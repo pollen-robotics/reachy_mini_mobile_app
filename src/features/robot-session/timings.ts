@@ -70,6 +70,16 @@ export const SESSION_TIMINGS = {
    * even when the chain itself is stuck.
    */
   bootChainUnmountTimeoutMs: 6_000,
+
+  /**
+   * In-place recovery loop after a post-ready fatal (`RobotSessionScreen`).
+   * The window outlasts a home Wi-Fi outage (~30 s) plus the robot
+   * relay's central re-registration (its SSE read timeout is 60 s, and
+   * central lists the stale peer id until then), or a daemon crash +
+   * systemd restart. Attempts are spaced so a failing one doesn't spin.
+   */
+  autoRecoverWindowMs: 90_000,
+  autoRecoverRetryDelayMs: 5_000,
 } as const;
 
 /**

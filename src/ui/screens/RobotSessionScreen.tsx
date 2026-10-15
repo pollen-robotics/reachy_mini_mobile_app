@@ -89,6 +89,7 @@ import {
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { SESSION_TIMINGS } from '@/features/robot-session/timings';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
@@ -595,21 +596,27 @@ function ConnectedSession({
   // connection loss), where a full-screen "Reconnecting" reads as a
   // failure. During reacquire the normal UI stays up and the identity
   // chip's pulsing "Reconnecting" badge is the only indicator.
-  const showRecoveringOverlay = !leaving && session.phase === 'recovering';
-
-  // One-shot in-place recovery. When a session that had already
-  // reached ready dies (SDK re-dial gave up, data-channel fatal,
-  // failed reacquire), retry the bring-up under the compact overlay
+  // In-place recovery loop. When a session that had already reached
+  // ready dies (SDK re-dial gave up, data-channel fatal, failed
+  // reacquire), keep retrying the bring-up under the compact overlay
   // INSTEAD of dumping the user straight onto the fatal error view -
   // whose only exit remounts everything and replays the full
-  // connecting pipeline. One attempt per incident: a second
-  // consecutive fatal falls through to `SessionErrorView` as before.
-  // The latch re-arms once the session is healthy again, so the NEXT
-  // incident gets its own automatic attempt.
-  const autoRecoverTriedRef = useRef(false);
+  // connecting pipeline.
+  //
+  // A single attempt was not enough: the usual killers (home Wi-Fi
+  // dropping robot and phone together for ~30 s, a daemon crash +
+  // systemd restart) keep the robot unreachable for longer than one
+  // attempt, and central still lists the robot's OLD peer id until the
+  // robot's relay notices (up to ~60 s) and re-registers. Each
+  // `recover()` re-resolves the dial target, so retrying every few
+  // seconds lands as soon as the robot is back. Past the window the
+  // error view takes over; the incident resets once we're live again.
+  const [autoRecovering, setAutoRecovering] = useState(false);
+  const recoverIncidentStartRef = useRef<number | null>(null);
   useEffect(() => {
     if (session.phase === 'live') {
-      autoRecoverTriedRef.current = false;
+      recoverIncidentStartRef.current = null;
+      setAutoRecovering(false);
       return;
     }
     if (session.phase !== 'error' || leaving) return;
@@ -619,11 +626,31 @@ function ConnectedSession({
     // While an iframe app owns the slot, the close-path reacquire is
     // the recovery mechanism - don't fight it from underneath.
     if (openedApp !== null) return;
-    if (autoRecoverTriedRef.current) return;
-    autoRecoverTriedRef.current = true;
-    console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
-    void session.recover();
+    const startedAt = recoverIncidentStartRef.current;
+    if (startedAt === null) {
+      recoverIncidentStartRef.current = Date.now();
+      setAutoRecovering(true);
+      console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
+      void session.recover();
+      return;
+    }
+    if (Date.now() - startedAt >= SESSION_TIMINGS.autoRecoverWindowMs) {
+      console.log('[shell-webrtc] auto-recover: robot still unreachable, giving up');
+      setAutoRecovering(false);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      console.log('[shell-webrtc] auto-recover: retrying');
+      void session.recover();
+    }, SESSION_TIMINGS.autoRecoverRetryDelayMs);
+    return () => window.clearTimeout(t);
   }, [session, leaving, openedApp]);
+
+  // The overlay also covers the pauses between two recovery attempts
+  // (the session sits on `error` then), so the error view doesn't
+  // flash up mid-loop.
+  const showRecoveringOverlay =
+    !leaving && (session.phase === 'recovering' || (autoRecovering && session.phase === 'error'));
 
   // Keep-screen-on rule. We only ask the OS to suppress the idle
   // timer while the user is engaged with the robot in a way that
@@ -1247,7 +1274,7 @@ function ConnectedSession({
             critical session-level event it is). The overlay sits
             above all other surfaces and lets the user back out via
             its primary CTA. */}
-        {isError && (
+        {isError && !autoRecovering && (
           <FullScreenTransition>
             <SessionErrorView
               message={session.errorMessage}
