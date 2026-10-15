@@ -40,6 +40,7 @@ import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
+import { installPlaceholderAudioReaper } from "@/features/robot-session/sdk-placeholder-audio";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
@@ -662,6 +663,9 @@ export function createConnectionController(
       // ignored by SDK builds that predate the option.
       autoReconnect: true,
     });
+    // The SDK leaks one AudioContext per dial; close them before they
+    // exhaust the WebView's output-stream budget (see the module doc).
+    installPlaceholderAudioReaper(robot);
     // Hand the SDK ref to the session so its lifecycle methods can use
     // it. The controller's local `robot` stays in sync; the session is
     // the canonical owner from here on.
