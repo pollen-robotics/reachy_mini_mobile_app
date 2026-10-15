@@ -135,6 +135,8 @@ export interface ReachyMiniInstance extends EventTarget {
     /** Body yaw in radians. */
     body_yaw?: number;
     motor_mode?: string;
+    /** A daemon-side move (recorded move, goto, wake/sleep) is playing. */
+    is_move_running?: boolean;
   };
 
   authenticate(): Promise<boolean>;

@@ -29,6 +29,7 @@ import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import CenterFocusWeakOutlinedIcon from '@mui/icons-material/CenterFocusWeakOutlined';
 import MicOffRoundedIcon from '@mui/icons-material/MicOffRounded';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
+import EmojiEmotionsOutlinedIcon from '@mui/icons-material/EmojiEmotionsOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import VolumeOffRoundedIcon from '@mui/icons-material/VolumeOffRounded';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
@@ -37,6 +38,7 @@ import { useDaemonState } from '@/features/daemon-state';
 import { useOverboard } from '@/features/overboard';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { useTelepresence } from '@/features/telepresence';
+import { useEmotionPlayer } from '@/features/emotions';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 
 import { WHEELS_COLOR, glassIconButtonSx, glassSurfaceSx } from './glass';
@@ -44,6 +46,7 @@ import { Joystick, MoveIcon, WheelsIcon } from './joystick';
 import LiveVideo, { type LiveVideoMode } from './LiveVideo';
 import ManualOverboardView from './ManualOverboardView';
 import SoundButton from './SoundButton';
+import EmotionSheet from './EmotionSheet';
 import TelepresenceSettingsSheet from './TelepresenceSettingsSheet';
 
 type DeflectionRef = React.RefObject<{ x: number; y: number }>;
@@ -70,6 +73,7 @@ export default function TelepresencePanel({
   const daemon = useDaemonState();
   const live = session.phase === 'live';
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [emotionsOpen, setEmotionsOpen] = useState(false);
 
   const headRef = useRef<DeflectionRef | null>(null);
   const wheelsRef = useRef<DeflectionRef | null>(null);
@@ -97,6 +101,8 @@ export default function TelepresencePanel({
   // settings sheet so the difference can be felt side by side.
   const [lowLatency, setLowLatency] = useState(true);
   const [videoMode, setVideoMode] = useState<LiveVideoMode>('standard');
+
+  const emotions = useEmotionPlayer({ getRobot: session.getRobot, active: live && !manualMode });
 
   const asleep = live && telepresence.robotAwake === false;
   const motionEnabled = live && allowMotion && telepresence.robotAwake === true;
@@ -308,6 +314,16 @@ export default function TelepresencePanel({
             />
           </>
         )}
+        {!manualMode && (
+          <IconButton
+            aria-label="Play an emotion"
+            onClick={() => setEmotionsOpen(true)}
+            disabled={!live}
+            sx={glassIconButtonSx}
+          >
+            <EmojiEmotionsOutlinedIcon />
+          </IconButton>
+        )}
         <IconButton aria-label="Telepresence settings" onClick={() => setSettingsOpen(true)} sx={glassIconButtonSx}>
           <SettingsOutlinedIcon />
         </IconButton>
@@ -332,6 +348,21 @@ export default function TelepresencePanel({
           Microphone unavailable: {telepresence.talkError}
         </Typography>
       )}
+
+      <EmotionSheet
+        open={emotionsOpen && !manualMode}
+        onClose={() => setEmotionsOpen(false)}
+        player={emotions}
+        blockedReason={
+          !live
+            ? 'Waiting for the robot…'
+            : asleep
+              ? 'Reachy is asleep - wake it up first.'
+              : !allowMotion
+                ? 'Reachy is busy waking up…'
+                : null
+        }
+      />
 
       <TelepresenceSettingsSheet
         open={settingsOpen}
