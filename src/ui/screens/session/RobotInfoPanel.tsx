@@ -93,6 +93,10 @@ import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
 import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import {
+  formatConnectionJournal,
+  useConnectionJournal,
+} from '@/features/robot-session/connection-journal';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
 import Section from '@/ui/design/Section';
@@ -192,6 +196,20 @@ export default function RobotInfoPanel({
 }: RobotInfoPanelProps) {
   const { daemonVersion } = useDaemonState();
   const versionLabel = daemonVersion ? `v${daemonVersion}` : '—';
+
+  // Recent connection incidents, persisted across reloads so the cause
+  // of a drop can still be copied into a bug report after the fact.
+  const journal = useConnectionJournal();
+  const lastIncident = journal.at(-1);
+  const incidentsLabel = lastIncident
+    ? `${journal.length} · last ${new Date(lastIncident.at).toLocaleTimeString()} ${lastIncident.kind}`
+    : 'None recorded';
+  const incidentsCopyText = lastIncident
+    ? formatConnectionJournal(journal, [
+        `App v${__APP_VERSION__}`,
+        `Daemon ${versionLabel}`,
+      ])
+    : undefined;
   const fullHardwareId = hardwareId ?? fallbackId ?? null;
 
   // Daemon log buffer. Lives in the panel host so the copy button
@@ -536,6 +554,17 @@ export default function RobotInfoPanel({
               />
             )}
             {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
+            <MetadataRow
+              label="Incidents"
+              info={
+                'Recent drops, reconnects and recoveries (kept across ' +
+                'app restarts). Copy them into a bug report when the ' +
+                'connection misbehaves.'
+              }
+              value={incidentsLabel}
+              copyable={Boolean(incidentsCopyText)}
+              copyText={incidentsCopyText}
+            />
           </Section>
           {/* Software section. Both version numbers (daemon firmware
             + this mobile app) are surfaced together on ONE row,
@@ -742,6 +771,7 @@ function MetadataRow({
   value,
   mono = false,
   copyable = false,
+  copyText,
   info,
 }: {
   label: string;
@@ -750,6 +780,9 @@ function MetadataRow({
   mono?: boolean;
   /** Render a trailing copy button. Only works for string values. */
   copyable?: boolean;
+  /** What the copy button puts on the clipboard, when it should differ
+   *  from the displayed value (e.g. a summary row copying full detail). */
+  copyText?: string;
   /**
    * When set, render a small `ⓘ` icon next to the label that
    * surfaces this string on hover (desktop) / long-press
@@ -759,7 +792,7 @@ function MetadataRow({
    */
   info?: string;
 }) {
-  const stringValue = typeof value === 'string' ? value : null;
+  const stringValue = copyText ?? (typeof value === 'string' ? value : null);
 
   const handleCopy = useCallback(async () => {
     if (!stringValue) return;

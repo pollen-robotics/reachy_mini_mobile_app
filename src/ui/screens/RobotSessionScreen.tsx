@@ -90,6 +90,7 @@ import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { SESSION_TIMINGS } from '@/features/robot-session/timings';
+import { recordConnectionEvent } from '@/features/robot-session/connection-journal';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
@@ -631,11 +632,13 @@ function ConnectedSession({
       recoverIncidentStartRef.current = Date.now();
       setAutoRecovering(true);
       console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
+      recordConnectionEvent('auto-recover');
       void session.recover();
       return;
     }
     if (Date.now() - startedAt >= SESSION_TIMINGS.autoRecoverWindowMs) {
       console.log('[shell-webrtc] auto-recover: robot still unreachable, giving up');
+      recordConnectionEvent('auto-recover-gave-up');
       setAutoRecovering(false);
       return;
     }

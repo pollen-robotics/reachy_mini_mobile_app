@@ -41,6 +41,7 @@ import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { installPlaceholderAudioReaper } from "@/features/robot-session/sdk-placeholder-audio";
+import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
@@ -231,6 +232,7 @@ export function createConnectionController(
     if (!transportDegraded) {
       transportDegraded = true;
       console.info(`[connection] transport-degraded cause=${cause}`);
+      recordConnectionEvent("degraded", cause);
     }
   };
   const onTransportRecovered = (cause: string): void => {
@@ -242,6 +244,7 @@ export function createConnectionController(
     // before its failures mean anything.
     dcHealth.setSuspended(false);
     console.info(`[connection] transport-recovered cause=${cause}`);
+    recordConnectionEvent("recovered", cause);
   };
 
   // ─── Auto re-dial policy ────────────────────────────────────────
@@ -270,6 +273,10 @@ export function createConnectionController(
     cause: string;
   }): void => {
     redialing = true;
+    recordConnectionEvent(
+      "redialing",
+      `attempt ${detail.attempt}/${detail.maxAttempts}: ${detail.cause}`,
+    );
     console.info(
       `[connection] session-reconnecting attempt=${detail.attempt}/` +
         `${detail.maxAttempts} cause=${detail.cause}`,
@@ -281,6 +288,7 @@ export function createConnectionController(
 
   const onSessionReconnected = (detail: { attempt: number }): void => {
     redialing = false;
+    recordConnectionEvent("redialed", `attempt ${detail.attempt}`);
     console.info(
       `[connection] session-reconnected attempt=${detail.attempt}`,
     );
@@ -631,6 +639,7 @@ export function createConnectionController(
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
     console.error("[main] error:", detail);
+    recordConnectionEvent("fatal", detail);
     // A fatal can land mid-bring-up; don't leak a stale sub-phase
     // into the next connect cycle.
     emitBringUpPhase(null);
