@@ -83,6 +83,8 @@ export interface RobotConversationDeps {
   getLevelsTarget: () => HTMLElement | null;
   onLevels: ((level: ConversationLevelEvent) => void) | null;
   onToolToast: ((toast: ConversationToolToastEvent) => void) | null;
+  /** The robot ended the conversation on its own; the state is already `idle`. */
+  onEnded: () => void;
 }
 
 export interface RobotConversation {
@@ -194,11 +196,24 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     }
   };
 
+  // The robot ended the conversation itself (sent to sleep): the app is
+  // already stopping, so stop following without an `apps.stop`.
+  const onPhase = (params: Record<string, unknown>): void => {
+    if (params.phase !== 'ended' || !running) return;
+    running = false;
+    client = null;
+    setLiveRobot(null);
+    unfollow();
+    deps.setConversationState('idle');
+    deps.onEnded();
+  };
+
   const follow = (activeClient: ConvAppClient): void => {
     unsubscribes.push(
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
-      activeClient.on('conversation.activity', onActivity)
+      activeClient.on('conversation.activity', onActivity),
+      activeClient.on('conversation.phase', onPhase)
     );
     raf = requestAnimationFrame(tick);
   };

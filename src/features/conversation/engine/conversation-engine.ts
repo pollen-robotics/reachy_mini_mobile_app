@@ -468,6 +468,11 @@ const robotConversation = createRobotConversation({
   getLevelsTarget: getAudioLevelsTarget,
   onLevels,
   onToolToast,
+  // Sent to sleep by voice: clear the flags so the next tap starts again.
+  onEnded: () => {
+    convoActiveRequested.off();
+    conversationStarted.off();
+  },
 });
 
 // ─── Host-driven controls ──────────────────────────────────────────────
