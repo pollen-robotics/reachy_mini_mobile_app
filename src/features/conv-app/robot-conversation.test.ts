@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConversationState } from '@/features/conversation/engine/types';
+import { setActiveLanguageId } from '@/features/conversation-language';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { cacheFacts, getFacts } from './memory-cache';
@@ -73,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveLanguageId('en');
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -98,15 +100,38 @@ describe('start', () => {
 
     await expect(conversation.start()).resolves.toBe(true);
 
-    // The last two are the settings sync: the robot's catalog, then its memory.
+    // The settings sync (the robot's catalog, then its memory) runs on the
+    // first answer, then the status is read again.
     expect(calls).toEqual([
       'apps.status',
       'apps.start',
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
     expect(states).toEqual(['starting', 'listening']);
+  });
+
+  it('hands the robot its settings before the backend connects, so it greets once', async () => {
+    setActiveLanguageId('fr');
+    let polls = 0;
+    const { robot, calls } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      // Connected from the second read on, as after a fast backend start.
+      'conversation.status': () => ({ ...READY, backend_connected: polls++ > 0 }),
+      'personalities.all': { personalities: [] },
+      'language.set': (params: Record<string, unknown>) => ({ language: params.language }),
+      'memory.list': { facts: [] },
+    });
+    const { conversation } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+
+    // Pushed after the first status read, which still saw no backend.
+    expect(calls.indexOf('language.set')).toBeGreaterThan(calls.indexOf('conversation.status'));
+    expect(calls.indexOf('language.set')).toBeLessThan(calls.lastIndexOf('conversation.status'));
   });
 
   it('adopts a conversation app that is already running', async () => {
@@ -159,6 +184,7 @@ describe('start', () => {
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
   });
 

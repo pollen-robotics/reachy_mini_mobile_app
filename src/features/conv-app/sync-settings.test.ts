@@ -81,6 +81,28 @@ describe('applySettingsToRobot', () => {
     expect(client.setMemoryEnabled).not.toHaveBeenCalled();
   });
 
+  it('pushes the language before the personality sync, which can be slow', async () => {
+    setActiveLanguageId('fr');
+    const client = fakeClient();
+    client.getPersonalities.mockRejectedValue(new Error('timed out'));
+
+    await applySettingsToRobot(client, status());
+
+    expect(client.setLanguage).toHaveBeenCalledWith('fr');
+  });
+
+  it('still pushes the rest when the robot has no language.set', async () => {
+    setActiveLanguageId('fr');
+    setVisionEnabled(false);
+    const client = fakeClient();
+    client.setLanguage.mockRejectedValue(new Error('method_not_found'));
+
+    await applySettingsToRobot(client, status());
+
+    expect(client.setVisionEnabled).toHaveBeenCalledWith(false);
+    expect(client.getPersonalities).toHaveBeenCalled();
+  });
+
   it('pushes nothing when the robot already agrees', async () => {
     const client = fakeClient();
 
