@@ -53,6 +53,7 @@ function harness(robot: ReachyMiniInstance, daemonVersion: string | null = '1.10
     getLevelsTarget: () => null,
     onLevels: null,
     onToolToast: vi.fn(),
+    onEnded: vi.fn(),
   };
   return { conversation: createRobotConversation(deps), states, errors, deps };
 }
@@ -295,7 +296,7 @@ describe('following the robot', () => {
 
   it('stops the app and unsubscribes on stop', async () => {
     const { conversation, calls, handlers } = await live();
-    expect(handlers.size).toBe(3);
+    expect(handlers.size).toBe(4);
 
     await conversation.stop();
 
@@ -303,5 +304,17 @@ describe('following the robot', () => {
     expect(handlers.size).toBe(0);
     await conversation.stop();
     expect(calls.filter(c => c === 'apps.stop')).toHaveLength(1);
+  });
+
+  it('ends when the robot is sent to sleep, without stopping the app itself', async () => {
+    const { conversation, calls, handlers, emit, states, deps } = await live();
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+
+    expect(states.at(-1)).toBe('idle');
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+    expect(handlers.size).toBe(0);
+    await conversation.stop();
+    expect(calls).not.toContain('apps.stop');
   });
 });
