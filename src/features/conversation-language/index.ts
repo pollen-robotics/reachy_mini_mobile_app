@@ -1,7 +1,8 @@
 /**
  * Public surface of the conversation-language feature.
  *
- * Engine-side: `getActiveLanguageId()` + `getLanguagePromptAppendix()`.
+ * Engine-side: `getActiveLanguageId()`, synced to the robot's
+ *              conversation app as its speech language.
  * UI side: `useActiveLanguageId()` / `useActiveLanguageMeta()` +
  *           `setActiveLanguageId()` mutation + the `LANGUAGES`
  *           catalog for the picker menu.
@@ -22,4 +23,3 @@ export {
   useActiveLanguageId,
   useActiveLanguageMeta,
 } from './store';
-export { getLanguagePromptAppendix } from './prompt-fragment';
