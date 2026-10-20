@@ -77,6 +77,9 @@ export interface ConvAppClient {
   /** Stops whatever app holds the robot, not only the conversation app. */
   stopRunningApp(): Promise<void>;
   installConvApp(): Promise<void>;
+  /** Whether touching the antennas on wake-up starts the conversation app. */
+  isStartupApp(): Promise<boolean>;
+  setStartupApp(enabled: boolean): Promise<void>;
 
   // The running conversation app.
   getStatus(): Promise<ConvAppStatus>;
@@ -116,6 +119,13 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
         { name: CONV_APP_NAME },
         { timeoutMs: INSTALL_TIMEOUT_MS }
       );
+    },
+    async isStartupApp() {
+      const res = await robot.rpcCall<{ name: string | null }>('apps.get_startup');
+      return res.name === CONV_APP_NAME;
+    },
+    async setStartupApp(enabled) {
+      await robot.rpcCall('apps.set_startup', { name: enabled ? CONV_APP_NAME : null });
     },
 
     getStatus() {

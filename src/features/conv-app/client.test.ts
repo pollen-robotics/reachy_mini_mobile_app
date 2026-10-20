@@ -47,6 +47,20 @@ describe('app lifecycle', () => {
     await client.stopRunningApp();
     expect(rpcCall).toHaveBeenCalledWith('apps.stop', {}, { timeoutMs: 15_000 });
   });
+
+  it('reads and sets the antenna start as the daemon startup app', async () => {
+    const { client, rpcCall } = robotReturning({ name: CONV_APP_NAME });
+    expect(await client.isStartupApp()).toBe(true);
+    expect(rpcCall).toHaveBeenCalledWith('apps.get_startup');
+
+    await client.setStartupApp(true);
+    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: CONV_APP_NAME });
+    await client.setStartupApp(false);
+    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: null });
+
+    rpcCall.mockResolvedValueOnce({ name: 'marionette' });
+    expect(await client.isStartupApp()).toBe(false);
+  });
 });
 
 describe('conversation control', () => {
