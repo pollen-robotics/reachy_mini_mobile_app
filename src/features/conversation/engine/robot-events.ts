@@ -31,6 +31,7 @@
  */
 
 import type { RobotSession } from "@/features/robot-session/RobotSession";
+import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
 import type {
   ReachyMiniInstance,
   RobotInfo,
@@ -337,6 +338,19 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
   //   - a terminal give-up (all attempts failed) falls back to the
   //     plain `sessionStopped` event - the unsolicited-drop fatal
   //     path above already owns that surface.
+  // Signaling (central) can drop and come back while the session keeps
+  // streaming peer-to-peer (SDK >= the peer-link liveness change). Nothing
+  // to do but keep a trace: the session is unaffected by design.
+  robot.addEventListener("signalingLost", () => {
+    recordConnectionEvent("signaling-lost", "session kept, reconnecting signaling");
+  });
+  robot.addEventListener("signalingRestored", () => {
+    recordConnectionEvent("signaling-restored");
+  });
+  robot.addEventListener("signalingSessionEnded", () => {
+    recordConnectionEvent("signaling-session-ended", "central dropped it, peer link live: kept");
+  });
+
   robot.addEventListener("sessionReconnecting", (event) => {
     const detail = (
       event as CustomEvent<{

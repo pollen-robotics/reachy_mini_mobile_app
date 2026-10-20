@@ -23,7 +23,10 @@ export type ConnectionEventKind =
   | 'auto-recover'
   | 'auto-recover-retry'
   | 'auto-recovered'
-  | 'auto-recover-gave-up';
+  | 'auto-recover-gave-up'
+  | 'signaling-lost'
+  | 'signaling-restored'
+  | 'signaling-session-ended';
 
 export interface ConnectionEvent {
   /** Epoch ms. */
