@@ -159,7 +159,14 @@ export function createRobotAppsClient(robot: ReachyMiniInstance): RobotAppsClien
       return { jobId: res.job_id };
     },
     async update(name) {
-      const res = await robot.rpcCall<{ job_id: string }>('apps.update', { name });
+      // #1471's reply: {started, job_id}. `started: false` means an update of
+      // this app already runs; its job_id lets us follow that one instead.
+      const res = await robot.rpcCall<{ started?: boolean; job_id?: string }>('apps.update', {
+        name,
+      });
+      if (!res.job_id) {
+        throw Object.assign(new Error('apps.update did not report a job'), { reason: 'busy' });
+      }
       return { jobId: res.job_id };
     },
     async jobStatus(jobId) {

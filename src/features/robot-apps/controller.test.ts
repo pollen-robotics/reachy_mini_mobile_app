@@ -427,3 +427,23 @@ describe('link drops', () => {
     expect(c.getSnapshot().job?.status).toBe('done');
   });
 });
+
+describe('apps.update reply', () => {
+  it('follows the job #1471 returns, also when one already runs', async () => {
+    const fake = fakeRobot({
+      'apps.list_installed': INSTALLED,
+      'apps.status': { state: 'idle' },
+      'apps.update': { started: false, job_id: 'u1' },
+    });
+    const c = new RobotAppsController({ getRobot: () => fake.robot });
+    await expect(c.update('marionette')).resolves.toBe(true);
+    expect(c.getSnapshot().job).toMatchObject({ id: 'u1', kind: 'update' });
+  });
+
+  it('reports busy when the daemon starts nothing', async () => {
+    const fake = fakeRobot({ 'apps.update': { started: false } });
+    const c = new RobotAppsController({ getRobot: () => fake.robot });
+    await expect(c.update('marionette')).resolves.toBe(false);
+    expect(c.getSnapshot().error).toMatch(/already installing/);
+  });
+});
