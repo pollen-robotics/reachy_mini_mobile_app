@@ -12,7 +12,7 @@ import { normalizeApp } from '@/features/apps/useApps';
 import { CONV_APP_NAME } from '@/features/conv-app/client';
 import { WEBSITE_API_URL } from '@/shared/env';
 
-import type { InstalledRobotApp } from './types';
+import type { InstalledRobotApp, RobotAppRunStatus } from './types';
 
 const CATALOG_ENDPOINT = `${WEBSITE_API_URL}/api/apps`;
 export const PYTHON_APPS_QUERY_KEY = ['python-apps-catalog'] as const;
@@ -117,4 +117,48 @@ export function displayNameFor(
   const app = installed?.find(i => i.name === name);
   if (!app) return name;
   return findCatalogEntry(app, catalog)?.name ?? app.title ?? name;
+}
+
+/**
+ * The app holding the slot when the installed list does not list it: its
+ * package was removed while it ran, or the list has not loaded (old daemon).
+ * It is still shown, so it can be stopped.
+ */
+export function orphanRunningApp(
+  installed: readonly InstalledRobotApp[] | null,
+  running: RobotAppRunStatus
+): InstalledRobotApp | null {
+  if (!running.name || running.state === 'idle') return null;
+  if (installed?.some(app => app.name === running.name)) return null;
+  return {
+    name: running.name,
+    spaceId: null,
+    title: null,
+    description: '',
+    emoji: null,
+    private: false,
+    customAppUrl: null,
+  };
+}
+
+/**
+ * The installed app a sheet is about: its installed copy, else the orphan
+ * holding the slot (matched by name, the only thing an orphan has), so the
+ * sheet offers Stop instead of Install for an app that is running.
+ */
+export function sheetInstalledApp(
+  app: AppEntry,
+  installed: readonly InstalledRobotApp[] | null,
+  running: RobotAppRunStatus
+): InstalledRobotApp | null {
+  const found = findInstalled(app, installed);
+  if (found) return found;
+  const orphan = orphanRunningApp(installed, running);
+  const repo = app.id.toLowerCase().split('/').pop();
+  return orphan && orphan.name.toLowerCase() === repo ? orphan : null;
+}
+
+/** Whether an entry names a real Hub Space (`owner/repo`), not a bare app name. */
+export function hasSpaceId(app: AppEntry): boolean {
+  return app.id.includes('/');
 }

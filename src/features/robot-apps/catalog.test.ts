@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { AppEntry } from '@/features/apps/types';
 
-import { findInstalled, normalizePythonCatalog } from './catalog';
+import {
+  findInstalled,
+  hasSpaceId,
+  normalizePythonCatalog,
+  orphanRunningApp,
+  sheetInstalledApp,
+} from './catalog';
 import type { InstalledRobotApp } from './types';
 
 function raw(id: string, extra: Record<string, unknown>, top: Record<string, unknown> = {}) {
@@ -59,5 +65,41 @@ describe('findInstalled', () => {
 
   it('does not match a same-named app from another Space', () => {
     expect(findInstalled(entry, [installed({ spaceId: 'someone/marionette' })])).toBeNull();
+  });
+});
+
+describe('orphans (running, but missing from the installed list)', () => {
+  const running = { state: 'running' as const, name: 'clock', error: null };
+  const idle = { state: 'idle' as const, name: null, error: null };
+  const clockInstalled: InstalledRobotApp = {
+    name: 'clock',
+    spaceId: 'pollen/clock',
+    title: 'Clock',
+    description: '',
+    emoji: null,
+    private: false,
+    customAppUrl: null,
+  };
+
+  it('reports the app holding the slot when the list lacks it', () => {
+    expect(orphanRunningApp([], running)?.name).toBe('clock');
+    expect(orphanRunningApp(null, running)?.name).toBe('clock');
+    expect(orphanRunningApp([clockInstalled], running)).toBeNull();
+    expect(orphanRunningApp([], idle)).toBeNull();
+  });
+
+  it('gives the sheet the orphan for its catalog entry or its bare name', () => {
+    const fromCatalog = { id: 'pollen/clock' } as AppEntry;
+    const bareName = { id: 'clock' } as AppEntry;
+    expect(sheetInstalledApp(fromCatalog, [], running)?.name).toBe('clock');
+    expect(sheetInstalledApp(bareName, [], running)?.name).toBe('clock');
+    expect(sheetInstalledApp({ id: 'pollen/other' } as AppEntry, [], running)).toBeNull();
+    // An installed copy wins over the orphan path.
+    expect(sheetInstalledApp(fromCatalog, [clockInstalled], running)).toBe(clockInstalled);
+  });
+
+  it('tells a Hub Space id from a bare app name', () => {
+    expect(hasSpaceId({ id: 'pollen/clock' } as AppEntry)).toBe(true);
+    expect(hasSpaceId({ id: 'clock' } as AppEntry)).toBe(false);
   });
 });

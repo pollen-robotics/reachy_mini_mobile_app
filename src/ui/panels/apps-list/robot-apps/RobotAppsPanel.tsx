@@ -12,7 +12,11 @@ import StopRoundedIcon from '@mui/icons-material/StopRounded';
 
 import type { AppEntry } from '@/features/apps/types';
 import { CONV_APP_NAME } from '@/features/conv-app/client';
-import { findCatalogEntry, installedAsEntry } from '@/features/robot-apps/catalog';
+import {
+  findCatalogEntry,
+  installedAsEntry,
+  orphanRunningApp,
+} from '@/features/robot-apps/catalog';
 import { describeJobPhase } from '@/features/robot-apps/job-phase';
 import type { InstalledRobotApp } from '@/features/robot-apps/types';
 import type { RobotAppsHandle } from '@/features/robot-apps/useRobotApps';
@@ -43,30 +47,17 @@ export default function RobotAppsPanel({
   const live = running.state === 'running' || running.state === 'starting';
   // Unknown to the installed list (old daemon, list not loaded yet) but
   // holding the slot: still show it, so it can be stopped.
-  const orphanRunning =
-    running.name && running.state !== 'idle' && !installed?.some(i => i.name === running.name)
-      ? running.name
-      : null;
+  const orphan = orphanRunningApp(installed, running);
 
-  if (support === 'unsupported' && !orphanRunning) return null;
-  if (installed === null && !orphanRunning) return null;
+  if (support === 'unsupported' && !orphan) return null;
+  if (installed === null && !orphan) return null;
 
   // The Talk tab owns the conversation app: listed only while it holds the
   // slot (a teardown still under way, a crash), so it can be stopped.
   const rows: InstalledRobotApp[] = (installed ?? []).filter(
     app => app.name !== CONV_APP_NAME || running.name === CONV_APP_NAME
   );
-  if (orphanRunning) {
-    rows.unshift({
-      name: orphanRunning,
-      spaceId: null,
-      title: null,
-      description: '',
-      emoji: null,
-      private: false,
-      customAppUrl: null,
-    });
-  }
+  if (orphan) rows.unshift(orphan);
   const jobRunning = job !== null && (job.status === 'pending' || job.status === 'in_progress');
 
   return (

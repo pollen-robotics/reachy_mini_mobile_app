@@ -32,6 +32,7 @@ import StopRoundedIcon from '@mui/icons-material/StopRounded';
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded';
 
 import type { AppEntry } from '@/features/apps/types';
+import { hasSpaceId } from '@/features/robot-apps/catalog';
 import { crashSummary } from '@/features/robot-apps/crash';
 import { describeJobPhase } from '@/features/robot-apps/job-phase';
 import type { InstalledRobotApp, RobotAppJob } from '@/features/robot-apps/types';
@@ -199,7 +200,7 @@ export default function RobotAppSheet({
             )}
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {!installed && (
+              {!installed && hasSpaceId(app) && (
                 <ActionButton
                   primary
                   icon={<DownloadRoundedIcon />}
@@ -267,15 +268,19 @@ export default function RobotAppSheet({
                 </Box>
               )}
 
-              <Button
-                variant="text"
-                size="small"
-                endIcon={<OpenInNewIcon sx={{ fontSize: TYPO.md }} />}
-                onClick={() => void openExternalUrl(app.spaceUrl)}
-                sx={{ alignSelf: 'center', textTransform: 'none', fontSize: TYPO.xs, mt: 0.5 }}
-              >
-                View on Hugging Face
-              </Button>
+              {/* An orphan the catalog does not list has no Space to open
+                  (or to install from: its bare name is no Space id). */}
+              {hasSpaceId(app) && (
+                <Button
+                  variant="text"
+                  size="small"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: TYPO.md }} />}
+                  onClick={() => void openExternalUrl(app.spaceUrl)}
+                  sx={{ alignSelf: 'center', textTransform: 'none', fontSize: TYPO.xs, mt: 0.5 }}
+                >
+                  View on Hugging Face
+                </Button>
+              )}
             </Box>
           </Box>
         )}

@@ -116,7 +116,7 @@ import { useMyApps } from '@/features/apps/useMyApps';
 import { MAX_PINNED, usePinnedApps } from '@/features/apps/usePinnedApps';
 import {
   displayNameFor,
-  findInstalled,
+  sheetInstalledApp,
   usePythonAppsCatalog,
 } from '@/features/robot-apps/catalog';
 import type { RobotAppsHandle } from '@/features/robot-apps/useRobotApps';
@@ -220,7 +220,10 @@ export default function AppsTabView({ onOpen, robotApps, ref }: AppsTabViewProps
   const pythonCatalog = usePythonAppsCatalog(true);
   // Python app whose sheet is open (install / start / stop / ...).
   const [sheetApp, setSheetApp] = useState<AppEntry | null>(null);
-  const sheetInstalled = sheetApp ? findInstalled(sheetApp, robotApps.snapshot.installed) : null;
+  // The running orphan counts too, so its sheet offers Stop, not Install.
+  const sheetInstalled = sheetApp
+    ? sheetInstalledApp(sheetApp, robotApps.snapshot.installed, robotApps.snapshot.running)
+    : null;
   // Quick start from the launcher row. Replacing another running app needs
   // the user's go-ahead, which the sheet asks for.
   const handleQuickStart = useCallback(
