@@ -42,10 +42,16 @@ describe('app lifecycle', () => {
     );
   });
 
-  it('stops whatever app holds the robot, without naming one', async () => {
-    const { client, rpcCall } = robotReturning({ stopped: true });
-    await client.stopRunningApp();
-    expect(rpcCall).toHaveBeenCalledWith('apps.stop', {}, { timeoutMs: 15_000 });
+  it('stops the conversation app when it is the one running', async () => {
+    const { client, rpcCall } = robotReturning({ state: 'running', info: { name: CONV_APP_NAME } });
+    await client.stopConvApp();
+    expect(rpcCall).toHaveBeenLastCalledWith('apps.stop', {}, { timeoutMs: 15_000 });
+  });
+
+  it('leaves any other app running', async () => {
+    const { client, rpcCall } = robotReturning({ state: 'running', info: { name: 'marionette' } });
+    await client.stopConvApp();
+    expect(rpcCall).not.toHaveBeenCalledWith('apps.stop', expect.anything(), expect.anything());
   });
 });
 

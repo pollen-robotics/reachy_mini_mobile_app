@@ -236,12 +236,25 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (name === CONV_APP_NAME) return null;
       return `Reachy is busy with ${name ?? 'another app'}. Stop it from the Apps tab first.`;
     }
+    if (app.state === 'error') {
+      // A crashed app has no process left but still holds the slot: clear
+      // it, or the start below reads `already_running` and the readiness
+      // poll talks to a dead app for a minute.
+      await activeClient.stopCurrentApp().catch((err: unknown) => {
+        console.debug('[robot-conversation] clearing a crashed app:', err);
+      });
+    }
     try {
       await activeClient.startConvApp();
       return null;
     } catch (err) {
       const reason = rpcErrorReason(err);
-      if (reason === 'already_running') return null;
+      if (reason === 'already_running') {
+        // Fine if it is ours (another tab, a race); not if someone else's.
+        const now = await activeClient.getCurrentAppStatus();
+        if (now.info?.name === CONV_APP_NAME) return null;
+        return `Reachy is busy with ${now.info?.name ?? 'another app'}. Stop it from the Apps tab first.`;
+      }
       // A reasoned refusal we did not anticipate is most likely "not
       // installed" on a fresh robot. No reason at all is a transport
       // problem, and installing would not help.
@@ -337,9 +350,12 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       client = null;
       if (!activeClient) return;
       try {
-        await activeClient.stopRunningApp();
+        // Only ever stop our own app: after a refused start ("busy with X")
+        // the robot runs an app the user launched from the Apps tab, and
+        // leaving the Talk tab must not kill it.
+        await activeClient.stopConvApp();
       } catch (err) {
-        // `internal_error` here means nothing was running; either way the
+        // `not_running` here means nothing was running; either way the
         // robot is free, which is all the caller needs.
         console.debug('[robot-conversation] apps.stop:', err);
       }

@@ -78,6 +78,40 @@ afterEach(() => {
 });
 
 describe('start', () => {
+  it('clears a crashed app holding the slot before starting', async () => {
+    let state: Record<string, unknown> = { state: 'error', info: { name: 'marionette' } };
+    const { robot, calls } = fakeRobot({
+      'apps.status': () => state,
+      'apps.stop': () => {
+        state = { state: 'idle' };
+        return { stopped: true };
+      },
+      'apps.start': () => {
+        state = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+        return state;
+      },
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+    });
+    const { conversation } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+    expect(calls.indexOf('apps.stop')).toBeLessThan(calls.indexOf('apps.start'));
+  });
+
+  it('reports another app that won the slot during the start', async () => {
+    let reads = 0;
+    const { robot } = fakeRobot({
+      'apps.status': () =>
+        reads++ === 0 ? { state: 'idle' } : { state: 'running', info: { name: 'marionette' } },
+      'apps.start': Object.assign(new Error('busy'), { reason: 'already_running' }),
+    });
+    const { conversation, errors } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(false);
+    expect(errors.at(-1)).toMatch(/busy with marionette/);
+  });
+
   it('refuses a daemon too old to relay JSON-RPC', async () => {
     const { robot, calls } = fakeRobot({});
     const { conversation, errors } = harness(robot, '1.9.3');
@@ -210,9 +244,16 @@ describe('start', () => {
 
 describe('following the robot', () => {
   async function live() {
+    let started = false;
     const fake = fakeRobot({
-      'apps.status': { state: 'idle' },
-      'apps.start': {},
+      'apps.status': () =>
+        started
+          ? { state: 'running', info: { name: 'reachy_mini_conversation_app' } }
+          : { state: 'idle' },
+      'apps.start': () => {
+        started = true;
+        return {};
+      },
       'apps.stop': {},
       'conversation.status': READY,
       'memory.list': { facts: [] },
@@ -277,5 +318,18 @@ describe('following the robot', () => {
     expect(handlers.size).toBe(0);
     await conversation.stop();
     expect(calls.filter(c => c === 'apps.stop')).toHaveLength(1);
+  });
+
+  it('leaves an app the user launched running when a refused start is torn down', async () => {
+    const { robot, calls } = fakeRobot({
+      'apps.status': { state: 'running', info: { name: 'marionette' } },
+    });
+    const { conversation, errors } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(false);
+    expect(errors.at(-1)).toMatch(/busy with marionette/);
+    await conversation.stop();
+
+    expect(calls).not.toContain('apps.stop');
   });
 });

@@ -93,6 +93,7 @@ import { rememberRobotPersona, useActivePersonality } from '@/features/personali
 import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
+import { useRobotApps } from '@/features/robot-apps/useRobotApps';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
 import ConnectingView from './session/ConnectingView';
@@ -454,6 +455,14 @@ function ConnectedSession({
    * release.
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
+  // Python apps on the robot. Polled only while the Apps tab is on screen
+  // over a live session; an iframe app holds the session otherwise.
+  const robotApps = useRobotApps({
+    robotId,
+    getRobot: session.getRobot,
+    active: tab === 'apps' && session.phase === 'live' && openedApp === null,
+    online: session.phase === 'live' && openedApp === null,
+  });
   // Robot Settings overlay, toggled from the topbar cog. This is now the
   // single topbar sheet: it leads with robot-level Audio + the
   // conversation options, and drills into "About & diagnostics" (the old
@@ -907,7 +916,7 @@ function ConnectedSession({
                 flexDirection: 'column',
               }}
             >
-              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} />
+              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} robotApps={robotApps} />
             </Box>
           )}
 

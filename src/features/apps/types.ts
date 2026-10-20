@@ -12,10 +12,11 @@
  * without forcing another normalization pass.
  *
  * Cross-reference: the desktop app uses a much richer normalization
- * step that includes installed-on-daemon merging. Mobile doesn't
- * install apps; it only ever shows them as iframes pointing at the
- * canonical HF Space runtime URL. So we deliberately keep the
- * surface tiny here.
+ * step that includes installed-on-daemon merging. Here the JS apps
+ * only ever show as iframes pointing at the canonical HF Space
+ * runtime URL, so we deliberately keep the surface tiny. Python apps
+ * (installed and run on the robot) reuse this shape for their
+ * catalog; their robot-side state lives in `features/robot-apps/`.
  */
 /**
  * The Space's HF SDK. Drives which subdomain pattern carries the
