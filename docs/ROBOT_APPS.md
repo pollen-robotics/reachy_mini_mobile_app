@@ -43,7 +43,8 @@ inline `install` that reported no progress. The daemon branch adds:
 | `apps.list_installed` | – | `{apps: [{name, description, url, space_id, title, emoji, private, custom_app_url}]}` |
 | `apps.install_space` | `{space_id: "owner/repo"}` | `{job_id, name}`. The Space is resolved on the Hub with the robot's token, so the owner's private Spaces work too. It must carry the `reachy_mini_python_app` tag. |
 | `apps.remove` | `{name}` | `{job_id}` |
-| `apps.update` | `{name}` | `{job_id}` |
+| `apps.update` | `{name}` | `{started, job_id}` (#1471's API). The app is stopped first if it runs; a second call while it updates answers `started: false` with the running job's id. |
+| `apps.check_update` | `{name}` | `{installed, version, update_available, checkable, updating, error}` (#1471). `checkable: false` means the source can't be checked, not "up to date". |
 | `apps.job_status` | `{job_id}` | `{job_id, command, status, logs}` |
 | `apps.restart` | – | status. The phone's session is kept (`keep_remote`); the REST restart evicts it. |
 | notification `apps.job_progress` | – | `{job_id, command, status, line, final}`, one per log line plus a final event |
