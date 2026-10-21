@@ -263,11 +263,30 @@ export function createConnectionController(
    * so it is cleared and re-synced. The video path heals itself via
    * the SDK's `videoTrack` re-fire + the cache listener.
    */
+  // A redial suspends dc-health, gates pose writes and puts up the
+  // "Reconnecting…" caption. `sessionReconnected` lifts all three, but the
+  // SDK cancels a redial silently (Hub app handoff, stop, disconnect):
+  // then the session comes back through reacquire / recover instead, and
+  // nothing lifted them - a live session stuck under "Reconnecting…" with
+  // its pose writes gated. Lifted on whichever comes first.
+  let redialPending = false;
+  const endRedialState = (cause: string): void => {
+    if (!redialPending) return;
+    redialPending = false;
+    dcHealth.setSuspended(false);
+    onTransportRecovered(cause);
+    emitErrorMessage(null);
+  };
+  connection.subscribe((next) => {
+    if (next === "live" || next === "released") endRedialState(`connection=${next}`);
+  });
+
   const onSessionReconnecting = (detail: {
     attempt: number;
     maxAttempts: number;
     cause: string;
   }): void => {
+    redialPending = true;
     recordConnectionEvent(
       "redialing",
       `attempt ${detail.attempt}/${detail.maxAttempts}: ${detail.cause}`,
@@ -289,9 +308,7 @@ export function createConnectionController(
     console.info(
       `[connection] session-reconnected attempt=${detail.attempt}`,
     );
-    dcHealth.setSuspended(false);
-    onTransportRecovered("redial");
-    emitErrorMessage(null);
+    endRedialState("redial");
     // Promote back to `live`. A phone-side network drop also kills the
     // SDK's central SSE feed, and its `disconnected` event demotes the
     // FSM to `authenticated` (see `robot-events.ts`). That demotion
