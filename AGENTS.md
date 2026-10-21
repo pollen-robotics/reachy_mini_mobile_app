@@ -332,6 +332,7 @@ truth because `gen/` is regenerated.
 | `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
 | `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/ROBOT_APPS.md` | Python apps on the robot: install / start / stop over JSON-RPC, wire contract, known gaps |
+| `docs/AGENT_TESTING.md` | Testing on a real phone + robot: build/install, driving the app over CDP (`scripts/agent-testing/`), test matrix |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
 
 ## Notes for HF Space authors
