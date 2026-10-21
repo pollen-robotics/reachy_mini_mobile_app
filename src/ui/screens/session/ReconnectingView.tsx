@@ -17,16 +17,23 @@
  * these paths restore an existing relationship, they don't build a
  * new one.
  */
-import { CircularProgress, Stack, Typography } from '@mui/material';
+import { Button, CircularProgress, Stack, Typography } from '@mui/material';
 
 import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
 
-export default function ReconnectingView() {
+interface ReconnectingViewProps {
+  /** Give up and go back to the robot list. The recovery loop can run
+   *  for minutes (90 s, longer after an update), so the overlay must
+   *  never trap the user. */
+  onBack?: () => void;
+}
+
+export default function ReconnectingView({ onBack }: ReconnectingViewProps) {
   // No attempt counter here on purpose: "Attempt 2 of 2" reads as a
   // countdown to failure and adds anxiety without giving the user
   // anything actionable. One calm, constant line is enough - if the
   // retries run out, the error view takes over anyway.
-  const caption = 'This should only take a few seconds…';
+  const caption = 'Hang on, your Reachy should be back shortly…';
 
   return (
     <Stack
@@ -65,6 +72,11 @@ export default function ReconnectingView() {
           {caption}
         </Typography>
       </Stack>
+      {onBack && (
+        <Button variant="text" onClick={onBack} sx={{ mt: 1 }}>
+          Back to robots
+        </Button>
+      )}
     </Stack>
   );
 }

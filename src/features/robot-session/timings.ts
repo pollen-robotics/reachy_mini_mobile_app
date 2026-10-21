@@ -80,6 +80,12 @@ export const SESSION_TIMINGS = {
    */
   autoRecoverWindowMs: 90_000,
   autoRecoverRetryDelayMs: 5_000,
+
+  /**
+   * The same loop's window while the update gate reports the robot
+   * restarting after a self-update: a reinstall + reboot outlasts 90 s.
+   */
+  rebootRecoverWindowMs: 240_000,
 } as const;
 
 /**

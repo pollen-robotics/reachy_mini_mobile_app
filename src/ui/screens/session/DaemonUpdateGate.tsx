@@ -19,9 +19,10 @@
  *   - show the live daemon log tail (`subscribeLogs`) while it runs,
  *   - treat the session dropping out of `live` as "the restart began"
  *     (→ rebooting),
- *   - DRIVE the reconnection while rebooting: re-run `session.recover()`
- *     every time the session lands on `error`, until it's `live` again or
- *     `REBOOT_RECONNECT_TIMEOUT_MS` runs out (→ lost),
+ *   - tell the screen the robot is rebooting (`onRebootingChange`): its
+ *     in-place recovery loop - the only one - keeps re-dialing for the
+ *     longer reboot window (`SESSION_TIMINGS.rebootRecoverWindowMs`),
+ *     after which we show `lost`,
  *   - re-read the version when the session comes back to confirm.
  *
  * The restart often outlasts the engine's auto-reconnect budget, so we
@@ -41,6 +42,7 @@ import updateBoxUrl from '@/assets/reachy-update-box.svg';
 import { compareSemver, isDaemonOutdated, parseSemver } from '@/features/daemon-update/latestRelease';
 import { useDaemonLogs } from '@/features/daemon-logs';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import { SESSION_TIMINGS } from '@/features/robot-session/timings';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
@@ -49,17 +51,6 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
  *  update, something went wrong silently → surface a failure. */
 const UPDATE_STALL_TIMEOUT_MS = 180_000;
 
-/**
- * Reboot reconnect loop. The screen's own auto-recover is ONE-shot and
- * fires the instant the session drops - i.e. while the daemon is still
- * going down and central still lists its old peer id - so it always burns
- * its attempt ~20 s before the restarted robot is reachable. While the
- * gate says "rebooting" we keep re-dialing ourselves (each `recover()`
- * re-resolves the fresh peer id from central) with a short pause between
- * attempts, and give up after the window below.
- */
-const REBOOT_RETRY_DELAY_MS = 5_000;
-const REBOOT_RECONNECT_TIMEOUT_MS = 240_000;
 
 /**
  * First daemon release that understands the in-app WebRTC `start_update`
@@ -113,12 +104,19 @@ interface DaemonUpdateGateProps {
   latestVersion: string | null;
   /** Leave the session and return to the robot list. */
   onBackToRobots: () => void;
+  /**
+   * The robot is restarting to finish the update (or the user chose to
+   * keep waiting for it). The screen's recovery loop stretches its window
+   * to `SESSION_TIMINGS.rebootRecoverWindowMs` meanwhile.
+   */
+  onRebootingChange?: (rebooting: boolean) => void;
 }
 
 export default function DaemonUpdateGate({
   session,
   latestVersion,
   onBackToRobots,
+  onRebootingChange,
 }: DaemonUpdateGateProps) {
   const live = session.phase === 'live';
   const [phase, setPhase] = useState<Phase>('idle');
@@ -126,8 +124,12 @@ export default function DaemonUpdateGate({
   // rest of this session even if a version read momentarily lags.
   const completedRef = useRef(false);
 
-  const { getDaemonVersion, recover } = session;
-  const sessionPhase = session.phase;
+  const { getDaemonVersion } = session;
+
+  const rebooting = phase === 'rebooting';
+  useEffect(() => {
+    onRebootingChange?.(rebooting);
+  }, [rebooting, onRebootingChange]);
 
   // Initial detection reads the version the connection layer resolved
   // DURING bring-up (`session.daemonVersion`), emitted just before the
@@ -168,7 +170,9 @@ export default function DaemonUpdateGate({
 
   // Reconnected after the restart → confirm and finish.
   useEffect(() => {
-    if (phase !== 'rebooting' || !live) return;
+    // `lost` too: the robot can still come back after the window, and a
+    // late success must finish the flow instead of staying on "lost".
+    if ((phase !== 'rebooting' && phase !== 'lost') || !live) return;
     let cancelled = false;
     void getDaemonVersion().then((v) => {
       if (cancelled) return;
@@ -181,22 +185,9 @@ export default function DaemonUpdateGate({
     };
   }, [phase, live, getDaemonVersion]);
 
-  // Keep re-dialing while the robot restarts. Re-armed by every
-  // `recovering → error` transition, so a failed attempt schedules the
-  // next one; stops as soon as the session is back (`live` flips the
-  // phase to `done` above) or the window below expires.
-  useEffect(() => {
-    if (phase !== 'rebooting' || sessionPhase !== 'error') return;
-    const t = window.setTimeout(() => {
-      console.log('[update-gate] robot restarting: re-dialing');
-      void recover();
-    }, REBOOT_RETRY_DELAY_MS);
-    return () => window.clearTimeout(t);
-  }, [phase, sessionPhase, recover]);
-
   useEffect(() => {
     if (phase !== 'rebooting') return;
-    const t = window.setTimeout(() => setPhase('lost'), REBOOT_RECONNECT_TIMEOUT_MS);
+    const t = window.setTimeout(() => setPhase('lost'), SESSION_TIMINGS.rebootRecoverWindowMs);
     return () => window.clearTimeout(t);
   }, [phase]);
 

@@ -115,9 +115,6 @@ export interface ConnectionController {
   /** Classify + surface a fatal error, flip the connection FSM to
    *  `error`, and tear the session down. */
   onFatalError(err: unknown): Promise<void>;
-  /** True while the SDK is re-dialing a dead transport: the old PC is
-   *  gone and the new one isn't up yet, so nothing can reach the robot. */
-  isRedialing(): boolean;
   /** Kick the boot chain and install background-tab resilience. Call
    *  once, after the conversation pipeline is wired. Returns the boot
    *  promise (for the unmount guard) + the resilience disposer. */
@@ -266,13 +263,11 @@ export function createConnectionController(
    * so it is cleared and re-synced. The video path heals itself via
    * the SDK's `videoTrack` re-fire + the cache listener.
    */
-  let redialing = false;
   const onSessionReconnecting = (detail: {
     attempt: number;
     maxAttempts: number;
     cause: string;
   }): void => {
-    redialing = true;
     recordConnectionEvent(
       "redialing",
       `attempt ${detail.attempt}/${detail.maxAttempts}: ${detail.cause}`,
@@ -287,8 +282,10 @@ export function createConnectionController(
   };
 
   const onSessionReconnected = (detail: { attempt: number }): void => {
-    redialing = false;
     recordConnectionEvent("redialed", `attempt ${detail.attempt}`);
+    // Fresh RTCPeerConnection: point the transport monitor (signal bars,
+    // latency badge) at it, or it keeps polling the closed one ("0 ms").
+    session.restartTransportMonitor();
     console.info(
       `[connection] session-reconnected attempt=${detail.attempt}`,
     );
@@ -589,7 +586,6 @@ export function createConnectionController(
   }
 
   async function teardown(): Promise<void> {
-    redialing = false;
     // Announce the connection is going down. The conversation seam
     // tears its pipeline WITHOUT glide here - `gotoSleep` below is
     // about to play its own head + antennas trajectory and a 700ms
@@ -809,7 +805,6 @@ export function createConnectionController(
     connect: doConnect,
     teardown,
     onFatalError,
-    isRedialing: () => redialing,
     start,
   };
 }

@@ -86,3 +86,36 @@ describe('connection journal', () => {
     expect(lines[2]).toMatch(/ auto-recover$/);
   });
 });
+
+describe('connection journal hygiene', () => {
+  it('drops malformed stored entries instead of crashing readers', () => {
+    localStorage.setItem(
+      'reachy.connection-journal.v1',
+      JSON.stringify([{ at: 'yesterday', kind: 'fatal' }, null, { at: 5, kind: 'fatal' }]),
+    );
+    resetConnectionJournalCacheForTests();
+
+    expect(readConnectionJournal()).toEqual([{ at: 5, kind: 'fatal' }]);
+  });
+
+  it('keeps peer ids, robot names and tokens out of the journal', () => {
+    recordConnectionEvent(
+      'fatal',
+      'Robot did not come back (id=09bb7cb2-1eb9-4433-9eeb-f5f74b9010b8, name=reachy_mini) token hf_abcdefghijkl',
+    );
+
+    expect(readConnectionJournal()[0].detail).toBe(
+      'Robot did not come back (id=<id>, name=<robot>) token <token>',
+    );
+  });
+
+  it('folds a failed recovery attempt into one entry', () => {
+    recordConnectionEvent('auto-recover-retry', '13 s into the incident');
+    recordConnectionEvent('fatal', 'Robot did not respond in time');
+
+    const events = readConnectionJournal();
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('auto-recover-retry');
+    expect(events[0].detail).toBe('13 s into the incident - failed: Robot did not respond in time');
+  });
+});

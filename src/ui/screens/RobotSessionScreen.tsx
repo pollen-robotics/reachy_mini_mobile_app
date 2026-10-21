@@ -614,8 +614,18 @@ function ConnectedSession({
   // error view takes over; the incident resets once we're live again.
   const [autoRecovering, setAutoRecovering] = useState(false);
   const recoverIncidentStartRef = useRef<number | null>(null);
+  // Set by the update gate while the robot restarts after a self-update:
+  // the loop then gets the longer reboot window. "Keep waiting" re-arms
+  // it, which restarts the incident below.
+  const [daemonRebooting, setDaemonRebooting] = useState(false);
   useEffect(() => {
-    if (session.phase === 'live') {
+    if (daemonRebooting) recoverIncidentStartRef.current = null;
+  }, [daemonRebooting]);
+  // Depend on these, not on `session`: the handle is a new object on
+  // every render, which re-ran the effect and restarted the retry timer.
+  const { phase: sessionPhase, hasReachedReady, recover } = session;
+  useEffect(() => {
+    if (sessionPhase === 'live') {
       const startedAt = recoverIncidentStartRef.current;
       if (startedAt !== null) {
         recordConnectionEvent(
@@ -627,10 +637,10 @@ function ConnectedSession({
       setAutoRecovering(false);
       return;
     }
-    if (session.phase !== 'error' || leaving) return;
+    if (sessionPhase !== 'error' || leaving) return;
     // Initial bring-up failures keep the full error UX: there is no
     // "known good" state to restore, the pipeline narrative is honest.
-    if (!session.hasReachedReady) return;
+    if (!hasReachedReady) return;
     // While an iframe app owns the slot, the close-path reacquire is
     // the recovery mechanism - don't fight it from underneath.
     if (openedApp !== null) return;
@@ -640,10 +650,13 @@ function ConnectedSession({
       setAutoRecovering(true);
       console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
       recordConnectionEvent('auto-recover');
-      void session.recover();
+      void recover();
       return;
     }
-    if (Date.now() - startedAt >= SESSION_TIMINGS.autoRecoverWindowMs) {
+    const windowMs = daemonRebooting
+      ? SESSION_TIMINGS.rebootRecoverWindowMs
+      : SESSION_TIMINGS.autoRecoverWindowMs;
+    if (Date.now() - startedAt >= windowMs) {
       console.log('[shell-webrtc] auto-recover: robot still unreachable, giving up');
       recordConnectionEvent('auto-recover-gave-up');
       setAutoRecovering(false);
@@ -655,10 +668,10 @@ function ConnectedSession({
         'auto-recover-retry',
         `${Math.round((Date.now() - startedAt) / 1000)} s into the incident`,
       );
-      void session.recover();
+      void recover();
     }, SESSION_TIMINGS.autoRecoverRetryDelayMs);
     return () => window.clearTimeout(t);
-  }, [session, leaving, openedApp]);
+  }, [sessionPhase, hasReachedReady, recover, leaving, openedApp, daemonRebooting]);
 
   // The overlay also covers the pauses between two recovery attempts
   // (the session sits on `error` then), so the error view doesn't
@@ -1267,7 +1280,7 @@ function ConnectedSession({
             here (see `showRecoveringOverlay`). */}
         {showRecoveringOverlay && (
           <FullScreenTransition>
-            <ReconnectingView />
+            <ReconnectingView onBack={handleLeave} />
           </FullScreenTransition>
         )}
         {/* Full-screen leaving transition: covers EVERYTHING while the
@@ -1318,6 +1331,7 @@ function ConnectedSession({
             session={session}
             latestVersion={latestDaemonVersion}
             onBackToRobots={handleLeave}
+            onRebootingChange={setDaemonRebooting}
           />
         )}
 

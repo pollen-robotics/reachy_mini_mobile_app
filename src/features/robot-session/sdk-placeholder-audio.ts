@@ -21,9 +21,10 @@
  * instance's `_startSessionInternal` to capture the context it builds
  * (it is constructed synchronously, before the method's first
  * `await`), close the previous one before each new dial, and close the
- * current one on `sessionStopped`. Reaches into a private SDK method,
- * like `release-sdk-phone-mic.ts`; if the method is renamed this
- * becomes a no-op and the leak comes back.
+ * current one on `sessionStopped`. Reaches into a private SDK method;
+ * if the method is renamed this becomes a no-op and the leak comes
+ * back. An SDK that closes the context itself (it then has a `_micCtx`
+ * field, pollen-robotics/reachy_mini#1480) turns this off.
  */
 
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
@@ -35,6 +36,8 @@ interface SdkInternals {
 }
 
 export function installPlaceholderAudioReaper(robot: ReachyMiniInstance): void {
+  // Fixed SDK: it owns and closes its placeholder context.
+  if ('_micCtx' in robot) return;
   const sdk = robot as unknown as SdkInternals;
   const dial = sdk._startSessionInternal;
   if (typeof dial !== 'function') return;

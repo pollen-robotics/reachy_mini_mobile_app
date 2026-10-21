@@ -42,24 +42,62 @@ const MAX_DETAIL_LENGTH = 300;
 let cache: ConnectionEvent[] | null = null;
 const listeners = new Set<() => void>();
 
+/** Storage is untrusted (older builds, manual edits): keep well-formed entries only. */
+function isEvent(value: unknown): value is ConnectionEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.at === 'number' &&
+    Number.isFinite(e.at) &&
+    typeof e.kind === 'string' &&
+    (e.detail === undefined || typeof e.detail === 'string')
+  );
+}
+
 function load(): ConnectionEvent[] {
   if (cache) return cache;
   try {
     const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    cache = Array.isArray(parsed) ? (parsed as ConnectionEvent[]) : [];
+    cache = Array.isArray(parsed) ? parsed.filter(isEvent) : [];
   } catch {
     cache = [];
   }
   return cache;
 }
 
+/**
+ * Keep identifiers out of the journal, since it is copied into bug reports:
+ * peer / session ids (UUIDs), robot names and HF tokens.
+ */
+export function scrubDetail(detail: string): string {
+  return detail
+    .replace(/hf_[A-Za-z0-9_-]{8,}/g, '<token>')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>')
+    .replace(/\bname=[^,)]*/g, 'name=<robot>');
+}
+
+const ATTEMPT_KINDS: readonly ConnectionEventKind[] = ['auto-recover', 'auto-recover-retry'];
+
 export function recordConnectionEvent(kind: ConnectionEventKind, detail?: string): void {
-  const entry: ConnectionEvent = { at: Date.now(), kind };
-  if (detail) entry.detail = detail.slice(0, MAX_DETAIL_LENGTH);
-  // New array on every write: `useSyncExternalStore` compares snapshots
-  // by identity.
-  cache = [...load(), entry].slice(-MAX_ENTRIES);
+  const clean = detail ? scrubDetail(detail).slice(0, MAX_DETAIL_LENGTH) : undefined;
+  const events = load();
+  const last = events.at(-1);
+  // A recovery attempt that fails logs its fatal right after the attempt:
+  // fold it into that entry, so an incident costs one slot per attempt.
+  if (kind === 'fatal' && last && ATTEMPT_KINDS.includes(last.kind) && !last.detail?.includes('failed:')) {
+    const merged: ConnectionEvent = {
+      ...last,
+      detail: [last.detail, `failed: ${clean ?? 'unknown'}`].filter(Boolean).join(' - ').slice(0, MAX_DETAIL_LENGTH),
+    };
+    cache = [...events.slice(0, -1), merged];
+  } else {
+    const entry: ConnectionEvent = { at: Date.now(), kind };
+    if (clean) entry.detail = clean;
+    // New array on every write: `useSyncExternalStore` compares snapshots
+    // by identity.
+    cache = [...events, entry].slice(-MAX_ENTRIES);
+  }
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(cache));
   } catch {

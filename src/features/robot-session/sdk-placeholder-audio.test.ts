@@ -83,6 +83,15 @@ describe('installPlaceholderAudioReaper', () => {
     );
   });
 
+  it('turns itself off on an SDK that closes its own context', async () => {
+    const sdk = makeSdk() as FakeSdk & { _micCtx: null };
+    sdk._micCtx = null;
+    const dial = sdk._startSessionInternal;
+    installPlaceholderAudioReaper(sdk as unknown as ReachyMiniInstance);
+
+    expect(sdk._startSessionInternal).toBe(dial);
+  });
+
   it('is a no-op when the SDK has no private dial method', () => {
     const sdk = new EventTarget();
     expect(() =>
