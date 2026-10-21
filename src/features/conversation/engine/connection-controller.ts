@@ -40,6 +40,8 @@ import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
+import { installPlaceholderAudioReaper } from "@/features/robot-session/sdk-placeholder-audio";
+import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
@@ -227,6 +229,7 @@ export function createConnectionController(
     if (!transportDegraded) {
       transportDegraded = true;
       console.info(`[connection] transport-degraded cause=${cause}`);
+      recordConnectionEvent("degraded", cause);
     }
   };
   const onTransportRecovered = (cause: string): void => {
@@ -238,6 +241,7 @@ export function createConnectionController(
     // before its failures mean anything.
     dcHealth.setSuspended(false);
     console.info(`[connection] transport-recovered cause=${cause}`);
+    recordConnectionEvent("recovered", cause);
   };
 
   // ─── Auto re-dial policy ────────────────────────────────────────
@@ -264,6 +268,10 @@ export function createConnectionController(
     maxAttempts: number;
     cause: string;
   }): void => {
+    recordConnectionEvent(
+      "redialing",
+      `attempt ${detail.attempt}/${detail.maxAttempts}: ${detail.cause}`,
+    );
     console.info(
       `[connection] session-reconnecting attempt=${detail.attempt}/` +
         `${detail.maxAttempts} cause=${detail.cause}`,
@@ -274,6 +282,10 @@ export function createConnectionController(
   };
 
   const onSessionReconnected = (detail: { attempt: number }): void => {
+    recordConnectionEvent("redialed", `attempt ${detail.attempt}`);
+    // Fresh RTCPeerConnection: point the transport monitor (signal bars,
+    // latency badge) at it, or it keeps polling the closed one ("0 ms").
+    session.restartTransportMonitor();
     console.info(
       `[connection] session-reconnected attempt=${detail.attempt}`,
     );
@@ -623,6 +635,7 @@ export function createConnectionController(
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
     console.error("[main] error:", detail);
+    recordConnectionEvent("fatal", detail);
     // A fatal can land mid-bring-up; don't leak a stale sub-phase
     // into the next connect cycle.
     emitBringUpPhase(null);
@@ -662,6 +675,9 @@ export function createConnectionController(
       // ignored by SDK builds that predate the option.
       autoReconnect: true,
     });
+    // The SDK leaks one AudioContext per dial; close them before they
+    // exhaust the WebView's output-stream budget (see the module doc).
+    installPlaceholderAudioReaper(robot);
     // Hand the SDK ref to the session so its lifecycle methods can use
     // it. The controller's local `robot` stays in sync; the session is
     // the canonical owner from here on.

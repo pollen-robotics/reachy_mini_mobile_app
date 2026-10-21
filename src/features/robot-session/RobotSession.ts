@@ -170,6 +170,15 @@ export class RobotSession {
     this.transportMonitor.start(pc, this.transportListener);
   }
 
+  /**
+   * Re-bind the transport monitor to the current RTCPeerConnection. The
+   * SDK's auto-reconnect replaces the PC without going through `start()`,
+   * so the engine calls this on `sessionReconnected`.
+   */
+  restartTransportMonitor(): void {
+    this.startTransportMonitor();
+  }
+
   private stopTransportMonitor(): void {
     this.transportMonitor.stop();
   }

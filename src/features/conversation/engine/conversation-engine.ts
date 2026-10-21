@@ -500,6 +500,12 @@ async function handleOrbClick(): Promise<void> {
         // conversation is running yet (conversation idle); ignore taps
         // while a conversation is already live / winding down.
         if (conversation.current() !== "idle") return;
+        // Mid re-dial there is no data channel to start the app over:
+        // the start would time out and drop the tap anyway. Ask the SDK
+        // itself rather than mirroring its redial in a flag: a redial can
+        // be cancelled silently (handoff, stop, disconnect), which left a
+        // mirrored flag stuck and the orb dead.
+        if (connectionController.getRobot()?.state !== "streaming") return;
         // Flip `convoActiveRequested` so re-entries do not bounce back
         // to idle if the runner is interrupted, then start the app on
         // the robot. `runConversationParts` flips the conversation FSM
