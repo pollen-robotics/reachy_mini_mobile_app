@@ -138,6 +138,11 @@ export interface ReachyMiniInstance extends EventTarget {
     head?: number[];
     antennas?: number[];
     head_joint_positions?: number[];
+    /** Body yaw in radians. */
+    body_yaw?: number;
+    motor_mode?: string;
+    /** A daemon-side move (recorded move, goto, wake/sleep) is playing. */
+    is_move_running?: boolean;
   };
 
   authenticate(): Promise<boolean>;
@@ -172,6 +177,13 @@ export interface ReachyMiniInstance extends EventTarget {
    * ±150°).
    */
   setBodyYawDeg(yawDeg: number): boolean;
+  /**
+   * One `set_full_target` frame carrying any subset of head (flat
+   * row-major 4x4), antennas ([right, left] rad) and body yaw (rad).
+   * Sending head + body together keeps them consistent for the daemon's
+   * head-vs-body yaw check. Returns false when the channel is closed.
+   */
+  setTarget(target: { head?: number[]; antennas?: number[]; body_yaw?: number }): boolean;
 
   /**
    * Smoothly interpolate to a target pose ENTIRELY daemon-side: the robot

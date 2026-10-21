@@ -1,7 +1,9 @@
 /**
  * Robot session screen.
  *
- * Two-tab shell hosted on a single connected robot:
+ * Three-tab shell hosted on a single connected robot
+ * (Conversation | Apps | Telepresence; the telepresence tab takes the
+ * whole screen, see `<TelepresencePanel>`):
  *
  *   ┌──────────────────────────────────────────────┐
  *   │ Header (name + chips + [ⓘ info] + [⏻ off])   │
@@ -75,6 +77,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 
 import AppsIcon from '@/ui/design/icons/AppsIcon';
 import ChatBubbleIcon from '@/ui/design/icons/ChatBubbleIcon';
@@ -98,6 +101,7 @@ import type { AppEntry } from '@/features/apps/types';
 import { useRobotApps } from '@/features/robot-apps/useRobotApps';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
+import TelepresencePanel from '@/ui/panels/telepresence/TelepresencePanel';
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
@@ -126,7 +130,7 @@ interface RobotSessionScreenProps {
   onBack: () => void;
 }
 
-type Tab = 'conv' | 'apps';
+type Tab = 'conv' | 'apps' | 'tele';
 
 export default function RobotSessionScreen({
   target,
@@ -399,6 +403,11 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // Tab to return to when the immersive telepresence view is exited.
+  const lastNonTeleTabRef = useRef<Exclude<Tab, 'tele'>>('conv');
+  useEffect(() => {
+    if (tab !== 'tele') lastNonTeleTabRef.current = tab;
+  }, [tab]);
   // True while the conversation tab has a persona authoring form open. The
   // bottom tab bar is pulled for the duration - see the `BottomNavigation`
   // below for why.
@@ -713,7 +722,7 @@ function ConnectedSession({
     session.connectionState === 'selecting' ||
     session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
-  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
+  useKeepScreenOn(isConversing || isBringingUp || isAppOpen || tab === 'tele');
 
   return (
     /* `DaemonStateProvider` is the single source of truth for
@@ -1169,6 +1178,9 @@ function ConnectedSession({
               `MicIcon` - same `1.8 px` stroke weight, same
               outline-only treatment, same 24×24 viewBox. */}
           <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
+          {/* Telepresence: live camera + head joystick, native
+              counterpart of the telepresence Space (no iframe handoff). */}
+          <BottomNavigationAction value="tele" label="Telepresence" icon={<VideocamOutlinedIcon />} />
         </BottomNavigation>
 
         {/* Settings overlay. The single topbar sheet, pinned BELOW the
@@ -1238,6 +1250,21 @@ function ConnectedSession({
               />
             )}
           </Box>
+        )}
+
+        {/* Telepresence tab: immersive full-screen layer (zIndex 1250)
+            covering the topbar + tab bar, exited via its own back
+            button. Mounted only while the tab is active so its motion
+            and audio loops live exactly as long as the view. */}
+        {/* Stays mounted while `leaving` (the leaving cover sits above it)
+            so it sees `allowMotion` drop and never glides the head while
+            the teardown puts the robot to sleep. */}
+        {tab === 'tele' && !isError && (
+          <TelepresencePanel
+            session={session}
+            onExit={() => handleTabChange(lastNonTeleTabRef.current)}
+            allowMotion={!leaving && !waking && wizardGate !== 'show'}
+          />
         )}
 
         {openedApp && (

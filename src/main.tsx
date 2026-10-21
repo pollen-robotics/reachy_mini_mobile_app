@@ -8,6 +8,7 @@ import { ErrorBoundary } from '@/ui/design/ErrorBoundary';
 import { useResolvedThemeMode } from '@/features/theme-preference';
 import { installDesktopMicShim } from '@/shared/desktop-mic-shim';
 import { installAndroidInsetsBridge } from '@/shared/android-insets';
+import { installLowLatencyVideo } from '@/features/robot-session/low-latency-video';
 import { queryClient } from './queryClient';
 import { lightTheme, darkTheme } from './theme';
 
@@ -21,6 +22,9 @@ installDesktopMicShim();
 // so bottom bars clear the system navigation bar under edge-to-edge. No-op
 // everywhere else. See `shared/android-insets.ts`.
 installAndroidInsetsBridge();
+// Must run before any robot session creates its RTCPeerConnection: the
+// low-latency video transform can only be installed at `track` time.
+installLowLatencyVideo();
 
 function Root() {
   // Resolved theme = user pick collapsed to a concrete palette

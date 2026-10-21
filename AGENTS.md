@@ -11,7 +11,9 @@ signs in with Hugging Face, picks a robot from their account, and gets:
 
 1. A live conversation panel (orb + the conversation app running on the robot).
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
-3. A robot tab with camera feed + audio sliders + manual head joystick.
+3. A native telepresence tab (full-screen camera, head joystick,
+   two-way audio, pose sliders, emotion wheel).
+   It reuses the live `RobotSession`: no iframe, no handoff.
 
 The robot is assumed to be already provisioned (on Wi-Fi, advertising
 itself on the HF central signaling Space). First-time Wi-Fi setup is
@@ -51,7 +53,8 @@ features/
 ├── robot-session/  RobotSession class + lifecycle helpers + React hook
 ├── conv-app/       JSON-RPC client for the conversation app on the robot
 ├── robot-apps/     Python apps on the robot: catalog, install / start / stop over JSON-RPC
-└── conversation/   session owner + connection FSM + the orb's host handle
+├── conversation/   session owner + connection FSM + the orb's host handle
+└── telepresence/   motion controller (head leash + base + antennas) + phone/robot audio legs
 ```
 
 Each feature folder contains its own `types.ts`, services, React
@@ -122,7 +125,7 @@ lifecycle and the iframe handoff lives in
 ui/
 ├── design/        Tokens + atomic primitives (TransportChip, RobotAvatar, ScreenTransition, ErrorBoundary, ...)
 ├── widgets/       Composable bricks reused across panels (video-feed, audio-controls, head-control, camera-overlay)
-├── panels/        Feature compositions mounted into screens (conversation, apps-list, robot)
+├── panels/        Feature compositions mounted into screens (conversation, apps-list, telepresence)
 └── screens/       Top-level routes (Splash, RemoteSignIn, WelcomeBack, Scan, RobotSession)
 ```
 
