@@ -408,6 +408,13 @@ function ConnectedSession({
   useEffect(() => {
     if (tab !== 'tele') lastNonTeleTabRef.current = tab;
   }, [tab]);
+  // Overboard manual (Bluetooth) mode, toggled from the telepresence
+  // settings. Releases the robot session entirely (see the handoff effect
+  // below); only meaningful while the telepresence tab is up.
+  const [overboardManual, setOverboardManual] = useState(false);
+  useEffect(() => {
+    if (tab !== 'tele') setOverboardManual(false);
+  }, [tab]);
   // True while the conversation tab has a persona authoring form open. The
   // bottom tab bar is pulled for the duration - see the `BottomNavigation`
   // below for why.
@@ -561,6 +568,22 @@ function ConnectedSession({
     }
   }, [openedApp, leaving, session]);
 
+  // Same release / reacquire handoff for overboard manual mode: the
+  // phone drives the base over BLE, so the WebRTC slot (video, audio,
+  // head control) is released for the duration and brought back on exit.
+  const previousManualRef = useRef(false);
+  useEffect(() => {
+    const previous = previousManualRef.current;
+    previousManualRef.current = overboardManual;
+    if (!previous && overboardManual) {
+      console.log('[shell-webrtc] overboard manual mode: releasing session');
+      void session.releaseForHandoff();
+    } else if (previous && !overboardManual && !leaving) {
+      console.log('[shell-webrtc] overboard manual mode off: reacquiring session');
+      void session.reacquire();
+    }
+  }, [overboardManual, leaving, session]);
+
   // Tab-switch lifecycle for the conversation parts.
   //
   // Leaving the conversation tab stops the HF realtime pipeline,
@@ -653,6 +676,8 @@ function ConnectedSession({
     // While an iframe app owns the slot, the close-path reacquire is
     // the recovery mechanism - don't fight it from underneath.
     if (openedApp !== null) return;
+    // Manual overboard mode released the slot on purpose.
+    if (overboardManual) return;
     const startedAt = recoverIncidentStartRef.current;
     if (startedAt === null) {
       recoverIncidentStartRef.current = Date.now();
@@ -680,7 +705,7 @@ function ConnectedSession({
       void recover();
     }, SESSION_TIMINGS.autoRecoverRetryDelayMs);
     return () => window.clearTimeout(t);
-  }, [sessionPhase, hasReachedReady, recover, leaving, openedApp, daemonRebooting]);
+  }, [sessionPhase, hasReachedReady, recover, leaving, openedApp, daemonRebooting, overboardManual]);
 
   // The overlay also covers the pauses between two recovery attempts
   // (the session sits on `error` then), so the error view doesn't
@@ -1178,7 +1203,7 @@ function ConnectedSession({
               `MicIcon` - same `1.8 px` stroke weight, same
               outline-only treatment, same 24×24 viewBox. */}
           <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
-          {/* Telepresence: live camera + head joystick, native
+          {/* Telepresence: live camera + head / wheels joysticks, native
               counterpart of the telepresence Space (no iframe handoff). */}
           <BottomNavigationAction value="tele" label="Telepresence" icon={<VideocamOutlinedIcon />} />
         </BottomNavigation>
@@ -1254,14 +1279,16 @@ function ConnectedSession({
 
         {/* Telepresence tab: immersive full-screen layer (zIndex 1250)
             covering the topbar + tab bar, exited via its own back
-            button. Mounted only while the tab is active so its motion
-            and audio loops live exactly as long as the view. */}
+            button. Mounted only while the tab is active so its motion,
+            audio and overboard loops live exactly as long as the view. */}
         {/* Stays mounted while `leaving` (the leaving cover sits above it)
             so it sees `allowMotion` drop and never glides the head while
             the teardown puts the robot to sleep. */}
         {tab === 'tele' && !isError && (
           <TelepresencePanel
             session={session}
+            manualMode={overboardManual}
+            onManualModeChange={setOverboardManual}
             onExit={() => handleTabChange(lastNonTeleTabRef.current)}
             allowMotion={!leaving && !waking && wizardGate !== 'show'}
           />
