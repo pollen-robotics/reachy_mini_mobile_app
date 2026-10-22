@@ -87,8 +87,9 @@ export interface ConnectionControllerDeps {
    *  to auto-start the AI pipeline. */
   onConnectionLive: () => Promise<void>;
   /** Connection going down: the conversation layer stops the app on the
-   *  robot and parks its FSM on `idle`. */
-  onConnectionLost: (opts: { glide: boolean }) => Promise<void>;
+   *  robot (not with `keepRobotApp`: a lost link) and parks its FSM on
+   *  `idle`. */
+  onConnectionLost: (opts: { glide: boolean; keepRobotApp?: boolean }) => Promise<void>;
   /** Gate the robot mic forwarded to the backend. Used by the
    *  unsolicited-drop recovery path to re-sync the host's mute button. */
   applyMicMuted: (muted: boolean) => void;
@@ -111,10 +112,13 @@ export interface ConnectionController {
   connect(): Promise<void>;
   /** Full transport teardown: stop pipeline (no glide) + goto-sleep +
    *  stopSession. */
-  teardown(): Promise<void>;
+  teardown(opts?: { keepRobotApp?: boolean }): Promise<void>;
   /** Classify + surface a fatal error, flip the connection FSM to
    *  `error`, and tear the session down. */
   onFatalError(err: unknown): Promise<void>;
+  /** How many fatals so far: a long step (recovery) compares it across
+   *  its awaits to learn that the session died underneath it. */
+  getFatalCount(): number;
   /** Kick the boot chain and install background-tab resilience. Call
    *  once, after the conversation pipeline is wired. Returns the boot
    *  promise (for the unmount guard) + the resilience disposer. */
@@ -602,14 +606,14 @@ export function createConnectionController(
     await onConnectionLive();
   }
 
-  async function teardown(): Promise<void> {
+  async function teardown(opts: { keepRobotApp?: boolean } = {}): Promise<void> {
     // Announce the connection is going down. The conversation seam
     // tears its pipeline WITHOUT glide here - `gotoSleep` below is
     // about to play its own head + antennas trajectory and a 700ms
     // ease-out would fight it on the bus - and parks the conversation
     // FSM on `idle` so every teardown caller inherits a clean
     // conversation cursor and only has to re-park the connection FSM.
-    await onConnectionLost({ glide: false });
+    await onConnectionLost({ glide: false, keepRobotApp: opts.keepRobotApp });
 
     // Capture the session flag BEFORE resetting it - we need it to
     // decide whether to run the goto-sleep dance below.
@@ -647,7 +651,9 @@ export function createConnectionController(
     }
   }
 
+  let fatalCount = 0;
   async function onFatalError(err: unknown): Promise<void> {
+    fatalCount += 1;
     const detail = err instanceof Error ? err.message : String(err);
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
@@ -666,7 +672,10 @@ export function createConnectionController(
         "The connection to your Reachy was lost and couldn't be restored automatically.",
       ),
     );
-    await teardown();
+    // A lost link must never stop the robot's conversation: it is
+    // autonomous, and the in-place recovery re-follows it. Only the
+    // following stops here; deliberate stops still stop the app.
+    await teardown({ keepRobotApp: true });
   }
 
   // ─── Boot ───────────────────────────────────────────────────────
@@ -706,6 +715,7 @@ export function createConnectionController(
       renderRobotList,
       applyMicMuted,
       setConnectionState,
+      getConnectionState: () => connection.current(),
       onFatalError,
       isConversationActive,
       probeRobotLink,
@@ -822,6 +832,7 @@ export function createConnectionController(
     connect: doConnect,
     teardown,
     onFatalError,
+    getFatalCount: () => fatalCount,
     start,
   };
 }

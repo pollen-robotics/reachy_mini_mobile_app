@@ -56,6 +56,9 @@ export interface WireRobotEventsDeps {
   applyMicMuted: (muted: boolean) => void;
   /** Drive the connection FSM directly for the `disconnected` event. */
   setConnectionState: (state: ConnectionState) => void;
+  /** Read the connection FSM, so `disconnected` only demotes states it
+   *  owns. */
+  getConnectionState: () => ConnectionState;
   /** Fatal-error sink for the unsolicited-drop path. Awaited so the
    *  listener returns after the user-facing teardown completes. */
   onFatalError: (err: unknown) => Promise<void>;
@@ -103,6 +106,7 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     renderRobotList,
     applyMicMuted,
     setConnectionState,
+    getConnectionState,
     onFatalError,
     isConversationActive,
     probeRobotLink,
@@ -232,6 +236,16 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // unmounting. The unmount path doesn't rely on this listener for
     // any of its cleanup.
     if (isUnmounted()) return;
+    // Signaling dropping says nothing new to these states, and demoting
+    // them would hide the truth: `error` keeps its caption and the
+    // in-place recovery loop that runs off it (the SDK also emits
+    // `disconnected` right after `sessionStopped` when signaling is down);
+    // `released` is a Hub app's handoff, owned by reacquire; `starting`
+    // is a bring-up or recovery that reports its own failure.
+    const current = getConnectionState();
+    if (current === "error" || current === "released" || current === "starting") {
+      return;
+    }
     if (robot.isAuthenticated) {
       setConnectionState("authenticated");
     } else {

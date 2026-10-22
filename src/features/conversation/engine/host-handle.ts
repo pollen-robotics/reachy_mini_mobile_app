@@ -30,6 +30,7 @@
 
 import { SESSION_TIMINGS } from "@/features/robot-session/timings";
 import { waitForRecoveryTarget } from "@/features/robot-session/recovery-target";
+import { isConvAppRunning } from "@/features/conv-app/app-slot";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type {
@@ -99,6 +100,8 @@ export interface ConversationHandleDeps {
   // ─── Observer plumbing ────────────────────────────────────────────
   emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
   onFatalError: (err: unknown) => Promise<void>;
+  /** Fatals so far (see `ConnectionController.getFatalCount`). */
+  getFatalCount: () => number;
 
   // ─── Cached values ────────────────────────────────────────────────
   /** Latest smoothed mic level in `[0..1]` from the audio monitors
@@ -130,6 +133,7 @@ export function createConversationHandle(
     setConversationState,
     emitConnectionAttempt,
     onFatalError,
+    getFatalCount,
     getMicLevel,
   } = deps;
 
@@ -158,6 +162,12 @@ export function createConversationHandle(
     );
 
     setConnectionState("starting");
+    // A fatal from here on means the session we are bringing back died
+    // underneath us (e.g. the robot ended it while we awaited wakeUp): its
+    // handler already set `error`, which the screen's recovery loop
+    // retries from. Carrying on would announce `live` over no session.
+    const fatalsAtStart = getFatalCount();
+    const sessionDied = (): boolean => getFatalCount() !== fatalsAtStart;
 
     // Reconnect the SDK FIRST (normally reacquire's job) because the
     // target resolution below feeds off `robotsChanged` snapshots,
@@ -209,6 +219,7 @@ export function createConversationHandle(
       await onFatalError(result.reason);
       return;
     }
+    if (isUnmounted() || recoveryCancelled || sessionDied()) return;
 
     // Unlike an iframe handoff, the robot did NOT stay awake: the
     // fatal teardown played sleepAndDisable (or, when the transport
@@ -217,10 +228,30 @@ export function createConversationHandle(
     // covers the trajectory. Idempotent on daemons with the wake
     // stand-down when the robot is somehow still up.
     await session.wakeUp();
+    if (isUnmounted() || recoveryCancelled || sessionDied()) {
+      console.log("[shell-webrtc] recoverSession: the session died during recovery; leaving it to the next attempt");
+      return;
+    }
 
     session.setEstablished(true);
     setConnectionState("live");
     setConversationState("idle");
+
+    // The robot's conversation is autonomous and outlives a lost link (the
+    // fatal teardown only stopped following it): follow it again, as a tap
+    // on the orb would, rather than showing "tap to start" over a live
+    // conversation. Not awaited: the session is live already, and the
+    // recovery overlay (and anything queued behind this recovery) must not
+    // wait on the conversation app's status / readiness calls.
+    void (async () => {
+      if (isUnmounted() || recoveryCancelled || sessionDied()) return;
+      if (!(await isConvAppRunning(robot))) return;
+      if (isUnmounted() || recoveryCancelled || sessionDied()) return;
+      setConvoActiveRequested(true);
+      await runConversationParts();
+    })().catch((err: unknown) => {
+      console.warn("[shell-webrtc] recoverSession: re-following the conversation failed:", err);
+    });
   }
 
   const handle: ConversationEngineHandle = {

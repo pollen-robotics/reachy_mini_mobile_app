@@ -320,6 +320,15 @@ describe('following the robot', () => {
     expect(calls.filter(c => c === 'apps.stop')).toHaveLength(1);
   });
 
+  it('only stops following on a lost link: the robot keeps its conversation', async () => {
+    const { conversation, calls, handlers } = await live();
+
+    await conversation.stop({ keepRobotApp: true });
+
+    expect(calls).not.toContain('apps.stop');
+    expect(handlers.size).toBe(0);
+  });
+
   it('leaves an app the user launched running when a refused start is torn down', async () => {
     const { robot, calls } = fakeRobot({
       'apps.status': { state: 'running', info: { name: 'marionette' } },
