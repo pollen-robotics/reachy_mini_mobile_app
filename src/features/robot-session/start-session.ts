@@ -42,6 +42,7 @@ import { SESSION_TIMINGS } from './timings';
  * per-call for tests / experiments.
  */
 const DEFAULT_ATTEMPT_TIMEOUT_MS = SESSION_TIMINGS.startAttemptTimeoutMs;
+const PROGRESS_TIMEOUT_MS = SESSION_TIMINGS.startAttemptProgressTimeoutMs;
 
 export interface StartRobotSessionOptions {
   /** Live SDK instance returned by `new ReachyMini(...)`. */
@@ -141,12 +142,26 @@ async function tryStartSession(
   timeoutMs: number,
 ): Promise<{ ok: true } | { ok: false; reason: Error; timedOut: boolean }> {
   let timedOut = false;
-  const timeoutHandle = window.setTimeout(() => {
+  const expire = (): void => {
     timedOut = true;
     void expectedStop(() => robot.stopSession());
-  }, timeoutMs);
+  };
+  let timeoutHandle = window.setTimeout(expire, timeoutMs);
 
   const t0 = performance.now();
+  // Once ICE shows progress the robot is answering: give the handshake
+  // the longer budget instead of killing it at the first deadline.
+  let extended = false;
+  const onIce = (event: Event): void => {
+    const state = (event as CustomEvent<{ state?: string }>).detail?.state;
+    if (extended || timedOut) return;
+    if (state !== 'checking' && state !== 'connected' && state !== 'completed') return;
+    extended = true;
+    window.clearTimeout(timeoutHandle);
+    const remaining = Math.max(0, Math.max(timeoutMs, PROGRESS_TIMEOUT_MS) - (performance.now() - t0));
+    timeoutHandle = window.setTimeout(expire, remaining);
+  };
+  robot.addEventListener('iceStateChange', onIce);
   try {
     await robot.startSession(peerId);
     window.clearTimeout(timeoutHandle);
@@ -173,5 +188,7 @@ async function tryStartSession(
         ? err
         : new Error(String(err));
     return { ok: false, reason, timedOut };
+  } finally {
+    robot.removeEventListener('iceStateChange', onIce);
   }
 }
