@@ -28,17 +28,22 @@ export async function applySettingsToRobot(
   const memory = isMemoryEnabled();
   const vision = isVisionEnabled();
 
+  // One failure must not skip the rest: an older app has no `language.set`.
+  const warn = (err: unknown) => console.warn('[conv-app] could not apply a setting:', err);
+  // The plain settings first: the app greets once its backend connects, and
+  // the personality sync below can take seconds (it fetches missing avatars).
+  if (status.language !== language) await client.setLanguage(language).catch(warn);
+  if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory).catch(warn);
+  if (status.vision_enabled !== vision) await client.setVisionEnabled(vision).catch(warn);
+
   try {
-    // Personalities first: the robot owns the catalog, and the phone's active
-    // id is only meaningful once the two have been reconciled.
+    // The robot owns the catalog, and the phone's active id is only
+    // meaningful once the two have been reconciled.
     await syncPersonalitiesToRobot(client);
     const personality = getActivePersonalityId();
     if (status.personality !== personality) await client.applyPersonality(personality);
-    if (status.language !== language) await client.setLanguage(language);
-    if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory);
-    if (status.vision_enabled !== vision) await client.setVisionEnabled(vision);
   } catch (err) {
-    console.warn('[conv-app] could not apply settings to the robot:', err);
+    console.warn('[conv-app] could not apply the personality to the robot:', err);
   }
 
   try {

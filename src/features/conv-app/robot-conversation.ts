@@ -272,12 +272,16 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   };
 
   /**
-   * Poll `conversation.status` until the backend is connected, then hand the
-   * robot the settings the phone owns (see `sync-settings.ts`).
+   * Hand the robot the settings the phone owns (see `sync-settings.ts`) as
+   * soon as the app answers, then poll `conversation.status` until the backend
+   * is connected. Before the backend connects, not after: the app greets the
+   * moment it connects, and a changed setting restarts it, which would greet
+   * twice, first with the old settings.
    */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
     const deadline = performance.now() + READY_TIMEOUT_MS;
     let lastError: string | null = null;
+    let settingsApplied = false;
     while (performance.now() < deadline) {
       if (!running) return 'Stopped before the conversation was ready.';
       let status: ConvAppStatus | null = null;
@@ -292,10 +296,13 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (status) {
         if (!status.has_hf_connection)
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
-        if (status.backend_connected) {
+        if (!settingsApplied) {
+          settingsApplied = true;
           await applySettingsToRobot(activeClient, status);
-          return null;
+          // Re-read at once: a changed setting restarts the backend.
+          continue;
         }
+        if (status.backend_connected) return null;
         if (status.backend_error) lastError = status.backend_error;
       }
       await sleep(READY_POLL_MS);
