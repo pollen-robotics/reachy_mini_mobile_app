@@ -2,7 +2,7 @@
  * The session-start budget follows the handshake's progress.
  *
  * With no ICE progress the attempt is stopped at startAttemptTimeoutMs (a
- * silent daemon). Once ICE reaches `checking` / `connected` the robot is
+ * silent daemon). Once ICE is `connected` the media path works and the
  * answering, and the attempt gets startAttemptProgressTimeoutMs in total:
  * on a lossy hop the data channel can need several more seconds, and the
  * flat budget killed a session that was nearly ready (seen on device).
@@ -71,6 +71,19 @@ describe('startRobotSession timeout', () => {
     resolve();
 
     expect(await outcome).toEqual({ ok: true });
+  });
+
+  it('keeps the short budget while ICE is only checking', async () => {
+    // The robot answered, but the media path may be blackholed.
+    const { robot, raw, ice } = fakeRobot();
+    const outcome = startRobotSession({ robot, peerId: 'p', expectedStop });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    ice('checking');
+    await vi.advanceTimersByTimeAsync(SESSION_TIMINGS.startAttemptTimeoutMs);
+
+    expect(raw.stopSession).toHaveBeenCalledOnce();
+    expect((await outcome).ok).toBe(false);
   });
 
   it('still stops at the long budget when the handshake never completes', async () => {

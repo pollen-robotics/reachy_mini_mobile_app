@@ -30,7 +30,7 @@
  * Worst-case bring-up latency before a fatal error is surfaced:
  *
  *     startAttemptTimeoutMs = 8_000 ms   (no ICE progress)
- *     startAttemptProgressTimeoutMs = 20_000 ms   (ICE under way)
+ *     startAttemptProgressTimeoutMs = 20_000 ms   (ICE connected)
  *
  * `startSession()` runs a SINGLE guarded attempt (no retry). The
  * previous 2-attempt / 12 s-gap loop was removed: it only ever
@@ -52,9 +52,8 @@ export const SESSION_TIMINGS = {
   startAttemptTimeoutMs: 8_000,
 
   /**
-   * Total budget for the same attempt once ICE shows progress
-   * (`checking` / `connected`): the robot answered, the handshake is
-   * under way, only the data channel is still opening. On a lossy hop
+   * Total budget for the same attempt once ICE is `connected`: the media
+   * path works, only the data channel is still opening. On a lossy hop
    * (the phone roaming between mesh access points) its setup packets are
    * retransmitted with growing delays: seen on device, ICE connected
    * 1 s in and the robot's data channel open, yet the flat 8 s budget

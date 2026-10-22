@@ -149,13 +149,15 @@ async function tryStartSession(
   let timeoutHandle = window.setTimeout(expire, timeoutMs);
 
   const t0 = performance.now();
-  // Once ICE shows progress the robot is answering: give the handshake
-  // the longer budget instead of killing it at the first deadline.
+  // Once ICE is connected the media path works and only the data channel
+  // is still opening: give it the longer budget instead of killing it at
+  // the first deadline. `checking` alone (the robot answered, the path may
+  // still be blackholed) keeps the short one.
   let extended = false;
   const onIce = (event: Event): void => {
     const state = (event as CustomEvent<{ state?: string }>).detail?.state;
     if (extended || timedOut) return;
-    if (state !== 'checking' && state !== 'connected' && state !== 'completed') return;
+    if (state !== 'connected' && state !== 'completed') return;
     extended = true;
     window.clearTimeout(timeoutHandle);
     const remaining = Math.max(0, Math.max(timeoutMs, PROGRESS_TIMEOUT_MS) - (performance.now() - t0));
