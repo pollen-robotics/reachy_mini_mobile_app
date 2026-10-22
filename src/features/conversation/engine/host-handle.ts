@@ -30,6 +30,7 @@
 
 import { SESSION_TIMINGS } from "@/features/robot-session/timings";
 import { waitForRecoveryTarget } from "@/features/robot-session/recovery-target";
+import { isConvAppRunning } from "@/features/conv-app/app-slot";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import type { ReachyMiniInstance } from "@/features/robot-session/sdk-types";
 import type {
@@ -221,6 +222,14 @@ export function createConversationHandle(
     session.setEstablished(true);
     setConnectionState("live");
     setConversationState("idle");
+
+    // The fatal teardown's stop request died with the link, so the robot
+    // may still be talking: follow it again, as a tap on the orb would,
+    // rather than showing "tap to start" over a live conversation.
+    if (!isUnmounted() && (await isConvAppRunning(robot))) {
+      setConvoActiveRequested(true);
+      await runConversationParts();
+    }
   }
 
   const handle: ConversationEngineHandle = {
