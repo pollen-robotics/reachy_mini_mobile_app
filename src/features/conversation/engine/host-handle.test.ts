@@ -22,6 +22,7 @@ vi.mock('@/features/conv-app/app-slot', () => ({
 }));
 
 function recoveringHandle() {
+  const fatals = { count: 0 };
   const session = {
     isEstablished: vi.fn().mockReturnValue(false),
     ensureConnected: vi.fn().mockResolvedValue({ ok: true }),
@@ -40,10 +41,13 @@ function recoveringHandle() {
     setConnectionState: vi.fn(),
     setConversationState: vi.fn(),
     emitConnectionAttempt: vi.fn(),
-    onFatalError: vi.fn(),
+    onFatalError: vi.fn(async () => {
+      fatals.count += 1;
+    }),
+    getFatalCount: () => fatals.count,
   };
   const handle = createConversationHandle(deps as unknown as ConversationHandleDeps);
-  return { handle, deps };
+  return { handle, deps, session, fatals };
 }
 
 describe('recoverSession', () => {
@@ -68,6 +72,35 @@ describe('recoverSession', () => {
     await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
 
     expect(deps.setConversationState).toHaveBeenLastCalledWith('idle');
+    expect(deps.runConversationParts).not.toHaveBeenCalled();
+  });
+
+  it('does not announce live when the session died during the wake-up', async () => {
+    convAppRunning.value = true;
+    const { handle, deps, session, fatals } = recoveringHandle();
+    // The robot ends the fresh session while recovery awaits wakeUp: the
+    // unsolicited-drop path raises a fatal (and sets `error`) meanwhile.
+    session.wakeUp.mockImplementation(async () => {
+      fatals.count += 1;
+    });
+
+    await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
+
+    expect(deps.setConnectionState).not.toHaveBeenCalledWith('live');
+    expect(session.setEstablished).not.toHaveBeenCalledWith(true);
+    expect(deps.runConversationParts).not.toHaveBeenCalled();
+  });
+
+  it('does not re-follow the conversation when the session died meanwhile', async () => {
+    const { handle, deps, fatals } = recoveringHandle();
+    const appSlot = await import('@/features/conv-app/app-slot');
+    vi.mocked(appSlot.isConvAppRunning).mockImplementationOnce(async () => {
+      fatals.count += 1;
+      return true;
+    });
+
+    await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
+
     expect(deps.runConversationParts).not.toHaveBeenCalled();
   });
 });

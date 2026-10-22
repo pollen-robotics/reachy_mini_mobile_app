@@ -706,6 +706,7 @@ const handle: ConversationEngineHandle = createConversationHandle({
   setConversationState,
   emitConnectionAttempt,
   onFatalError: connectionController.onFatalError,
+  getFatalCount: connectionController.getFatalCount,
   getMicLevel: robotConversation.getMicLevel,
 });
 return handle;

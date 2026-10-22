@@ -100,6 +100,8 @@ export interface ConversationHandleDeps {
   // ─── Observer plumbing ────────────────────────────────────────────
   emitConnectionAttempt: (info: ConversationConnectionAttempt | null) => void;
   onFatalError: (err: unknown) => Promise<void>;
+  /** Fatals so far (see `ConnectionController.getFatalCount`). */
+  getFatalCount: () => number;
 
   // ─── Cached values ────────────────────────────────────────────────
   /** Latest smoothed mic level in `[0..1]` from the audio monitors
@@ -131,6 +133,7 @@ export function createConversationHandle(
     setConversationState,
     emitConnectionAttempt,
     onFatalError,
+    getFatalCount,
     getMicLevel,
   } = deps;
 
@@ -159,6 +162,12 @@ export function createConversationHandle(
     );
 
     setConnectionState("starting");
+    // A fatal from here on means the session we are bringing back died
+    // underneath us (e.g. the robot ended it while we awaited wakeUp): its
+    // handler already set `error`, which the screen's recovery loop
+    // retries from. Carrying on would announce `live` over no session.
+    const fatalsAtStart = getFatalCount();
+    const sessionDied = (): boolean => getFatalCount() !== fatalsAtStart;
 
     // Reconnect the SDK FIRST (normally reacquire's job) because the
     // target resolution below feeds off `robotsChanged` snapshots,
@@ -210,6 +219,7 @@ export function createConversationHandle(
       await onFatalError(result.reason);
       return;
     }
+    if (isUnmounted() || recoveryCancelled || sessionDied()) return;
 
     // Unlike an iframe handoff, the robot did NOT stay awake: the
     // fatal teardown played sleepAndDisable (or, when the transport
@@ -218,6 +228,10 @@ export function createConversationHandle(
     // covers the trajectory. Idempotent on daemons with the wake
     // stand-down when the robot is somehow still up.
     await session.wakeUp();
+    if (isUnmounted() || recoveryCancelled || sessionDied()) {
+      console.log("[shell-webrtc] recoverSession: the session died during recovery; leaving it to the next attempt");
+      return;
+    }
 
     session.setEstablished(true);
     setConnectionState("live");
@@ -226,7 +240,7 @@ export function createConversationHandle(
     // The fatal teardown's stop request died with the link, so the robot
     // may still be talking: follow it again, as a tap on the orb would,
     // rather than showing "tap to start" over a live conversation.
-    if (!isUnmounted() && (await isConvAppRunning(robot))) {
+    if (!isUnmounted() && (await isConvAppRunning(robot)) && !sessionDied()) {
       setConvoActiveRequested(true);
       await runConversationParts();
     }

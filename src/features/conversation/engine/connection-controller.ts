@@ -115,6 +115,9 @@ export interface ConnectionController {
   /** Classify + surface a fatal error, flip the connection FSM to
    *  `error`, and tear the session down. */
   onFatalError(err: unknown): Promise<void>;
+  /** How many fatals so far: a long step (recovery) compares it across
+   *  its awaits to learn that the session died underneath it. */
+  getFatalCount(): number;
   /** Kick the boot chain and install background-tab resilience. Call
    *  once, after the conversation pipeline is wired. Returns the boot
    *  promise (for the unmount guard) + the resilience disposer. */
@@ -647,7 +650,9 @@ export function createConnectionController(
     }
   }
 
+  let fatalCount = 0;
   async function onFatalError(err: unknown): Promise<void> {
+    fatalCount += 1;
     const detail = err instanceof Error ? err.message : String(err);
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
@@ -706,6 +711,7 @@ export function createConnectionController(
       renderRobotList,
       applyMicMuted,
       setConnectionState,
+      getConnectionState: () => connection.current(),
       onFatalError,
       isConversationActive,
       probeRobotLink,
@@ -822,6 +828,7 @@ export function createConnectionController(
     connect: doConnect,
     teardown,
     onFatalError,
+    getFatalCount: () => fatalCount,
     start,
   };
 }
