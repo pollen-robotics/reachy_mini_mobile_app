@@ -237,13 +237,21 @@ export function createConversationHandle(
     setConnectionState("live");
     setConversationState("idle");
 
-    // The fatal teardown's stop request died with the link, so the robot
-    // may still be talking: follow it again, as a tap on the orb would,
-    // rather than showing "tap to start" over a live conversation.
-    if (!isUnmounted() && (await isConvAppRunning(robot)) && !sessionDied()) {
+    // The robot's conversation is autonomous and outlives a lost link (the
+    // fatal teardown only stopped following it): follow it again, as a tap
+    // on the orb would, rather than showing "tap to start" over a live
+    // conversation. Not awaited: the session is live already, and the
+    // recovery overlay (and anything queued behind this recovery) must not
+    // wait on the conversation app's status / readiness calls.
+    void (async () => {
+      if (isUnmounted() || recoveryCancelled || sessionDied()) return;
+      if (!(await isConvAppRunning(robot))) return;
+      if (isUnmounted() || recoveryCancelled || sessionDied()) return;
       setConvoActiveRequested(true);
       await runConversationParts();
-    }
+    })().catch((err: unknown) => {
+      console.warn("[shell-webrtc] recoverSession: re-following the conversation failed:", err);
+    });
   }
 
   const handle: ConversationEngineHandle = {

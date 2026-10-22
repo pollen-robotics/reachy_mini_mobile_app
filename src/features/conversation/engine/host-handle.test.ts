@@ -62,8 +62,19 @@ describe('recoverSession', () => {
     await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
 
     expect(deps.setConnectionState).toHaveBeenLastCalledWith('live');
+    await vi.waitFor(() => expect(deps.runConversationParts).toHaveBeenCalledOnce());
     expect(deps.setConvoActiveRequested).toHaveBeenCalledWith(true);
-    expect(deps.runConversationParts).toHaveBeenCalledOnce();
+  });
+
+  it('does not hold the recovery on the re-follow', async () => {
+    convAppRunning.value = true;
+    const { handle, deps } = recoveringHandle();
+    // The conversation app's readiness calls can take long on a lossy link.
+    deps.runConversationParts.mockImplementation(() => new Promise(() => {}));
+
+    await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
+
+    expect(deps.setConnectionState).toHaveBeenLastCalledWith('live');
   });
 
   it('stays on "tap to start" when no conversation is running', async () => {
@@ -100,6 +111,7 @@ describe('recoverSession', () => {
     });
 
     await handle.recoverSession({ robotId: 'old-peer', robotName: 'reachy' });
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(deps.runConversationParts).not.toHaveBeenCalled();
   });

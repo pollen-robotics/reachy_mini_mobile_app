@@ -112,7 +112,9 @@ pointing at the update gate.
 engine is the single place every "stop the D layer" path goes through
 (`stopConversation`, `releaseSessionKeepAwake`, `teardown`), and it
 stops the app on the robot. So stop, tab switch, Hub-app handoff and
-power-off all leave the robot with nothing running.
+power-off all leave the robot with nothing running. A lost link is the
+exception: the fatal-error teardown only stops *following* (the robot's
+conversation is autonomous), and the in-place recovery re-follows it.
 
 **Audit point**: every timing budget that drives the session
 lifecycle and the iframe handoff lives in

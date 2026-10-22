@@ -451,7 +451,7 @@ const connectionController: ConnectionController = createConnectionController({
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
-  onConnectionLost: () => onConnectionLost(),
+  onConnectionLost: (opts) => onConnectionLost(opts),
   applyMicMuted: (muted) => applyMicMuted(muted),
 });
 
@@ -617,10 +617,12 @@ async function runConversationParts(): Promise<void> {
  * Hub-app handoff, power-off) lands here, so "stop" always means the app on
  * the robot stops too. Idempotent.
  */
-async function tearDownConversationPipeline(): Promise<void> {
+async function tearDownConversationPipeline(
+  opts: { keepRobotApp?: boolean } = {},
+): Promise<void> {
   if (!conversationStarted.get()) return;
   convoActiveRequested.off();
-  await robotConversation.stop();
+  await robotConversation.stop({ keepRobotApp: opts.keepRobotApp });
   conversationStarted.off();
 }
 
@@ -632,8 +634,8 @@ async function tearDownConversationPipeline(): Promise<void> {
  * conversation FSM to `idle`, so every teardown caller inherits a clean
  * conversation cursor.
  */
-async function onConnectionLost(): Promise<void> {
-  await tearDownConversationPipeline();
+async function onConnectionLost(opts: { keepRobotApp?: boolean } = {}): Promise<void> {
+  await tearDownConversationPipeline({ keepRobotApp: opts.keepRobotApp });
   setConversationState("idle");
 }
 
