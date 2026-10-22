@@ -92,6 +92,12 @@ import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
+import {
+  linkAccessory,
+  useAccessory,
+  useAccessoryPersonality,
+  useNfcReader,
+} from '@/features/nfc';
 import type { AppEntry } from '@/features/apps/types';
 import { useRobotApps } from '@/features/robot-apps/useRobotApps';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
@@ -104,6 +110,7 @@ import {
   ONBOARDING_PRELOAD_TIMEOUT_MS,
 } from './session/first-wake-up/constants';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
+import { NfcStatusPill } from '@/ui/screens/session/NfcStatusPill';
 import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
@@ -473,6 +480,26 @@ function ConnectedSession({
   // `useDaemonLogs` on the engine being live, and the content is cheap
   // to remount).
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Bumped by each tap on the topbar's NFC pill: Settings scrolls to its
+  // NFC section, even when already open. 0 = opened from the cog.
+  const [nfcFocusKey, setNfcFocusKey] = useState(0);
+  // NFC reader, polled for the topbar pill and the Settings NFC section
+  // alike, while the session is live and no iframe app holds it.
+  const nfc = useNfcReader({
+    getRobot: session.getRobot,
+    active: session.phase === 'live' && openedApp === null,
+  });
+  // The accessory on that reader, for the conversation panel's badge.
+  const accessory = useAccessory(nfc.state, nfc.tag);
+  // Switch personality as accessories come and go. While a conversation runs
+  // the conversation app on the robot does it, as on desktop.
+  useAccessoryPersonality(accessory, session.conversationState === 'idle');
+  // The topbar NFC pill and the accessory badge both land on Settings > NFC.
+  const openNfcSettings = useCallback(() => {
+    setSettingsView('root');
+    setNfcFocusKey(key => key + 1);
+    setSettingsOpen(true);
+  }, []);
   /**
    * Which Settings page is showing: the root list, or the drilled-in
    * "About & diagnostics" sub-page (the old `RobotInfoPanel`). Reset to
@@ -772,6 +799,12 @@ function ConnectedSession({
             linkKind={session.webrtcTransport?.kind ?? null}
             linkRttMs={session.webrtcTransport?.rttMs ?? null}
             sessionPhase={session.phase}
+            accessory={
+              <NfcStatusPill
+                state={nfc.state}
+                onClick={openNfcSettings}
+              />
+            }
           />
           {/* Right-hand action cluster. `spacing={0.25}` keeps the two
               buttons visually grouped (they're both "session-level
@@ -806,6 +839,7 @@ function ConnectedSession({
                 // Always land on the root Settings page when (re)opening;
                 // resetting on close too keeps the next open predictable.
                 setSettingsView('root');
+                setNfcFocusKey(0);
                 setSettingsOpen(open => !open);
               }}
               color="primary"
@@ -902,6 +936,11 @@ function ConnectedSession({
                   orbRef={orbRef}
                   active={tab === 'conv'}
                   onAuthoringChange={setAuthoringPersona}
+                  accessory={accessory}
+                  onOpenAccessory={openNfcSettings}
+                  onLinkAccessory={personality =>
+                    linkAccessory(session.getRobot(), personality, nfc.tag)
+                  }
                 />
               </Box>
             </Box>
@@ -1172,6 +1211,8 @@ function ConnectedSession({
             ) : (
               <ConversationSettingsPanel
                 audioReady={session.hasReachedReady}
+                nfc={nfc}
+                nfcFocusKey={nfcFocusKey}
                 onOpenAbout={() => setSettingsView('about')}
                 conversationLive={session.conversationState !== 'idle'}
                 robotName={displayName}

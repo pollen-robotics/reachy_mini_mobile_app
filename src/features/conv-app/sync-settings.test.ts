@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setActiveLanguageId } from '@/features/conversation-language';
 import { setMemoryEnabled, setVisionEnabled } from '@/features/conversation-settings';
+import { getActivePersonalityId, setPersonalityBeforeAccessory } from '@/features/personalities';
 
 import type { ConvAppClient, ConvAppStatus } from './client';
 import {
@@ -32,6 +33,7 @@ function fakeClient(facts = [FACT]) {
     clearMemory: vi.fn().mockResolvedValue(undefined),
     getPersonalities: vi.fn().mockResolvedValue([]),
     applyPersonality: vi.fn().mockResolvedValue(undefined),
+    setDefaultPersonality: vi.fn().mockResolvedValue(undefined),
   } as unknown as ConvAppClient & {
     setLanguage: ReturnType<typeof vi.fn>;
     setMemoryEnabled: ReturnType<typeof vi.fn>;
@@ -40,6 +42,7 @@ function fakeClient(facts = [FACT]) {
     clearMemory: ReturnType<typeof vi.fn>;
     getPersonalities: ReturnType<typeof vi.fn>;
     applyPersonality: ReturnType<typeof vi.fn>;
+    setDefaultPersonality: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -62,6 +65,7 @@ beforeEach(() => {
   setActiveLanguageId('en');
   setMemoryEnabled(true);
   setVisionEnabled(true);
+  setPersonalityBeforeAccessory(null);
 });
 
 afterEach(() => {
@@ -89,6 +93,32 @@ describe('applySettingsToRobot', () => {
     expect(client.setLanguage).not.toHaveBeenCalled();
     expect(client.setVisionEnabled).not.toHaveBeenCalled();
     expect(client.setMemoryEnabled).not.toHaveBeenCalled();
+  });
+
+  it('makes the pick its default, with no accessory switching personalities', async () => {
+    const client = fakeClient();
+
+    await applySettingsToRobot(client, status({ personality: 'mars_rover' }));
+
+    expect(client.applyPersonality).toHaveBeenCalledWith(getActivePersonalityId(), {
+      persist: true,
+    });
+    expect(client.setDefaultPersonality).not.toHaveBeenCalled();
+  });
+
+  it("runs an accessory's personality but keeps the one from before it as the default", async () => {
+    setPersonalityBeforeAccessory('mars_rover');
+    const client = fakeClient();
+    client.getPersonalities.mockResolvedValue(
+      ['default', 'mars_rover'].map(name => ({ name, instructions: '', greeting: '', voice: '' }))
+    );
+
+    await applySettingsToRobot(client, status({ personality: 'something_else' }));
+
+    expect(client.applyPersonality).toHaveBeenCalledWith(getActivePersonalityId(), {
+      persist: false,
+    });
+    expect(client.setDefaultPersonality).toHaveBeenCalledWith('mars_rover');
   });
 
   it('refreshes the memory cache from the robot', async () => {

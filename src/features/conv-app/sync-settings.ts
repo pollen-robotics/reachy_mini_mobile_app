@@ -15,7 +15,11 @@
  */
 import { getActiveLanguageId } from '@/features/conversation-language';
 import { isMemoryEnabled, isVisionEnabled } from '@/features/conversation-settings';
-import { getActivePersonalityId, syncPersonalitiesToRobot } from '@/features/personalities';
+import {
+  getActivePersonalityId,
+  getPersonalityBeforeAccessory,
+  syncPersonalitiesToRobot,
+} from '@/features/personalities';
 
 import type { ConvAppClient, ConvAppStatus } from './client';
 import { cacheFacts, consumeClearPending, isClearPending } from './memory-cache';
@@ -33,7 +37,18 @@ export async function applySettingsToRobot(
     // id is only meaningful once the two have been reconciled.
     await syncPersonalitiesToRobot(client);
     const personality = getActivePersonalityId();
-    if (status.personality !== personality) await client.applyPersonality(personality);
+    // Running an accessory's personality: the one from before it stays the
+    // robot's default, so taking the accessory off mid-conversation goes back
+    // to the same personality as it does here.
+    const beforeAccessory = getPersonalityBeforeAccessory();
+    if (status.personality !== personality) {
+      await client.applyPersonality(personality, { persist: beforeAccessory === null });
+    }
+    if (beforeAccessory !== null) {
+      await client.setDefaultPersonality(beforeAccessory).catch((err: unknown) => {
+        console.warn('[conv-app] could not set the fallback personality:', err);
+      });
+    }
     if (status.language !== language) await client.setLanguage(language);
     if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory);
     if (status.vision_enabled !== vision) await client.setVisionEnabled(vision);

@@ -27,6 +27,8 @@ const START_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 300_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
+/** `rfid.link_tag` writes the tag through the daemon, which retries for a while. */
+const LINK_TIMEOUT_MS = 20_000;
 
 /** One personality as the robot stores it. `name` is its canonical id. */
 export interface RobotPersonality {
@@ -91,7 +93,14 @@ export interface ConvAppClient {
   getPersonalities(): Promise<RobotPersonality[]>;
   /** The profile's avatar as SVG markup. */
   getAvatar(name: string): Promise<string>;
-  applyPersonality(name: string): Promise<void>;
+  /** Run `name`. `persist` (the default) also makes it the one to start with. */
+  applyPersonality(name: string, options?: { persist?: boolean }): Promise<void>;
+  /**
+   * Make `name` the personality to start with and to fall back to when an
+   * accessory comes off, without running it. Needs an app with
+   * `personalities.set_default`; older ones reject with `method_not_found`.
+   */
+  setDefaultPersonality(name: string): Promise<void>;
   savePersonality(personality: RobotPersonality): Promise<void>;
   deletePersonality(name: string): Promise<void>;
   setLanguage(language: string): Promise<string>;
@@ -99,6 +108,8 @@ export interface ConvAppClient {
   setVisionEnabled(enabled: boolean): Promise<boolean>;
   listMemory(): Promise<MemoryFact[]>;
   clearMemory(): Promise<void>;
+  /** Write `personality` onto the accessory on the reader. `written` is false when it already carried it. */
+  linkAccessory(personality: string): Promise<{ written: boolean }>;
 
   /** Subscribe to a notification; returns an unsubscribe function. */
   on(event: string, handler: RpcNotificationHandler): () => void;
@@ -142,8 +153,11 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     async getAvatar(name) {
       return (await robot.rpcCall<{ svg: string }>('personalities.avatar', { name })).svg;
     },
-    async applyPersonality(name) {
-      await robot.rpcCall('personalities.apply', { name, persist: true });
+    async applyPersonality(name, { persist = true } = {}) {
+      await robot.rpcCall('personalities.apply', { name, persist });
+    },
+    async setDefaultPersonality(name) {
+      await robot.rpcCall('personalities.set_default', { name });
     },
     async savePersonality({ name, instructions, greeting, voice }) {
       // `personalities.save` names a profile by its bare slug and puts it in
@@ -176,6 +190,14 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     },
     async clearMemory() {
       await robot.rpcCall('memory.clear');
+    },
+    async linkAccessory(personality) {
+      const res = await robot.rpcCall<{ written?: boolean }>(
+        'rfid.link_tag',
+        { personality },
+        { timeoutMs: LINK_TIMEOUT_MS }
+      );
+      return { written: res.written !== false };
     },
 
     on(event, handler) {

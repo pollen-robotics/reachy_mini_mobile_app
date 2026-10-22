@@ -42,12 +42,19 @@ import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
 import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
+import { AccessoryBadge } from './AccessoryBadge';
 import type {
   ConnectionState,
   ConversationState,
 } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { type Personality, useActivePersonality } from '@/features/personalities';
+import {
+  type Personality,
+  useActivePersonality,
+  useIsPersonalityOnRobot,
+  wasActivePersonalitySetByRobot,
+} from '@/features/personalities';
+import { accessoryPersonalityId, type AccessoryBadgeView, type LinkOutcome } from '@/features/nfc';
 import { useActiveLanguageId } from '@/features/conversation-language';
 import {
   PersonalityStore,
@@ -89,6 +96,13 @@ export interface ConversationPanelProps {
    * CTA is a trap. Always fired with `false` on unmount.
    */
   onAuthoringChange?: (authoring: boolean) => void;
+  /** What is on the NFC reader, shown in the orb area like the
+   *  conversation app's own "Accessory" badge. Omitted: no badge. */
+  accessory?: AccessoryBadgeView;
+  /** Tapping the accessory badge: the host opens Settings on NFC. */
+  onOpenAccessory?: () => void;
+  /** "Link personality": write `personality` (as the robot names it) onto the accessory. */
+  onLinkAccessory?: (personality: string) => Promise<LinkOutcome>;
 }
 
 /** Which persona-authoring form (if any) is open in the body slot. */
@@ -102,6 +116,9 @@ export function ConversationPanel({
   orbRef,
   active = true,
   onAuthoringChange,
+  accessory,
+  onOpenAccessory,
+  onLinkAccessory,
 }: ConversationPanelProps) {
   const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
@@ -127,7 +144,9 @@ export function ConversationPanel({
   // and the `voice` getter in `conversation-engine.ts`), so all we
   // need to do here is restart the conversation parts when a switch
   // happens mid-call.
-  const activePersonalityId = useActivePersonality().id;
+  const activePersona = useActivePersonality();
+  const activePersonalityId = activePersona.id;
+  const activeOnRobot = useIsPersonalityOnRobot(activePersonalityId);
 
   // Personality picker open / closed. When open, the body slot
   // below the sub-header swaps from the orb area to the persona
@@ -256,6 +275,8 @@ export function ConversationPanel({
     if (previous === null) return; // first render, nothing to restart
     if (previous === activePersonalityId) return; // no actual change
     if (!live) return; // not in conversation, will be picked up on next start
+    // An accessory switched it on the robot, which is already running it.
+    if (wasActivePersonalitySetByRobot()) return;
     void restartConversation().catch(err => {
       console.warn('[conversation-panel] restartConversation threw:', err);
     });
@@ -418,9 +439,23 @@ export function ConversationPanel({
             justifyItems: 'center',
           }}
         >
-          {/* Top spacer: balances the third row so the orb stays
-              centred regardless of caption / toast content. */}
-          <Box />
+          {/* Top row: balances the third one so the orb stays centred,
+              and holds the accessory on the NFC reader, top-right like
+              the conversation app's own badge group. In the flow rather
+              than overlaid, so on a short screen it pushes the orb down
+              instead of covering it. */}
+          <Box sx={{ justifySelf: 'stretch', display: 'flex', justifyContent: 'flex-end', px: 3 }}>
+            {accessory && onOpenAccessory && onLinkAccessory && (
+              <AccessoryBadge
+                accessory={accessory}
+                activePersonality={accessoryPersonalityId(activePersonalityId)}
+                activePersonalityName={activePersona.name}
+                canLink={activeOnRobot}
+                onOpen={onOpenAccessory}
+                onLink={() => onLinkAccessory(accessoryPersonalityId(activePersonalityId))}
+              />
+            )}
+          </Box>
           <Stack
             direction="row"
             spacing={1.25}

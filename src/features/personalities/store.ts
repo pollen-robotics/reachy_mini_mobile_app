@@ -49,6 +49,8 @@ import {
   writeCachedCatalog,
   writePendingWrites,
   writeSeeded,
+  readPersonalityBeforeAccessory,
+  writePersonalityBeforeAccessory,
 } from './storage';
 import type { PendingWrites } from './storage';
 import type { RobotPersonality } from '@/features/conv-app/client';
@@ -176,6 +178,16 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
     catalog.find(p => presentationKey(p.id) === presentationKey(state.activeId))?.id ??
     catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ??
     catalog[0].id;
+  // Same for the personality to go back to after an accessory, which the robot
+  // is told by its name; one that is gone leaves nothing to go back to.
+  if (personalityBeforeAccessory !== null) {
+    const before = personalityBeforeAccessory;
+    setPersonalityBeforeAccessory(
+      catalog.find(p => p.id === before)?.id ??
+        catalog.find(p => presentationKey(p.id) === presentationKey(before))?.id ??
+        null
+    );
+  }
   writeCachedCatalog(catalog);
   if (activeId !== state.activeId) writeActivePersonalityId(activeId);
   update({ catalog, activeId });
@@ -331,6 +343,58 @@ export function resolvePersonalityById(id: string): Personality | null {
   return state.catalog.find(p => p.id === id) ?? BUILTIN_BY_ID.get(id) ?? null;
 }
 
+/** The id to go back to once the NFC accessory switching the personality
+ *  comes off (see `features/nfc/accessory-follower.ts`), null without one.
+ *  Kept across restarts: the accessory may still be on when the app reopens. */
+let personalityBeforeAccessory = readPersonalityBeforeAccessory();
+
+export function getPersonalityBeforeAccessory(): string | null {
+  return personalityBeforeAccessory;
+}
+
+export function setPersonalityBeforeAccessory(id: string | null): void {
+  if (id === personalityBeforeAccessory) return;
+  personalityBeforeAccessory = id;
+  writePersonalityBeforeAccessory(id);
+}
+
+/** Whether the robot already has this personality: not still waiting to be
+ *  pushed at the next conversation start (`syncPersonalitiesToRobot`). */
+export function isPersonalityOnRobot(id: string): boolean {
+  return !state.pending.dirty.includes(id) && !state.pending.deleted.includes(id);
+}
+
+/** React hook over `isPersonalityOnRobot`, re-rendering as pushes land. */
+export function useIsPersonalityOnRobot(id: string): boolean {
+  return useSyncExternalStore(subscribe, () => isPersonalityOnRobot(id));
+}
+
+/** Whether the last switch of the active personality was the robot's own
+ *  (an accessory on its NFC reader), already in effect there. */
+let activeSetByRobot = false;
+
+export function wasActivePersonalitySetByRobot(): boolean {
+  return activeSetByRobot;
+}
+
+/** The catalog entry for a personality as the robot names it (`noir_detective`),
+ *  also before the robot's catalog has replaced the bundled ids. */
+export function resolveRobotPersonality(name: string): Personality | null {
+  return resolvePersonalityById(name) ?? resolvePersonalityById(`builtin:${name}`);
+}
+
+/**
+ * Follow a personality the robot switched to on its own, while it is
+ * listening: the same as `setActivePersonality`, minus telling the robot
+ * what it already did.
+ */
+export function followRobotPersonality(id: string): void {
+  if (id === state.activeId || !resolvePersonalityById(id)) return;
+  activeSetByRobot = true;
+  writeActivePersonalityId(id);
+  update({ activeId: id });
+}
+
 /** Switch the active personality. Persists to localStorage in the
  *  same tick so a hard refresh keeps the choice. No-op when the id
  *  is already active. */
@@ -342,6 +406,7 @@ export function setActivePersonality(id: string): void {
     console.warn(`[personalities] refusing to set unknown active id: ${id}`);
     return;
   }
+  activeSetByRobot = false;
   writeActivePersonalityId(id);
   update({ activeId: id });
   // Tell the robot now when it is listening; otherwise the next conversation

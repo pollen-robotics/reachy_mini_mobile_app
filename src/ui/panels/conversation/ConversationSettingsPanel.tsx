@@ -12,6 +12,8 @@
  *     read/apply live regardless of conversation state.
  *   - Language (conversation): the language Reachy speaks/listens in.
  *     Single-select chips from the `conversation-language` catalog.
+ *   - NFC (robot-level): the optional NFC reader add-on - switch it on
+ *     or off, see the tag on it, rewrite or erase that tag.
  *   - Privacy & memory (conversation): a vision toggle gating the
  *     on-demand `look` tool, a long-term-memory toggle, and a destructive
  *     "Clear memory" with a two-step confirm.
@@ -47,11 +49,15 @@ import {
   useVisionEnabled,
 } from '@/features/conversation-settings';
 import { useRobotMemory } from '@/features/conv-app/memory-cache';
+import type { UseNfcReaderResult } from '@/features/nfc';
 import { useDaemonState } from '@/features/daemon-state';
 import { MAX_ROBOT_NAME_LENGTH } from '@/features/robot-session/sdk-types';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { FONT_WEIGHT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
+
+import { NfcSettingsSection } from './NfcSettingsSection';
+import { Card, GroupLabel, Row, Section, ghostBtnSx } from './settingsLayout';
 
 /** How long after the last keystroke to auto-commit the rename. Long
  *  enough not to fire mid-word, short enough to feel immediate. Enter
@@ -63,6 +69,11 @@ export interface ConversationSettingsPanelProps {
    *  Gates the volume sliders so they can't be dragged against an
    *  unreachable daemon (values fall back to 50 until then). */
   audioReady: boolean;
+  /** The NFC reader, polled by the host (it also feeds the topbar pill). */
+  nfc: UseNfcReaderResult;
+  /** Changes on each tap on the topbar's NFC pill: scroll to the NFC
+   *  section. 0 when Settings was opened from the cog. */
+  nfcFocusKey?: number;
   /** Drill into the "About & diagnostics" sub-page (the host swaps this
    *  panel for `<RobotInfoPanel>`). Surfaced as a tappable row at the
    *  end of the panel. */
@@ -97,6 +108,8 @@ export interface ConversationSettingsPanelProps {
 
 export function ConversationSettingsPanel({
   audioReady,
+  nfc,
+  nfcFocusKey = 0,
   onOpenAbout,
   conversationLive,
   robotName,
@@ -335,6 +348,11 @@ export function ConversationSettingsPanel({
               </Box>
             </Box>
           </Section>
+
+          {/* NFC - a robot-level accessory the conversation app (hats) and
+              other apps read, so unlike its neighbours it is not locked
+              while talking. */}
+          <NfcSettingsSection reader={nfc} focusKey={nfcFocusKey} />
 
           {/* PRIVACY & MEMORY */}
           <Section
@@ -633,12 +651,6 @@ export function ConversationSettingsPanel({
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Layout primitives, local to this panel. Mirror the store's "section
- * header + paper card" rhythm so the two body-swap surfaces feel like
- * siblings.
- * ────────────────────────────────────────────────────────────────── */
-
 /** In-field rename status shown at the input's right edge (endAdornment).
  *  A spinner while the auto-save is in flight, a "Saved" check once it
  *  lands, and nothing at rest / on error (the error line renders below). */
@@ -667,158 +679,4 @@ function RenameStatus({
     );
   }
   return null;
-}
-
-function Section({
-  label,
-  blurb,
-  children,
-}: {
-  label: string;
-  blurb?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Box>
-      <Stack sx={{ px: 3, mb: 1.25 }}>
-        <Typography
-          sx={{
-            fontSize: TYPO.lg,
-            fontWeight: FONT_WEIGHT.semibold,
-            letterSpacing: '-0.2px',
-            lineHeight: 1.2,
-          }}
-        >
-          {label}
-        </Typography>
-        {blurb && (
-          <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
-            {blurb}
-          </Typography>
-        )}
-      </Stack>
-      {children}
-    </Box>
-  );
-}
-
-/** Top-tier group heading ("Robot" / "Conversation") that splits the
- *  panel into its two scopes. Sized ABOVE the `Section` labels
- *  (`TYPO.xl` vs `TYPO.lg`) so the hierarchy reads top-down:
- *  panel title (xxl) > group (xl) > section (lg) > rows. */
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <Typography
-      sx={{
-        px: 3,
-        // Pull the following section up so the heading hugs its own
-        // group (the Stack's `spacing={4}` would otherwise leave it
-        // floating equidistant between groups, breaking the grouping).
-        mb: -2,
-        fontSize: TYPO.xl,
-        fontWeight: FONT_WEIGHT.bold,
-        letterSpacing: '-0.2px',
-        lineHeight: 1.2,
-        color: 'text.primary',
-      }}
-    >
-      {children}
-    </Typography>
-  );
-}
-
-/** Paper card wrapper with the app's "white island on grey" look,
- *  inset by the standard `px: 3` gutter. */
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <Box sx={{ px: 3 }}>
-      <Box
-        sx={theme => ({
-          borderRadius: `${RADIUS.lg}px`,
-          bgcolor: 'background.paper',
-          border: `1px solid ${theme.palette.divider}`,
-          overflow: 'hidden',
-        })}
-      >
-        {children}
-      </Box>
-    </Box>
-  );
-}
-
-interface RowProps {
-  children: React.ReactNode;
-  /** Render as a tappable button (rows that act) vs a static div. */
-  as?: 'div' | 'button';
-  /** Draw a top hairline (for stacked rows inside a Card). */
-  divider?: boolean;
-  /** Standalone paper card row (its own surface + border), used for the
-   *  clear-memory affordance which sits outside the grouped Card. */
-  card?: boolean;
-  disabled?: boolean;
-  onClick?: () => void;
-  'aria-label'?: string;
-  'aria-pressed'?: boolean;
-}
-
-function Row({
-  children,
-  as = 'div',
-  divider = false,
-  card = false,
-  disabled = false,
-  ...rest
-}: RowProps) {
-  const interactive = as === 'button';
-  return (
-    <Box
-      component={interactive ? 'button' : 'div'}
-      type={interactive ? 'button' : undefined}
-      disabled={interactive ? disabled : undefined}
-      {...rest}
-      sx={theme => ({
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 1.5,
-        px: 2,
-        py: 1.5,
-        textAlign: 'left',
-        appearance: 'none',
-        font: 'inherit',
-        color: 'text.primary',
-        bgcolor: card ? 'background.paper' : 'transparent',
-        border: card ? `1px solid ${theme.palette.divider}` : 'none',
-        borderRadius: card ? `${RADIUS.lg}px` : 0,
-        borderTop: divider ? `1px solid ${theme.palette.divider}` : 'none',
-        cursor: interactive && !disabled ? 'pointer' : 'default',
-        opacity: disabled ? 0.5 : 1,
-        transition: 'background-color 0.12s ease',
-        WebkitTapHighlightColor: 'transparent',
-        ...(interactive && !disabled
-          ? { '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.03) } }
-          : {}),
-      })}
-    >
-      {children}
-    </Box>
-  );
-}
-
-function ghostBtnSx(color: string) {
-  return {
-    flex: 1,
-    appearance: 'none',
-    cursor: 'pointer',
-    font: 'inherit',
-    py: 1,
-    borderRadius: `${RADIUS.md}px`,
-    bgcolor: 'transparent',
-    border: `1px solid ${alpha(color, 0.4)}`,
-    color,
-    fontSize: TYPO.sm,
-    fontWeight: FONT_WEIGHT.medium,
-    WebkitTapHighlightColor: 'transparent',
-    '&:active': { transform: 'scale(0.99)' },
-  } as const;
 }

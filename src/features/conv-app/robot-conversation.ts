@@ -31,6 +31,7 @@ import type {
   ConversationState,
   ConversationToolToastEvent,
 } from '@/features/conversation/engine/types';
+import { followRobotPersonality, resolveRobotPersonality } from '@/features/personalities';
 
 import {
   CONV_APP_NAME,
@@ -184,6 +185,14 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     if (params.reason === 'tool_result_ready') void refreshMemory();
   };
 
+  // An accessory put on (or taken off) the robot's NFC reader switched the
+  // personality there: show it, without pushing it back or restarting.
+  const onPersonality = (params: Record<string, unknown>): void => {
+    if (!running || typeof params.profile !== 'string') return;
+    const personality = resolveRobotPersonality(params.profile);
+    if (personality) followRobotPersonality(personality.id);
+  };
+
   const refreshMemory = async (): Promise<void> => {
     const activeClient = client;
     if (!activeClient) return;
@@ -198,7 +207,8 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     unsubscribes.push(
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
-      activeClient.on('conversation.activity', onActivity)
+      activeClient.on('conversation.activity', onActivity),
+      activeClient.on('conversation.personality', onPersonality)
     );
     raf = requestAnimationFrame(tick);
   };
