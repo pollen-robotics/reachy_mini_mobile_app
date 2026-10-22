@@ -1154,10 +1154,10 @@ function PinView({
       <IconHero>
         <LockOutlinedIcon sx={{ fontSize: 48 }} />
       </IconHero>
-      <Headline title="Enter the setup code" caption="Find the 5-character code printed under your Reachy." />
+      <Headline title="Enter the setup code" caption="Find the 5-digit code printed under your Reachy." />
       <TextField
         value={pin}
-        onChange={e => setPin(e.target.value.trim().toUpperCase().slice(0, PIN_LENGTH))}
+        onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, PIN_LENGTH))}
         onKeyDown={e => {
           if (e.key === 'Enter') submit();
         }}
@@ -1166,8 +1166,8 @@ function PinView({
         helperText={error ? 'Incorrect code. Check the label under your Reachy.' : ' '}
         slotProps={{
           htmlInput: {
-            inputMode: 'text',
-            autoCapitalize: 'characters',
+            inputMode: 'numeric',
+            pattern: '[0-9]*',
             'aria-label': 'Setup code',
             style: { textAlign: 'center', letterSpacing: '0.4em', fontFamily: 'monospace', fontSize: 22 },
           },
