@@ -19,3 +19,6 @@ export const glassIconButtonSx = {
   '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.5)' },
   '&.Mui-disabled': { color: 'rgba(255, 255, 255, 0.4)' },
 };
+
+/** Wheels joystick accent, distinct from the (primary orange) head stick. */
+export const WHEELS_COLOR = '#3b82f6';

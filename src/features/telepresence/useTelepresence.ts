@@ -2,11 +2,11 @@
  * React glue for the telepresence tab: owns the motion controller and
  * the two audio legs for as long as `active` is true.
  *
- * `active` = tab visible AND session live. Flipping it off parks the
- * head/base/antennas back to neutral, stops the phone mic (releasing the
- * OS mic indicator) and drops the robot audio element - so the
- * conversation tab finds the robot and the audio sender exactly as it
- * left them.
+ * `active` = tab visible AND session live AND not in manual overboard
+ * mode. Flipping it off parks the head/base/antennas back to neutral,
+ * stops the phone mic (releasing the OS mic indicator) and drops the
+ * robot audio element - so the conversation tab finds the robot and the
+ * audio sender exactly as it left them.
  *
  * `allowMotion` is the host's veto (session tearing down, wake-up
  * trajectory or first-wake-up wizard in progress). Combined with the
@@ -231,7 +231,7 @@ export function useTelepresence({
     attachPhoneMic(robot)
       .then((link) => {
         if (gen !== audioGenRef.current) {
-          // Tab left while we were attaching.
+          // Tab left / manual mode entered while we were attaching.
           void link.dispose();
           return;
         }
