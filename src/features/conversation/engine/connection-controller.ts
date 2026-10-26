@@ -40,6 +40,8 @@ import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
 import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
+import { installPlaceholderAudioReaper } from "@/features/robot-session/sdk-placeholder-audio";
+import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
@@ -85,8 +87,9 @@ export interface ConnectionControllerDeps {
    *  to auto-start the AI pipeline. */
   onConnectionLive: () => Promise<void>;
   /** Connection going down: the conversation layer stops the app on the
-   *  robot and parks its FSM on `idle`. */
-  onConnectionLost: (opts: { glide: boolean }) => Promise<void>;
+   *  robot (not with `keepRobotApp`: a lost link) and parks its FSM on
+   *  `idle`. */
+  onConnectionLost: (opts: { glide: boolean; keepRobotApp?: boolean }) => Promise<void>;
   /** Gate the robot mic forwarded to the backend. Used by the
    *  unsolicited-drop recovery path to re-sync the host's mute button. */
   applyMicMuted: (muted: boolean) => void;
@@ -109,10 +112,13 @@ export interface ConnectionController {
   connect(): Promise<void>;
   /** Full transport teardown: stop pipeline (no glide) + goto-sleep +
    *  stopSession. */
-  teardown(): Promise<void>;
+  teardown(opts?: { keepRobotApp?: boolean }): Promise<void>;
   /** Classify + surface a fatal error, flip the connection FSM to
    *  `error`, and tear the session down. */
   onFatalError(err: unknown): Promise<void>;
+  /** How many fatals so far: a long step (recovery) compares it across
+   *  its awaits to learn that the session died underneath it. */
+  getFatalCount(): number;
   /** Kick the boot chain and install background-tab resilience. Call
    *  once, after the conversation pipeline is wired. Returns the boot
    *  promise (for the unmount guard) + the resilience disposer. */
@@ -227,6 +233,7 @@ export function createConnectionController(
     if (!transportDegraded) {
       transportDegraded = true;
       console.info(`[connection] transport-degraded cause=${cause}`);
+      recordConnectionEvent("degraded", cause);
     }
   };
   const onTransportRecovered = (cause: string): void => {
@@ -238,6 +245,7 @@ export function createConnectionController(
     // before its failures mean anything.
     dcHealth.setSuspended(false);
     console.info(`[connection] transport-recovered cause=${cause}`);
+    recordConnectionEvent("recovered", cause);
   };
 
   // ─── Auto re-dial policy ────────────────────────────────────────
@@ -259,11 +267,34 @@ export function createConnectionController(
    * so it is cleared and re-synced. The video path heals itself via
    * the SDK's `videoTrack` re-fire + the cache listener.
    */
+  // A redial suspends dc-health, gates pose writes and puts up the
+  // "Reconnecting…" caption. `sessionReconnected` lifts all three, but the
+  // SDK cancels a redial silently (Hub app handoff, stop, disconnect):
+  // then the session comes back through reacquire / recover instead, and
+  // nothing lifted them - a live session stuck under "Reconnecting…" with
+  // its pose writes gated. Lifted on whichever comes first.
+  let redialPending = false;
+  const endRedialState = (cause: string): void => {
+    if (!redialPending) return;
+    redialPending = false;
+    dcHealth.setSuspended(false);
+    onTransportRecovered(cause);
+    emitErrorMessage(null);
+  };
+  connection.subscribe((next) => {
+    if (next === "live" || next === "released") endRedialState(`connection=${next}`);
+  });
+
   const onSessionReconnecting = (detail: {
     attempt: number;
     maxAttempts: number;
     cause: string;
   }): void => {
+    redialPending = true;
+    recordConnectionEvent(
+      "redialing",
+      `attempt ${detail.attempt}/${detail.maxAttempts}: ${detail.cause}`,
+    );
     console.info(
       `[connection] session-reconnecting attempt=${detail.attempt}/` +
         `${detail.maxAttempts} cause=${detail.cause}`,
@@ -274,12 +305,14 @@ export function createConnectionController(
   };
 
   const onSessionReconnected = (detail: { attempt: number }): void => {
+    recordConnectionEvent("redialed", `attempt ${detail.attempt}`);
+    // Fresh RTCPeerConnection: point the transport monitor (signal bars,
+    // latency badge) at it, or it keeps polling the closed one ("0 ms").
+    session.restartTransportMonitor();
     console.info(
       `[connection] session-reconnected attempt=${detail.attempt}`,
     );
-    dcHealth.setSuspended(false);
-    onTransportRecovered("redial");
-    emitErrorMessage(null);
+    endRedialState("redial");
     // Promote back to `live`. A phone-side network drop also kills the
     // SDK's central SSE feed, and its `disconnected` event demotes the
     // FSM to `authenticated` (see `robot-events.ts`). That demotion
@@ -573,14 +606,14 @@ export function createConnectionController(
     await onConnectionLive();
   }
 
-  async function teardown(): Promise<void> {
+  async function teardown(opts: { keepRobotApp?: boolean } = {}): Promise<void> {
     // Announce the connection is going down. The conversation seam
     // tears its pipeline WITHOUT glide here - `gotoSleep` below is
     // about to play its own head + antennas trajectory and a 700ms
     // ease-out would fight it on the bus - and parks the conversation
     // FSM on `idle` so every teardown caller inherits a clean
     // conversation cursor and only has to re-park the connection FSM.
-    await onConnectionLost({ glide: false });
+    await onConnectionLost({ glide: false, keepRobotApp: opts.keepRobotApp });
 
     // Capture the session flag BEFORE resetting it - we need it to
     // decide whether to run the goto-sleep dance below.
@@ -618,11 +651,14 @@ export function createConnectionController(
     }
   }
 
+  let fatalCount = 0;
   async function onFatalError(err: unknown): Promise<void> {
+    fatalCount += 1;
     const detail = err instanceof Error ? err.message : String(err);
     // Log the raw detail for diagnosis, but surface only the honest,
     // classified copy to the orb caption - never the raw engine string.
     console.error("[main] error:", detail);
+    recordConnectionEvent("fatal", detail);
     // A fatal can land mid-bring-up; don't leak a stale sub-phase
     // into the next connect cycle.
     emitBringUpPhase(null);
@@ -636,7 +672,10 @@ export function createConnectionController(
         "The connection to your Reachy was lost and couldn't be restored automatically.",
       ),
     );
-    await teardown();
+    // A lost link must never stop the robot's conversation: it is
+    // autonomous, and the in-place recovery re-follows it. Only the
+    // following stops here; deliberate stops still stop the app.
+    await teardown({ keepRobotApp: true });
   }
 
   // ─── Boot ───────────────────────────────────────────────────────
@@ -662,6 +701,9 @@ export function createConnectionController(
       // ignored by SDK builds that predate the option.
       autoReconnect: true,
     });
+    // The SDK leaks one AudioContext per dial; close them before they
+    // exhaust the WebView's output-stream budget (see the module doc).
+    installPlaceholderAudioReaper(robot);
     // Hand the SDK ref to the session so its lifecycle methods can use
     // it. The controller's local `robot` stays in sync; the session is
     // the canonical owner from here on.
@@ -673,6 +715,7 @@ export function createConnectionController(
       renderRobotList,
       applyMicMuted,
       setConnectionState,
+      getConnectionState: () => connection.current(),
       onFatalError,
       isConversationActive,
       probeRobotLink,
@@ -789,6 +832,7 @@ export function createConnectionController(
     connect: doConnect,
     teardown,
     onFatalError,
+    getFatalCount: () => fatalCount,
     start,
   };
 }

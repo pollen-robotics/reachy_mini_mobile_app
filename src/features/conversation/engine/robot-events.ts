@@ -31,6 +31,7 @@
  */
 
 import type { RobotSession } from "@/features/robot-session/RobotSession";
+import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
 import type {
   ReachyMiniInstance,
   RobotInfo,
@@ -55,6 +56,9 @@ export interface WireRobotEventsDeps {
   applyMicMuted: (muted: boolean) => void;
   /** Drive the connection FSM directly for the `disconnected` event. */
   setConnectionState: (state: ConnectionState) => void;
+  /** Read the connection FSM, so `disconnected` only demotes states it
+   *  owns. */
+  getConnectionState: () => ConnectionState;
   /** Fatal-error sink for the unsolicited-drop path. Awaited so the
    *  listener returns after the user-facing teardown completes. */
   onFatalError: (err: unknown) => Promise<void>;
@@ -102,6 +106,7 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     renderRobotList,
     applyMicMuted,
     setConnectionState,
+    getConnectionState,
     onFatalError,
     isConversationActive,
     probeRobotLink,
@@ -231,6 +236,16 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
     // unmounting. The unmount path doesn't rely on this listener for
     // any of its cleanup.
     if (isUnmounted()) return;
+    // Signaling dropping says nothing new to these states, and demoting
+    // them would hide the truth: `error` keeps its caption and the
+    // in-place recovery loop that runs off it (the SDK also emits
+    // `disconnected` right after `sessionStopped` when signaling is down);
+    // `released` is a Hub app's handoff, owned by reacquire; `starting`
+    // is a bring-up or recovery that reports its own failure.
+    const current = getConnectionState();
+    if (current === "error" || current === "released" || current === "starting") {
+      return;
+    }
     if (robot.isAuthenticated) {
       setConnectionState("authenticated");
     } else {
@@ -337,6 +352,19 @@ export function wireRobotEvents(deps: WireRobotEventsDeps): void {
   //   - a terminal give-up (all attempts failed) falls back to the
   //     plain `sessionStopped` event - the unsolicited-drop fatal
   //     path above already owns that surface.
+  // Signaling (central) can drop and come back while the session keeps
+  // streaming peer-to-peer (SDK >= the peer-link liveness change). Nothing
+  // to do but keep a trace: the session is unaffected by design.
+  robot.addEventListener("signalingLost", () => {
+    recordConnectionEvent("signaling-lost", "session kept, reconnecting signaling");
+  });
+  robot.addEventListener("signalingRestored", () => {
+    recordConnectionEvent("signaling-restored");
+  });
+  robot.addEventListener("signalingSessionEnded", () => {
+    recordConnectionEvent("signaling-session-ended", "central dropped it, peer link live: kept");
+  });
+
   robot.addEventListener("sessionReconnecting", (event) => {
     const detail = (
       event as CustomEvent<{

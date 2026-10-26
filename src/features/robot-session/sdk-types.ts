@@ -85,6 +85,12 @@ export interface RobotInfo {
   meta?: { name?: string };
 }
 
+export interface TelemetryStatus {
+  enabled: boolean;
+  /** An environment variable on the robot forces telemetry off. */
+  disabled_by_env: boolean;
+}
+
 export interface RobotState {
   head: { roll: number; pitch: number; yaw: number };
   antennas: { right: number; left: number };
@@ -132,6 +138,11 @@ export interface ReachyMiniInstance extends EventTarget {
     head?: number[];
     antennas?: number[];
     head_joint_positions?: number[];
+    /** Body yaw in radians. */
+    body_yaw?: number;
+    motor_mode?: string;
+    /** A daemon-side move (recorded move, goto, wake/sleep) is playing. */
+    is_move_running?: boolean;
   };
 
   authenticate(): Promise<boolean>;
@@ -166,6 +177,13 @@ export interface ReachyMiniInstance extends EventTarget {
    * ±150°).
    */
   setBodyYawDeg(yawDeg: number): boolean;
+  /**
+   * One `set_full_target` frame carrying any subset of head (flat
+   * row-major 4x4), antennas ([right, left] rad) and body yaw (rad).
+   * Sending head + body together keeps them consistent for the daemon's
+   * head-vs-body yaw check. Returns false when the channel is closed.
+   */
+  setTarget(target: { head?: number[]; antennas?: number[]; body_yaw?: number }): boolean;
 
   /**
    * Smoothly interpolate to a target pose ENTIRELY daemon-side: the robot
@@ -334,6 +352,15 @@ export interface ReachyMiniInstance extends EventTarget {
    * on a daemon error / closed channel / unsupported daemon.
    */
   setFirstWakeUp(isCompleted: boolean): Promise<boolean | null>;
+
+  /**
+   * Read the robot's anonymous telemetry choice. `null` when the channel
+   * isn't open or the daemon predates the `get_telemetry` command. Optional
+   * because SDK builds before reachy_mini's telemetry commands lack it.
+   */
+  getTelemetry?(): Promise<TelemetryStatus | null>;
+  /** Enable or disable telemetry on the robot. `null` on error. */
+  setTelemetry?(enabled: boolean): Promise<TelemetryStatus | null>;
 
   setAudioMuted(muted: boolean): void;
   setMicMuted(muted: boolean): void;

@@ -93,8 +93,10 @@ export interface RobotConversation {
    * could not start (the state is back on `idle` and the caption says why).
    */
   start(): Promise<boolean>;
-  /** Stop the app on the robot and stop following it. Idempotent. */
-  stop(): Promise<void>;
+  /** Idempotent. Stop following the conversation, and stop the app on the robot
+   *  unless `keepRobotApp` (a lost link: the robot's conversation is
+   *  autonomous and must keep running; recovery re-follows it). */
+  stop(opts?: { keepRobotApp?: boolean }): Promise<void>;
   setMicMuted(muted: boolean): void;
   /** Latest user level, 0..1, for rAF-driven visuals. */
   getMicLevel(): number;
@@ -351,14 +353,14 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       return true;
     },
 
-    async stop() {
+    async stop(opts) {
       if (!running && client === null) return;
       running = false;
       setLiveRobot(null);
       unfollow();
       const activeClient = client;
       client = null;
-      if (!activeClient) return;
+      if (!activeClient || opts?.keepRobotApp) return;
       try {
         // Only ever stop our own app: after a refused start ("busy with X")
         // the robot runs an app the user launched from the Apps tab, and

@@ -451,7 +451,7 @@ const connectionController: ConnectionController = createConnectionController({
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
-  onConnectionLost: () => onConnectionLost(),
+  onConnectionLost: (opts) => onConnectionLost(opts),
   applyMicMuted: (muted) => applyMicMuted(muted),
 });
 
@@ -500,6 +500,12 @@ async function handleOrbClick(): Promise<void> {
         // conversation is running yet (conversation idle); ignore taps
         // while a conversation is already live / winding down.
         if (conversation.current() !== "idle") return;
+        // Mid re-dial there is no data channel to start the app over:
+        // the start would time out and drop the tap anyway. Ask the SDK
+        // itself rather than mirroring its redial in a flag: a redial can
+        // be cancelled silently (handoff, stop, disconnect), which left a
+        // mirrored flag stuck and the orb dead.
+        if (connectionController.getRobot()?.state !== "streaming") return;
         // Flip `convoActiveRequested` so re-entries do not bounce back
         // to idle if the runner is interrupted, then start the app on
         // the robot. `runConversationParts` flips the conversation FSM
@@ -611,10 +617,12 @@ async function runConversationParts(): Promise<void> {
  * Hub-app handoff, power-off) lands here, so "stop" always means the app on
  * the robot stops too. Idempotent.
  */
-async function tearDownConversationPipeline(): Promise<void> {
+async function tearDownConversationPipeline(
+  opts: { keepRobotApp?: boolean } = {},
+): Promise<void> {
   if (!conversationStarted.get()) return;
   convoActiveRequested.off();
-  await robotConversation.stop();
+  await robotConversation.stop({ keepRobotApp: opts.keepRobotApp });
   conversationStarted.off();
 }
 
@@ -626,8 +634,8 @@ async function tearDownConversationPipeline(): Promise<void> {
  * conversation FSM to `idle`, so every teardown caller inherits a clean
  * conversation cursor.
  */
-async function onConnectionLost(): Promise<void> {
-  await tearDownConversationPipeline();
+async function onConnectionLost(opts: { keepRobotApp?: boolean } = {}): Promise<void> {
+  await tearDownConversationPipeline({ keepRobotApp: opts.keepRobotApp });
   setConversationState("idle");
 }
 
@@ -700,6 +708,7 @@ const handle: ConversationEngineHandle = createConversationHandle({
   setConversationState,
   emitConnectionAttempt,
   onFatalError: connectionController.onFatalError,
+  getFatalCount: connectionController.getFatalCount,
   getMicLevel: robotConversation.getMicLevel,
 });
 return handle;
