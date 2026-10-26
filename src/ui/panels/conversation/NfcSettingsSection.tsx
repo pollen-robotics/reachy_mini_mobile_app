@@ -202,10 +202,11 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
   }
 
   const detail = readerDetail(status, reader.fetchError);
-  const actionsDisabled = !tag?.present || busy;
-  // No tag, nothing to act on: the footer only stays for an operation
-  // still running or the error it ended with.
-  const showFooter = tag?.present || busy || (result !== null && !result.success);
+  // No tag, or the reader off: nothing to act on. The footer only stays for
+  // an operation still running or the error it ended with.
+  const hasTag = state === 'tag';
+  const actionsDisabled = !hasTag || busy;
+  const showFooter = hasTag || busy || (result !== null && !result.success);
 
   return anchored(
     <Section label="NFC" blurb="Tags placed on Reachy's NFC reader.">
@@ -480,7 +481,7 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                   </Box>
                 </Stack>
               </>
-            ) : tag?.present || busy ? (
+            ) : hasTag || busy ? (
               <Stack direction="row" spacing={1}>
                 <Box
                   component="button"
