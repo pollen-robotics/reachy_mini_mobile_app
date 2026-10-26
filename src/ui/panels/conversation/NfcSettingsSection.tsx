@@ -40,7 +40,7 @@ import { FONT_WEIGHT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 import { Card, Row, Section, ghostBtnSx } from './settingsLayout';
 
 /** Same page as the conversation app's "Get the NFC add-on". */
-const ADD_ON_STORE_URL = 'https://store.pollen-robotics.com/collections/reachy-mini';
+const ADD_ON_STORE_URL = 'https://store.pollen-robotics.com/products/reachy-mini-accessory-pack';
 
 /** The daemon refuses more than this; the tag's own capacity is smaller still. */
 const MAX_WRITE_CHARS = 860;
