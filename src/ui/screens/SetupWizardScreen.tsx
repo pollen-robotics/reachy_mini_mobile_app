@@ -598,11 +598,14 @@ function DeviceRow({
             {label}
           </Typography>
           <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+            {/* Tail, not head: on Android the address is a MAC whose first
+                three pairs are the vendor OUI, identical on every Reachy.
+                On iOS it's a per-device UUID, random either way. */}
             <Typography
               sx={{ fontSize: TYPO.xs, fontFamily: 'monospace', color: 'text.secondary', opacity: 0.6 }}
               noWrap
             >
-              #{device.address.slice(0, 8)}
+              #{device.address.slice(-8)}
             </Typography>
             {isClosest ? (
               <Typography
