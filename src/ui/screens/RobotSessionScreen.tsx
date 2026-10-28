@@ -1243,6 +1243,7 @@ function ConnectedSession({
                 robotName={displayName}
                 renameRobot={handleRenameRobot}
                 signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
+                getRobot={session.getRobot}
                 onSignedOutRobot={() => {
                   setSettingsOpen(false);
                   handleLeave();
