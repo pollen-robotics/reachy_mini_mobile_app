@@ -31,6 +31,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type BleDevice,
   type ScanController,
+  StaleBondError,
   connect as bleConnect,
   disconnect as bleDisconnect,
   reachyBySignal,
@@ -325,6 +326,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const scanBootAwaitingVisibleRef = useRef(false);
   /** Set once the native scanner has been armed at least once (refocus resume). */
   const bleScanEverStartedRef = useRef(false);
+  /** True while `bleConnect` is in flight: it owns the link's failures then. */
+  const linkingRef = useRef(false);
 
   const cancelScanBoot = useCallback(() => {
     if (scanBootRafRef.current !== null) {
@@ -363,6 +366,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   useEffect(() => {
     void watchConnection((connected) => {
       if (connected) return;
+      // A connect that fails also reports the link as down, and the connect's
+      // own error says why (a stale bond is not "move closer").
+      if (linkingRef.current) return;
       const p = phaseRef.current;
       const midFlow = p !== 'scanning' && p !== 'done' && p !== 'error';
       // Once the HF sign-in is underway BLE has done its job (IP resolved, all
@@ -523,7 +529,12 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
         try {
           // The radio can't scan and connect simultaneously — stop the loop first.
           await stopScanLoop();
-          await bleConnect(device.address);
+          linkingRef.current = true;
+          try {
+            await bleConnect(device.address, undefined, { bonded: device.bonded });
+          } finally {
+            linkingRef.current = false;
+          }
           if (runId !== runIdRef.current || !mountedRef.current) return;
           // Play the identify chirp (sound only, no motion) so the user hears
           // which physical Reachy they just tapped. Public BLE command (no
@@ -539,8 +550,19 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           // to match the robot on central. Nothing in the UI renders it.
           identityRef.current = id;
           setPhase('pin');
-        } catch {
+        } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
+          if (e instanceof StaleBondError) {
+            setError({
+              code: 'ble-bond-stale',
+              message:
+                'Your phone kept an old Bluetooth pairing with this Reachy that no longer works. ' +
+                'Forget “reachy-mini” in your Bluetooth settings, then try again.',
+              recoverPhase: 'scanning',
+            });
+            setPhase('error');
+            return;
+          }
           setError({
             code: 'connect-failed',
             message: 'Could not connect to this robot. Make sure it is powered on and close by.',

@@ -356,7 +356,7 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
         // The radio can't scan and connect at once — stop the loop first.
         await stopScanLoop();
         setScanning(false);
-        await bleConnect(d.address);
+        await bleConnect(d.address, undefined, { bonded: d.bonded });
         linkUpRef.current = true;
         setLinkLost(false);
         setStep('pin');

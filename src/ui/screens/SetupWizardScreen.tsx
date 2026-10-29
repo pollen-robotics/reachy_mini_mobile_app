@@ -45,7 +45,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
-import type { BleDevice } from '@/features/ble/bleWifi';
+import { type BleDevice, openBluetoothSettings } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
 import { openAppSettings, openExternalUrl } from '@/shared/tauri/openUrl';
@@ -240,6 +240,11 @@ function StepView({
     // "Something went wrong / Try again" error.
     if (m.error.code === 'permission-denied') {
       return <PermissionDeniedView onRetry={m.retry} onCancel={onCancel} />;
+    }
+    // A stale Bluetooth pairing isn't fixed by trying again either: the user
+    // has to forget the robot in the phone's Bluetooth settings first.
+    if (m.error.code === 'ble-bond-stale') {
+      return <StaleBondView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
     }
     return <ErrorView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
   }
@@ -1441,6 +1446,55 @@ function PermissionDeniedView({
           {isIos ? (
             <>
               <PrimaryButton onClick={() => void openAppSettings()}>Open Settings</PrimaryButton>
+              <SecondaryButton onClick={onRetry}>Try again</SecondaryButton>
+            </>
+          ) : (
+            <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
+          )}
+          <TextButton onClick={onCancel}>Cancel setup</TextButton>
+        </Stack>
+      }
+    />
+  );
+}
+
+/* --- stale bluetooth pairing --------------------------------------------- */
+
+/**
+ * Shown when the phone holds a Bluetooth bond the robot no longer has the keys
+ * for (the user paired it from the phone's settings once) and the app could
+ * not drop it itself. Android can deep-link to its Bluetooth settings; iOS
+ * can't, so the copy names the path instead.
+ */
+function StaleBondView({
+  message,
+  onRetry,
+  onCancel,
+}: {
+  message: string;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const isAndroid = getPlatform() === 'android';
+  const caption = isAndroid
+    ? message
+    : `${message} Go to Settings › Bluetooth, tap ⓘ next to it, then Forget This Device.`;
+  return (
+    <SetupScaffold
+      hero={
+        <IconHero tint={STATUS.error}>
+          <BluetoothIcon sx={{ fontSize: 48 }} />
+        </IconHero>
+      }
+      title="Forget the old pairing"
+      caption={caption}
+      actions={
+        <Stack spacing={1.25}>
+          {isAndroid ? (
+            <>
+              <PrimaryButton onClick={() => void openBluetoothSettings()}>
+                Open Bluetooth settings
+              </PrimaryButton>
               <SecondaryButton onClick={onRetry}>Try again</SecondaryButton>
             </>
           ) : (

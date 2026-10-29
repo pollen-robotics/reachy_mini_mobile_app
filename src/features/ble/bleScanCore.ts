@@ -21,6 +21,8 @@ export interface BleDevice {
   name?: string | null;
   services?: string[];
   rssi?: number;
+  /** The phone holds a bond with it (only Android reports this). */
+  bonded?: boolean;
   raw: unknown; // the untouched plugin object, for diagnostics
 }
 
@@ -41,7 +43,8 @@ export function normalizeDevice(d: Record<string, unknown>): BleDevice {
   const rawServices = (d.services ?? d.serviceUuids ?? d.advertisedServices ?? []) as unknown[];
   const services: string[] = rawServices.map((s) => String(s).toLowerCase());
   const rssi = typeof d.rssi === 'number' ? d.rssi : undefined;
-  return { address, name, services, rssi, raw: d };
+  const bonded = d.isBonded === true;
+  return { address, name, services, rssi, bonded, raw: d };
 }
 
 /**
