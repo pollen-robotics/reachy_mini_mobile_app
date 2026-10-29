@@ -62,6 +62,11 @@ export interface SetupError {
     | 'busy'
     | 'daemon-unreachable'
     | 'ble-dropped'
+    // The phone holds a Bluetooth bond the robot no longer has keys for (the
+    // user paired it from the phone's settings), so every connect is refused.
+    // Dropping the bond from the app failed or isn't possible (iOS): the user
+    // has to forget the robot in the phone's Bluetooth settings.
+    | 'ble-bond-stale'
     // Phone-side GATT state went stale (e.g. the app was killed mid-connection
     // and iOS served a cached/partial service discovery): a characteristic we
     // need is "not available". Nothing is wrong robot-side - a fresh connect
