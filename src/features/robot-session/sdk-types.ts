@@ -110,6 +110,11 @@ export interface ReachyMiniOptions {
    * on success; a terminal give-up falls back to `sessionStopped`.
    */
   autoReconnect?: boolean;
+  /**
+   * Identifies this client to the robot's anonymous telemetry, as
+   * `<type>/<version> (<os>)`. The SDK defaults to `web/<sdk version>`.
+   */
+  client?: string;
 }
 
 export interface ReachyMiniInstance extends EventTarget {
