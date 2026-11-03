@@ -34,6 +34,7 @@
 
 import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
+import { getPlatform } from "@/shared/platform";
 import { isAnotherAppDrivingRobot } from "@/features/conv-app/app-slot";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { applyAudioStartupConfig } from "./audio-startup-config";
@@ -678,6 +679,12 @@ export function createConnectionController(
     await teardown({ keepRobotApp: true });
   }
 
+  /** `mobile/<version> (<os>)`, the format the daemon's telemetry parses. */
+  function mobileClientName(): string {
+    const os = getPlatform();
+    return `mobile/${__APP_VERSION__}${os === "browser" ? "" : ` (${os})`}`;
+  }
+
   // ─── Boot ───────────────────────────────────────────────────────
   // `consumeTokenFromHash()` reads the HF token from the URL fragment
   // for the legacy iframe deployment (no-op on bundled mobile);
@@ -700,6 +707,9 @@ export function createConnectionController(
       // `sessionReconnected` (see the auto re-dial policy above);
       // ignored by SDK builds that predate the option.
       autoReconnect: true,
+      // Names the app to the robot's anonymous telemetry (reported as
+      // `web` otherwise); SDK builds before the option ignore it.
+      client: mobileClientName(),
     });
     // The SDK leaks one AudioContext per dial; close them before they
     // exhaust the WebView's output-stream budget (see the module doc).
