@@ -56,17 +56,19 @@ const UPDATE_STALL_TIMEOUT_MS = 180_000;
  * First daemon release that understands the in-app WebRTC `start_update`
  * command (reachy_mini#1208, landed in v1.8.2). Below this - or when the
  * daemon never reported its version - the in-app "Update now" path can't
- * work, so we send the user to the Reachy desktop app instead of offering
- * a button that would silently do nothing.
+ * work, so we send the user to the Reachy Mini Flasher (full OS reflash
+ * over USB) instead of offering a button that would silently do nothing.
  */
 const MIN_DAEMON_VERSION_FOR_SELF_UPDATE = '1.8.2';
 
 /** Public troubleshooting docs - same target as the Help & Support overlay. */
 const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
 
-/** Showcase site download page (Reachy Mini website Space). Where users
- *  grab the desktop app that can update a daemon too old for OTA. */
-const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
+/** "Reflash the ISO" docs page: Reachy Mini Flasher download (macOS /
+ *  Windows) and the hardware steps (open the head, SW1, USB). The only way
+ *  to bring a daemon too old for OTA up to date. Factory resets the robot. */
+const REFLASH_GUIDE_URL =
+  'https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/reflash_the_rpi_ISO';
 
 /**
  * Dev-only escape hatch for the blocking update prompt.
@@ -87,8 +89,8 @@ const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf
 const DEV_BYPASS = import.meta.env.DEV;
 
 /** True only when the daemon version is known AND new enough to self-update
- *  over the WebRTC data channel. Unknown / unparseable → false (→ desktop
- *  app fallback). */
+ *  over the WebRTC data channel. Unknown / unparseable → false (→ reflash
+ *  fallback). */
 function supportsSelfUpdate(current: string | null): boolean {
   const c = parseSemver(current);
   const min = parseSemver(MIN_DAEMON_VERSION_FOR_SELF_UPDATE);
@@ -149,7 +151,7 @@ export default function DaemonUpdateGate({
   const outdated = isDaemonOutdated(current, latestVersion);
   // Can this robot update itself from the app? Needs a daemon new enough to
   // understand the WebRTC `start_update` command. When false, the prompt
-  // switches to a "use the desktop app" message instead of "Update now".
+  // switches to a "reflash with the Flasher" message instead of "Update now".
   const canSelfUpdate = supportsSelfUpdate(current);
 
   // Derive the prompt SYNCHRONOUSLY (no effect) the moment we positively
@@ -310,9 +312,9 @@ export default function DaemonUpdateGate({
           {effectivePhase === 'lost' && (
             <PrimaryButton onClick={() => setPhase('rebooting')}>Keep waiting</PrimaryButton>
           )}
-          {((effectivePhase === 'prompt' && !canSelfUpdate) || effectivePhase === 'failed') && (
-            <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
-              Get the desktop app ↗
+          {effectivePhase === 'prompt' && !canSelfUpdate && (
+            <PrimaryButton onClick={() => void openExternalUrl(REFLASH_GUIDE_URL)}>
+              How to reflash ↗
             </PrimaryButton>
           )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) ||
@@ -352,7 +354,7 @@ function titleFor(phase: Phase, canSelfUpdate: boolean): string {
     case 'lost':
       return "Reachy didn't come back online";
     default:
-      return canSelfUpdate ? 'Update required' : 'Update from the desktop app';
+      return canSelfUpdate ? 'Update required' : 'Reflash required';
   }
 }
 
@@ -372,15 +374,15 @@ function bodyFor(
     case 'lost':
       return 'The update may have finished, but the robot has not reconnected yet. Check that it is powered on and on Wi-Fi, then keep waiting or go back to your robots and reconnect.';
     case 'failed':
-      return 'The robot did not respond to the update request. Make sure you are close to it and it is online, then try again - or update it from the Reachy desktop app.';
+      return 'The robot did not respond to the update request. Make sure you are close to it and it is online, then try again.';
     default:
       // `prompt`. Two flavours: a daemon new enough to update itself from the
-      // app, vs. one that's too old (or silent) and must be updated from the
-      // desktop app.
+      // app, vs. one that's too old (or silent) and must be reflashed with the
+      // Reachy Mini Flasher.
       if (!canSelfUpdate) {
         return current
-          ? `This Reachy runs v${current}, which is too old to update over the air. Install the Reachy desktop app to update it, then reconnect here.`
-          : `This Reachy needs version v${MIN_DAEMON_VERSION_FOR_SELF_UPDATE} or newer to update from the app. Install the Reachy desktop app to update it, then reconnect here.`;
+          ? `This Reachy runs v${current}, which is too old to update over the air. Reflash it from a computer with the Reachy Mini Flasher (this resets the robot to factory settings), then reconnect here.`
+          : `This Reachy needs version v${MIN_DAEMON_VERSION_FOR_SELF_UPDATE} or newer to update from the app. Reflash it from a computer with the Reachy Mini Flasher (this resets the robot to factory settings), then reconnect here.`;
       }
       return current && latest
         ? `This Reachy runs v${current}. Version v${latest} is required to continue. The robot will reboot during the update (~2 min).`

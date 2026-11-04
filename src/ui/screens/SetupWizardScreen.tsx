@@ -58,10 +58,11 @@ import serialNumberImg from '@/assets/serial-number.jpg';
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
 
-/** Showcase site download page (Reachy Mini website Space). Where users grab
- *  the desktop app that can update a robot too old for Bluetooth Wi-Fi setup.
- *  Mirrors `DaemonUpdateGate`'s desktop-app fallback. */
-const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
+/** "Reflash the ISO" docs page: Reachy Mini Flasher download and hardware
+ *  steps, to bring a robot too old for Bluetooth Wi-Fi setup up to date.
+ *  Mirrors `DaemonUpdateGate`'s reflash fallback. */
+const REFLASH_GUIDE_URL =
+  'https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/reflash_the_rpi_ISO';
 
 /** Public troubleshooting docs (same target as the Help & Support overlay). */
 const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
@@ -227,8 +228,8 @@ function StepView({
 }) {
   if (m.phase === 'error' && m.error) {
     // An outdated robot can't be fixed by retrying the BLE flow - it needs a
-    // software update first. Route it to the dedicated "update from the desktop
-    // app" view (mirrors the in-session `DaemonUpdateGate`) instead of the
+    // software update first. Route it to the dedicated "reflash with the
+    // Flasher" view (mirrors the in-session `DaemonUpdateGate`) instead of the
     // generic "Something went wrong / Try again" error.
     if (m.error.code === 'robot-outdated') {
       return <OutdatedView message={m.error.message} onCancel={onCancel} />;
@@ -1512,10 +1513,10 @@ function StaleBondView({
 /**
  * Shown when the robot's software is too old to provision Wi-Fi over Bluetooth
  * (pre-v1.8.2: `WIFI_SCAN` is unsupported). Unlike a transient error, there is
- * no "Try again": fixing it means updating from the Reachy desktop app, which
- * takes the robot offline and reboots it, tearing down this BLE session. The
- * user must update, then start setup fresh (Cancel → back to the robot list).
- * Mirrors the desktop-app fallback of the in-session `DaemonUpdateGate`.
+ * no "Try again": fixing it means reflashing the OS over USB with the Reachy
+ * Mini Flasher, which tears down this BLE session. The user must reflash, then
+ * start setup fresh (Cancel → back to the robot list).
+ * Mirrors the reflash fallback of the in-session `DaemonUpdateGate`.
  */
 function OutdatedView({
   message,
@@ -1526,12 +1527,12 @@ function OutdatedView({
 }) {
   return (
     <SetupScaffold
-      title="Update from the desktop app"
+      title="Reflash required"
       caption={message}
       actions={
         <Stack spacing={1.25}>
-          <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
-            Get the desktop app ↗
+          <PrimaryButton onClick={() => void openExternalUrl(REFLASH_GUIDE_URL)}>
+            How to reflash ↗
           </PrimaryButton>
           <Button
             variant="text"
