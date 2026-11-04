@@ -337,6 +337,7 @@ truth because `gen/` is regenerated.
 | `docs/ANDROID_PERMISSIONS.md` | Runbook for iframe-delegated mic / camera / geolocation permissions on Android |
 | `docs/APPS_TAB_REDESIGN.md` | Apps tab UX redesign + catalog payload shape |
 | `docs/ROBOT_APPS.md` | Python apps on the robot: install / start / stop over JSON-RPC, wire contract, known gaps |
+| `docs/RELEASING.md` | Shipping a version: the two version bumps, the `chore(release)` commit, the `vX.Y.Z` tag that starts the store builds, and the manual steps after |
 | `docs/AGENT_TESTING.md` | Testing on a real phone + robot: build/install, driving the app over CDP (`scripts/agent-testing/`), test matrix |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
 
