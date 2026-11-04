@@ -64,11 +64,10 @@ const MIN_DAEMON_VERSION_FOR_SELF_UPDATE = '1.8.2';
 /** Public troubleshooting docs - same target as the Help & Support overlay. */
 const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
 
-/** "Reflash the ISO" docs page: Reachy Mini Flasher download (macOS /
- *  Windows) and the hardware steps (open the head, SW1, USB). The only way
- *  to bring a daemon too old for OTA up to date. Factory resets the robot. */
-const REFLASH_GUIDE_URL =
-  'https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/reflash_the_rpi_ISO';
+/** Pollen website Flasher page: Reachy Mini Flasher download and the reflash
+ *  walkthrough (open the head, USB). The only way to bring a daemon too old
+ *  for OTA up to date. Factory resets the robot. */
+const FLASHER_PAGE_URL = 'https://pollen-robotics.com/reachy-mini/flasher/';
 
 /**
  * Dev-only escape hatch for the blocking update prompt.
@@ -313,8 +312,8 @@ export default function DaemonUpdateGate({
             <PrimaryButton onClick={() => setPhase('rebooting')}>Keep waiting</PrimaryButton>
           )}
           {effectivePhase === 'prompt' && !canSelfUpdate && (
-            <PrimaryButton onClick={() => void openExternalUrl(REFLASH_GUIDE_URL)}>
-              How to reflash ↗
+            <PrimaryButton onClick={() => void openExternalUrl(FLASHER_PAGE_URL)}>
+              Get the Reachy Mini Flasher ↗
             </PrimaryButton>
           )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) ||

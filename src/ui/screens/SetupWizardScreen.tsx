@@ -58,11 +58,10 @@ import serialNumberImg from '@/assets/serial-number.jpg';
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
 
-/** "Reflash the ISO" docs page: Reachy Mini Flasher download and hardware
- *  steps, to bring a robot too old for Bluetooth Wi-Fi setup up to date.
+/** Pollen website Flasher page: Reachy Mini Flasher download and the reflash
+ *  walkthrough, to bring a robot too old for Bluetooth Wi-Fi setup up to date.
  *  Mirrors `DaemonUpdateGate`'s reflash fallback. */
-const REFLASH_GUIDE_URL =
-  'https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/reflash_the_rpi_ISO';
+const FLASHER_PAGE_URL = 'https://pollen-robotics.com/reachy-mini/flasher/';
 
 /** Public troubleshooting docs (same target as the Help & Support overlay). */
 const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
@@ -1531,8 +1530,8 @@ function OutdatedView({
       caption={message}
       actions={
         <Stack spacing={1.25}>
-          <PrimaryButton onClick={() => void openExternalUrl(REFLASH_GUIDE_URL)}>
-            How to reflash ↗
+          <PrimaryButton onClick={() => void openExternalUrl(FLASHER_PAGE_URL)}>
+            Get the Reachy Mini Flasher ↗
           </PrimaryButton>
           <Button
             variant="text"
