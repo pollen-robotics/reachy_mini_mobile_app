@@ -48,6 +48,7 @@ import WifiLockIcon from '@mui/icons-material/WifiLock';
 import { type BleDevice, openBluetoothSettings } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
+import type { RobotUpdateProgress } from '@/features/ble-provisioning/robotUpdate';
 import { openAppSettings, openExternalUrl } from '@/shared/tauri/openUrl';
 import { getPlatform } from '@/shared/platform';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
@@ -83,6 +84,7 @@ const PHASE_FRACTION: Record<SetupPhase, number> = {
   'wifi-scanning': 0.46,
   'wifi-pick': 0.56,
   'wifi-connecting': 0.76,
+  'updating-robot': 0.78,
   'linking-account': 0.82,
   'device-code-waiting': 0.88,
   'central-waiting': 0.92,
@@ -292,6 +294,8 @@ function StepView({
       );
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
+    case 'updating-robot':
+      return <UpdatingRobotView progress={m.robotUpdate} />;
     case 'linking-account':
       return (
         <LinkAccountView
@@ -950,6 +954,28 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
       ? `Joining ${ssid || 'the network'}…`
       : 'Registering with Hugging Face…';
   return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />} title={title} caption={caption} />;
+}
+
+/* --- 6a. update the robot before sign-in ---------------------------------- */
+
+/**
+ * The robot is installing the latest software (started over Bluetooth), then
+ * restarting on it. The restart drops Bluetooth; the flow moves on by itself
+ * once the robot answers on its new version.
+ */
+function UpdatingRobotView({ progress }: { progress: RobotUpdateProgress | null }) {
+  const caption =
+    progress?.stage === 'restarting'
+      ? 'Restarting with the new software. This takes about a minute.'
+      : `Installing ${progress?.to ? `version ${progress.to}` : 'the latest software'} before you sign in. ` +
+        'Keep the app open, this takes a minute or two.';
+  return (
+    <SetupScaffold
+      hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />}
+      title="Getting the latest software"
+      caption={caption}
+    />
+  );
 }
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
