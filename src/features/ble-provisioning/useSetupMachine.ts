@@ -4,7 +4,12 @@
  * Drives the BLE Wi-Fi provisioning wizard end to end:
  *
  *   scanning → connecting → pin → authenticating → wifi-scanning → wifi-pick
- *     → wifi-connecting → linking-account → central-waiting → done
+ *     → wifi-connecting → [updating-robot] → linking-account → central-waiting
+ *     → done
+ *
+ * `updating-robot` only shows when the robot's daemon is behind the latest
+ * release: it is updated before sign-in so sign-in runs once, on the latest
+ * daemon (see `robotUpdate.ts`).
  *
  * Account linking (robot-side HF OAuth) is the last human step: once the robot
  * registers on central the flow settles to sleep and finishes. Naming the robot
@@ -66,7 +71,9 @@ import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 import { ensureDaemonRunning } from './ensureDaemonRunning';
+import { RobotUpdateUnconfirmedError, type RobotUpdateProgress, updateRobot } from './robotUpdate';
 import type { RobotIdentity, SetupError, SetupPhase, SetupResult } from './types';
+import { updateCheck, updateInfo, updateStart } from './updateProtocol';
 
 // Wi-Fi join polling: nmcli connect + DHCP can take a while; the daemon
 // reverts to its hotspot on failure (and sets `error`). The join only counts
@@ -205,6 +212,23 @@ async function probeDaemonFault(ip: string): Promise<string | null> {
   }
 }
 
+// Daemon version over HTTP at the robot's LAN IP, or null when unreachable
+// (mid-restart) or not reported. This is how the pre-sign-in update confirms
+// the robot came back on the new version: BLE goes quiet across that restart.
+async function readDaemonVersion(ip: string): Promise<string | null> {
+  try {
+    const resp = await tauriFetch(`http://${ip}:8000/api/daemon/status`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { version?: string | null };
+    return data.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Can the PHONE reach the robot's daemon at the LAN IP read over BLE? Knowing
 // the robot's IP proves nothing about the phone's own network - this HTTP
 // round-trip is the actual "same network" test the OAuth handoff depends on.
@@ -265,6 +289,9 @@ export interface SetupMachine {
    *  i.e. with `?user_code=` appended). Opened by the view's explicit "open
    *  browser" action - never auto-opened. `null` outside the device-code flow. */
   deviceVerificationUri: string | null;
+  /** Progress of the daemon update run before sign-in (`updating-robot`).
+   *  `null` until an update actually starts. */
+  robotUpdate: RobotUpdateProgress | null;
 
   // actions
   startScanning: () => void;
@@ -307,6 +334,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const connectedSsidRef = useRef<string | null>(null);
   const [deviceUserCode, setDeviceUserCode] = useState<string | null>(null);
   const [deviceVerificationUri, setDeviceVerificationUri] = useState<string | null>(null);
+  const [robotUpdate, setRobotUpdate] = useState<RobotUpdateProgress | null>(null);
 
   // Values threaded through async chains (avoid stale-closure reads).
   const pinRef = useRef<string>('');
@@ -332,6 +360,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const bleScanEverStartedRef = useRef(false);
   /** True while `bleConnect` is in flight: it owns the link's failures then. */
   const linkingRef = useRef(false);
+  /** Last known state of the GATT link (the update step expects it to drop). */
+  const bleConnectedRef = useRef(false);
 
   const cancelScanBoot = useCallback(() => {
     if (scanBootRafRef.current !== null) {
@@ -369,6 +399,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   phaseRef.current = phase;
   useEffect(() => {
     void watchConnection((connected) => {
+      bleConnectedRef.current = connected;
       if (connected) return;
       // A connect that fails also reports the link as down, and the connect's
       // own error says why (a stale bond is not "move closer").
@@ -381,7 +412,10 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       // EXPECTED - erroring out (and bumping runId, which silently kills the
       // device-code poll loop) would fail every successful sign-in. The only
       // casualty is the final goto-sleep BLE cue, which is best-effort anyway.
-      const bleNoLongerNeeded = p === 'device-code-waiting' || p === 'central-waiting';
+      // The pre-sign-in update ends with the new daemon restarting the BLE
+      // service, so a drop there is the update finishing (confirmed over HTTP).
+      const bleNoLongerNeeded =
+        p === 'updating-robot' || p === 'device-code-waiting' || p === 'central-waiting';
       if (midFlow && !bleNoLongerNeeded && mountedRef.current) {
         runIdRef.current += 1; // abort any in-flight chain
         setError({
@@ -539,6 +573,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           } finally {
             linkingRef.current = false;
           }
+          bleConnectedRef.current = true;
           if (runId !== runIdRef.current || !mountedRef.current) return;
           // Play the identify chirp (sound only, no motion) so the user hears
           // which physical Reachy they just tapped. Public BLE command (no
@@ -655,6 +690,69 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       if (mountedRef.current && seq === ipResolveSeqRef.current) setResolvingIp(false);
     }
   }, [adoptRobotIp]);
+
+  // ── UPDATE (before sign-in) ────────────────────────────────────────────────
+  //
+  // Bring the robot to the latest daemon, then move on to account linking.
+  // Signing in on the factory daemon and updating later is what broke
+  // out-of-the-box setup (legacy mDNS sign-in, login lost across the update,
+  // a session-side update screen that can't see the restart): see
+  // `robotUpdate.ts`. Needs the LAN IP to confirm the update, so it is
+  // skipped when the IP is unknown. Any failure to CHECK never blocks setup.
+  const updateThenLink = useCallback(async (runId: number): Promise<void> => {
+    const stale = () => runId !== runIdRef.current || !mountedRef.current;
+    const ip = robotIpRef.current;
+    if (ip) {
+      try {
+        const outcome = await updateRobot({
+          // The PIN session expires after 300 s; typing the Wi-Fi password
+          // can take longer than that.
+          reauthenticate: () => authenticate(pinRef.current),
+          check: updateCheck,
+          start: updateStart,
+          info: updateInfo,
+          readVersion: () => readDaemonVersion(ip),
+          isBleConnected: () => bleConnectedRef.current,
+          isCancelled: stale,
+          onProgress: (progress) => {
+            if (stale()) return;
+            setRobotUpdate(progress);
+            setPhase('updating-robot');
+          },
+          sleep,
+          now: Date.now,
+        });
+        if (outcome === null || stale()) return;
+      } catch (e) {
+        if (stale()) return;
+        if (e instanceof RobotUpdateUnconfirmedError) {
+          setError({
+            code: 'robot-update-unconfirmed',
+            message:
+              "Your Reachy is taking longer than usual to finish its update. Give it a " +
+              'minute, then continue to sign in.',
+            recoverPhase: 'linking-account',
+          });
+        } else {
+          setError({
+            code: 'robot-update-failed',
+            message:
+              `Your Reachy couldn't update (${(e as Error).message ?? String(e)}). ` +
+              'Check that your Wi-Fi has internet access, then try again.',
+            recoverPhase: 'updating-robot',
+          });
+        }
+        setPhase('error');
+        return;
+      }
+    }
+    // Cue the "waiting" idle while the account-link step is up. Sequential:
+    // nothing else holds the BLE channel now. Skipped when the update's
+    // restart took the link down (the cue would only time out).
+    if (bleConnectedRef.current) await play(WAITING_MOVE);
+    if (stale()) return;
+    setPhase('linking-account');
+  }, []);
 
   const submitPin = useCallback(
     (pin: string) => {
@@ -852,24 +950,18 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
             }
           }
 
-          // Joined Wi-Fi with a known LAN IP. Cue the "waiting" idle again
-          // while the account-link step is up (sequential: nothing else holds
-          // the BLE channel now).
-          await play(WAITING_MOVE);
-          if (runId !== runIdRef.current || !mountedRef.current) return;
-
-          // Hand off to robot-side HF OAuth, the last human step of setup, so
-          // the robot comes fully online and registers on central before we
-          // finish. (Naming now happens later, in the first wake-up wizard
+          // Joined Wi-Fi with a known LAN IP → bring the daemon up to date,
+          // then hand off to robot-side HF OAuth, the last human step of
+          // setup. (Naming now happens later, in the first wake-up wizard
           // over the live session.)
-          setPhase('linking-account');
+          await updateThenLink(runId);
         } catch (e) {
           if (runId !== runIdRef.current || !mountedRef.current) return;
           fail((e as Error).message ?? String(e), 'wifi-pick');
         }
       })();
     },
-    [selectedSsid, fail, adoptRobotIp],
+    [selectedSsid, fail, adoptRobotIp, updateThenLink],
   );
 
   // Robot is already on Wi-Fi (see the `wifi-already-connected` branch in
@@ -879,12 +971,18 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const skipWifiSetup = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
-    setPhase('linking-account');
-    // The runId bump above kills the fast path's background IP resolve; if it
-    // hadn't landed yet, restart it under the new runId so the link view's
-    // address badge keeps resolving instead of flipping to "not found".
-    if (!robotIpRef.current) void resolveRobotIp(runId, IP_POLL_TIMEOUT_MS);
-  }, [resolveRobotIp]);
+    if (!robotIpRef.current) {
+      setPhase('linking-account');
+      // The runId bump above kills the fast path's background IP resolve;
+      // restart it under the new runId so the link view's address badge keeps
+      // resolving instead of flipping to "not found". Without an IP there is
+      // no way to confirm an update, so this path signs in on the current
+      // daemon (the in-session gate still applies).
+      void resolveRobotIp(runId, IP_POLL_TIMEOUT_MS);
+      return;
+    }
+    void updateThenLink(runId);
+  }, [resolveRobotIp, updateThenLink]);
 
   // ── ACCOUNT LINK (robot-side OAuth) - the last human step ────────────────────
 
@@ -1085,11 +1183,16 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       rescanWifi();
       return;
     }
+    if (target === 'updating-robot') {
+      // No view to park on either: re-run the check + update itself.
+      void updateThenLink((runIdRef.current += 1));
+      return;
+    }
     // Re-enter the relevant step; the user re-performs the action (pin,
     // password, …). Bumping runId invalidates any stale chain.
     runIdRef.current += 1;
     setPhase(target);
-  }, [error, scheduleBleScanStart, rescanWifi]);
+  }, [error, scheduleBleScanStart, rescanWifi, updateThenLink]);
 
   // Step back one logical stage instead of bailing out of the whole wizard.
   // Any in-flight async chain is aborted first (runId bump). Returning to the
@@ -1098,6 +1201,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   // re-show an earlier step (the user re-performs its action to move forward).
   const goBack = useCallback(() => {
     const p = phaseRef.current;
+    // An update in flight can't be called back, and abandoning its progress
+    // would leave the user guessing whether the robot is mid-install.
+    if (p === 'updating-robot') return;
     runIdRef.current += 1;
     setError(null);
     switch (p) {
@@ -1141,7 +1247,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     }
   }, [scheduleBleScanStart, resolveRobotIp]);
 
-  const canGoBack = phase !== 'scanning' && phase !== 'done' && phase !== 'error';
+  const canGoBack =
+    phase !== 'scanning' && phase !== 'done' && phase !== 'error' && phase !== 'updating-robot';
 
   const reset = useCallback(() => {
     runIdRef.current += 1;
@@ -1158,6 +1265,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     setConnectedSsid(null);
     setDeviceUserCode(null);
     setDeviceVerificationUri(null);
+    setRobotUpdate(null);
     setError(null);
     setScanning(false);
     setDevices([]);
@@ -1183,6 +1291,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     connectedSsid,
     deviceUserCode,
     deviceVerificationUri,
+    robotUpdate,
     startScanning,
     rescan,
     selectDevice,

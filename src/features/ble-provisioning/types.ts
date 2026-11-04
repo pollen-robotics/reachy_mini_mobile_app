@@ -27,6 +27,7 @@ export type SetupPhase =
   | 'wifi-scanning' // WIFI_SCAN in flight (~10 s)
   | 'wifi-pick' // choose an SSID + enter its password inline
   | 'wifi-connecting' // sealed connect + poll WIFI_STATUS
+  | 'updating-robot' // daemon update over BLE before sign-in (see robotUpdate.ts)
   | 'linking-account' // robot-side HF OAuth (open browser) so it can register
   | 'device-code-waiting' // redirect-free (device-code) HF sign-in: browser open, polling the robot
   | 'central-waiting' // joined Wi-Fi, waiting to appear on HF central (last step)
@@ -77,6 +78,12 @@ export interface SetupError {
     // OAuth endpoint. We reach the robot strictly by IP (mDNS is unreliable on
     // mobile and never used), so a missing IP is a hard, explicit failure.
     | 'robot-ip-unknown'
+    // The daemon reported the pre-sign-in update as failed. Retrying re-runs
+    // the update.
+    | 'robot-update-failed'
+    // The update started but the robot never came back on the new version in
+    // time. Recovery moves on to sign-in: the robot may well have updated.
+    | 'robot-update-unconfirmed'
     // The robot never registered on HF central after the OAuth step, so we
     // could not confirm sign-in actually completed. Treated as a recoverable
     // failure instead of a silent success.
