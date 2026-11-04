@@ -39,7 +39,12 @@ import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 
 import updateBoxUrl from '@/assets/reachy-update-box.svg';
-import { compareSemver, isDaemonOutdated, parseSemver } from '@/features/daemon-update/latestRelease';
+import {
+  compareSemver,
+  isDaemonOutdated,
+  parseSemver,
+  updateLanded,
+} from '@/features/daemon-update/latestRelease';
 import { useDaemonLogs } from '@/features/daemon-logs';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { SESSION_TIMINGS } from '@/features/robot-session/timings';
@@ -51,6 +56,15 @@ import { FONT_WEIGHT, LAYOUT, RADIUS, TYPO } from '@/ui/design/tokens';
  *  update, something went wrong silently → surface a failure. */
 const UPDATE_STALL_TIMEOUT_MS = 180_000;
 
+/** Version poll while the update runs (see the effect in the gate). */
+const VERSION_POLL_INTERVAL_MS = 5_000;
+/** The SDK's version read has no timeout of its own and can hang on a
+ *  half-dead data channel mid-restart. */
+const VERSION_READ_TIMEOUT_MS = 4_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([promise, new Promise<null>((resolve) => window.setTimeout(() => resolve(null), ms))]);
+}
 
 /**
  * First daemon release that understands the in-app WebRTC `start_update`
@@ -123,6 +137,8 @@ export default function DaemonUpdateGate({
   // Once the user has cleared the flow (Continue), don't reopen for the
   // rest of this session even if a version read momentarily lags.
   const completedRef = useRef(false);
+  /** Daemon version when "Update now" was tapped. */
+  const startVersionRef = useRef<string | null>(null);
 
   const { getDaemonVersion } = session;
 
@@ -191,6 +207,29 @@ export default function DaemonUpdateGate({
     return () => window.clearTimeout(t);
   }, [phase]);
 
+  // The restart is often invisible from here: the daemon is back within
+  // ~20 s and the session re-dials it without ever leaving `live`, so the
+  // `rebooting` edge above never fires and the stall timer below used to
+  // report a successful update as failed. Poll the version instead: once
+  // the robot reports the target release, the update is done whatever the
+  // transport did in between.
+  useEffect(() => {
+    if (phase !== 'updating' || !live) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void withTimeout(getDaemonVersion(), VERSION_READ_TIMEOUT_MS).then((v) => {
+        if (cancelled || !updateLanded(v, startVersionRef.current, latestVersion)) return;
+        setConfirmedVersion(v);
+        completedRef.current = true;
+        setPhase('done');
+      });
+    }, VERSION_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [phase, live, latestVersion, getDaemonVersion]);
+
   // Safety net: the daemon acked but never restarted within the window.
   useEffect(() => {
     if (phase !== 'updating') return;
@@ -205,9 +244,10 @@ export default function DaemonUpdateGate({
   const logs = useDaemonLogs({ session, enabled: logsActive });
 
   const handleUpdateNow = useCallback(() => {
+    startVersionRef.current = current;
     const ok = session.startDaemonUpdate();
     setPhase(ok ? 'updating' : 'failed');
-  }, [session]);
+  }, [session, current]);
 
   const handleContinue = useCallback(() => {
     completedRef.current = true;
