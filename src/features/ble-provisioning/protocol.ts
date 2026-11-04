@@ -166,11 +166,18 @@ export async function scanWifi(): Promise<string[]> {
   try {
     const parsed = JSON.parse(r) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s): s is string => typeof s === 'string' && s.length > 0);
+    return parsed.filter(
+      (s): s is string => typeof s === 'string' && s.length > 0 && s !== ROBOT_HOTSPOT_SSID,
+    );
   } catch {
     return [];
   }
 }
+
+/** SSID of the access point a Reachy Mini opens while it has no Wi-Fi
+ *  (`HOTSPOT_SSID` in the daemon). The robot sees its own (and any other
+ *  robot's) in a scan, but it is never a network to join. */
+const ROBOT_HOTSPOT_SSID = 'reachy-mini-ap';
 
 // Emotions-library move names played as onboarding cues over BLE. All ship in
 // the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
