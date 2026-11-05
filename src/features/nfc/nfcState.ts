@@ -4,6 +4,14 @@
  * same way.
  */
 
+/** Why the reader is not serving: the daemon's `NfcStatus.error_code`. */
+export type NfcStatusError =
+  | 'DISABLED'
+  | 'NO_BOARD'
+  | 'DRIVER_MISSING'
+  | 'PORT_CONFLICT'
+  | 'LINK_ERROR';
+
 /** Mirrors the daemon's `NfcStatus` (`nfc.status`). */
 export interface NfcStatus {
   connected: boolean;
@@ -15,7 +23,9 @@ export interface NfcStatus {
   /** From the board's USB product string ("Winnie NFC 1.2"). Absent on older daemons. */
   board_version?: string | null;
   chip_version?: string | null;
+  /** For people; branch on `error_code`, the wording may change. */
   error?: string | null;
+  error_code?: NfcStatusError | null;
   last_seen_at?: string | null;
 }
 
@@ -55,8 +65,11 @@ export type NfcWriteContent = { text: string } | { uri: string };
 /** What the reader is doing. */
 export type NfcState = 'disabled' | 'unavailable' | 'idle' | 'tag';
 
-/** Error code for a tag operation refused because the reader is off. */
-export const READER_DISABLED = 'NFC reader disabled';
+/**
+ * Error code for a tag operation refused because the reader is off. The
+ * daemon refuses with the RPC reason `nfc_disabled` rather than a result.
+ */
+export const READER_DISABLED = 'DISABLED';
 
 /** Stable error codes returned by the daemon's erase and write. */
 const TAG_ERROR_MESSAGES: Record<string, string> = {
@@ -70,6 +83,8 @@ const TAG_ERROR_MESSAGES: Record<string, string> = {
   NOT_CONNECTED: 'NFC reader not connected',
   LINK_LOST: 'Lost the link to the NFC reader',
   TIMEOUT: 'Tag was not presented in time',
+  UNCERTAIN: 'The write may not have finished: check the tag',
+  BUSY: 'The NFC reader is busy, try again',
   DRIVER_MISSING: 'NFC driver not installed on the robot',
   [READER_DISABLED]: 'NFC reader is switched off',
 };

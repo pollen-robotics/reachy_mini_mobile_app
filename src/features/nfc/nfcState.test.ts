@@ -56,7 +56,9 @@ describe('needsFullErase', () => {
 describe('describeTagError', () => {
   it('explains known codes and passes unknown ones through', () => {
     expect(describeTagError('LOCKED')).toMatch(/locked/i);
-    expect(describeTagError('NFC reader disabled')).toMatch(/switched off/i);
+    expect(describeTagError('DISABLED')).toMatch(/switched off/i);
+    expect(describeTagError('UNCERTAIN')).toMatch(/check the tag/i);
+    expect(describeTagError('BUSY')).toMatch(/busy/i);
     expect(describeTagError('SOMETHING_NEW')).toBe('SOMETHING_NEW');
     expect(describeTagError(null)).toBe('Unknown error');
   });
