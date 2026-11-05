@@ -47,8 +47,12 @@ import {
   useVisionEnabled,
 } from '@/features/conversation-settings';
 import { useRobotMemory } from '@/features/conv-app/memory-cache';
+import { useStartupApp } from '@/features/conv-app/useStartupApp';
 import { useDaemonState } from '@/features/daemon-state';
-import { MAX_ROBOT_NAME_LENGTH } from '@/features/robot-session/sdk-types';
+import {
+  MAX_ROBOT_NAME_LENGTH,
+  type ReachyMiniInstance,
+} from '@/features/robot-session/sdk-types';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { FONT_WEIGHT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
@@ -93,6 +97,8 @@ export interface ConversationSettingsPanelProps {
    *  would silently no-op; we lock them while live and show a hint.
    *  Audio (robot-level, live) and About stay usable. */
   conversationLive: boolean;
+  /** The live robot, to read and set the antenna start (`useStartupApp`). */
+  getRobot: () => ReachyMiniInstance | null;
 }
 
 export function ConversationSettingsPanel({
@@ -103,8 +109,10 @@ export function ConversationSettingsPanel({
   renameRobot,
   signOutRobot,
   onSignedOutRobot,
+  getRobot,
 }: ConversationSettingsPanelProps) {
   const theme = useTheme();
+  const startupApp = useStartupApp(getRobot, audioReady);
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
@@ -456,6 +464,31 @@ export function ConversationSettingsPanel({
               </Box>
             </Card>
           </Section>
+
+          {/* WITHOUT THE PHONE: the daemon's startup app. Applied live on the
+              robot, so not locked while a conversation runs; hidden on a
+              daemon that cannot read it over the data channel. */}
+          {startupApp.enabled !== null && (
+            <Section label="Without the phone">
+              <Card>
+                <Row divider={false}>
+                  <Stack sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
+                      Talk when the antennas are touched
+                    </Typography>
+                    <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
+                      Touch Reachy&apos;s antennas while it sleeps to wake it up and start talking.
+                    </Typography>
+                  </Stack>
+                  <OutlinedSwitch
+                    checked={startupApp.enabled}
+                    onChange={(_, checked) => void startupApp.setStartup(checked)}
+                    slotProps={{ input: { 'aria-label': 'Talk when the antennas are touched' } }}
+                  />
+                </Row>
+              </Card>
+            </Section>
+          )}
 
           {/* ROBOT block (bottom): robot identity + management. Leads with
               Name (rename over the data channel via SDK `setRobotName`; the
