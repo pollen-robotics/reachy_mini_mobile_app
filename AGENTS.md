@@ -11,8 +11,8 @@ signs in with Hugging Face, picks a robot from their account, and gets:
 
 1. A live conversation panel (orb + the conversation app running on the robot).
 2. An apps catalog mounted as iframes (Hugging Face Spaces).
-3. A native telepresence tab (full-screen camera, head joystick,
-   two-way audio, pose sliders, emotion wheel).
+3. A native telepresence tab (full-screen camera, head + wheels
+   joysticks, two-way audio, pose sliders, overboard manual BLE mode).
    It reuses the live `RobotSession`: no iframe, no handoff.
 
 The robot is assumed to be already provisioned (on Wi-Fi, advertising
@@ -54,7 +54,8 @@ features/
 ├── conv-app/       JSON-RPC client for the conversation app on the robot
 ├── robot-apps/     Python apps on the robot: catalog, install / start / stop over JSON-RPC
 ├── conversation/   session owner + connection FSM + the orb's host handle
-└── telepresence/   motion controller (head leash + base + antennas) + phone/robot audio legs
+├── telepresence/   motion controller (head leash + base + antennas) + phone/robot audio legs
+└── overboard/      wheeled-base drive: WebRTC `overboard_drive` stub + BLE manual-mode stub
 ```
 
 Each feature folder contains its own `types.ts`, services, React
@@ -339,6 +340,7 @@ truth because `gen/` is regenerated.
 | `docs/ROBOT_APPS.md` | Python apps on the robot: install / start / stop over JSON-RPC, wire contract, known gaps |
 | `docs/AGENT_TESTING.md` | Testing on a real phone + robot: build/install, driving the app over CDP (`scripts/agent-testing/`), test matrix |
 | `docs/MCP_DESIGN.md` | Design draft for an MCP server wrapping the daemon |
+| `docs/OVERBOARD.md` | Overboard (wheeled base) drive: `overboard_drive` wire format, heartbeat, BLE manual-mode stub |
 
 ## Notes for HF Space authors
 

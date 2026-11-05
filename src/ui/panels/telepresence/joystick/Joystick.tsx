@@ -30,7 +30,7 @@ export interface JoystickProps {
   /** Receives the live deflection ref once (stable object); the caller's control loop reads `.current` every tick. */
   onDeflectionRef: (ref: React.RefObject<{ x: number; y: number }>) => void;
   enabled: boolean;
-  /** Micro-label under the puck, e.g. "Head". */
+  /** Micro-label under the puck, e.g. "Head" / "Wheels". */
   label?: string;
   /** Label override when disabled (e.g. "Waking up…"). */
   disabledLabel?: string;
