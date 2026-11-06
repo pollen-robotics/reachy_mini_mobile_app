@@ -26,8 +26,10 @@ export interface UseNfcReaderResult {
   status: NfcStatus | null;
   tag: NfcTag | null;
   state: NfcState;
-  /** Set when the daemon could not be asked at all (older daemon, network). */
+  /** Set when the daemon could not be asked (network, timeout). */
   fetchError: string | null;
+  /** The daemon has no NFC support: the robot needs an update. */
+  unsupported: boolean;
   isErasing: boolean;
   eraseResult: NfcTagResult | null;
   erase: (full: boolean) => Promise<void>;
@@ -57,6 +59,7 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
   const [status, setStatus] = useState<NfcStatus | null>(null);
   const [tag, setTag] = useState<NfcTag | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [unsupported, setUnsupported] = useState(false);
   const [isErasing, setIsErasing] = useState(false);
   const [eraseResult, setEraseResult] = useState<NfcTagResult | null>(null);
   const [isWriting, setIsWriting] = useState(false);
@@ -101,19 +104,16 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
         setStatus(nextStatus);
         setTag(nextTag);
         setFetchError(null);
+        setUnsupported(false);
       } catch (err) {
         if (cancelled) return;
         setStatus(null);
         setTag(null);
         // A daemon without `nfc.*` relays the call to the running app (or
         // finds none), and answers with a reason; a timeout carries none.
-        setFetchError(
-          rpcErrorReason(err)
-            ? 'This robot software has no NFC support yet. Update it to use the reader.'
-            : err instanceof Error
-              ? err.message
-              : String(err)
-        );
+        const noNfc = Boolean(rpcErrorReason(err));
+        setUnsupported(noNfc);
+        setFetchError(noNfc ? null : err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) timer = setTimeout(poll, POLL_INTERVAL_MS);
       }
@@ -191,6 +191,7 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
     tag,
     state: deriveNfcState(status, tag),
     fetchError,
+    unsupported,
     isErasing,
     eraseResult,
     erase,

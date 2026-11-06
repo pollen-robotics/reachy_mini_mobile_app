@@ -150,6 +150,8 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
   // present it rather than a reader with nothing to do. A reader switched off
   // keeps the full card, since its switch is the way back on.
   const absent = status !== null && !status.connected && status.enabled !== false;
+  // An outdated daemon gets the same card, pointing to the update instead.
+  const unsupported = reader.unsupported;
 
   // Every layout sits in the same anchor, for the scroll above.
   const anchored = (node: ReactNode) => (
@@ -158,7 +160,8 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
     </Box>
   );
 
-  if (absent) {
+  if (absent || unsupported) {
+    const blurbSx = { fontSize: TYPO.xs, color: 'text.secondary', lineHeight: 1.5 } as const;
     return anchored(
       <Section label="NFC" blurb="Tags placed on Reachy's NFC reader.">
         <Card>
@@ -166,31 +169,42 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
             <Stack sx={{ flexDirection: 'row', alignItems: 'center', gap: 1.5 }}>
               <NfcRoundedIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary', flexShrink: 0 }} />
               <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
-                No NFC reader detected
+                {unsupported ? 'Update Reachy Mini to use NFC' : 'No NFC reader detected'}
               </Typography>
             </Stack>
-            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', lineHeight: 1.5 }}>
-              Pop a hat on Reachy Mini and watch its personality change! The Conversation app reads
-              the hat's NFC tag and takes on its character.
-            </Typography>
-            <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', lineHeight: 1.5 }}>
-              Got an idea? Tag any object and make it trigger your own behaviors in your apps.
-            </Typography>
-            <Box
-              component="button"
-              type="button"
-              onClick={() => void openExternalUrl(ADD_ON_STORE_URL)}
-              sx={{
-                ...actionBtnSx(theme.palette.primary.main),
-                flex: 'none',
-                width: '100%',
-                bgcolor: alpha(theme.palette.primary.main, 0.05),
-              }}
-            >
-              Get the NFC add-on
-              <OpenInNewRoundedIcon sx={{ fontSize: TYPO.md }} />
-            </Box>
-            {!status.driver_available && (
+            {unsupported ? (
+              <Typography sx={blurbSx}>
+                The software on this robot does not support the NFC reader yet. Update it to read
+                and write NFC tags.
+              </Typography>
+            ) : (
+              <>
+                <Typography sx={blurbSx}>
+                  Pop a hat on Reachy Mini and watch its personality change! The Conversation app
+                  reads the hat's NFC tag and takes on its character.
+                </Typography>
+                <Typography sx={blurbSx}>
+                  Got an idea? Tag any object and make it trigger your own behaviors in your apps.
+                </Typography>
+              </>
+            )}
+            {!unsupported && (
+              <Box
+                component="button"
+                type="button"
+                onClick={() => void openExternalUrl(ADD_ON_STORE_URL)}
+                sx={{
+                  ...actionBtnSx(theme.palette.primary.main),
+                  flex: 'none',
+                  width: '100%',
+                  bgcolor: alpha(theme.palette.primary.main, 0.05),
+                }}
+              >
+                Get the NFC add-on
+                <OpenInNewRoundedIcon sx={{ fontSize: TYPO.md }} />
+              </Box>
+            )}
+            {!unsupported && status?.driver_available === false && (
               <Typography sx={{ fontSize: TYPO.tiny, color: 'text.disabled', textAlign: 'center' }}>
                 Already fitted? Install reachy_mini[nfc] on the robot.
               </Typography>
