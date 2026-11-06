@@ -63,7 +63,13 @@ export interface NfcTagResult {
 export type NfcWriteContent = { text: string } | { uri: string };
 
 /** What the reader is doing. */
-export type NfcState = 'disabled' | 'unavailable' | 'idle' | 'tag';
+export type NfcState =
+  | 'disabled'
+  | 'unavailable'
+  | 'connecting'
+  | 'not_responding'
+  | 'idle'
+  | 'tag';
 
 /**
  * Error code for a tag operation refused because the reader is off. The
@@ -98,17 +104,35 @@ export function describeTagError(code: string | null | undefined): string {
   return TAG_ERROR_MESSAGES[code] ?? code;
 }
 
+// None of these change without restarting the daemon, which drops the
+// session. The board is not hot-plugged: the robot is switched off to fit it.
+const ABSENT_FOR_GOOD: ReadonlyArray<NfcStatusError> = [
+  'NO_BOARD',
+  'DRIVER_MISSING',
+  'PORT_CONFLICT',
+];
+
+/** No reader will show up this session (same rule as the desktop app). */
+export function isReaderAbsentForGood(status: NfcStatus): boolean {
+  return status.error_code != null && ABSENT_FOR_GOOD.includes(status.error_code);
+}
+
 /**
  * Collapse the daemon's status and tag into one state.
  *
- * "disabled" is the user's choice and wins over everything else.
- * Anything short of a connected reader is "unavailable": no answer from the
- * daemon, an older daemon without NFC, the driver missing, or the board
- * unplugged all look the same.
+ * "disabled" is the user's choice and wins over everything else. A reader
+ * that is not connected is "unavailable" only when it is absent for good
+ * (or the daemon did not answer); otherwise it is starting, for instance
+ * right after being switched back on, and reads as "connecting", or as
+ * "not_responding" while the daemon retries a failed link.
  */
 export function deriveNfcState(status: NfcStatus | null, tag: NfcTag | null): NfcState {
   if (status?.enabled === false) return 'disabled';
-  if (!status?.connected) return 'unavailable';
+  if (!status) return 'unavailable';
+  if (!status.connected) {
+    if (isReaderAbsentForGood(status)) return 'unavailable';
+    return status.error_code === 'LINK_ERROR' ? 'not_responding' : 'connecting';
+  }
   return tag?.present ? 'tag' : 'idle';
 }
 

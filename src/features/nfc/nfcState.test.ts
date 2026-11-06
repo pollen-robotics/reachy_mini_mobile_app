@@ -11,17 +11,35 @@ describe('deriveNfcState', () => {
   });
 
   it('is unavailable when the driver or the board is missing', () => {
+    const off = { connected: false, chip_detected: false };
     expect(
-      deriveNfcState({ connected: false, chip_detected: false, driver_available: false }, null)
+      deriveNfcState({ ...off, driver_available: false, error_code: 'DRIVER_MISSING' }, null)
     ).toBe('unavailable');
+    expect(deriveNfcState({ ...off, driver_available: true, error_code: 'NO_BOARD' }, null)).toBe(
+      'unavailable'
+    );
     expect(
-      deriveNfcState({ connected: false, chip_detected: false, driver_available: true }, null)
+      deriveNfcState({ ...off, driver_available: true, error_code: 'PORT_CONFLICT' }, null)
     ).toBe('unavailable');
+  });
+
+  it('is connecting while the reader starts, e.g. just switched back on', () => {
+    const off = { connected: false, chip_detected: false, driver_available: true };
+    expect(deriveNfcState({ ...off, error_code: null }, null)).toBe('connecting');
+    expect(deriveNfcState({ ...off, enabled: true }, null)).toBe('connecting');
+  });
+
+  it('is not responding while the daemon retries a failed link', () => {
+    const off = { connected: false, chip_detected: false, driver_available: true };
+    expect(deriveNfcState({ ...off, error_code: 'LINK_ERROR' }, null)).toBe('not_responding');
   });
 
   it('ignores a stale tag once the reader is gone', () => {
     const tag: NfcTag = { present: true, uid: '04A1B2C3' };
-    expect(deriveNfcState({ ...connected, connected: false }, tag)).toBe('unavailable');
+    expect(deriveNfcState({ ...connected, connected: false, error_code: 'NO_BOARD' }, tag)).toBe(
+      'unavailable'
+    );
+    expect(deriveNfcState({ ...connected, connected: false }, tag)).toBe('connecting');
   });
 
   it('is disabled when switched off, whatever the reader reports', () => {

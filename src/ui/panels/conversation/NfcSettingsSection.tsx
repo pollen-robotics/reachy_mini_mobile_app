@@ -28,6 +28,7 @@ import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 
 import {
   describeTagError,
+  isReaderAbsentForGood,
   needsFullErase,
   type NfcRecord,
   type NfcStatus,
@@ -47,11 +48,14 @@ const MAX_WRITE_CHARS = 860;
 
 type WriteKind = 'text' | 'uri';
 
-// A reader the daemon cannot find gets its own body (see `absent`), so these
-// only cover the daemon not answering, the switch off, and a live reader.
+// A reader absent for good gets its own body (see `absent`), so these cover
+// the daemon not answering, the switch off, a reader starting or retrying,
+// and a live reader. Same wording as the desktop app's NFC Reader card.
 function readerTitle(status: NfcStatus | null): string {
   if (!status) return 'Unknown';
   if (status.enabled === false) return 'Reader switched off';
+  if (status.error_code === 'LINK_ERROR') return 'Reader not responding';
+  if (!status.connected) return 'Connecting…';
   return 'Reader connected';
 }
 
@@ -59,6 +63,9 @@ function readerTitle(status: NfcStatus | null): string {
 function readerDetail(status: NfcStatus | null, fetchError: string | null): string | null {
   if (!status) return fetchError ?? 'Waiting for the robot…';
   if (status.enabled === false) return 'Turn it on to read tags.';
+  if (status.error_code === 'LINK_ERROR') {
+    return status.error ? `${status.error} · Retrying…` : 'Retrying…';
+  }
   return null;
 }
 
@@ -149,7 +156,9 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
   // The daemon answers but finds no board: most robots have no add-on, so
   // present it rather than a reader with nothing to do. A reader switched off
   // keeps the full card, since its switch is the way back on.
-  const absent = status !== null && !status.connected && status.enabled !== false;
+  // Only for good (no board, no driver, port taken): a reader that is starting,
+  // e.g. just switched back on, keeps the full card as "Connecting…".
+  const absent = status !== null && status.enabled !== false && isReaderAbsentForGood(status);
   // An outdated daemon gets the same card, pointing to the update instead.
   const unsupported = reader.unsupported;
 
@@ -300,9 +309,11 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
               >
                 {state === 'disabled'
                   ? 'Reader is off'
-                  : state === 'unavailable'
-                    ? 'No reader to read from'
-                    : 'Place a tag on the reader'}
+                  : state === 'connecting' || state === 'not_responding'
+                    ? 'Waiting for the reader…'
+                    : state === 'unavailable'
+                      ? 'No reader to read from'
+                      : 'Place a tag on the reader'}
               </Typography>
             ) : (
               <>

@@ -5,6 +5,8 @@
  *
  *   - unavailable : muted icon struck through
  *   - disabled    : muted icon
+ *   - connecting  : muted icon, pulsing (reader starting, e.g. switched back on)
+ *   - not_responding : muted icon (the daemon retries a failed link)
  *   - idle        : primary icon, grey dot
  *   - tag         : primary icon, green dot
  *
@@ -21,6 +23,8 @@ import { RADIUS, STATUS } from '@/ui/design/tokens';
 const NFC_STATE_LABEL: Record<NfcState, string> = {
   disabled: 'NFC off',
   unavailable: 'NFC unavailable',
+  connecting: 'Connecting…',
+  not_responding: 'Not responding',
   idle: 'No tag',
   tag: 'Tag detected',
 };
@@ -32,7 +36,10 @@ interface NfcStatusPillProps {
 
 export function NfcStatusPill({ state, onClick }: NfcStatusPillProps) {
   const unavailable = state === 'unavailable';
-  const muted = unavailable || state === 'disabled';
+  const connecting = state === 'connecting';
+  // Not connected yet: muted like the desktop's status button, and pulsing
+  // while the reader starts.
+  const muted = unavailable || connecting || state === 'not_responding' || state === 'disabled';
 
   return (
     <ButtonBase
@@ -50,7 +57,15 @@ export function NfcStatusPill({ state, onClick }: NfcStatusPillProps) {
       })}
     >
       <Box sx={{ position: 'relative', display: 'flex' }}>
-        <NfcRoundedIcon sx={{ fontSize: 15 }} />
+        <NfcRoundedIcon
+          sx={{
+            fontSize: 15,
+            ...(connecting && {
+              animation: 'nfcConnecting 1.2s ease-in-out infinite',
+              '@keyframes nfcConnecting': { '50%': { opacity: 0.35 } },
+            }),
+          }}
+        />
         {unavailable && (
           // Diagonal slash across the icon, like a muted speaker icon.
           <Box

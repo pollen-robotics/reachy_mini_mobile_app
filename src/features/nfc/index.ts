@@ -1,6 +1,6 @@
 export { useNfcReader } from './useNfcReader';
 export type { UseNfcReaderOptions, UseNfcReaderResult } from './useNfcReader';
-export { describeTagError, needsFullErase } from './nfcState';
+export { describeTagError, isReaderAbsentForGood, needsFullErase } from './nfcState';
 export type {
   NfcRecord,
   NfcState,
