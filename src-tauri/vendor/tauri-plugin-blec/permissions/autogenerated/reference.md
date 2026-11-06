@@ -19,6 +19,8 @@ Default permissions for the plugin
 - `allow-scanning-state`
 - `allow-list-services`
 - `allow-check-permissions`
+- `allow-remove-bond`
+- `allow-open-bluetooth-settings`
 - `allow-get-adapter-state`
 - `allow-mtu`
 - `allow-set-write-behavior`
@@ -219,6 +221,32 @@ Denies the mtu command without any pre-configured scope.
 <tr>
 <td>
 
+`blec:allow-open-bluetooth-settings`
+
+</td>
+<td>
+
+Enables the open_bluetooth_settings command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-open-bluetooth-settings`
+
+</td>
+<td>
+
+Denies the open_bluetooth_settings command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `blec:allow-recv`
 
 </td>
@@ -264,6 +292,32 @@ Enables the recv_string command without any pre-configured scope.
 <td>
 
 Denies the recv_string command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:allow-remove-bond`
+
+</td>
+<td>
+
+Enables the remove_bond command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`blec:deny-remove-bond`
+
+</td>
+<td>
+
+Denies the remove_bond command without any pre-configured scope.
 
 </td>
 </tr>

@@ -45,9 +45,10 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiLockIcon from '@mui/icons-material/WifiLock';
 
-import type { BleDevice } from '@/features/ble/bleWifi';
+import { type BleDevice, openBluetoothSettings } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
 import { type SetupPhase, type SetupResult } from '@/features/ble-provisioning/types';
+import type { RobotUpdateProgress } from '@/features/ble-provisioning/robotUpdate';
 import { openAppSettings, openExternalUrl } from '@/shared/tauri/openUrl';
 import { getPlatform } from '@/shared/platform';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
@@ -83,6 +84,7 @@ const PHASE_FRACTION: Record<SetupPhase, number> = {
   'wifi-scanning': 0.46,
   'wifi-pick': 0.56,
   'wifi-connecting': 0.76,
+  'updating-robot': 0.78,
   'linking-account': 0.82,
   'device-code-waiting': 0.88,
   'central-waiting': 0.92,
@@ -241,6 +243,11 @@ function StepView({
     if (m.error.code === 'permission-denied') {
       return <PermissionDeniedView onRetry={m.retry} onCancel={onCancel} />;
     }
+    // A stale Bluetooth pairing isn't fixed by trying again either: the user
+    // has to forget the robot in the phone's Bluetooth settings first.
+    if (m.error.code === 'ble-bond-stale') {
+      return <StaleBondView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
+    }
     return <ErrorView message={m.error.message} onRetry={m.retry} onCancel={onCancel} />;
   }
   switch (m.phase) {
@@ -287,6 +294,8 @@ function StepView({
       );
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
+    case 'updating-robot':
+      return <UpdatingRobotView progress={m.robotUpdate} />;
     case 'linking-account':
       return (
         <LinkAccountView
@@ -598,11 +607,14 @@ function DeviceRow({
             {label}
           </Typography>
           <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+            {/* Tail, not head: on Android the address is a MAC whose first
+                three pairs are the vendor OUI, identical on every Reachy.
+                On iOS it's a per-device UUID, random either way. */}
             <Typography
               sx={{ fontSize: TYPO.xs, fontFamily: 'monospace', color: 'text.secondary', opacity: 0.6 }}
               noWrap
             >
-              #{device.address.slice(0, 8)}
+              #{device.address.slice(-8)}
             </Typography>
             {isClosest ? (
               <Typography
@@ -942,6 +954,28 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
       ? `Joining ${ssid || 'the network'}…`
       : 'Registering with Hugging Face…';
   return <SetupScaffold hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />} title={title} caption={caption} />;
+}
+
+/* --- 6a. update the robot before sign-in ---------------------------------- */
+
+/**
+ * The robot is installing the latest software (started over Bluetooth), then
+ * restarting on it. The restart drops Bluetooth; the flow moves on by itself
+ * once the robot answers on its new version.
+ */
+function UpdatingRobotView({ progress }: { progress: RobotUpdateProgress | null }) {
+  const caption =
+    progress?.stage === 'restarting'
+      ? 'Restarting with the new software. This takes about a minute.'
+      : `Installing ${progress?.to ? `version ${progress.to}` : 'the latest software'} before you sign in. ` +
+        'Keep the app open, this takes a minute or two.';
+  return (
+    <SetupScaffold
+      hero={<CircularProgress size={32} sx={{ color: 'text.secondary' }} />}
+      title="Getting the latest software"
+      caption={caption}
+    />
+  );
 }
 
 /* --- 6b. link account (robot-side Hugging Face OAuth) --------------------- */
@@ -1438,6 +1472,55 @@ function PermissionDeniedView({
           {isIos ? (
             <>
               <PrimaryButton onClick={() => void openAppSettings()}>Open Settings</PrimaryButton>
+              <SecondaryButton onClick={onRetry}>Try again</SecondaryButton>
+            </>
+          ) : (
+            <PrimaryButton onClick={onRetry}>Try again</PrimaryButton>
+          )}
+          <TextButton onClick={onCancel}>Cancel setup</TextButton>
+        </Stack>
+      }
+    />
+  );
+}
+
+/* --- stale bluetooth pairing --------------------------------------------- */
+
+/**
+ * Shown when the phone holds a Bluetooth bond the robot no longer has the keys
+ * for (the user paired it from the phone's settings once) and the app could
+ * not drop it itself. Android can deep-link to its Bluetooth settings; iOS
+ * can't, so the copy names the path instead.
+ */
+function StaleBondView({
+  message,
+  onRetry,
+  onCancel,
+}: {
+  message: string;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const isAndroid = getPlatform() === 'android';
+  const caption = isAndroid
+    ? message
+    : `${message} Go to Settings › Bluetooth, tap ⓘ next to it, then Forget This Device.`;
+  return (
+    <SetupScaffold
+      hero={
+        <IconHero tint={STATUS.error}>
+          <BluetoothIcon sx={{ fontSize: 48 }} />
+        </IconHero>
+      }
+      title="Forget the old pairing"
+      caption={caption}
+      actions={
+        <Stack spacing={1.25}>
+          {isAndroid ? (
+            <>
+              <PrimaryButton onClick={() => void openBluetoothSettings()}>
+                Open Bluetooth settings
+              </PrimaryButton>
               <SecondaryButton onClick={onRetry}>Try again</SecondaryButton>
             </>
           ) : (

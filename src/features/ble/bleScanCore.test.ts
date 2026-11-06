@@ -43,6 +43,12 @@ describe('normalizeDevice', () => {
     expect(normalizeDevice({ advertisedServices: ['Xy'] }).services).toEqual(['xy']);
   });
 
+  it('reads the bond state, false unless the plugin says bonded', () => {
+    expect(normalizeDevice({ address: 'A', isBonded: true }).bonded).toBe(true);
+    expect(normalizeDevice({ address: 'A', isBonded: false }).bonded).toBe(false);
+    expect(normalizeDevice({ address: 'A' }).bonded).toBe(false);
+  });
+
   it('keeps rssi only when numeric', () => {
     expect(normalizeDevice({ rssi: -42 }).rssi).toBe(-42);
     expect(normalizeDevice({ rssi: 'nope' }).rssi).toBeUndefined();

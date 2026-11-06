@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-open-bluetooth-settings"
+description = "Enables the open_bluetooth_settings command without any pre-configured scope."
+commands.allow = ["open_bluetooth_settings"]
+
+[[permission]]
+identifier = "deny-open-bluetooth-settings"
+description = "Denies the open_bluetooth_settings command without any pre-configured scope."
+commands.deny = ["open_bluetooth_settings"]
