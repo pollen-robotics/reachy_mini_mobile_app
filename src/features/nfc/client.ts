@@ -28,19 +28,17 @@ export interface NfcClient {
   write(content: NfcWriteContent): Promise<NfcTagResult>;
 }
 
-/**
- * Run one tag-modifying call and fold every way it can fail into a result,
- * so the caller only has one shape to show.
- */
-async function tagOperation(call: () => Promise<NfcTagResult>): Promise<NfcTagResult> {
+/** Run one tag-modifying call, folding every failure into the result. */
+async function tagOperation(
+  label: string,
+  call: () => Promise<NfcTagResult>
+): Promise<NfcTagResult> {
   try {
     return await call();
   } catch (err) {
     const reason = rpcErrorReason(err);
     if (reason === 'nfc_disabled') return { success: false, error: READER_DISABLED };
-    // A reason means the daemon answered and said no; none means the call
-    // never made it (timeout, closed channel).
-    if (reason) return { success: false, error: err instanceof Error ? err.message : reason };
+    if (reason) return { success: false, error: `${label} request failed (${reason})` };
     return { success: false, error: 'LINK_LOST' };
   }
 }
@@ -61,12 +59,12 @@ export function createNfcClient(robot: ReachyMiniInstance): NfcClient {
       );
     },
     erase(full) {
-      return tagOperation(() =>
+      return tagOperation(full ? 'NFC full erase' : 'NFC erase', () =>
         robot.rpcCall<NfcTagResult>('nfc.erase', { full }, { timeoutMs: ERASE_TIMEOUT_MS })
       );
     },
     write(content) {
-      return tagOperation(() =>
+      return tagOperation('NFC write', () =>
         robot.rpcCall<NfcTagResult>('nfc.write', content, { timeoutMs: WRITE_TIMEOUT_MS })
       );
     },

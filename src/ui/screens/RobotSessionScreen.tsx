@@ -116,7 +116,7 @@ import {
   ONBOARDING_PRELOAD_TIMEOUT_MS,
 } from './session/first-wake-up/constants';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
-import { NfcStatusPill } from '@/ui/screens/session/NfcStatusPill';
+import { NfcStatusPill } from './session/NfcStatusPill';
 import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
@@ -865,12 +865,7 @@ function ConnectedSession({
             linkKind={session.webrtcTransport?.kind ?? null}
             linkRttMs={session.webrtcTransport?.rttMs ?? null}
             sessionPhase={session.phase}
-            accessory={
-              <NfcStatusPill
-                state={nfc.state}
-                onClick={openNfcSettings}
-              />
-            }
+            accessory={<NfcStatusPill state={nfc.state} onClick={openNfcSettings} />}
           />
           {/* Right-hand action cluster. `spacing={0.25}` keeps the two
               buttons visually grouped (they're both "session-level

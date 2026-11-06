@@ -1,74 +1,91 @@
 /**
- * Switch personality as accessories come and go, like the conversation app's
- * NFC reader does on desktop (`RfidController._process` in `rfid_routes.py`):
+ * Switch personality as accessories come and go (same rules as `RfidController`
+ * in the conversation app):
  *
- *   - an accessory naming a personality this robot has: switch to it;
- *   - a blank or unrecognised one: keep the personality running;
- *   - taken off: back to the personality from before the accessory.
+ *   - first reading: the accessory's personality, else the fallback;
+ *   - an accessory naming a known personality: switch to it;
+ *   - a blank or unrecognised one: keep the running personality;
+ *   - taken off: back to the fallback;
+ *   - no reader: the next reading is not compared.
  *
- * While a conversation runs, the conversation app does this itself and
- * announces it; the phone only tracks the accessory then, so that taking it
- * off after the conversation still brings the earlier personality back.
+ * Personalities are robot names.
  */
 import type { AccessoryView } from './accessory';
 
 export interface FollowerState {
+  /** False until the first reading. */
+  launched: boolean;
   /** The personality the accessory on the reader switched to. */
-  accessoryPersonality: string | null;
-  /** The active id to go back to when the accessory comes off. */
-  restoreTo: string | null;
+  current: string | null;
 }
 
-export const IDLE_FOLLOWER: FollowerState = { accessoryPersonality: null, restoreTo: null };
+export const IDLE_FOLLOWER: FollowerState = { launched: false, current: null };
 
-export type FollowerAction =
-  | { kind: 'apply'; personality: string }
-  | { kind: 'restore'; activeId: string }
-  | null;
+export interface FollowerContext {
+  /** The personality running. */
+  active: string;
+  /** The one to go back to when the accessory comes off; null: the active one. */
+  fallback: string | null;
+}
+
+export interface FollowerStep {
+  state: FollowerState;
+  fallback: string | null;
+  /** The personality to switch to, or null to leave the running one. */
+  switchTo: string | null;
+}
+
+function switchFor(target: string, ctx: FollowerContext): string | null {
+  return target === ctx.active ? null : target;
+}
+
+function arrive(personality: string, ctx: FollowerContext): FollowerStep {
+  return {
+    state: { launched: true, current: personality },
+    fallback: ctx.fallback ?? (personality === ctx.active ? null : ctx.active),
+    switchTo: switchFor(personality, ctx),
+  };
+}
+
+function revert(ctx: FollowerContext): FollowerStep {
+  return {
+    state: { launched: true, current: null },
+    fallback: null,
+    switchTo: switchFor(ctx.fallback ?? ctx.active, ctx),
+  };
+}
 
 /**
  * One step of the follower, for a new reading of the accessory.
  *
- * `active` is the running personality as the robot names it, `activeId` the
- * same as the phone's store holds it (what `restore` gives back). A first
- * reading counts as the accessory arriving: the conversation app also starts
- * with the personality of an accessory already on the reader.
+ * `previous` is the reading before, or null when there is none to compare
+ * with: the reader was gone (or not read yet).
  */
 export function followAccessory(
   previous: AccessoryView | null,
   next: AccessoryView,
   state: FollowerState,
-  active: string,
-  activeId: string
-): { state: FollowerState; action: FollowerAction } {
-  // No reader: nothing to compare with, like the app resetting its last read.
-  if (next.state === 'unavailable') return { state, action: null };
+  ctx: FollowerContext
+): FollowerStep {
+  const unchanged: FollowerStep = { state, fallback: ctx.fallback, switchTo: null };
+  if (next.state === 'unavailable') return unchanged;
+  const known = next.state === 'known' ? next.personality : null;
 
-  if (next.state === 'known' && next.personality) {
-    if (next.personality === state.accessoryPersonality) return { state, action: null };
-    return {
-      state: {
-        accessoryPersonality: next.personality,
-        // Swapping one accessory for another keeps the personality from before both.
-        restoreTo: state.restoreTo ?? activeId,
-      },
-      action: next.personality === active ? null : { kind: 'apply', personality: next.personality },
-    };
+  if (!state.launched) {
+    if (known) return arrive(known, ctx);
+    return ctx.fallback === null
+      ? { ...unchanged, state: { launched: true, current: null } }
+      : revert(ctx);
   }
 
-  // No reader before (not answered yet, or gone) counts as no reading.
-  const hadReading = previous !== null && previous.state !== 'unavailable';
-  // A first reading of an empty reader: an accessory taken off while the app
-  // was closed left nothing to go back to.
-  if (next.state === 'none' && !hadReading) return { state: IDLE_FOLLOWER, action: null };
+  if (previous === null) return unchanged;
 
-  const removed = next.state === 'none' && hadReading && previous.state !== 'none';
-  if (!removed || state.accessoryPersonality === null) return { state, action: null };
-  // Picked by hand meanwhile: that choice stands.
-  const stillOnAccessory = active === state.accessoryPersonality;
-  return {
-    state: IDLE_FOLLOWER,
-    action:
-      stillOnAccessory && state.restoreTo ? { kind: 'restore', activeId: state.restoreTo } : null,
-  };
+  if (next.state === 'none') {
+    if (previous.state === 'none' || state.current === null) return unchanged;
+    return revert(ctx);
+  }
+
+  const arrived = previous.state !== 'known' || previous.personality !== known;
+  if (!known || !arrived || known === state.current) return unchanged;
+  return arrive(known, ctx);
 }

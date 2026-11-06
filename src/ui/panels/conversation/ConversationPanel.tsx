@@ -51,10 +51,11 @@ import type { RobotSessionHandle } from '@/features/robot-session/useRobotSessio
 import {
   type Personality,
   useActivePersonality,
+  toRobotPersonalityName,
   useIsPersonalityOnRobot,
   wasActivePersonalitySetByRobot,
 } from '@/features/personalities';
-import { accessoryPersonalityId, type AccessoryBadgeView, type LinkOutcome } from '@/features/nfc';
+import type { AccessoryBadgeView, LinkOutcome } from '@/features/nfc';
 import { useActiveLanguageId } from '@/features/conversation-language';
 import {
   PersonalityStore,
@@ -448,11 +449,11 @@ export function ConversationPanel({
             {accessory && onOpenAccessory && onLinkAccessory && (
               <AccessoryBadge
                 accessory={accessory}
-                activePersonality={accessoryPersonalityId(activePersonalityId)}
+                activePersonality={toRobotPersonalityName(activePersonalityId)}
                 activePersonalityName={activePersona.name}
                 canLink={activeOnRobot}
                 onOpen={onOpenAccessory}
-                onLink={() => onLinkAccessory(accessoryPersonalityId(activePersonalityId))}
+                onLink={() => onLinkAccessory(toRobotPersonalityName(activePersonalityId))}
               />
             )}
           </Box>

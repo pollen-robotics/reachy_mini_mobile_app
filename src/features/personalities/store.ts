@@ -360,13 +360,20 @@ export function setPersonalityBeforeAccessory(id: string | null): void {
 
 /** Whether the robot already has this personality: not still waiting to be
  *  pushed at the next conversation start (`syncPersonalitiesToRobot`). */
-export function isPersonalityOnRobot(id: string): boolean {
+function isPersonalityOnRobot(id: string): boolean {
   return !state.pending.dirty.includes(id) && !state.pending.deleted.includes(id);
 }
 
 /** React hook over `isPersonalityOnRobot`, re-rendering as pushes land. */
 export function useIsPersonalityOnRobot(id: string): boolean {
   return useSyncExternalStore(subscribe, () => isPersonalityOnRobot(id));
+}
+
+const BUNDLED_PREFIX = 'builtin:';
+
+/** A catalog id as the robot names the personality (`noir_detective`). */
+export function toRobotPersonalityName(id: string): string {
+  return id.startsWith(BUNDLED_PREFIX) ? id.slice(BUNDLED_PREFIX.length) : id;
 }
 
 /** Whether the last switch of the active personality was the robot's own
@@ -380,7 +387,15 @@ export function wasActivePersonalitySetByRobot(): boolean {
 /** The catalog entry for a personality as the robot names it (`noir_detective`),
  *  also before the robot's catalog has replaced the bundled ids. */
 export function resolveRobotPersonality(name: string): Personality | null {
-  return resolvePersonalityById(name) ?? resolvePersonalityById(`builtin:${name}`);
+  return resolvePersonalityById(name) ?? resolvePersonalityById(`${BUNDLED_PREFIX}${name}`);
+}
+
+/** Switch personality for an NFC accessory, keeping the one to go back to. */
+export function setActivePersonalityForAccessory(id: string): void {
+  if (id === state.activeId || !resolvePersonalityById(id)) return;
+  activeSetByRobot = false;
+  writeActivePersonalityId(id);
+  update({ activeId: id });
 }
 
 /**
@@ -395,9 +410,9 @@ export function followRobotPersonality(id: string): void {
   update({ activeId: id });
 }
 
-/** Switch the active personality. Persists to localStorage in the
- *  same tick so a hard refresh keeps the choice. No-op when the id
- *  is already active. */
+/** Switch the active personality, as picked by hand. Persists to
+ *  localStorage in the same tick so a hard refresh keeps the choice.
+ *  No-op when the id is already active. */
 export function setActivePersonality(id: string): void {
   if (id === state.activeId) return;
   // Defensive: refuse to switch to an unknown id rather than leaving
@@ -407,6 +422,7 @@ export function setActivePersonality(id: string): void {
     return;
   }
   activeSetByRobot = false;
+  setPersonalityBeforeAccessory(null);
   writeActivePersonalityId(id);
   update({ activeId: id });
   // Tell the robot now when it is listening; otherwise the next conversation

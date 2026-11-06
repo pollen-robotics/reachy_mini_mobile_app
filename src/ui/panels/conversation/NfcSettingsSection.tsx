@@ -28,10 +28,13 @@ import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 
 import {
   describeTagError,
+  isRawPreviewTruncated,
   isReaderAbsentForGood,
+  ndefMessageBytes,
   needsFullErase,
   type NfcRecord,
   type NfcStatus,
+  type NfcWriteContent,
   type UseNfcReaderResult,
 } from '@/features/nfc';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
@@ -43,7 +46,7 @@ import { Card, Row, Section, ghostBtnSx } from './settingsLayout';
 /** Same page as the conversation app's "Get the NFC add-on". */
 const ADD_ON_STORE_URL = 'https://store.pollen-robotics.com/products/reachy-mini-accessory-pack';
 
-/** The daemon refuses more than this; the tag's own capacity is smaller still. */
+/** Daemon limit; the tag capacity is checked separately, in bytes. */
 const MAX_WRITE_CHARS = 860;
 
 type WriteKind = 'text' | 'uri';
@@ -125,9 +128,16 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
     setEditing(true);
   };
 
+  const writeContent: NfcWriteContent =
+    writeKind === 'uri' ? { uri: draft.trim() } : { text: draft };
+  const writeBytes = ndefMessageBytes(writeContent);
+  const capacity = tag?.present ? (tag.capacity ?? null) : null;
+  const tooLong = capacity !== null && writeBytes > capacity;
+  const canSubmit = draft.trim() !== '' && !tooLong;
+
   const submitWrite = (): void => {
     setEditing(false);
-    void reader.write(writeKind === 'uri' ? { uri: draft.trim() } : { text: draft });
+    void reader.write(writeContent);
   };
 
   const kickerSx = {
@@ -273,7 +283,7 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
           <OutlinedSwitch
             checked={state !== 'disabled'}
             onChange={(_, checked) => void reader.setEnabled(checked)}
-            disabled={!reader.canToggle || reader.isToggling || isErasing}
+            disabled={!reader.canToggle || reader.isToggling || busy}
             slotProps={{ input: { 'aria-label': 'NFC reader on' } }}
           />
         </Row>
@@ -357,7 +367,8 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                       ))
                     ) : tag.raw_hex ? (
                       <Typography sx={{ ...monoSx, wordBreak: 'break-all' }}>
-                        {tag.raw_hex}…
+                        {tag.raw_hex}
+                        {isRawPreviewTruncated(tag.raw_hex) && '…'}
                       </Typography>
                     ) : (
                       <Typography sx={{ fontSize: TYPO.sm, color: STATUS.warning }}>
@@ -437,7 +448,7 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                   onChange={e => setDraft(e.target.value)}
                   onKeyDown={e => {
                     if (e.key === 'Escape') setEditing(false);
-                    if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
+                    if (e.key === 'Enter' && !e.shiftKey && canSubmit) {
                       e.preventDefault();
                       submitWrite();
                     }
@@ -454,6 +465,18 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                     },
                   }}
                 />
+                {capacity !== null && (
+                  <Typography
+                    sx={{
+                      fontSize: TYPO.xs,
+                      color: tooLong ? 'error.main' : 'text.secondary',
+                      textAlign: 'right',
+                    }}
+                  >
+                    {tooLong && 'Too long for this tag · '}
+                    {writeBytes} / {capacity} bytes
+                  </Typography>
+                )}
                 {records.length > 1 && (
                   <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
                     Replaces all {records.length} records on the tag.
@@ -472,8 +495,8 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                     component="button"
                     type="button"
                     onClick={submitWrite}
-                    disabled={!draft.trim()}
-                    sx={actionBtnSx(theme.palette.primary.main, !draft.trim())}
+                    disabled={!canSubmit}
+                    sx={actionBtnSx(theme.palette.primary.main, !canSubmit)}
                   >
                     Write
                   </Box>
@@ -520,7 +543,7 @@ export function NfcSettingsSection({ reader, focusKey = 0 }: NfcSettingsSectionP
                   ) : (
                     <EditRoundedIcon sx={{ fontSize: TYPO.md }} />
                   )}
-                  {isWriting ? 'Writing…' : 'Modify'}
+                  {isWriting ? 'Writing…' : 'Modify content'}
                 </Box>
                 <Box
                   component="button"

@@ -8,7 +8,7 @@
  */
 import type { NfcState, NfcTag } from './nfcState';
 
-/** `unavailable`: no reader. `none`: nothing on it. `known`: names a personality this robot has. */
+/** `unavailable`: no reader serving. `none`: nothing on it. `known`: names a personality this robot has. */
 export type AccessoryState = 'unavailable' | 'none' | 'blank' | 'known' | 'unknown';
 
 export interface AccessoryView {
@@ -83,7 +83,7 @@ export function describeAccessory(
   tag: NfcTag | null,
   personalities: ReadonlySet<string>
 ): AccessoryView {
-  if (readerState === 'unavailable' || readerState === 'disabled') return NO_ACCESSORY_READER;
+  if (readerState !== 'idle' && readerState !== 'tag') return NO_ACCESSORY_READER;
   if (!tag?.present) return { state: 'none', personality: null };
   if (tag.blank || !tag.content) return { state: 'blank', personality: null };
   const personality = fromTagToken(tag.content);

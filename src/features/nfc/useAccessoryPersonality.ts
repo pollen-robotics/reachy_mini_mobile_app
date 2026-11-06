@@ -6,7 +6,7 @@
  * followed in `robot-conversation.ts`), so the phone only keeps track.
  *
  * The personality to go back to is kept in the personalities store, so a
- * conversation start can make it the robot's fallback too (`sync-settings.ts`).
+ * conversation start can make it the robot's default too (`sync-settings.ts`).
  */
 import { useEffect, useRef } from 'react';
 
@@ -16,13 +16,13 @@ import {
   getActivePersonalityId,
   getPersonalityBeforeAccessory,
   resolveRobotPersonality,
-  setActivePersonality,
+  setActivePersonalityForAccessory,
   setPersonalityBeforeAccessory,
+  toRobotPersonalityName,
 } from '@/features/personalities';
 
 import type { AccessoryView } from './accessory';
 import { IDLE_FOLLOWER, followAccessory, type FollowerState } from './accessory-follower';
-import { accessoryPersonalityId } from './useAccessory';
 
 /**
  * After an accessory change mid-conversation, when to check the robot did
@@ -44,12 +44,13 @@ async function reconcileWithRobot(): Promise<void> {
   }
 }
 
+function idOf(name: string | null): string | null {
+  return name === null ? null : (resolveRobotPersonality(name)?.id ?? null);
+}
+
 export function useAccessoryPersonality(accessory: AccessoryView, acting: boolean): void {
   const previousRef = useRef<AccessoryView | null>(null);
-  const stateRef = useRef<FollowerState>({
-    ...IDLE_FOLLOWER,
-    restoreTo: getPersonalityBeforeAccessory(),
-  });
+  const stateRef = useRef<FollowerState>(IDLE_FOLLOWER);
   const { state: accessoryState, personality } = accessory;
   const reconcileRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -61,30 +62,23 @@ export function useAccessoryPersonality(accessory: AccessoryView, acting: boolea
 
   useEffect(() => {
     const next: AccessoryView = { state: accessoryState, personality };
-    const activeId = getActivePersonalityId();
-    const step = followAccessory(
-      previousRef.current,
-      next,
-      stateRef.current,
-      accessoryPersonalityId(activeId),
-      activeId
-    );
-    previousRef.current = next;
+    const fallbackId = getPersonalityBeforeAccessory();
+    const step = followAccessory(previousRef.current, next, stateRef.current, {
+      active: toRobotPersonalityName(getActivePersonalityId()),
+      fallback: fallbackId === null ? null : toRobotPersonalityName(fallbackId),
+    });
+    previousRef.current = accessoryState === 'unavailable' ? null : next;
     stateRef.current = step.state;
-    setPersonalityBeforeAccessory(step.state.restoreTo);
-    if (!step.action) return;
+    setPersonalityBeforeAccessory(idOf(step.fallback));
+    if (step.switchTo === null) return;
     if (!acting) {
       // The conversation app switches it and announces it; check it did.
       if (reconcileRef.current) clearTimeout(reconcileRef.current);
       reconcileRef.current = setTimeout(() => void reconcileWithRobot(), RECONCILE_AFTER_MS);
       return;
     }
-    if (step.action.kind === 'restore') {
-      setActivePersonality(step.action.activeId);
-      return;
-    }
-    const target = resolveRobotPersonality(step.action.personality);
-    if (target) setActivePersonality(target.id);
+    const target = idOf(step.switchTo);
+    if (target) setActivePersonalityForAccessory(target);
     // `acting` is read, not watched: a conversation starting or stopping is
     // not an accessory coming or going.
     // eslint-disable-next-line react-hooks/exhaustive-deps

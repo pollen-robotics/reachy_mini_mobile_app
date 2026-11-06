@@ -3,22 +3,22 @@
  * Settings NFC section (one instance, in the session screen).
  *
  * Polls `nfc.status` (and `nfc.tag` while a reader is connected) once a
- * second while `active` and the phone is in the foreground, like the
- * desktop app's status button.
+ * second while `active` and the phone is in the foreground. Stops once the
+ * answer cannot change: no NFC on the daemon, or no reader.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { rpcErrorReason, type ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { createNfcClient } from './client';
-import { deriveNfcState } from './nfcState';
+import { deriveNfcState, isReaderAbsentForGood } from './nfcState';
 import type { NfcState, NfcStatus, NfcTag, NfcTagResult, NfcWriteContent } from './nfcState';
 
 const POLL_INTERVAL_MS = 1_000;
 
 export interface UseNfcReaderOptions {
   getRobot: () => ReachyMiniInstance | null;
-  /** Poll the reader: the session is up and the NFC section is on screen. */
+  /** Poll the reader: the session is live and no app holds the robot. */
   active: boolean;
 }
 
@@ -93,13 +93,32 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const poll = async (): Promise<void> => {
+      let final = false;
       try {
         const client = clientFor();
         if (!client) throw new Error('Waiting for the robot…');
-        const nextStatus = await client.status();
-        // The daemon answers "no tag" when the reader is not connected, so
-        // the request would tell us nothing.
-        const nextTag = nextStatus.connected ? await client.tag().catch(() => null) : null;
+        let nextStatus: NfcStatus;
+        try {
+          nextStatus = await client.status();
+        } catch (err) {
+          // A reason: the daemon has no `nfc.*`. None: no answer.
+          if (!rpcErrorReason(err)) throw err;
+          final = true;
+          if (cancelled) return;
+          setUnsupported(true);
+          setStatus(null);
+          setTag(null);
+          setFetchError(null);
+          return;
+        }
+        final = isReaderAbsentForGood(nextStatus);
+        // A refused tag request reads as no tag; an unanswered one fails the poll.
+        const nextTag = nextStatus.connected
+          ? await client.tag().catch((err: unknown) => {
+              if (rpcErrorReason(err)) return null;
+              throw err;
+            })
+          : null;
         if (cancelled) return;
         setStatus(nextStatus);
         setTag(nextTag);
@@ -109,13 +128,9 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
         if (cancelled) return;
         setStatus(null);
         setTag(null);
-        // A daemon without `nfc.*` relays the call to the running app (or
-        // finds none), and answers with a reason; a timeout carries none.
-        const noNfc = Boolean(rpcErrorReason(err));
-        setUnsupported(noNfc);
-        setFetchError(noNfc ? null : err instanceof Error ? err.message : String(err));
+        setFetchError(err instanceof Error ? err.message : String(err));
       } finally {
-        if (!cancelled) timer = setTimeout(poll, POLL_INTERVAL_MS);
+        if (!cancelled && !final) timer = setTimeout(poll, POLL_INTERVAL_MS);
       }
     };
 
@@ -170,8 +185,9 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
         if (!client) throw new Error('no robot');
         nextStatus = await client.setEnabled(enabled);
       } catch (err) {
-        error = rpcErrorReason(err)
-          ? `Could not switch the reader ${enabled ? 'on' : 'off'}`
+        const reason = rpcErrorReason(err);
+        error = reason
+          ? `Could not switch the reader ${enabled ? 'on' : 'off'} (${reason})`
           : 'Lost the link to the robot';
       }
       if (!mountedRef.current) return;

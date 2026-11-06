@@ -28,7 +28,7 @@ const INSTALL_TIMEOUT_MS = 300_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
 /** `rfid.link_tag` writes the tag through the daemon, which retries for a while. */
-const LINK_TIMEOUT_MS = 20_000;
+const LINK_TIMEOUT_MS = 60_000;
 
 /** One personality as the robot stores it. `name` is its canonical id. */
 export interface RobotPersonality {
