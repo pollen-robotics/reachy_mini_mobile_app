@@ -67,6 +67,7 @@ import {
   wifiStatus,
   type WifiStatus,
 } from './protocol';
+import { SKIP_DAEMON_UPDATE } from '@/shared/env';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
@@ -702,7 +703,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const updateThenLink = useCallback(async (runId: number): Promise<void> => {
     const stale = () => runId !== runIdRef.current || !mountedRef.current;
     const ip = robotIpRef.current;
-    if (ip) {
+    if (ip && !SKIP_DAEMON_UPDATE) {
       try {
         const outcome = await updateRobot({
           // The PIN session expires after 300 s; typing the Wi-Fi password

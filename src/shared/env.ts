@@ -196,6 +196,29 @@ export const DEV_HF_TOKEN: string | null = (() => {
 })();
 
 /**
+ * Leave the robot's daemon alone, to test a daemon built from a branch.
+ *
+ * Set `VITE_SKIP_DAEMON_UPDATE=1` in `.env.local`. The Bluetooth setup then
+ * skips its automatic update, and the session never shows the "Update
+ * required" gate. The update from the Bluetooth tools stays available.
+ *
+ * NOT gated behind `import.meta.env.DEV`: `yarn tauri android build --debug`
+ * bundles the front with `vite build`, where `DEV` is false. `vite build`
+ * reads `.env.local` too, so remove the variable before building anything
+ * you hand out.
+ *
+ * Consumers:
+ *   - `features/ble-provisioning/useSetupMachine.ts` (update before sign-in)
+ *   - `ui/screens/RobotSessionScreen.tsx` (daemon update gate)
+ */
+export const SKIP_DAEMON_UPDATE: boolean = (() => {
+  const raw = (import.meta.env.VITE_SKIP_DAEMON_UPDATE as string | undefined)?.trim().toLowerCase();
+  const skip = raw === '1' || raw === 'true';
+  if (skip) console.warn('[env] VITE_SKIP_DAEMON_UPDATE: the robot daemon will not be updated');
+  return skip;
+})();
+
+/**
  * Optional display username paired with {@link DEV_HF_TOKEN}. Purely
  * cosmetic (the welcome-back banner / SDK `robot.username`); falls back
  * to a placeholder when omitted. Same dev-only gating as the token.

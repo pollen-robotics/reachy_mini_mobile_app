@@ -122,6 +122,7 @@ import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
 import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
+import { SKIP_DAEMON_UPDATE } from '@/shared/env';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
 
@@ -267,7 +268,9 @@ function ConnectedSession({
   // Latest published daemon version (GitHub). Fail-open: `null` until it
   // resolves / when offline, which keeps `DaemonUpdateGate` dormant and
   // `daemonOutdated` false.
-  const latestDaemonVersion = useLatestDaemonVersion();
+  // `VITE_SKIP_DAEMON_UPDATE` reads as unknown: the same fail-open path.
+  const fetchedLatestDaemonVersion = useLatestDaemonVersion();
+  const latestDaemonVersion = SKIP_DAEMON_UPDATE ? null : fetchedLatestDaemonVersion;
 
   // Same verdict the mandatory update gate renders on: is the connected
   // daemon behind the latest public release? Used below to hold the wizard
