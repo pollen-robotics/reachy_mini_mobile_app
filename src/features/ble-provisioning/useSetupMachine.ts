@@ -443,8 +443,9 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
       code: 'robot-outdated',
       message:
         'This Reachy’s software is too old to set up Wi-Fi over Bluetooth. ' +
-        `It needs ${MIN_WIFI_SETUP_VERSION} or newer. Update it from the Reachy ` +
-        'desktop app, then start setup again.',
+        `It needs ${MIN_WIFI_SETUP_VERSION} or newer. Reflash it from a computer with ` +
+        'the Reachy Mini Flasher (this resets the robot to factory settings), then ' +
+        'start setup again.',
       recoverPhase: 'scanning',
     });
     setPhase('error');
