@@ -2,8 +2,8 @@
  * Bottom sheet behind the telepresence cog.
  *
  *   Pose      head roll · base yaw · left / right antenna · reset
- *   Video     low-latency (WebCodecs) switch
  *   Audio     robot speaker volume · robot mic gain
+ *   Overboard manual (Bluetooth) mode switch + WebRTC pipe counters
  *
  * Pose sliders show the controller's TARGETS: the base slider moves on
  * its own when the head joystick drags the base past the head's leash.
@@ -11,6 +11,7 @@
 import { Box, Button, Drawer, Slider, Stack, Typography } from '@mui/material';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 
+import type { OverboardLinkStats } from '@/features/overboard';
 import { TELEPRESENCE_LIMITS, type TelepresenceHandle } from '@/features/telepresence';
 import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
@@ -23,6 +24,9 @@ interface TelepresenceSettingsSheetProps {
   open: boolean;
   onClose: () => void;
   telepresence: TelepresenceHandle;
+  manualMode: boolean;
+  onManualModeChange: (manual: boolean) => void;
+  overboardStats: OverboardLinkStats;
   audioReady: boolean;
   /** Robot awake + host allows motion. Pose controls are inert otherwise. */
   motionEnabled: boolean;
@@ -42,13 +46,16 @@ export default function TelepresenceSettingsSheet({
   open,
   onClose,
   telepresence,
+  manualMode,
+  onManualModeChange,
+  overboardStats,
   audioReady,
   motionEnabled,
   lowLatency,
   onLowLatencyChange,
   videoMode,
 }: TelepresenceSettingsSheetProps) {
-  const poseDisabled = !motionEnabled;
+  const poseDisabled = manualMode || !motionEnabled;
   const daemon = useDaemonState();
   const { targets } = telepresence.motion;
   const L = TELEPRESENCE_LIMITS;
@@ -131,6 +138,7 @@ export default function TelepresenceSettingsSheet({
             </Box>
             <OutlinedSwitch
               checked={lowLatency}
+              disabled={manualMode}
               onChange={(_, checked) => onLowLatencyChange(checked)}
               slotProps={{ input: { 'aria-label': 'Low-latency video' } }}
             />
@@ -143,15 +151,48 @@ export default function TelepresenceSettingsSheet({
             value={daemon.speakerVolume ?? 50}
             onChange={daemon.setSpeakerVolume}
             onToggleMute={daemon.toggleSpeakerMute}
-            disabled={!audioReady}
+            disabled={!audioReady || manualMode}
           />
           <AudioControlCard
             kind="microphone"
             value={daemon.microphoneVolume ?? 50}
             onChange={daemon.setMicrophoneVolume}
             onToggleMute={daemon.toggleMicrophoneMute}
-            disabled={!audioReady}
+            disabled={!audioReady || manualMode}
           />
+        </SheetSection>
+
+        <SheetSection title="Overboard">
+          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}>
+                Manual mode (Bluetooth)
+              </Typography>
+              <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary' }}>
+                Drive the base directly from the phone. Stops video, audio and head control
+                and releases the robot.
+              </Typography>
+            </Box>
+            <OutlinedSwitch
+              checked={manualMode}
+              onChange={(_, checked) => onManualModeChange(checked)}
+              slotProps={{ input: { 'aria-label': 'Overboard manual mode' } }}
+            />
+          </Stack>
+          {!manualMode && (
+            <Typography
+              sx={{
+                fontSize: TYPO.tiny,
+                color: 'text.secondary',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-line',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              WebRTC pipe · sent {overboardStats.sent} · daemon replies {overboardStats.echoes}
+              {overboardStats.lastEcho ? `\n${overboardStats.lastEcho}` : ''}
+            </Typography>
+          )}
         </SheetSection>
       </Stack>
     </Drawer>

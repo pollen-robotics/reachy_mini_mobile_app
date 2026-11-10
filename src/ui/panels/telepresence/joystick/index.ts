@@ -9,6 +9,7 @@ export type {
 export { useGamepadDeflection } from './useGamepadDeflection';
 export type { GamepadStick, UseGamepadDeflectionOptions } from './useGamepadDeflection';
 export { default as MoveIcon } from './MoveIcon';
+export { default as WheelsIcon } from './WheelsIcon';
 export {
   applyRadialDeadzone,
   computeDeflection,
