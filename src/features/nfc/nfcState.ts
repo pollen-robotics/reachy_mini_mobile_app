@@ -3,6 +3,7 @@
  * app (`views/active-robot/nfc/nfcState.ts`) so both apps word the reader the
  * same way.
  */
+import { compareSemver, parseSemver } from '@/features/daemon-update/latestRelease';
 
 /** Why the reader is not serving: the daemon's `NfcStatus.error_code`. */
 export type NfcStatusError =
@@ -111,6 +112,27 @@ const ABSENT_FOR_GOOD: ReadonlyArray<NfcStatusError> = [
   'DRIVER_MISSING',
   'PORT_CONFLICT',
 ];
+
+/**
+ * Last daemon release without `nfc.*`. Such a daemon relays the call to the
+ * running app instead, which answers late (it may still be starting) or not
+ * at all, so the version is checked before asking.
+ */
+const LAST_DAEMON_WITHOUT_NFC = '1.14.0';
+
+/**
+ * True when the daemon's version proves it has no NFC support. False when
+ * the version is unknown or unparseable (ask the daemon), and for a dev
+ * build of the last release without NFC, which may be the branch adding it.
+ */
+export function daemonPredatesNfc(version: string | null | undefined): boolean {
+  const current = parseSemver(version);
+  const last = parseSemver(LAST_DAEMON_WITHOUT_NFC);
+  if (!current || !last) return false;
+  const order = compareSemver(current, last);
+  if (order !== 0) return order < 0;
+  return !/dev/i.test(version ?? '');
+}
 
 /** No reader will show up this session (same rule as the desktop app). */
 export function isReaderAbsentForGood(status: NfcStatus): boolean {

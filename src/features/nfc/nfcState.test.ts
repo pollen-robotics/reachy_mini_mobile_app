@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  daemonPredatesNfc,
   deriveNfcState,
   describeTagError,
   isRawPreviewTruncated,
@@ -117,5 +118,22 @@ describe('isRawPreviewTruncated', () => {
   it('is true only for a full 32-byte preview', () => {
     expect(isRawPreviewTruncated('42'.repeat(32))).toBe(true);
     expect(isRawPreviewTruncated('42414447')).toBe(false);
+  });
+});
+
+describe('daemonPredatesNfc', () => {
+  it('is true for releases up to the last one without NFC', () => {
+    expect(daemonPredatesNfc('1.14.0')).toBe(true);
+    expect(daemonPredatesNfc('v1.13.2')).toBe(true);
+    expect(daemonPredatesNfc('1.14.0rc2')).toBe(true);
+    expect(daemonPredatesNfc('1.12.0.dev3')).toBe(true);
+  });
+
+  it('asks the daemon when the version does not settle it', () => {
+    expect(daemonPredatesNfc(null)).toBe(false);
+    expect(daemonPredatesNfc('garbage')).toBe(false);
+    expect(daemonPredatesNfc('1.14.0.dev0')).toBe(false);
+    expect(daemonPredatesNfc('1.14.1')).toBe(false);
+    expect(daemonPredatesNfc('1.15.0')).toBe(false);
   });
 });

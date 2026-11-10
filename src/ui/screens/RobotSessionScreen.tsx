@@ -502,6 +502,7 @@ function ConnectedSession({
   const nfc = useNfcReader({
     getRobot: session.getRobot,
     active: session.phase === 'live' && openedApp === null,
+    daemonVersion: session.daemonVersion,
   });
   // The accessory on that reader, for the conversation panel's badge.
   const accessory = useAccessory(nfc.state, nfc.tag);

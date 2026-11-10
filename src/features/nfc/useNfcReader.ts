@@ -4,22 +4,28 @@
  *
  * Polls `nfc.status` (and `nfc.tag` while a reader is connected) once a
  * second while `active` and the phone is in the foreground. Stops once the
- * answer cannot change: no NFC on the daemon, or no reader.
+ * answer cannot change: no NFC on the daemon, or no reader. A daemon whose
+ * version predates NFC is never asked: it reads as unsupported at once.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { rpcErrorReason, type ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { createNfcClient } from './client';
-import { deriveNfcState, isReaderAbsentForGood } from './nfcState';
+import { daemonPredatesNfc, deriveNfcState, isReaderAbsentForGood } from './nfcState';
 import type { NfcState, NfcStatus, NfcTag, NfcTagResult, NfcWriteContent } from './nfcState';
 
 const POLL_INTERVAL_MS = 1_000;
+
+/** Shown instead of the SDK's error ("rpcCall(nfc.status) timed out…"). */
+const NO_ANSWER = 'The robot is not answering. Retrying…';
 
 export interface UseNfcReaderOptions {
   getRobot: () => ReachyMiniInstance | null;
   /** Poll the reader: the session is live and no app holds the robot. */
   active: boolean;
+  /** Daemon version read at bring-up, `null` when unknown. */
+  daemonVersion: string | null;
 }
 
 export interface UseNfcReaderResult {
@@ -55,11 +61,17 @@ function useDocumentVisible(): boolean {
   return visible;
 }
 
-export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcReaderResult {
+export function useNfcReader({
+  getRobot,
+  active,
+  daemonVersion,
+}: UseNfcReaderOptions): UseNfcReaderResult {
   const [status, setStatus] = useState<NfcStatus | null>(null);
   const [tag, setTag] = useState<NfcTag | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [unsupported, setUnsupported] = useState(false);
+  const [probedUnsupported, setProbedUnsupported] = useState(false);
+  const predatesNfc = daemonPredatesNfc(daemonVersion);
+  const unsupported = predatesNfc || probedUnsupported;
   const [isErasing, setIsErasing] = useState(false);
   const [eraseResult, setEraseResult] = useState<NfcTagResult | null>(null);
   const [isWriting, setIsWriting] = useState(false);
@@ -88,7 +100,7 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
   }, []);
 
   useEffect(() => {
-    if (!active || !visible) return;
+    if (!active || !visible || predatesNfc) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -96,7 +108,14 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
       let final = false;
       try {
         const client = clientFor();
-        if (!client) throw new Error('Waiting for the robot…');
+        if (!client) {
+          // Not connected yet: the card says it is waiting for the robot.
+          if (cancelled) return;
+          setStatus(null);
+          setTag(null);
+          setFetchError(null);
+          return;
+        }
         let nextStatus: NfcStatus;
         try {
           nextStatus = await client.status();
@@ -105,7 +124,7 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
           if (!rpcErrorReason(err)) throw err;
           final = true;
           if (cancelled) return;
-          setUnsupported(true);
+          setProbedUnsupported(true);
           setStatus(null);
           setTag(null);
           setFetchError(null);
@@ -123,12 +142,13 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
         setStatus(nextStatus);
         setTag(nextTag);
         setFetchError(null);
-        setUnsupported(false);
+        setProbedUnsupported(false);
       } catch (err) {
         if (cancelled) return;
         setStatus(null);
         setTag(null);
-        setFetchError(err instanceof Error ? err.message : String(err));
+        console.warn('[nfc] status poll failed:', err);
+        setFetchError(NO_ANSWER);
       } finally {
         if (!cancelled && !final) timer = setTimeout(poll, POLL_INTERVAL_MS);
       }
@@ -139,7 +159,7 @@ export function useNfcReader({ getRobot, active }: UseNfcReaderOptions): UseNfcR
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [active, visible, clientFor]);
+  }, [active, visible, predatesNfc, clientFor]);
 
   const erase = useCallback(
     async (full: boolean): Promise<void> => {
