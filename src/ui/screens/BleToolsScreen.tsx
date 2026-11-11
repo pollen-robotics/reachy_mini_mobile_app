@@ -13,9 +13,8 @@
  *                              ├─ change Wi-Fi: scan → pick → joining → joined / failed
  *                              └─ recovery script: confirm → running → result / failed
  *
- * `initialAction="wifi"` (robot settings → "Change Wi-Fi network") skips the
- * intro and lands on the Wi-Fi pick right after the PIN; the menu stays one
- * Back away.
+ * `skipIntro` (robot settings → "Change Wi-Fi network") starts on the scan:
+ * the user already said what they came for. The PIN still lands on the menu.
  *
  * The BLE commands (`UPDATE_*`, `JOURNAL_*`, `CMD_<script>`, `PING`, see
  * `features/ble-provisioning/{update,tools}Protocol.ts`) all share ONE
@@ -259,11 +258,11 @@ function scriptMeta(name: string): ScriptMeta {
 
 export default function BleToolsScreen({
   onBack,
-  initialAction,
+  skipIntro = false,
 }: {
   onBack: () => void;
-  /** Jump straight to a tool once paired (from the robot settings). */
-  initialAction?: 'wifi';
+  /** Start scanning right away instead of on the intro (from the robot settings). */
+  skipIntro?: boolean;
 }) {
   const [step, setStep] = useState<Step>('intro');
   const [devices, setDevices] = useState<BleDevice[]>([]);
@@ -401,14 +400,14 @@ export default function BleToolsScreen({
     runScan();
   }, [runScan]);
 
-  // Opened for a specific tool: the user already chose what to do, skip the
-  // intro and start looking for the robot right away.
+  // Opened from the robot settings: the user already knows why they're here,
+  // skip the intro and start looking for the robot right away.
   const autoStartedRef = useRef(false);
   useEffect(() => {
-    if (!initialAction || autoStartedRef.current) return;
+    if (!skipIntro || autoStartedRef.current) return;
     autoStartedRef.current = true;
     handleStart();
-  }, [handleStart, initialAction]);
+  }, [handleStart, skipIntro]);
 
   // Re-scan when the app returns to the foreground while on the scan step:
   // mobile OSes kill an in-flight BLE scan when the app is backgrounded.
@@ -459,7 +458,8 @@ export default function BleToolsScreen({
     return ok;
   }, []);
 
-  const loadScripts = useCallback(async () => {
+  const enterMenu = useCallback(async () => {
+    setStep('menu');
     // Best-effort: [] on an old firmware / read error → the two scripts
     // every robot ships with.
     // The robot lists its scripts in directory order; show the ones we know
@@ -469,11 +469,6 @@ export default function BleToolsScreen({
     const other = names.filter(n => !(n in SCRIPT_META));
     setScripts(names.length > 0 ? [...known, ...other] : FALLBACK_SCRIPTS);
   }, [withBle]);
-
-  const enterMenu = useCallback(async () => {
-    setStep('menu');
-    await loadScripts();
-  }, [loadScripts]);
 
   /* --- change Wi-Fi ------------------------------------------------------ */
 
@@ -574,13 +569,7 @@ export default function BleToolsScreen({
           return;
         }
         pinRef.current = pin;
-        if (initialAction === 'wifi') {
-          handleOpenWifi();
-          // Queued behind the Wi-Fi reads, for when the user steps back to the menu.
-          void loadScripts();
-        } else {
-          await enterMenu();
-        }
+        await enterMenu();
       } catch (e) {
         setErrorText(`Authentication error: ${(e as Error).message}`);
         setStep('failed');
@@ -588,7 +577,7 @@ export default function BleToolsScreen({
         setBusy(false);
       }
     },
-    [enterMenu, handleOpenWifi, initialAction, loadScripts, withBle]
+    [enterMenu, withBle]
   );
 
   /* --- status ------------------------------------------------------------- */

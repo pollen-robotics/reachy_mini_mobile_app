@@ -56,8 +56,8 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
   const [screen, setScreen] = useState<Screen>('scan');
   const [target, setTarget] = useState<ConnectionTarget | null>(null);
-  // Tool the Bluetooth tools open straight into (robot settings → Wi-Fi).
-  const [bleToolsAction, setBleToolsAction] = useState<'wifi' | undefined>(undefined);
+  // Bluetooth tools opened from the robot settings: skip their intro.
+  const [bleToolsSkipIntro, setBleToolsSkipIntro] = useState(false);
   // True for the ~1.5 s celebratory transition that runs right
   // after the OAuth callback resolves, on top of the freshly-
   // mounted ScanScreen. Lets the data fetch warm up underneath
@@ -202,7 +202,7 @@ export default function App() {
           username={username}
           onBack={backToScan}
           onChangeWifi={() => {
-            setBleToolsAction('wifi');
+            setBleToolsSkipIntro(true);
             setScreen('ble-tools');
           }}
         />
@@ -212,10 +212,10 @@ export default function App() {
       return (
         <BleToolsScreen
           onBack={() => {
-            setBleToolsAction(undefined);
+            setBleToolsSkipIntro(false);
             backToScan();
           }}
-          initialAction={bleToolsAction}
+          skipIntro={bleToolsSkipIntro}
         />
       );
     }
@@ -252,7 +252,7 @@ export default function App() {
         }}
         onStartSetup={() => setScreen('setup')}
         onOpenBleTools={() => {
-          setBleToolsAction(undefined);
+          setBleToolsSkipIntro(false);
           setScreen('ble-tools');
         }}
         onSignOutRemote={handleSignOut}
