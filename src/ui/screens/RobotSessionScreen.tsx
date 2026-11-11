@@ -1244,6 +1244,7 @@ function ConnectedSession({
                 renameRobot={handleRenameRobot}
                 signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
                 getRobot={session.getRobot}
+                robotLive={session.connectionState === 'live'}
                 onSignedOutRobot={() => {
                   setSettingsOpen(false);
                   handleLeave();

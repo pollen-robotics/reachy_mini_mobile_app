@@ -54,18 +54,22 @@ describe('app lifecycle', () => {
     expect(rpcCall).not.toHaveBeenCalledWith('apps.stop', expect.anything(), expect.anything());
   });
 
-  it('reads and sets the antenna start as the daemon startup app', async () => {
+  it('reads and sets the daemon startup app by name', async () => {
     const { client, rpcCall } = robotReturning({ name: CONV_APP_NAME });
-    expect(await client.isStartupApp()).toBe(true);
-    expect(rpcCall).toHaveBeenCalledWith('apps.get_startup');
+    expect(await client.getStartupApp()).toBe(CONV_APP_NAME);
+    expect(rpcCall).toHaveBeenCalledWith('apps.get_startup', {}, { timeoutMs: 15_000 });
 
-    await client.setStartupApp(true);
-    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: CONV_APP_NAME });
-    await client.setStartupApp(false);
-    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: null });
+    await client.setStartupApp(CONV_APP_NAME);
+    expect(rpcCall).toHaveBeenCalledWith(
+      'apps.set_startup',
+      { name: CONV_APP_NAME },
+      { timeoutMs: 15_000 }
+    );
+    await client.setStartupApp(null);
+    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: null }, { timeoutMs: 15_000 });
 
-    rpcCall.mockResolvedValueOnce({ name: 'marionette' });
-    expect(await client.isStartupApp()).toBe(false);
+    rpcCall.mockResolvedValueOnce({ name: null });
+    expect(await client.getStartupApp()).toBeNull();
   });
 });
 

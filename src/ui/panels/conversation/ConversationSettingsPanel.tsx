@@ -99,6 +99,9 @@ export interface ConversationSettingsPanelProps {
   conversationLive: boolean;
   /** The live robot, to read and set the antenna start (`useStartupApp`). */
   getRobot: () => ReachyMiniInstance | null;
+  /** Whether the link to the robot is up right now (not the sticky
+   *  `audioReady`): the antenna start is hidden while it is down. */
+  robotLive: boolean;
 }
 
 export function ConversationSettingsPanel({
@@ -110,9 +113,10 @@ export function ConversationSettingsPanel({
   signOutRobot,
   onSignedOutRobot,
   getRobot,
+  robotLive,
 }: ConversationSettingsPanelProps) {
   const theme = useTheme();
-  const startupApp = useStartupApp(getRobot, audioReady);
+  const startupApp = useStartupApp(getRobot, robotLive);
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
@@ -467,7 +471,9 @@ export function ConversationSettingsPanel({
 
           {/* WITHOUT THE PHONE: the daemon's startup app. Applied live on the
               robot, so not locked while a conversation runs; hidden on a
-              daemon that cannot read it over the data channel. */}
+              daemon that cannot read it over the data channel, and while
+              the link is down. The slot is daemon-wide, so say which other
+              app turning this on would replace. */}
           {startupApp.enabled !== null && (
             <Section label="Without the phone">
               <Card>
@@ -479,10 +485,24 @@ export function ConversationSettingsPanel({
                     <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
                       Touch Reachy&apos;s antennas while it sleeps to wake it up and start talking.
                     </Typography>
+                    {startupApp.otherApp && (
+                      <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.5 }}>
+                        Replaces {startupApp.otherApp}, which the antennas start today.
+                      </Typography>
+                    )}
+                    {startupApp.error && (
+                      <Typography
+                        role="alert"
+                        sx={{ fontSize: TYPO.xs, color: 'error.main', lineHeight: 1.4, mt: 0.5 }}
+                      >
+                        {startupApp.error}
+                      </Typography>
+                    )}
                   </Stack>
                   <OutlinedSwitch
                     checked={startupApp.enabled}
-                    onChange={(_, checked) => void startupApp.setStartup(checked)}
+                    disabled={startupApp.busy}
+                    onChange={(_, checked) => startupApp.setStartup(checked)}
                     slotProps={{ input: { 'aria-label': 'Talk when the antennas are touched' } }}
                   />
                 </Row>

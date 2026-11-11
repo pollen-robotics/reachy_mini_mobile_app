@@ -27,6 +27,8 @@ const START_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 300_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
+/** Setting the startup app re-arms the daemon's antenna watcher. */
+const STARTUP_TIMEOUT_MS = 15_000;
 
 /** One personality as the robot stores it. `name` is its canonical id. */
 export interface RobotPersonality {
@@ -82,9 +84,10 @@ export interface ConvAppClient {
   /** Stops whatever holds the slot. Only for clearing a crashed app. */
   stopCurrentApp(): Promise<void>;
   installConvApp(): Promise<void>;
-  /** Whether touching the antennas on wake-up starts the conversation app. */
-  isStartupApp(): Promise<boolean>;
-  setStartupApp(enabled: boolean): Promise<void>;
+  /** The app the antennas start on wake-up (any app, not only this one), or `null`. */
+  getStartupApp(): Promise<string | null>;
+  /** Sets that app by name; `null` clears it. */
+  setStartupApp(name: string | null): Promise<void>;
 
   // The running conversation app.
   getStatus(): Promise<ConvAppStatus>;
@@ -130,12 +133,16 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
         { timeoutMs: INSTALL_TIMEOUT_MS }
       );
     },
-    async isStartupApp() {
-      const res = await robot.rpcCall<{ name: string | null }>('apps.get_startup');
-      return res.name === CONV_APP_NAME;
+    async getStartupApp() {
+      const res = await robot.rpcCall<{ name: string | null } | null>(
+        'apps.get_startup',
+        {},
+        { timeoutMs: STARTUP_TIMEOUT_MS }
+      );
+      return res?.name ?? null;
     },
-    async setStartupApp(enabled) {
-      await robot.rpcCall('apps.set_startup', { name: enabled ? CONV_APP_NAME : null });
+    async setStartupApp(name) {
+      await robot.rpcCall('apps.set_startup', { name }, { timeoutMs: STARTUP_TIMEOUT_MS });
     },
 
     getStatus() {

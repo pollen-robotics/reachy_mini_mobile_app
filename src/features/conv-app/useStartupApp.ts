@@ -1,47 +1,37 @@
 /**
- * Whether touching Reachy's antennas while it sleeps starts the conversation
- * app, with no phone involved. The daemon owns the setting (its "startup
- * app", `apps.get_startup` / `apps.set_startup`); the phone only flips it.
+ * React binding for the antenna start (`./startup-app`): reads the setting
+ * each time the link to the robot comes up, and hides it while the link is
+ * down so the switch never shows a value it cannot change.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
-import { createConvAppClient } from './client';
+import {
+  createStartupAppController,
+  INITIAL_STARTUP_APP_STATE,
+  type StartupAppController,
+} from './startup-app';
 
-/** `enabled` is `null` until read, and stays so on a daemon without the verbs. */
 export function useStartupApp(getRobot: () => ReachyMiniInstance | null, live: boolean) {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [state, setState] = useState(INITIAL_STARTUP_APP_STATE);
+  const controllerRef = useRef<StartupAppController | null>(null);
 
   useEffect(() => {
-    const robot = getRobot();
-    if (!live || !robot) return;
-    let cancelled = false;
-    createConvAppClient(robot)
-      .isStartupApp()
-      .then(
-        value => !cancelled && setEnabled(value),
-        (err: unknown) => console.debug('[startup-app] apps.get_startup:', err)
-      );
+    if (!live) return;
+    const controller = createStartupAppController(getRobot, setState);
+    controllerRef.current = controller;
+    void controller.refresh();
     return () => {
-      cancelled = true;
+      controller.dispose();
+      controllerRef.current = null;
+      setState(INITIAL_STARTUP_APP_STATE);
     };
   }, [getRobot, live]);
 
-  const setStartup = useCallback(
-    async (next: boolean) => {
-      const robot = getRobot();
-      if (!robot) return;
-      setEnabled(next);
-      try {
-        await createConvAppClient(robot).setStartupApp(next);
-      } catch (err) {
-        console.warn('[startup-app] apps.set_startup failed:', err);
-        setEnabled(!next);
-      }
-    },
-    [getRobot]
-  );
+  const setStartup = useCallback((next: boolean) => {
+    void controllerRef.current?.toggle(next);
+  }, []);
 
-  return { enabled, setStartup };
+  return { ...state, setStartup };
 }

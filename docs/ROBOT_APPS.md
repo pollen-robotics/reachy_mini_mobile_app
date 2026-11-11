@@ -130,9 +130,12 @@ stale central peer, and the libnice abort.
    control-only. The conversation engine already stands down
    (`isAnotherAppDrivingRobot`); the other surfaces don't. Opening a JS app
    while a Python app runs should at least ask for confirmation.
-5. **Removing the startup app** is refused over RPC (`startup_app`), because
-   re-arming the antenna watcher needs FastAPI state the relay doesn't have.
-   The phone has no startup-app control yet.
+5. **Startup app.** The phone only sets or clears the conversation app as the
+   startup app (Settings → "Without the phone", `apps.get_startup` /
+   `apps.set_startup`, see `features/conv-app/startup-app.ts`); picking
+   another app is still desktop-only. A daemon with those verbs clears the
+   startup app itself when that app is removed; `startup_app` is only refused
+   when the relay has no daemon to disarm the antenna watcher.
 6. **Updates are always offered.** `apps.check_updates` is not exposed yet, so
    "Update" means "reinstall latest".
 7. **Daemon-version gate.** Daemons older than the relay (< 1.10) don't answer
