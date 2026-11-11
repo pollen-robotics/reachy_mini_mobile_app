@@ -128,6 +128,8 @@ interface RobotSessionScreenProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  /** Leave the session for the Bluetooth "Change Wi-Fi network" flow. */
+  onChangeWifi: () => void;
 }
 
 type Tab = 'conv' | 'apps' | 'tele';
@@ -137,6 +139,7 @@ export default function RobotSessionScreen({
   token,
   username,
   onBack,
+  onChangeWifi,
 }: RobotSessionScreenProps) {
   const robotId = extractRobotId(target.robot);
   const robotName = extractRobotName(target.robot) ?? robotId ?? 'Reachy Mini';
@@ -159,6 +162,7 @@ export default function RobotSessionScreen({
       token={token}
       username={username}
       onBack={onBack}
+      onChangeWifi={onChangeWifi}
     />
   );
 }
@@ -171,6 +175,7 @@ interface ConnectedSessionProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  onChangeWifi: () => void;
 }
 
 /**
@@ -219,6 +224,7 @@ function ConnectedSession({
   token,
   username,
   onBack,
+  onChangeWifi,
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
 
@@ -503,23 +509,32 @@ function ConnectedSession({
   // screen renders the leaving view in the meantime.
   const [leaving, setLeaving] = useState(false);
   const leavingTriggeredRef = useRef(false);
+  /** Where to go once torn down: the robot list, or the Bluetooth Wi-Fi flow. */
+  const leaveToRef = useRef<'back' | 'wifi'>('back');
   useEffect(() => {
     if (!leaving) return;
     let cancelled = false;
     void (async () => {
       await session.tearDown();
       if (cancelled) return;
-      onBack();
+      if (leaveToRef.current === 'wifi') onChangeWifi();
+      else onBack();
     })();
     return () => {
       cancelled = true;
     };
-  }, [leaving, onBack, session]);
+  }, [leaving, onBack, onChangeWifi, session]);
 
   const handleLeave = (): void => {
     if (leavingTriggeredRef.current) return;
     leavingTriggeredRef.current = true;
     setLeaving(true);
+  };
+
+  const handleLeaveToChangeWifi = (): void => {
+    if (leavingTriggeredRef.current) return;
+    leaveToRef.current = 'wifi';
+    handleLeave();
   };
 
   // Handoff lifecycle for the apps iframe.
@@ -1239,6 +1254,10 @@ function ConnectedSession({
               <ConversationSettingsPanel
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
+                onChangeWifi={() => {
+                  setSettingsOpen(false);
+                  handleLeaveToChangeWifi();
+                }}
                 conversationLive={session.conversationState !== 'idle'}
                 robotName={displayName}
                 renameRobot={handleRenameRobot}
