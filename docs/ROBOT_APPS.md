@@ -136,6 +136,10 @@ stale central peer, and the libnice abort.
    another app is still desktop-only. A daemon with those verbs clears the
    startup app itself when that app is removed; `startup_app` is only refused
    when the relay has no daemon to disarm the antenna watcher.
+   A conversation the antennas started is already running when the phone
+   connects: the phone attaches to it (no wake-up, no first-wake-up wizard, no
+   settings push, see `onConnectionLive` and `ensureAppRunning`). If that
+   attach fails, leaving still plays the goto-sleep under the running app.
 6. **Updates are always offered.** `apps.check_updates` is not exposed yet, so
    "Update" means "reinstall latest".
 7. **Daemon-version gate.** Daemons older than the relay (< 1.10) don't answer

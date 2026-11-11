@@ -35,7 +35,7 @@
 import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
 import { getPlatform } from "@/shared/platform";
-import { isAnotherAppDrivingRobot } from "@/features/conv-app/app-slot";
+import { isAnotherAppDrivingRobot, isAnyAppDrivingRobot } from "@/features/conv-app/app-slot";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
@@ -552,15 +552,17 @@ export function createConnectionController(
     // motor test looked dead when bring-up had already woken it). The
     // wizard guarantees the robot ends up awake on finish / skip.
     //
-    // EXCEPTION: a Hub app already driving the robot owns the motors. Waking
+    // EXCEPTION: an app already driving the robot owns the motors. Waking
     // under it would fight its trajectory on the bus, so we reach `live` and
-    // leave the robot exactly as the app is posing it.
+    // leave the robot exactly as the app is posing it. That includes the
+    // conversation app when the robot started it by itself (antenna touch):
+    // the conversation layer attaches to it once we are live.
     if (shouldDeferInitialWakeUp?.()) {
       console.log(
         `[DIAG] doStart: deferring initial wake-up to host (first-wake-up ` +
           `wizard pending) at t+${Math.round(performance.now() - tDoStart0)}ms`,
       );
-    } else if (robot && (await isAnotherAppDrivingRobot(robot))) {
+    } else if (robot && (await isAnyAppDrivingRobot(robot))) {
       console.log("[DIAG] doStart: skipping wake-up, an app is driving the robot");
     } else {
       const tBeforeWake = performance.now();
