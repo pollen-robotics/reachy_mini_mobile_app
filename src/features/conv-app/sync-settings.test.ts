@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { setActiveLanguageId } from '@/features/conversation-language';
+import { resetActiveLanguageId, setActiveLanguageId } from '@/features/conversation-language';
 import { setMemoryEnabled, setVisionEnabled } from '@/features/conversation-settings';
 
 import type { ConvAppClient, ConvAppStatus } from './client';
@@ -79,6 +79,15 @@ describe('applySettingsToRobot', () => {
     expect(client.setLanguage).toHaveBeenCalledWith('fr');
     expect(client.setVisionEnabled).toHaveBeenCalledWith(false);
     expect(client.setMemoryEnabled).not.toHaveBeenCalled();
+  });
+
+  it('lets the robot detect the language by default', async () => {
+    resetActiveLanguageId();
+    const client = fakeClient();
+
+    await applySettingsToRobot(client, status());
+
+    expect(client.setLanguage).toHaveBeenCalledWith('auto');
   });
 
   it('pushes nothing when the robot already agrees', async () => {
