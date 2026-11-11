@@ -29,7 +29,8 @@
  *
  * Worst-case bring-up latency before a fatal error is surfaced:
  *
- *     startAttemptTimeoutMs = 8_000 ms
+ *     startAttemptTimeoutMs = 8_000 ms   (no ICE progress)
+ *     startAttemptProgressTimeoutMs = 20_000 ms   (ICE connected)
  *
  * `startSession()` runs a SINGLE guarded attempt (no retry). The
  * previous 2-attempt / 12 s-gap loop was removed: it only ever
@@ -51,6 +52,16 @@ export const SESSION_TIMINGS = {
   startAttemptTimeoutMs: 8_000,
 
   /**
+   * Total budget for the same attempt once ICE is `connected`: the media
+   * path works, only the data channel is still opening. On a lossy hop
+   * (the phone roaming between mesh access points) its setup packets are
+   * retransmitted with growing delays: seen on device, ICE connected
+   * 1 s in and the robot's data channel open, yet the flat 8 s budget
+   * killed the session; the retry 5 s later went live in 1.5 s.
+   */
+  startAttemptProgressTimeoutMs: 20_000,
+
+  /**
    * Duration of the smooth ease-out from the wobbler / antennas last
    * animated pose back to neutral when the user stops the
    * conversation (or hands off to an iframe). Long enough to feel
@@ -70,6 +81,22 @@ export const SESSION_TIMINGS = {
    * even when the chain itself is stuck.
    */
   bootChainUnmountTimeoutMs: 6_000,
+
+  /**
+   * In-place recovery loop after a post-ready fatal (`RobotSessionScreen`).
+   * The window outlasts a home Wi-Fi outage (~30 s) plus the robot
+   * relay's central re-registration (its SSE read timeout is 60 s, and
+   * central lists the stale peer id until then), or a daemon crash +
+   * systemd restart. Attempts are spaced so a failing one doesn't spin.
+   */
+  autoRecoverWindowMs: 90_000,
+  autoRecoverRetryDelayMs: 5_000,
+
+  /**
+   * The same loop's window while the update gate reports the robot
+   * restarting after a self-update: a reinstall + reboot outlasts 90 s.
+   */
+  rebootRecoverWindowMs: 240_000,
 } as const;
 
 /**

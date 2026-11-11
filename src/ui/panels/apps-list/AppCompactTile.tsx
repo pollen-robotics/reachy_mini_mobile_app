@@ -62,12 +62,18 @@ import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AppActionsMenu from './AppActionsMenu';
 import AppIcon from './AppIcon';
 import LikeButton from './LikeButton';
+import RunsOnChip, { type RunsOn } from './RunsOnChip';
 
 interface AppCompactTileProps {
   app: AppEntry;
-  isPinned: boolean;
+  isPinned?: boolean;
   onOpen: (app: AppEntry) => void;
-  onTogglePin: (app: AppEntry) => void;
+  /** Omit to hide the Pin button (robot apps are not pinnable). */
+  onTogglePin?: (app: AppEntry) => void;
+  /** Label of the open button; robot apps read "Get" / "Open". */
+  actionLabel?: string;
+  /** Where the app runs, shown as a chip under the author line. */
+  runsOn?: RunsOn;
   /**
    * When true, the tile spans `width: 100%` of its parent
    * (used in search results and category-focus mode where the
@@ -81,9 +87,11 @@ interface AppCompactTileProps {
 
 function AppCompactTileImpl({
   app,
-  isPinned,
+  isPinned = false,
   onOpen,
   onTogglePin,
+  actionLabel = 'Try',
+  runsOn,
   fullWidth = false,
 }: AppCompactTileProps) {
   const StarIcon = isPinned ? StarRoundedIcon : StarOutlineIcon;
@@ -112,7 +120,7 @@ function AppCompactTileImpl({
 
   const handleTogglePin = () => {
     setPulseKey(k => k + 1);
-    onTogglePin(app);
+    onTogglePin?.(app);
   };
 
   return (
@@ -320,6 +328,12 @@ function AppCompactTileImpl({
             </Box>
           )}
 
+          {runsOn && (
+            <Box sx={{ display: 'flex', mt: 0.25 }}>
+              <RunsOnChip runsOn={runsOn} />
+            </Box>
+          )}
+
           {/* Description sits below the meta line with a small
               top margin. Clamped to 2 lines so tile heights stay
               predictable across cards with very long blurbs. */}
@@ -361,89 +375,91 @@ function AppCompactTileImpl({
             the left edge of the footer while keeping the Pin /
             Open buttons flush right, matching iOS App Store cards. */}
         <AppActionsMenu app={app} buttonSx={{ p: 0.25, mr: 'auto' }} />
-        <Button
-          variant="outlined"
-          color="primary"
-          size="small"
-          aria-label={isPinned ? `Unpin ${app.name}` : `Pin ${app.name}`}
-          startIcon={
-            <StarIcon
-              // Remount on every toggle to replay the keyframe
-              // (assigning the same animation name doesn't re-fire
-              // on its own).
-              key={`star-${pulseKey}`}
-              sx={{
-                fontSize: TYPO.lg,
-                // Kick the star with a quick scale spring on every
-                // toggle. `pulseKey > 0` skips the very first
-                // render so the tile doesn't pulse on initial
-                // mount.
-                animation:
-                  pulseKey > 0 ? 'star-pulse 250ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
-                '@keyframes star-pulse': {
-                  '0%': { transform: 'scale(1)' },
-                  '40%': { transform: 'scale(1.35)' },
-                  '100%': { transform: 'scale(1)' },
-                },
-              }}
-            />
-          }
-          onClick={handleTogglePin}
-          sx={theme => ({
-            minWidth: 0,
-            px: 1.25,
-            py: 0.5,
-            fontSize: TYPO.xs,
-            fontWeight: FONT_WEIGHT.semibold,
-            textTransform: 'none',
-            borderRadius: `${RADIUS.md}px`,
-            borderWidth: 1.5,
-            // Pinned-state background: very subtle primary tint
-            // (~6 % alpha). The filled star icon and the
-            // "Pinned" label do most of the state-cue work; the
-            // background is just there to whisper "this is the
-            // on state" without shouting at the rest of the card.
-            bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.06) : 'transparent',
-            '&:hover': {
+        {onTogglePin && (
+          <Button
+            variant="outlined"
+            color="primary"
+            size="small"
+            aria-label={isPinned ? `Unpin ${app.name}` : `Pin ${app.name}`}
+            startIcon={
+              <StarIcon
+                // Remount on every toggle to replay the keyframe
+                // (assigning the same animation name doesn't re-fire
+                // on its own).
+                key={`star-${pulseKey}`}
+                sx={{
+                  fontSize: TYPO.lg,
+                  // Kick the star with a quick scale spring on every
+                  // toggle. `pulseKey > 0` skips the very first
+                  // render so the tile doesn't pulse on initial
+                  // mount.
+                  animation:
+                    pulseKey > 0 ? 'star-pulse 250ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+                  '@keyframes star-pulse': {
+                    '0%': { transform: 'scale(1)' },
+                    '40%': { transform: 'scale(1.35)' },
+                    '100%': { transform: 'scale(1)' },
+                  },
+                }}
+              />
+            }
+            onClick={handleTogglePin}
+            sx={theme => ({
+              minWidth: 0,
+              px: 1.25,
+              py: 0.5,
+              fontSize: TYPO.xs,
+              fontWeight: FONT_WEIGHT.semibold,
+              textTransform: 'none',
+              borderRadius: `${RADIUS.md}px`,
               borderWidth: 1.5,
-              bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.1) : 'action.hover',
-            },
-            '&:active': {
-              borderWidth: 1.5,
-            },
-            '& .MuiButton-startIcon': { mr: 0.5 },
-          })}
-        >
-          {/* Inline-grid phantom: the longer label ("Pinned") is
+              // Pinned-state background: very subtle primary tint
+              // (~6 % alpha). The filled star icon and the
+              // "Pinned" label do most of the state-cue work; the
+              // background is just there to whisper "this is the
+              // on state" without shouting at the rest of the card.
+              bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.06) : 'transparent',
+              '&:hover': {
+                borderWidth: 1.5,
+                bgcolor: isPinned ? alpha(theme.palette.primary.main, 0.1) : 'action.hover',
+              },
+              '&:active': {
+                borderWidth: 1.5,
+              },
+              '& .MuiButton-startIcon': { mr: 0.5 },
+            })}
+          >
+            {/* Inline-grid phantom: the longer label ("Pinned") is
               rendered in the same grid cell as the visible label
               but with `visibility: hidden`, so the button sizes
               itself to the longest state. The visible label then
               swaps freely without any reflow, which keeps the
               star pulse perfectly visible at the same
               x-position. */}
-          <Box component="span" sx={{ display: 'inline-grid', placeItems: 'center' }}>
-            <Box
-              component="span"
-              aria-hidden
-              sx={{
-                gridColumn: 1,
-                gridRow: 1,
-                visibility: 'hidden',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Pinned
+            <Box component="span" sx={{ display: 'inline-grid', placeItems: 'center' }}>
+              <Box
+                component="span"
+                aria-hidden
+                sx={{
+                  gridColumn: 1,
+                  gridRow: 1,
+                  visibility: 'hidden',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Pinned
+              </Box>
+              <Box component="span" sx={{ gridColumn: 1, gridRow: 1, whiteSpace: 'nowrap' }}>
+                {isPinned ? 'Pinned' : 'Pin'}
+              </Box>
             </Box>
-            <Box component="span" sx={{ gridColumn: 1, gridRow: 1, whiteSpace: 'nowrap' }}>
-              {isPinned ? 'Pinned' : 'Pin'}
-            </Box>
-          </Box>
-        </Button>
+          </Button>
+        )}
         <Button
           variant="outlined"
           color="primary"
           size="small"
-          aria-label={`Try ${app.name}`}
+          aria-label={`${actionLabel} ${app.name}`}
           startIcon={<PlayArrowOutlinedIcon sx={{ fontSize: TYPO.lg }} />}
           onClick={() => onOpen(app)}
           sx={{
@@ -466,7 +482,7 @@ function AppCompactTileImpl({
             '& .MuiButton-startIcon': { mr: 0.5 },
           }}
         >
-          Try
+          {actionLabel}
         </Button>
       </Box>
     </Box>

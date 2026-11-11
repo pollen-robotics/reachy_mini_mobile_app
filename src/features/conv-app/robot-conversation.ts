@@ -92,8 +92,10 @@ export interface RobotConversation {
    * could not start (the state is back on `idle` and the caption says why).
    */
   start(): Promise<boolean>;
-  /** Stop the app on the robot and stop following it. Idempotent. */
-  stop(): Promise<void>;
+  /** Idempotent. Stop following the conversation, and stop the app on the robot
+   *  unless `keepRobotApp` (a lost link: the robot's conversation is
+   *  autonomous and must keep running; recovery re-follows it). */
+  stop(opts?: { keepRobotApp?: boolean }): Promise<void>;
   setMicMuted(muted: boolean): void;
   /** Latest user level, 0..1, for rAF-driven visuals. */
   getMicLevel(): number;
@@ -236,12 +238,25 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (name === CONV_APP_NAME) return null;
       return `Reachy is busy with ${name ?? 'another app'}. Stop it from the Apps tab first.`;
     }
+    if (app.state === 'error') {
+      // A crashed app has no process left but still holds the slot: clear
+      // it, or the start below reads `already_running` and the readiness
+      // poll talks to a dead app for a minute.
+      await activeClient.stopCurrentApp().catch((err: unknown) => {
+        console.debug('[robot-conversation] clearing a crashed app:', err);
+      });
+    }
     try {
       await activeClient.startConvApp();
       return null;
     } catch (err) {
       const reason = rpcErrorReason(err);
-      if (reason === 'already_running') return null;
+      if (reason === 'already_running') {
+        // Fine if it is ours (another tab, a race); not if someone else's.
+        const now = await activeClient.getCurrentAppStatus();
+        if (now.info?.name === CONV_APP_NAME) return null;
+        return `Reachy is busy with ${now.info?.name ?? 'another app'}. Stop it from the Apps tab first.`;
+      }
       // A reasoned refusal we did not anticipate is most likely "not
       // installed" on a fresh robot. No reason at all is a transport
       // problem, and installing would not help.
@@ -328,18 +343,21 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       return true;
     },
 
-    async stop() {
+    async stop(opts) {
       if (!running && client === null) return;
       running = false;
       setLiveRobot(null);
       unfollow();
       const activeClient = client;
       client = null;
-      if (!activeClient) return;
+      if (!activeClient || opts?.keepRobotApp) return;
       try {
-        await activeClient.stopRunningApp();
+        // Only ever stop our own app: after a refused start ("busy with X")
+        // the robot runs an app the user launched from the Apps tab, and
+        // leaving the Talk tab must not kill it.
+        await activeClient.stopConvApp();
       } catch (err) {
-        // `internal_error` here means nothing was running; either way the
+        // `not_running` here means nothing was running; either way the
         // robot is free, which is all the caller needs.
         console.debug('[robot-conversation] apps.stop:', err);
       }

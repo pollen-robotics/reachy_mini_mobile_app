@@ -13,6 +13,8 @@ const COMMANDS: &[&str] = &[
     "unsubscribe",
     "scanning_state",
     "check_permissions",
+    "remove_bond",
+    "open_bluetooth_settings",
     "list_services",
     "get_adapter_state",
     "mtu",

@@ -22,6 +22,12 @@
         { "url": "https://hf.co/*" },
         { "url": "https://*.hf.space/*" },
         { "url": "https://*.huggingface.co/*" },
+        { "url": "https://pollen-robotics.com/*" },
+        { "url": "https://www.pollen-robotics.com/*" },
+        { "url": "https://discord.gg/*" },
+        { "url": "https://github.com/*" },
+        { "url": "mailto:*" },
+        { "url": "app-settings:*" },
         { "url": "http://192.168.*:8000/*" },
         { "url": "http://10.*:8000/*" },
         { "url": "http://172.*:8000/*" }

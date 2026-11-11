@@ -81,7 +81,7 @@
  *                       gated on `enabled` so we don't subscribe
  *                       while the engine hasn't reached `ready`.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
@@ -92,9 +92,15 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
 import { useDaemonState } from '@/features/daemon-state';
 import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
+import type { TelemetryStatus } from '@/features/robot-session/sdk-types';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
+import {
+  formatConnectionJournal,
+  useConnectionJournal,
+} from '@/features/robot-session/connection-journal';
 import { DaemonLogConsole } from '@/ui/widgets/daemon-logs';
 import { RobotPanel } from '@/ui/widgets/robot-panel';
+import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import Section from '@/ui/design/Section';
 import { FONT_WEIGHT, LAYOUT, STATUS, TYPO } from '@/ui/design/tokens';
 
@@ -172,7 +178,7 @@ interface RobotInfoPanelProps {
    * `Pick` so the dependency surface is explicit at the call site
    * and the panel can be unit-tested with a fake handle.
    */
-  session: Pick<RobotSessionHandle, 'subscribeLogs' | 'webrtcTransport'>;
+  session: Pick<RobotSessionHandle, 'subscribeLogs' | 'webrtcTransport' | 'getRobot'>;
   /**
    * Becomes `true` once the engine has reached `ready` for the
    * first time. Gates the daemon log subscription so we don't
@@ -192,6 +198,20 @@ export default function RobotInfoPanel({
 }: RobotInfoPanelProps) {
   const { daemonVersion } = useDaemonState();
   const versionLabel = daemonVersion ? `v${daemonVersion}` : '—';
+
+  // Recent connection incidents, persisted across reloads so the cause
+  // of a drop can still be copied into a bug report after the fact.
+  const journal = useConnectionJournal();
+  const lastIncident = journal.at(-1);
+  const incidentsLabel = lastIncident
+    ? `${journal.length} · last ${new Date(lastIncident.at).toLocaleTimeString()} ${lastIncident.kind}`
+    : 'None recorded';
+  const incidentsCopyText = lastIncident
+    ? formatConnectionJournal(journal, [
+        `App v${__APP_VERSION__}`,
+        `Daemon ${versionLabel}`,
+      ])
+    : undefined;
   const fullHardwareId = hardwareId ?? fallbackId ?? null;
 
   // Daemon log buffer. Lives in the panel host so the copy button
@@ -215,6 +235,49 @@ export default function RobotInfoPanel({
    * running across the swap so the buffer is preserved.
    */
   const [logsFullscreen, setLogsFullscreen] = useState(false);
+
+  // Robot-wide telemetry choice. `null` hides the row: not read yet, or a
+  // daemon / SDK without the `get_telemetry` command.
+  const { getRobot } = session;
+  const [telemetry, setTelemetry] = useState<TelemetryStatus | null>(null);
+  const [telemetryBusy, setTelemetryBusy] = useState(false);
+  useEffect(() => {
+    if (!isLive) return;
+    let cancelled = false;
+    const read = () => Promise.resolve(getRobot()?.getTelemetry?.() ?? null);
+    void (async () => {
+      let status = await read();
+      // The data channel may not be open yet right after `isLive`: retry once.
+      if (status === null && !cancelled) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        if (!cancelled) status = await read();
+      }
+      if (!cancelled) setTelemetry(status);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [getRobot, isLive]);
+
+  const handleTelemetryChange = useCallback(
+    async (enabled: boolean) => {
+      const robot = getRobot();
+      if (!robot?.setTelemetry) return;
+      // One write at a time: replies are matched by command name, so a second
+      // tap in flight could take the first reply and show the wrong value.
+      setTelemetryBusy(true);
+      setTelemetry(prev => prev && { ...prev, enabled });
+      let status: TelemetryStatus | null = null;
+      try {
+        status = await robot.setTelemetry(enabled);
+      } finally {
+        // Failed write: put the switch back where the robot still is.
+        setTelemetry(prev => status ?? (prev && { ...prev, enabled: !enabled }));
+        setTelemetryBusy(false);
+      }
+    },
+    [getRobot],
+  );
 
   const handleCopyLogs = useCallback(async () => {
     const text = formatEntriesForCopy(logs.entries);
@@ -536,6 +599,17 @@ export default function RobotInfoPanel({
               />
             )}
             {remoteIp && <MetadataRow label="Remote IP" value={remoteIp} mono copyable />}
+            <MetadataRow
+              label="Incidents"
+              info={
+                'Recent drops, reconnects and recoveries (kept across ' +
+                'app restarts). Copy them into a bug report when the ' +
+                'connection misbehaves.'
+              }
+              value={incidentsLabel}
+              copyable={Boolean(incidentsCopyText)}
+              copyText={incidentsCopyText}
+            />
           </Section>
           {/* Software section. Both version numbers (daemon firmware
             + this mobile app) are surfaced together on ONE row,
@@ -569,6 +643,28 @@ export default function RobotInfoPanel({
               <VersionCell label="App" value={`v${__APP_VERSION__}`} />
             </Stack>
           </Section>
+          {telemetry && (
+            <Section label="Privacy">
+              <MetadataRow
+                label="Share anonymous usage data"
+                info={
+                  telemetry.disabled_by_env
+                    ? 'Turned off by an environment variable on the robot.'
+                    : 'Helps Pollen see which versions and apps are used and ' +
+                      'where things break. Never includes your account, ' +
+                      'network, logs, camera or audio.'
+                }
+                value={
+                  <OutlinedSwitch
+                    checked={telemetry.enabled && !telemetry.disabled_by_env}
+                    onChange={(_, checked) => void handleTelemetryChange(checked)}
+                    disabled={telemetryBusy || telemetry.disabled_by_env}
+                    slotProps={{ input: { 'aria-label': 'Share anonymous usage data' } }}
+                  />
+                }
+              />
+            </Section>
+          )}
           {/* Account section. Reassurance about which HF account is
             signed in (and what the support team will see attached to
             a bug report). The session-phase row that used to sit here
@@ -742,6 +838,7 @@ function MetadataRow({
   value,
   mono = false,
   copyable = false,
+  copyText,
   info,
 }: {
   label: string;
@@ -750,6 +847,9 @@ function MetadataRow({
   mono?: boolean;
   /** Render a trailing copy button. Only works for string values. */
   copyable?: boolean;
+  /** What the copy button puts on the clipboard, when it should differ
+   *  from the displayed value (e.g. a summary row copying full detail). */
+  copyText?: string;
   /**
    * When set, render a small `ⓘ` icon next to the label that
    * surfaces this string on hover (desktop) / long-press
@@ -759,7 +859,7 @@ function MetadataRow({
    */
   info?: string;
 }) {
-  const stringValue = typeof value === 'string' ? value : null;
+  const stringValue = copyText ?? (typeof value === 'string' ? value : null);
 
   const handleCopy = useCallback(async () => {
     if (!stringValue) return;

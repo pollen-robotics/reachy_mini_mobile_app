@@ -589,6 +589,10 @@ export function useRobotSession({
       return;
     }
     setPhaseHint('tearing-down');
+    // Synchronously, before queueing: an in-flight recovery attempt holds
+    // the lifecycle queue for its whole dial, and leaving must not wait
+    // behind it.
+    handle.cancelRecovery();
     try {
       await chainLifecycle(async () => {
         await handle.unmount();
