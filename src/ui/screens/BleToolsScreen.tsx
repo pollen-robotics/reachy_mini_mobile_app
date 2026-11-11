@@ -10,7 +10,7 @@
  *                              ├─ logs
  *                              ├─ update: check ─┬─ up to date
  *                              │                 └─ available → updating → done / failed
- *                              ├─ change Wi-Fi: scan → pick → joining → joined / failed
+ *                              ├─ change Wi-Fi: status → pick (+ scan on request) → joining → joined / failed
  *                              └─ recovery script: confirm → running → result / failed
  *
  * `skipIntro` (robot settings → "Change Wi-Fi network") starts on the scan:
@@ -111,7 +111,7 @@ import {
   WifiJoinedView,
   WifiJoiningView,
   WifiPickView,
-  WifiScanningView,
+  WifiLoadingView,
 } from './ble-tools/WifiViews';
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
@@ -144,7 +144,7 @@ type Step =
   | 'updating'
   | 'done'
   | 'failed'
-  | 'wifi-scanning'
+  | 'wifi-loading'
   | 'wifi-pick'
   | 'wifi-joining'
   | 'wifi-joined'
@@ -159,7 +159,7 @@ const LINKED_STEPS = new Set<Step>([
   'checking',
   'available',
   'uptodate',
-  'wifi-scanning',
+  'wifi-loading',
   'wifi-pick',
   'wifi-joining',
   'wifi-failed',
@@ -167,7 +167,8 @@ const LINKED_STEPS = new Set<Step>([
 
 /** What the Wi-Fi steps know about the robot's networks. */
 interface WifiState {
-  networks: string[];
+  /** Nearby networks from the last on-request scan (null until one ran). */
+  networks: string[] | null;
   /** Network the robot is on right now (null in hotspot / offline). */
   current: string | null;
   /** Networks saved on the robot. */
@@ -286,10 +287,11 @@ export default function BleToolsScreen({
   });
   const [progress, setProgress] = useState<UpdateInfo | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [wifi, setWifi] = useState<WifiState>({ networks: [], current: null, saved: [], previous: null });
+  const [wifi, setWifi] = useState<WifiState>({ networks: null, current: null, saved: [], previous: null });
   const [wifiTarget, setWifiTarget] = useState<string | null>(null);
   const [wifiJoined, setWifiJoined] = useState<{ ssid: string; ip: string } | null>(null);
   const [wifiError, setWifiError] = useState<string>('');
+  const [wifiSearching, setWifiSearching] = useState(false);
 
   const pinRef = useRef('');
   const linkUpRef = useRef(false);
@@ -487,13 +489,14 @@ export default function BleToolsScreen({
     setStep('failed');
   }, []);
 
-  /** Read where the robot is + what it can see. `remember` records the
-   *  current network as the way back (only on the first visit). */
-  const scanNetworks = useCallback(
+  /** Read where the robot is and which networks it has saved: no radio
+   *  scan. `remember` records the current network as the way back (first
+   *  visit only). */
+  const readWifi = useCallback(
     async (remember: boolean) => {
       const gen = ++wifiGenRef.current;
       const stale = wifiIsStale(gen);
-      setStep('wifi-scanning');
+      setStep('wifi-loading');
       try {
         await withBle(async () => {
           if (!(await ensureAuthed())) return;
@@ -503,11 +506,9 @@ export default function BleToolsScreen({
           let status = await wifiStatus().catch(() => null);
           if (!status?.mode && !status?.connected) status = await wifiStatus().catch(() => null);
           if (stale()) return;
-          const networks = await scanWifiResilient(stale);
-          if (stale()) return;
           const current = stationSsid(status);
           setWifi(w => ({
-            networks,
+            ...w,
             current,
             saved: status?.known ?? [],
             previous: remember ? current : w.previous,
@@ -521,10 +522,30 @@ export default function BleToolsScreen({
     [ensureAuthed, failWifi, withBle]
   );
 
+  /** `WIFI_SCAN`, only when the user asks for it: it ties up the robot's
+   *  Wi-Fi chip for ~10 s. Runs from the pick view, which stays up. A join
+   *  started meanwhile bumps the generation and drops the result. */
+  const findNetworks = useCallback(async () => {
+    const stale = wifiIsStale(wifiGenRef.current);
+    setWifiSearching(true);
+    try {
+      const networks = await withBle(async () => {
+        if (!(await ensureAuthed())) return null;
+        return scanWifiResilient(stale);
+      });
+      if (!stale() && networks) setWifi(w => ({ ...w, networks }));
+    } catch (e) {
+      if (!stale()) failWifi(e);
+    } finally {
+      setWifiSearching(false);
+    }
+  }, [ensureAuthed, failWifi, withBle]);
+
   const handleOpenWifi = useCallback(() => {
     setWifiJoined(null);
-    void scanNetworks(true);
-  }, [scanNetworks]);
+    setWifi(w => ({ ...w, networks: null }));
+    void readWifi(true);
+  }, [readWifi]);
 
   const handleJoin = useCallback(
     async (password: string, ssid: string) => {
@@ -902,7 +923,7 @@ export default function BleToolsScreen({
       case 'checking':
       case 'available':
       case 'uptodate':
-      case 'wifi-scanning':
+      case 'wifi-loading':
       case 'wifi-pick':
       case 'wifi-joined':
       case 'wifi-failed':
@@ -990,14 +1011,15 @@ export default function BleToolsScreen({
               onScript={setPendingScript}
             />
           )}
-          {step === 'wifi-scanning' && <WifiScanningView />}
+          {step === 'wifi-loading' && <WifiLoadingView />}
           {step === 'wifi-pick' && (
             <WifiPickView
               networks={wifi.networks}
               current={wifi.current}
               saved={wifi.saved}
               onConnect={(password, ssid) => void handleJoin(password, ssid)}
-              onRescan={() => void scanNetworks(false)}
+              searching={wifiSearching}
+              onFind={() => void findNetworks()}
             />
           )}
           {step === 'wifi-joining' && <WifiJoiningView ssid={wifiTarget ?? ''} />}
@@ -1010,7 +1032,7 @@ export default function BleToolsScreen({
               message={wifiError}
               // Only offered when it's a different network from the one that failed.
               previous={wifi.previous && wifi.previous !== wifiTarget ? wifi.previous : null}
-              onPickAgain={() => void scanNetworks(false)}
+              onPickAgain={() => void readWifi(false)}
               onRejoinPrevious={() => wifi.previous && void handleJoin('', wifi.previous)}
               onMenu={backToMenu}
             />

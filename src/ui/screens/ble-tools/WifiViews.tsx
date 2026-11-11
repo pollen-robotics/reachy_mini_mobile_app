@@ -1,27 +1,31 @@
 /**
  * "Change Wi-Fi network" steps of the Bluetooth tools hub.
  *
- *   menu → wifi-scanning → wifi-pick → wifi-joining ─┬─ wifi-joined
- *                                                    └─ wifi-failed ─┬─ pick again
- *                                                                    └─ rejoin the previous network
+ *   menu → wifi-loading → wifi-pick → wifi-joining ─┬─ wifi-joined
+ *                                                   └─ wifi-failed ─┬─ pick again
+ *                                                                   └─ rejoin the previous network
+ *
+ * The pick view starts from what the robot already knows (current + saved
+ * networks). Nearby networks are only scanned when the user asks: a scan
+ * ties up the robot's Wi-Fi chip for ~10 s.
  *
  * Presentational only: `BleToolsScreen` owns the BLE sequence (PIN, KEYEX,
  * scan, `joinNetwork`) and hands us its state.
  */
 import { Box, CircularProgress, Stack, Typography } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import WifiOffRoundedIcon from '@mui/icons-material/WifiOffRounded';
 
 import { STATUS, TYPO } from '@/ui/design/tokens';
 import { WifiNetworkList } from '@/ui/widgets/wifi-picker';
 import { Headline, IconHero, PrimaryButton, TextButton } from './parts';
 
-export function WifiScanningView() {
+export function WifiLoadingView() {
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
       <CircularProgress size={40} sx={{ color: 'primary.main' }} />
-      <Headline title="Finding networks" caption="Your Reachy is scanning nearby Wi-Fi (~10 s)…" />
+      <Headline title="Checking Wi-Fi" caption="Reading your Reachy's Wi-Fi settings…" />
     </Stack>
   );
 }
@@ -30,19 +34,22 @@ export function WifiPickView({
   networks,
   current,
   saved,
+  searching,
   onConnect,
-  onRescan,
+  onFind,
 }: {
-  networks: string[];
+  /** Nearby networks from the last scan (null until the user asked for one). */
+  networks: string[] | null;
   /** Network the robot is on right now (null in hotspot / offline). */
   current: string | null;
   saved: string[];
+  searching: boolean;
   onConnect: (password: string, ssid: string) => void;
-  onRescan: () => void;
+  onFind: () => void;
 }) {
-  // The robot's own network may not show up in its scan (it's associated,
-  // not advertising to itself); keep it on top so the user sees where it is.
-  const list = current && !networks.includes(current) ? [current, ...networks] : networks;
+  // What the robot knows first (its network, then its saved ones), then
+  // whatever a scan found. The robot's own network may not show in a scan.
+  const list = Array.from(new Set([...(current ? [current] : []), ...saved, ...(networks ?? [])]));
   return (
     <Stack spacing={2.5} sx={{ alignItems: 'center', width: '100%' }}>
       <Headline
@@ -53,16 +60,24 @@ export function WifiPickView({
             : 'Your Reachy is not on Wi-Fi. Pick the network it should join.'
         }
       />
-      {list.length > 0 ? (
+      {list.length > 0 && (
         <WifiNetworkList networks={list} currentSsid={current} saved={saved} onConnect={onConnect} />
-      ) : (
+      )}
+      {networks?.length === 0 && !searching && (
         <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
-          No networks found nearby. Move the robot closer to your router and rescan.
+          No other networks found nearby. Move the robot closer to your router and search again.
         </Typography>
       )}
-      <TextButton onClick={onRescan} startIcon={<RefreshIcon />}>
-        Rescan
-      </TextButton>
+      {searching ? (
+        <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', color: 'text.secondary', py: 0.75 }}>
+          <CircularProgress size={16} sx={{ color: 'text.secondary' }} />
+          <Typography sx={{ fontSize: TYPO.sm }}>Looking for networks nearby (~10 s)…</Typography>
+        </Stack>
+      ) : (
+        <TextButton onClick={onFind} startIcon={<SearchRoundedIcon />}>
+          {networks ? 'Search again' : 'Find other networks'}
+        </TextButton>
+      )}
     </Stack>
   );
 }
