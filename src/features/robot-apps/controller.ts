@@ -63,7 +63,7 @@ export function describeRobotAppsError(err: unknown): string {
     case 'app_running':
       return 'Stop the app before changing it.';
     case 'startup_app':
-      return 'This app launches when Reachy wakes up. Unset it as startup app from the desktop app first.';
+      return 'This app launches when Reachy wakes up. Turn that off first: in Settings for the conversation app, from the desktop app for any other.';
     case 'not_found':
       return 'This app could not be found on Hugging Face.';
     case 'already_running':
