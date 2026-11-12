@@ -25,6 +25,8 @@ export interface ConvAppUpdateView {
 }
 
 const POLL_MS = 3000;
+/** Consecutive unanswered polls tolerated mid-update: the robot is busy installing. */
+const MAX_FAILED_READS = 5;
 const UNKNOWN: ConvAppUpdateView = { state: 'unknown', version: null };
 
 /** Read the daemon's view once. Any error (old daemon, offline) is `unknown`. */
@@ -41,15 +43,23 @@ export async function readUpdateState(client: ConvAppClient): Promise<ConvAppUpd
   }
 }
 
-/** Start an update, then poll until the daemon reports it finished. */
+/**
+ * Start an update, then poll until the daemon reports it finished.
+ *
+ * `beforeUpdate` runs first: the update stops the app on the robot, so a live
+ * conversation has to be stopped through the engine, or the Talk tab keeps
+ * following a conversation that is gone.
+ */
 export async function runUpdate(
   client: ConvAppClient,
   current: ConvAppUpdateView,
   onView: (view: ConvAppUpdateView) => void,
-  sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms))
+  sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms)),
+  beforeUpdate?: () => Promise<void>
 ): Promise<ConvAppUpdateView> {
   onView({ ...current, state: 'updating' });
   try {
+    await beforeUpdate?.();
     await client.updateConvApp();
   } catch {
     const failed = { ...current, state: 'failed' as const };
@@ -57,9 +67,18 @@ export async function runUpdate(
     return failed;
   }
   let view: ConvAppUpdateView = { ...current, state: 'updating' };
+  let failedReads = 0;
   while (view.state === 'updating') {
     await sleep(POLL_MS);
     const next = await readUpdateState(client);
+    if (next.state === 'unknown') {
+      // An unanswered poll is not the end of the update: keep the spinner
+      // and ask again, a few times, before giving up on knowing.
+      failedReads += 1;
+      if (failedReads <= MAX_FAILED_READS) continue;
+    } else {
+      failedReads = 0;
+    }
     // The daemon leaves the version out mid-update; keep showing the old one.
     view = { ...next, version: next.version ?? current.version };
   }
@@ -67,7 +86,15 @@ export async function runUpdate(
   return view;
 }
 
-export function useConvAppUpdate(getRobot: () => ReachyMiniInstance | null, enabled: boolean) {
+/**
+ * `stopConversation`, when given, is awaited before an update starts; pass it
+ * while a conversation is live.
+ */
+export function useConvAppUpdate(
+  getRobot: () => ReachyMiniInstance | null,
+  enabled: boolean,
+  stopConversation?: () => Promise<void>
+) {
   const [view, setView] = useState<ConvAppUpdateView>(UNKNOWN);
 
   useEffect(() => {
@@ -84,8 +111,9 @@ export function useConvAppUpdate(getRobot: () => ReachyMiniInstance | null, enab
 
   const update = useCallback(() => {
     const robot = getRobot();
-    if (robot) void runUpdate(createConvAppClient(robot), view, setView);
-  }, [getRobot, view]);
+    if (robot)
+      void runUpdate(createConvAppClient(robot), view, setView, undefined, stopConversation);
+  }, [getRobot, view, stopConversation]);
 
   return { ...view, update };
 }

@@ -47,6 +47,7 @@ describe('readUpdateState', () => {
 
 describe('runUpdate', () => {
   const current = { state: 'available' as const, version: '1.0.1' };
+  const noSleep = async () => {};
 
   it('polls until the background update ends, keeping the old version meanwhile', async () => {
     const client = fakeClient([
@@ -79,5 +80,57 @@ describe('runUpdate', () => {
         )
       ).state
     ).toBe('failed');
+  });
+
+  it('keeps polling through an unanswered read: the robot is busy installing', async () => {
+    const client = fakeClient([
+      { ...base, version: null, updating: true },
+      new Error('timed out'),
+      new Error('timed out'),
+      { ...base, version: '1.1.0' },
+    ]);
+    const views: string[] = [];
+
+    const done = await runUpdate(
+      client,
+      { state: 'available', version: '1.0.1' },
+      v => views.push(v.state),
+      noSleep
+    );
+
+    expect(done).toEqual({ state: 'up-to-date', version: '1.1.0' });
+    expect(views).toEqual(['updating', 'up-to-date']);
+  });
+
+  it('gives up once the robot stops answering altogether', async () => {
+    const client = fakeClient([]);
+
+    const done = await runUpdate(
+      client,
+      { state: 'available', version: '1.0.1' },
+      () => {},
+      noSleep
+    );
+
+    expect(done).toEqual({ state: 'unknown', version: '1.0.1' });
+    expect(client.checkConvAppUpdate).toHaveBeenCalledTimes(6);
+  });
+
+  it('stops the live conversation before asking the robot to update', async () => {
+    const client = fakeClient([{ ...base, version: '1.1.0' }]);
+    const stopConversation = vi.fn().mockResolvedValue(undefined);
+
+    await runUpdate(
+      client,
+      { state: 'available', version: '1.0.1' },
+      () => {},
+      noSleep,
+      stopConversation
+    );
+
+    expect(stopConversation).toHaveBeenCalledOnce();
+    expect(stopConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      client.updateConvApp.mock.invocationCallOrder[0]
+    );
   });
 });

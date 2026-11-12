@@ -180,7 +180,10 @@ interface RobotInfoPanelProps {
    * `Pick` so the dependency surface is explicit at the call site
    * and the panel can be unit-tested with a fake handle.
    */
-  session: Pick<RobotSessionHandle, 'subscribeLogs' | 'webrtcTransport' | 'getRobot'>;
+  session: Pick<
+    RobotSessionHandle,
+    'subscribeLogs' | 'webrtcTransport' | 'getRobot' | 'conversationState' | 'stopConversation'
+  >;
   /**
    * Becomes `true` once the engine has reached `ready` for the
    * first time. Gates the daemon log subscription so we don't
@@ -214,7 +217,13 @@ export default function RobotInfoPanel({
         `Daemon ${versionLabel}`,
       ])
     : undefined;
-  const convApp = useConvAppUpdate(session.getRobot, isLive);
+  // The update stops the app on the robot: a live conversation is stopped
+  // through the engine first, so the Talk tab does not keep following it.
+  const convApp = useConvAppUpdate(
+    session.getRobot,
+    isLive,
+    session.conversationState === 'idle' ? undefined : session.stopConversation
+  );
   const fullHardwareId = hardwareId ?? fallbackId ?? null;
 
   // Daemon log buffer. Lives in the panel host so the copy button
