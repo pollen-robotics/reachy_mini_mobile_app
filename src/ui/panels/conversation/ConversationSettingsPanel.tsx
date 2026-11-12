@@ -33,6 +33,7 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import WifiRoundedIcon from '@mui/icons-material/WifiRounded';
 
 import {
   LANGUAGES,
@@ -67,6 +68,10 @@ export interface ConversationSettingsPanelProps {
    *  panel for `<RobotInfoPanel>`). Surfaced as a tappable row at the
    *  end of the panel. */
   onOpenAbout: () => void;
+  /** Leave the session for the Bluetooth tools' "Change Wi-Fi network"
+   *  flow (the daemon can't switch networks over the live session; BLE
+   *  also survives the switch, so the user sees it through). */
+  onChangeWifi: () => void;
   /** Display name of the connected robot, used in the sign-out confirm
    *  copy ("Sign out <name>?") and to seed the rename field. */
   robotName: string;
@@ -98,6 +103,7 @@ export interface ConversationSettingsPanelProps {
 export function ConversationSettingsPanel({
   audioReady,
   onOpenAbout,
+  onChangeWifi,
   conversationLive,
   robotName,
   renameRobot,
@@ -116,6 +122,7 @@ export function ConversationSettingsPanel({
   const daemon = useDaemonState();
 
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingWifi, setConfirmingWifi] = useState(false);
 
   // Rename flow. The field is seeded with the current display name and
   // auto-saves - there is no Save button. Editing schedules a debounced
@@ -512,6 +519,77 @@ export function ConversationSettingsPanel({
                 )}
               </Stack>
             </Box>
+          </Section>
+
+          {/* WI-FI - robot-level. Switching networks goes over Bluetooth, so
+              it ends this session: an inline confirm says so (and what the
+              user needs) before leaving. */}
+          <Section label="Wi-Fi" blurb="Move Reachy to another network, or update its Wi-Fi password.">
+            <Card>
+              <Row
+                as="button"
+                onClick={() => setConfirmingWifi(c => !c)}
+                aria-label="Change Wi-Fi network"
+                aria-pressed={confirmingWifi}
+              >
+                <WifiRoundedIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary', flexShrink: 0 }} />
+                <Stack sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
+                    Change Wi-Fi network
+                  </Typography>
+                  <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
+                    Over Bluetooth, next to the robot.
+                  </Typography>
+                </Stack>
+                <ChevronRightRoundedIcon
+                  sx={{
+                    fontSize: TYPO.xl,
+                    color: 'primary.main',
+                    flexShrink: 0,
+                    transform: confirmingWifi ? 'rotate(90deg)' : 'none',
+                    transition: 'transform 0.2s ease',
+                  }}
+                />
+              </Row>
+              {confirmingWifi && (
+                <Stack spacing={1.5} sx={{ px: 2, pb: 2, pt: 0.5 }}>
+                  <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.4 }}>
+                    This ends the session and connects to {robotName} over Bluetooth. Stay close to it
+                    and have its setup code ready (the 5 characters under the robot).
+                  </Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={() => setConfirmingWifi(false)}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.text.secondary),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${theme.palette.divider}`,
+                      }}
+                    >
+                      Cancel
+                    </Box>
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={onChangeWifi}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.primary.main),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${alpha(theme.palette.primary.main, 0.45)}`,
+                      }}
+                    >
+                      Continue
+                    </Box>
+                  </Stack>
+                </Stack>
+              )}
+            </Card>
           </Section>
 
           {/* ABOUT & DIAGNOSTICS - robot-level. Drills into the old info

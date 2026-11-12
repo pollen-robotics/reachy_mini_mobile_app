@@ -5,8 +5,10 @@
  *
  *   `reachyMini.conversationLanguage.activeId` (string)
  *       The ISO 639-1 code of the user's preferred conversation
- *       language. Read on every conversation (re)connect so the
- *       system-prompt fragment can nudge the model toward it.
+ *       language, or `auto`. Read on every conversation (re)connect
+ *       and synced to the robot's conversation app. Only written when
+ *       the user picks one, so an install that never did follows the
+ *       default.
  *
  * Failures (private mode, quota, missing localStorage in test
  * envs, …) are swallowed with a single warn line; the in-memory

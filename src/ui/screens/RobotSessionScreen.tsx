@@ -1,7 +1,9 @@
 /**
  * Robot session screen.
  *
- * Two-tab shell hosted on a single connected robot:
+ * Three-tab shell hosted on a single connected robot
+ * (Conversation | Apps | Telepresence; the telepresence tab takes the
+ * whole screen, see `<TelepresencePanel>`):
  *
  *   ┌──────────────────────────────────────────────┐
  *   │ Header (name + chips + [ⓘ info] + [⏻ off])   │
@@ -75,6 +77,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CloseIcon from '@mui/icons-material/Close';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 
 import AppsIcon from '@/ui/design/icons/AppsIcon';
 import ChatBubbleIcon from '@/ui/design/icons/ChatBubbleIcon';
@@ -89,12 +92,16 @@ import {
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { SESSION_TIMINGS } from '@/features/robot-session/timings';
+import { recordConnectionEvent } from '@/features/robot-session/connection-journal';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
 import { useChangePersonaAnimation } from '@/features/personalities/useChangePersonaAnimation';
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
+import { useRobotApps } from '@/features/robot-apps/useRobotApps';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
+import TelepresencePanel from '@/ui/panels/telepresence/TelepresencePanel';
 import ConnectingView from './session/ConnectingView';
 import DaemonUpdateGate from './session/DaemonUpdateGate';
 import FirstWakeUpWizard from './session/first-wake-up';
@@ -121,15 +128,18 @@ interface RobotSessionScreenProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  /** Leave the session for the Bluetooth "Change Wi-Fi network" flow. */
+  onChangeWifi: () => void;
 }
 
-type Tab = 'conv' | 'apps';
+type Tab = 'conv' | 'apps' | 'tele';
 
 export default function RobotSessionScreen({
   target,
   token,
   username,
   onBack,
+  onChangeWifi,
 }: RobotSessionScreenProps) {
   const robotId = extractRobotId(target.robot);
   const robotName = extractRobotName(target.robot) ?? robotId ?? 'Reachy Mini';
@@ -152,6 +162,7 @@ export default function RobotSessionScreen({
       token={token}
       username={username}
       onBack={onBack}
+      onChangeWifi={onChangeWifi}
     />
   );
 }
@@ -164,6 +175,7 @@ interface ConnectedSessionProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  onChangeWifi: () => void;
 }
 
 /**
@@ -212,6 +224,7 @@ function ConnectedSession({
   token,
   username,
   onBack,
+  onChangeWifi,
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
 
@@ -396,6 +409,11 @@ function ConnectedSession({
   });
 
   const [tab, setTab] = useState<Tab>('conv');
+  // Tab to return to when the immersive telepresence view is exited.
+  const lastNonTeleTabRef = useRef<Exclude<Tab, 'tele'>>('conv');
+  useEffect(() => {
+    if (tab !== 'tele') lastNonTeleTabRef.current = tab;
+  }, [tab]);
   // True while the conversation tab has a persona authoring form open. The
   // bottom tab bar is pulled for the duration - see the `BottomNavigation`
   // below for why.
@@ -454,6 +472,14 @@ function ConnectedSession({
    * release.
    */
   const [openedApp, setOpenedApp] = useState<AppEntry | null>(null);
+  // Python apps on the robot. Polled only while the Apps tab is on screen
+  // over a live session; an iframe app holds the session otherwise.
+  const robotApps = useRobotApps({
+    robotId,
+    getRobot: session.getRobot,
+    active: tab === 'apps' && session.phase === 'live' && openedApp === null,
+    online: session.phase === 'live' && openedApp === null,
+  });
   // Robot Settings overlay, toggled from the topbar cog. This is now the
   // single topbar sheet: it leads with robot-level Audio + the
   // conversation options, and drills into "About & diagnostics" (the old
@@ -483,23 +509,32 @@ function ConnectedSession({
   // screen renders the leaving view in the meantime.
   const [leaving, setLeaving] = useState(false);
   const leavingTriggeredRef = useRef(false);
+  /** Where to go once torn down: the robot list, or the Bluetooth Wi-Fi flow. */
+  const leaveToRef = useRef<'back' | 'wifi'>('back');
   useEffect(() => {
     if (!leaving) return;
     let cancelled = false;
     void (async () => {
       await session.tearDown();
       if (cancelled) return;
-      onBack();
+      if (leaveToRef.current === 'wifi') onChangeWifi();
+      else onBack();
     })();
     return () => {
       cancelled = true;
     };
-  }, [leaving, onBack, session]);
+  }, [leaving, onBack, onChangeWifi, session]);
 
   const handleLeave = (): void => {
     if (leavingTriggeredRef.current) return;
     leavingTriggeredRef.current = true;
     setLeaving(true);
+  };
+
+  const handleLeaveToChangeWifi = (): void => {
+    if (leavingTriggeredRef.current) return;
+    leaveToRef.current = 'wifi';
+    handleLeave();
   };
 
   // Handoff lifecycle for the apps iframe.
@@ -586,35 +621,87 @@ function ConnectedSession({
   // connection loss), where a full-screen "Reconnecting" reads as a
   // failure. During reacquire the normal UI stays up and the identity
   // chip's pulsing "Reconnecting" badge is the only indicator.
-  const showRecoveringOverlay = !leaving && session.phase === 'recovering';
-
-  // One-shot in-place recovery. When a session that had already
-  // reached ready dies (SDK re-dial gave up, data-channel fatal,
-  // failed reacquire), retry the bring-up under the compact overlay
+  // In-place recovery loop. When a session that had already reached
+  // ready dies (SDK re-dial gave up, data-channel fatal, failed
+  // reacquire), keep retrying the bring-up under the compact overlay
   // INSTEAD of dumping the user straight onto the fatal error view -
   // whose only exit remounts everything and replays the full
-  // connecting pipeline. One attempt per incident: a second
-  // consecutive fatal falls through to `SessionErrorView` as before.
-  // The latch re-arms once the session is healthy again, so the NEXT
-  // incident gets its own automatic attempt.
-  const autoRecoverTriedRef = useRef(false);
+  // connecting pipeline.
+  //
+  // A single attempt was not enough: the usual killers (home Wi-Fi
+  // dropping robot and phone together for ~30 s, a daemon crash +
+  // systemd restart) keep the robot unreachable for longer than one
+  // attempt, and central still lists the robot's OLD peer id until the
+  // robot's relay notices (up to ~60 s) and re-registers. Each
+  // `recover()` re-resolves the dial target, so retrying every few
+  // seconds lands as soon as the robot is back. Past the window the
+  // error view takes over; the incident resets once we're live again.
+  const [autoRecovering, setAutoRecovering] = useState(false);
+  const recoverIncidentStartRef = useRef<number | null>(null);
+  // Set by the update gate while the robot restarts after a self-update:
+  // the loop then gets the longer reboot window. "Keep waiting" re-arms
+  // it, which restarts the incident below.
+  const [daemonRebooting, setDaemonRebooting] = useState(false);
   useEffect(() => {
-    if (session.phase === 'live') {
-      autoRecoverTriedRef.current = false;
+    if (daemonRebooting) recoverIncidentStartRef.current = null;
+  }, [daemonRebooting]);
+  // Depend on these, not on `session`: the handle is a new object on
+  // every render, which re-ran the effect and restarted the retry timer.
+  const { phase: sessionPhase, hasReachedReady, recover } = session;
+  useEffect(() => {
+    if (sessionPhase === 'live') {
+      const startedAt = recoverIncidentStartRef.current;
+      if (startedAt !== null) {
+        recordConnectionEvent(
+          'auto-recovered',
+          `after ${Math.round((Date.now() - startedAt) / 1000)} s`,
+        );
+      }
+      recoverIncidentStartRef.current = null;
+      setAutoRecovering(false);
       return;
     }
-    if (session.phase !== 'error' || leaving) return;
+    if (sessionPhase !== 'error' || leaving) return;
     // Initial bring-up failures keep the full error UX: there is no
     // "known good" state to restore, the pipeline narrative is honest.
-    if (!session.hasReachedReady) return;
+    if (!hasReachedReady) return;
     // While an iframe app owns the slot, the close-path reacquire is
     // the recovery mechanism - don't fight it from underneath.
     if (openedApp !== null) return;
-    if (autoRecoverTriedRef.current) return;
-    autoRecoverTriedRef.current = true;
-    console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
-    void session.recover();
-  }, [session, leaving, openedApp]);
+    const startedAt = recoverIncidentStartRef.current;
+    if (startedAt === null) {
+      recoverIncidentStartRef.current = Date.now();
+      setAutoRecovering(true);
+      console.log('[shell-webrtc] auto-recover: transport fatal after ready, retrying in place');
+      recordConnectionEvent('auto-recover');
+      void recover();
+      return;
+    }
+    const windowMs = daemonRebooting
+      ? SESSION_TIMINGS.rebootRecoverWindowMs
+      : SESSION_TIMINGS.autoRecoverWindowMs;
+    if (Date.now() - startedAt >= windowMs) {
+      console.log('[shell-webrtc] auto-recover: robot still unreachable, giving up');
+      recordConnectionEvent('auto-recover-gave-up');
+      setAutoRecovering(false);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      console.log('[shell-webrtc] auto-recover: retrying');
+      recordConnectionEvent(
+        'auto-recover-retry',
+        `${Math.round((Date.now() - startedAt) / 1000)} s into the incident`,
+      );
+      void recover();
+    }, SESSION_TIMINGS.autoRecoverRetryDelayMs);
+    return () => window.clearTimeout(t);
+  }, [sessionPhase, hasReachedReady, recover, leaving, openedApp, daemonRebooting]);
+
+  // The overlay also covers the pauses between two recovery attempts
+  // (the session sits on `error` then), so the error view doesn't
+  // flash up mid-loop.
+  const showRecoveringOverlay =
+    !leaving && (session.phase === 'recovering' || (autoRecovering && session.phase === 'error'));
 
   // Keep-screen-on rule. We only ask the OS to suppress the idle
   // timer while the user is engaged with the robot in a way that
@@ -650,7 +737,7 @@ function ConnectedSession({
     session.connectionState === 'selecting' ||
     session.connectionState === 'starting';
   const isAppOpen = openedApp !== null;
-  useKeepScreenOn(isConversing || isBringingUp || isAppOpen);
+  useKeepScreenOn(isConversing || isBringingUp || isAppOpen || tab === 'tele');
 
   return (
     /* `DaemonStateProvider` is the single source of truth for
@@ -907,7 +994,7 @@ function ConnectedSession({
                 flexDirection: 'column',
               }}
             >
-              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} />
+              <AppsTabView ref={appsViewRef} onOpen={setOpenedApp} robotApps={robotApps} />
             </Box>
           )}
 
@@ -1106,6 +1193,9 @@ function ConnectedSession({
               `MicIcon` - same `1.8 px` stroke weight, same
               outline-only treatment, same 24×24 viewBox. */}
           <BottomNavigationAction value="apps" label="Apps" icon={<AppsIcon />} />
+          {/* Telepresence: live camera + head joystick, native
+              counterpart of the telepresence Space (no iframe handoff). */}
+          <BottomNavigationAction value="tele" label="Telepresence" icon={<VideocamOutlinedIcon />} />
         </BottomNavigation>
 
         {/* Settings overlay. The single topbar sheet, pinned BELOW the
@@ -1164,6 +1254,10 @@ function ConnectedSession({
               <ConversationSettingsPanel
                 audioReady={session.hasReachedReady}
                 onOpenAbout={() => setSettingsView('about')}
+                onChangeWifi={() => {
+                  setSettingsOpen(false);
+                  handleLeaveToChangeWifi();
+                }}
                 conversationLive={session.conversationState !== 'idle'}
                 robotName={displayName}
                 renameRobot={handleRenameRobot}
@@ -1175,6 +1269,21 @@ function ConnectedSession({
               />
             )}
           </Box>
+        )}
+
+        {/* Telepresence tab: immersive full-screen layer (zIndex 1250)
+            covering the topbar + tab bar, exited via its own back
+            button. Mounted only while the tab is active so its motion
+            and audio loops live exactly as long as the view. */}
+        {/* Stays mounted while `leaving` (the leaving cover sits above it)
+            so it sees `allowMotion` drop and never glides the head while
+            the teardown puts the robot to sleep. */}
+        {tab === 'tele' && !isError && (
+          <TelepresencePanel
+            session={session}
+            onExit={() => handleTabChange(lastNonTeleTabRef.current)}
+            allowMotion={!leaving && !waking && wizardGate !== 'show'}
+          />
         )}
 
         {openedApp && (
@@ -1217,7 +1326,7 @@ function ConnectedSession({
             here (see `showRecoveringOverlay`). */}
         {showRecoveringOverlay && (
           <FullScreenTransition>
-            <ReconnectingView />
+            <ReconnectingView onBack={handleLeave} />
           </FullScreenTransition>
         )}
         {/* Full-screen leaving transition: covers EVERYTHING while the
@@ -1238,7 +1347,7 @@ function ConnectedSession({
             critical session-level event it is). The overlay sits
             above all other surfaces and lets the user back out via
             its primary CTA. */}
-        {isError && (
+        {isError && !autoRecovering && (
           <FullScreenTransition>
             <SessionErrorView
               message={session.errorMessage}
@@ -1268,6 +1377,7 @@ function ConnectedSession({
             session={session}
             latestVersion={latestDaemonVersion}
             onBackToRobots={handleLeave}
+            onRebootingChange={setDaemonRebooting}
           />
         )}
 

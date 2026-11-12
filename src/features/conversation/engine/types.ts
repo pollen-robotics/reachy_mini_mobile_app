@@ -331,6 +331,12 @@ export interface ConversationEngineHandle {
     robotId: string;
     robotName?: string | null;
   }) => Promise<void>;
+  /**
+   * Abort any in-flight and future `recoverSession` (the user is
+   * leaving). Synchronous, so a teardown queued behind an attempt
+   * doesn't wait out its dial.
+   */
+  cancelRecovery: () => void;
 
   // ─── Audio volume controls ────────────────────────────────────────
   //

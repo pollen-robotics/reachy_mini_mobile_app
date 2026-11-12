@@ -78,3 +78,34 @@ pub async fn check_permissions(ask_if_denied: bool) -> Result<bool> {
     #[cfg(not(target_os = "android"))]
     return Ok(true);
 }
+
+/// Forgets the phone's bond with the device at `address`, for a bond the
+/// device no longer has the keys for: every connect then fails with
+/// `GATT_INSUFFICIENT_AUTHENTICATION` until the bond is gone.
+///
+/// Returns true once the device is not bonded anymore (including when it never
+/// was). Only Android lets an app do this; elsewhere it returns false.
+///
+/// # Errors
+/// Returns an error if the call to the platform fails.
+#[allow(unused)]
+pub async fn remove_bond(address: &str) -> Result<bool> {
+    #[cfg(target_os = "android")]
+    return android::remove_bond(address).await;
+    #[cfg(not(target_os = "android"))]
+    return Ok(false);
+}
+
+/// Opens the system Bluetooth settings, where the user can forget a device.
+///
+/// Returns false where an app can't open them (anywhere but Android).
+///
+/// # Errors
+/// Returns an error if the call to the platform fails.
+#[allow(unused)]
+pub async fn open_bluetooth_settings() -> Result<bool> {
+    #[cfg(target_os = "android")]
+    return android::open_bluetooth_settings().await;
+    #[cfg(not(target_os = "android"))]
+    return Ok(false);
+}

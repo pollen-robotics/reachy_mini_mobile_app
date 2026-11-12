@@ -10,23 +10,34 @@
  */
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
-import { CONV_APP_NAME, createConvAppClient } from './client';
+import { CONV_APP_NAME, createConvAppClient, type CurrentAppStatus } from './client';
 
 const STATUS_TIMEOUT_MS = 2_000;
 
-export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promise<boolean> {
+/** The app the robot runs or is starting, or `null` (idle, timeout, error). */
+async function readActiveApp(robot: ReachyMiniInstance): Promise<CurrentAppStatus | null> {
   try {
     const app = await Promise.race([
       createConvAppClient(robot).getCurrentAppStatus(),
       new Promise<null>(resolve => setTimeout(() => resolve(null), STATUS_TIMEOUT_MS)),
     ]);
-    if (!app) return false;
-    if (app.state !== 'running' && app.state !== 'starting') return false;
-    // Our own conversation app is stopped by the teardown that precedes both
-    // guards, and it does not hold the motors the way a Hub app does.
-    return app.info?.name !== CONV_APP_NAME;
+    if (!app) return null;
+    return app.state === 'running' || app.state === 'starting' ? app : null;
   } catch (err) {
     console.warn('[conv-app] could not read who holds the robot:', err);
-    return false;
+    return null;
   }
+}
+
+export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promise<boolean> {
+  const app = await readActiveApp(robot);
+  // Our own conversation app is stopped by the teardown that precedes both
+  // guards, and it does not hold the motors the way a Hub app does.
+  return app !== null && app.info?.name !== CONV_APP_NAME;
+}
+
+/** True when the robot is running (or starting) the conversation app. */
+export async function isConvAppRunning(robot: ReachyMiniInstance): Promise<boolean> {
+  const app = await readActiveApp(robot);
+  return app?.info?.name === CONV_APP_NAME;
 }

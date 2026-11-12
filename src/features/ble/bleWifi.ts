@@ -30,6 +30,7 @@ import {
   readString,
   subscribeString,
 } from '@mnlphlp/plugin-blec';
+import { invoke } from '@tauri-apps/api/core';
 
 import { startReachyScan as startScan } from './reachyScan';
 
@@ -390,16 +391,98 @@ export async function watchConnection(
 }
 
 /**
+ * The connect failed on the phone's bond with the robot: the phone encrypts
+ * the link with keys the robot no longer has (it was reset, re-flashed, or
+ * re-paired with another phone), so the link drops before any GATT traffic.
+ * Our GATT service needs no encryption; the bond only exists because the user
+ * paired the robot from the phone's Bluetooth settings.
+ *
+ * Android reports GATT status 5 (GATT_INSUFFICIENT_AUTHENTICATION) or 137
+ * (MIC failure: the link was encrypted with mismatched keys); iOS reports the
+ * equivalent CoreBluetooth errors.
+ */
+export function isStaleBondError(e: unknown): boolean {
+  const msg = toError(e).message;
+  return (
+    /\bstatus:?\s*(5|137)\b/i.test(msg) ||
+    /insufficient_authentication|mic_failure|authentication is insufficient|peer removed pairing information/i.test(
+      msg,
+    )
+  );
+}
+
+/** A stale bond (see {@link isStaleBondError}) that dropping it did not cure:
+ *  the user has to forget the robot in the phone's Bluetooth settings. */
+export class StaleBondError extends Error {
+  constructor(cause: unknown) {
+    super(`The phone's Bluetooth pairing with the robot is stale: ${toError(cause).message}`);
+    this.name = 'StaleBondError';
+  }
+}
+
+/**
+ * Forget the phone's bond with `address`. Only Android lets an app do this;
+ * elsewhere, and when Android refuses, this resolves false. True once the
+ * phone holds no bond with the device (including when it never did).
+ */
+export async function removeBond(address: string): Promise<boolean> {
+  try {
+    return await withTimeout(invoke<boolean>('plugin:blec|remove_bond', { address }), 12000, 'remove bond');
+  } catch (e) {
+    _log(`remove bond with ${address} failed: ${toError(e).message}`);
+    return false;
+  }
+}
+
+/** Open the system Bluetooth settings. False where an app can't (anywhere but
+ *  Android) or when opening them failed. */
+export async function openBluetoothSettings(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('plugin:blec|open_bluetooth_settings');
+  } catch (e) {
+    _log(`open bluetooth settings failed: ${toError(e).message}`);
+    return false;
+  }
+}
+
+/**
  * Connect to a device and subscribe to RESPONSE notifications.
  *
- * Every step is logged and time-bounded: `blecConnect` swallows its own
- * errors (so a failed GATT connect would otherwise look like success and
- * then hang at subscribe), and a stuck CCCD write must not wedge the flow.
+ * A bond the phone holds with the robot is dropped first (`bonded`, from the
+ * scan) or after a connect that failed on it, then the connect is retried
+ * once. Throws {@link StaleBondError} when that doesn't cure it.
  */
 export async function connect(
   address: string,
   log: (s: string) => void = () => {},
+  opts: { bonded?: boolean } = {},
 ): Promise<void> {
+  if (opts.bonded) {
+    // Nothing needs the bond, and a stale one fails every connect. Best effort:
+    // a bond we fail to drop here gets a second chance below.
+    log('phone is bonded with the robot; dropping the bond before connecting');
+    await removeBond(address);
+  }
+  try {
+    await connectAndSubscribe(address, log);
+  } catch (e) {
+    if (!isStaleBondError(e)) throw e;
+    log(`connect failed on the phone's bond (${toError(e).message}); dropping it and retrying…`);
+    if (!(await removeBond(address))) throw new StaleBondError(e);
+    try {
+      await connectAndSubscribe(address, log);
+    } catch (e2) {
+      throw isStaleBondError(e2) ? new StaleBondError(e2) : e2;
+    }
+  }
+}
+
+/**
+ * Every step is logged and time-bounded: `blecConnect` swallows its own
+ * errors (so a failed GATT connect would otherwise look like success and
+ * then hang at subscribe), and a stuck CCCD write must not wedge the flow.
+ */
+async function connectAndSubscribe(address: string, log: (s: string) => void): Promise<void> {
   const connectOnce = () =>
     withTimeout(
       blecConnect(address, () => {
@@ -435,6 +518,8 @@ export async function connect(
     await link();
     await subscribe();
   } catch (e) {
+    // A fresh connection can't help a stale bond: leave it to `connect`.
+    if (isStaleBondError(e)) throw toError(e);
     // A failed connect or subscribe right after connect usually means the
     // GATT discovery was stale or partial (classic after the app was killed
     // mid-connection: iOS serves a cached service table and every later

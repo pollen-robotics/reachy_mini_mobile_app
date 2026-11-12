@@ -13,9 +13,10 @@
  * `docs/APPS_TAB_REDESIGN.md`, Section 5.1.
  *
  * The desktop app augments a richer catalog with a daemon-local
- * (installed apps) view, but mobile never installs apps - we only
- * ever iframe them at their HF Space runtime URL. So a single fetch
- * + minimal normalization is enough.
+ * (installed apps) view. JS apps are never installed - we only ever
+ * iframe them at their HF Space runtime URL - so a single fetch +
+ * minimal normalization is enough. Python apps, which the robot
+ * installs, have their own catalog in `features/robot-apps/`.
  *
  * Caching strategy: short-staleness + opportunistic revalidation.
  * ────────────────────────────────────────────

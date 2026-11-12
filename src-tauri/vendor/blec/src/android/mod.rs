@@ -80,6 +80,34 @@ pub(crate) async fn check_permissions(ask_if_denied: bool) -> std::result::Resul
     Ok(res.result)
 }
 
+/// Forgets the phone's bond with the device at `address`. True once it is not
+/// bonded anymore, false if android refused or did not finish in time.
+pub(crate) async fn remove_bond(address: &str) -> std::result::Result<bool, Error> {
+    #[derive(serde::Serialize)]
+    struct RemoveBondParams<'a> {
+        address: &'a str,
+    }
+    // The Kotlin side waits up to 5 s for the bond to go away.
+    let res: BoolResult = bridge::call(
+        "remove_bond",
+        RemoveBondParams { address },
+        Duration::from_secs(6),
+    )
+    .await?;
+    Ok(res.result)
+}
+
+/// Opens the system Bluetooth settings. False if they could not be opened.
+pub(crate) async fn open_bluetooth_settings() -> std::result::Result<bool, Error> {
+    let res: BoolResult = bridge::call(
+        "open_bluetooth_settings",
+        serde_json::Value::Null,
+        IPC_DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(res.result)
+}
+
 #[derive(Debug, Clone)]
 pub struct Adapter;
 static DEVICES: Lazy<RwLock<HashMap<PeripheralId, Peripheral>>> =

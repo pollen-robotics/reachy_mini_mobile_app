@@ -246,6 +246,19 @@ pub(crate) async fn check_permissions(
 }
 
 #[command]
+pub(crate) async fn remove_bond(_app: AppHandle<impl Runtime>, address: String) -> Result<bool> {
+    // Same bridge as `check_permissions`, so it waits for the same initialization.
+    crate::ready().await?;
+    blec::remove_bond(&address).await
+}
+
+#[command]
+pub(crate) async fn open_bluetooth_settings(_app: AppHandle<impl Runtime>) -> Result<bool> {
+    crate::ready().await?;
+    blec::open_bluetooth_settings().await
+}
+
+#[command]
 pub(crate) async fn list_services<R: Runtime>(
     _app: tauri::AppHandle<R>,
     address: String,
@@ -322,6 +335,8 @@ pub fn commands<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         unsubscribe,
         scanning_state,
         check_permissions,
+        remove_bond,
+        open_bluetooth_settings,
         list_services,
         get_adapter_state,
         mtu,

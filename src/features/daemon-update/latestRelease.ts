@@ -75,6 +75,24 @@ export function isDaemonOutdated(
   return compareSemver(c, l) < 0;
 }
 
+/**
+ * True once a daemon reporting `version` has finished updating: at or past
+ * `target`, or - when the target is unknown - past the version the update
+ * started `from`. Unparseable input returns `false`.
+ */
+export function updateLanded(
+  version: string | null | undefined,
+  from: string | null | undefined,
+  target: string | null | undefined,
+): boolean {
+  const v = parseSemver(version);
+  if (!v) return false;
+  const t = parseSemver(target);
+  if (t) return compareSemver(v, t) >= 0;
+  const f = parseSemver(from);
+  return !!f && compareSemver(v, f) > 0;
+}
+
 interface CacheEntry {
   value: string | null;
   at: number;
