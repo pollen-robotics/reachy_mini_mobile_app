@@ -53,6 +53,7 @@ function harness(robot: ReachyMiniInstance, daemonVersion: string | null = '1.10
     getLevelsTarget: () => null,
     onLevels: null,
     onToolToast: vi.fn(),
+    onEnded: vi.fn(),
   };
   return { conversation: createRobotConversation(deps), states, errors, deps };
 }
@@ -236,7 +237,9 @@ describe('start', () => {
 
 describe('following the robot', () => {
   async function live() {
-    const fake = fakeRobot({
+    const answers: Record<string, unknown> = {};
+    const fake = fakeRobot(answers);
+    Object.assign(answers, {
       'apps.status': { state: 'idle' },
       'apps.start': {},
       'apps.stop': {},
@@ -247,7 +250,7 @@ describe('following the robot', () => {
     const h = harness(fake.robot);
     await h.conversation.start();
     h.states.length = 0;
-    return { ...fake, ...h };
+    return { ...fake, ...h, answers };
   }
 
   it('maps the robot turn vocabulary onto the orb states', async () => {
@@ -295,7 +298,7 @@ describe('following the robot', () => {
 
   it('stops the app and unsubscribes on stop', async () => {
     const { conversation, calls, handlers } = await live();
-    expect(handlers.size).toBe(3);
+    expect(handlers.size).toBe(4);
 
     await conversation.stop();
 
@@ -303,5 +306,59 @@ describe('following the robot', () => {
     expect(handlers.size).toBe(0);
     await conversation.stop();
     expect(calls.filter(c => c === 'apps.stop')).toHaveLength(1);
+  });
+
+  it('ends when the robot is sent to sleep, without stopping the app itself', async () => {
+    const { conversation, calls, handlers, emit, states, deps, answers } = await live();
+    // The app says `ended` first and exits after the sleep move.
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+
+    expect(handlers.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(states).toEqual(['stopping']);
+    expect(deps.onEnded).not.toHaveBeenCalled();
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+    await conversation.stop();
+    expect(calls).not.toContain('apps.stop');
+  });
+
+  it('gives up waiting for an app that never exits', async () => {
+    const { emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('holds a new start until the ended app has exited', async () => {
+    const { conversation, calls, emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(0);
+    calls.length = 0;
+
+    const restarted = conversation.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Still waiting: it must not have followed the dying app.
+    expect(calls).not.toContain('conversation.status');
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(restarted).resolves.toBe(true);
+    expect(calls).toContain('apps.start');
+    expect(states.at(-1)).toBe('listening');
+    // The new start owns the state: the old end must not clear its flags.
+    expect(deps.onEnded).not.toHaveBeenCalled();
   });
 });

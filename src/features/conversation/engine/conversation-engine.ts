@@ -468,6 +468,14 @@ const robotConversation = createRobotConversation({
   getLevelsTarget: getAudioLevelsTarget,
   onLevels,
   onToolToast,
+  // The robot went to sleep on its own (voice or inactivity timeout): clear
+  // the flags so the next tap starts again, and forget the motor mode so the
+  // next start re-asserts `enabled` instead of deduping against a stale cache.
+  onEnded: () => {
+    convoActiveRequested.off();
+    conversationStarted.off();
+    session.recordMotorMode(null);
+  },
 });
 
 // ─── Host-driven controls ──────────────────────────────────────────────
