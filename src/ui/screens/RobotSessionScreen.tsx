@@ -90,6 +90,7 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
+import { isConvAppRunning } from '@/features/conv-app/app-slot';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { SESSION_TIMINGS } from '@/features/robot-session/timings';
@@ -280,8 +281,31 @@ function ConnectedSession({
   // flag was still unknown. Fail-open: an old daemon / closed channel
   // (`null`) skips the wizard. Dev-force / disabled short-circuit the seed
   // above, so this only runs for the real production gating.
+  //
+  // First, though: a robot that is already talking (its antennas started the
+  // conversation app with no phone involved) is neither woken nor walked
+  // through the wizard. Both command the motors the app is driving. The
+  // engine attaches to that conversation by itself (`onConnectionLive`); here
+  // we only close the gate. A wizard that was due shows on the next connection.
+  // This also covers the dev-forced `show` seed, so the wizard waits for the
+  // answer (`talkingChecked`) before it mounts. Asked once per screen, and
+  // never cancelled: `session` is a fresh object on every render, so an
+  // effect cleanup would abandon the question each time the screen repaints.
+  const talkingCheckStartedRef = useRef(false);
+  const [talkingChecked, setTalkingChecked] = useState(false);
   useEffect(() => {
-    if (wizardGate !== 'pending') return;
+    if (talkingCheckStartedRef.current || session.phase !== 'live') return;
+    const robot = session.getRobot();
+    if (!robot) return;
+    talkingCheckStartedRef.current = true;
+    void isConvAppRunning(robot).then(talking => {
+      if (talking) setWizardGate('done');
+      setTalkingChecked(true);
+    });
+  }, [session]);
+
+  useEffect(() => {
+    if (wizardGate !== 'pending' || !talkingChecked) return;
     if (session.phase !== 'live') return;
     // Wait out the blocking daemon-update gate first. An outdated daemon
     // predates `get_first_wake_up`, so querying it now would just time out
@@ -316,7 +340,7 @@ function ConnectedSession({
     return () => {
       cancelled = true;
     };
-  }, [wizardGate, session, daemonOutdated]);
+  }, [wizardGate, talkingChecked, session, daemonOutdated]);
 
   // Optimistic display name. `robotName` comes from the central listing we
   // booted the session from, which is fixed for the session's lifetime. The
@@ -350,7 +374,7 @@ function ConnectedSession({
   const [onboardingMovesReady, setOnboardingMovesReady] = useState(false);
   useEffect(() => {
     if (preloadedOnboardingRef.current) return;
-    if (wizardGate !== 'show' || session.phase !== 'live') return;
+    if (wizardGate !== 'show' || !talkingChecked || session.phase !== 'live') return;
     const robot = session.getRobot();
     if (!robot) return;
     preloadedOnboardingRef.current = true;
@@ -372,7 +396,7 @@ function ConnectedSession({
     } else {
       setOnboardingMovesReady(true);
     }
-  }, [wizardGate, session]);
+  }, [wizardGate, talkingChecked, session]);
 
   // Wizard finished: close the gate and persist the completion flag on the
   // robot so it never shows again (dev-force ignores the flag on the next
@@ -1262,6 +1286,8 @@ function ConnectedSession({
                 robotName={displayName}
                 renameRobot={handleRenameRobot}
                 signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
+                getRobot={session.getRobot}
+                robotLive={session.connectionState === 'live'}
                 onSignedOutRobot={() => {
                   setSettingsOpen(false);
                   handleLeave();
@@ -1390,7 +1416,7 @@ function ConnectedSession({
             conversation UI (already mounted behind it) cross-fades in instead
             of hard-cutting when `wakeUpDone` flips true. */}
         <AnimatePresence>
-          {!leaving && session.phase === 'live' && wizardGate === 'show' && (
+          {!leaving && session.phase === 'live' && wizardGate === 'show' && talkingChecked && (
             <FirstWakeUpWizard
               key="first-wake-up"
               session={session}

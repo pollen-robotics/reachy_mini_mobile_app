@@ -53,6 +53,24 @@ describe('app lifecycle', () => {
     await client.stopConvApp();
     expect(rpcCall).not.toHaveBeenCalledWith('apps.stop', expect.anything(), expect.anything());
   });
+
+  it('reads and sets the daemon startup app by name', async () => {
+    const { client, rpcCall } = robotReturning({ name: CONV_APP_NAME });
+    expect(await client.getStartupApp()).toBe(CONV_APP_NAME);
+    expect(rpcCall).toHaveBeenCalledWith('apps.get_startup', {}, { timeoutMs: 15_000 });
+
+    await client.setStartupApp(CONV_APP_NAME);
+    expect(rpcCall).toHaveBeenCalledWith(
+      'apps.set_startup',
+      { name: CONV_APP_NAME },
+      { timeoutMs: 15_000 }
+    );
+    await client.setStartupApp(null);
+    expect(rpcCall).toHaveBeenCalledWith('apps.set_startup', { name: null }, { timeoutMs: 15_000 });
+
+    rpcCall.mockResolvedValueOnce({ name: null });
+    expect(await client.getStartupApp()).toBeNull();
+  });
 });
 
 describe('conversation control', () => {

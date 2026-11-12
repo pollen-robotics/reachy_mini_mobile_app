@@ -170,14 +170,42 @@ describe('start', () => {
   });
 
   it('adopts a conversation app that is already running', async () => {
+    // What the phone would push if it owned this conversation: none of it
+    // matches the robot, which keeps its own.
     const { robot, calls } = fakeRobot({
       'apps.status': { state: 'running', info: { name: 'reachy_mini_conversation_app' } },
+      'conversation.status': { ...READY, language: 'xx', personality: 'not-the-phones' },
+      'memory.list': { facts: ['likes tea'] },
+    });
+    const { conversation, states } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+    // Attached, the memory counter read, and nothing written to the robot.
+    expect(calls).toEqual(['apps.status', 'conversation.status', 'memory.list']);
+    expect(getFacts()).toEqual(['likes tea']);
+    expect(states).toEqual(['starting', 'listening']);
+  });
+
+  it('pushes its settings again once it starts the app itself', async () => {
+    let appState = 'running';
+    const { robot, calls } = fakeRobot({
+      'apps.status': () => ({ state: appState, info: { name: 'reachy_mini_conversation_app' } }),
+      'apps.stop': () => {
+        appState = 'idle';
+        return {};
+      },
+      'apps.start': {},
       'conversation.status': READY,
+      'memory.list': { facts: [] },
     });
     const { conversation } = harness(robot);
 
-    await expect(conversation.start()).resolves.toBe(true);
-    expect(calls).not.toContain('apps.start');
+    await conversation.start();
+    await conversation.stop();
+    calls.length = 0;
+    await conversation.start();
+    expect(calls).toContain('apps.start');
+    expect(calls).toContain('personalities.all');
   });
 
   it('never takes the robot away from another app', async () => {

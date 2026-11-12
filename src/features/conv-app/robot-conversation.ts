@@ -118,6 +118,8 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   let running = false;
   /** Pending while an app that announced its end is still exiting. */
   let ending: Promise<void> | null = null;
+  // The app was already running when `start()` looked (see `ensureAppRunning`).
+  let adopted = false;
   const unsubscribes: Array<() => void> = [];
 
   // Levels are peak-held here and decayed in the rAF loop, so a 15 Hz feed
@@ -270,12 +272,6 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   };
 
   /**
-   * Make sure the conversation app is the app holding the robot. Returns
-   * the reason it cannot be, or null when it is running (or was just
-   * started). Never takes the robot away from another app: that is an
-   * explicit user action in the Apps tab, not a side effect of a tap.
-   */
-  /**
    * A daemon we could read and that predates the relay cannot host the
    * conversation. One we could not read is let through: the bring-up version
    * probe is best-effort, and failing there is not evidence of an old robot.
@@ -287,11 +283,26 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     return `Reachy needs version v${MIN_DAEMON_VERSION} or newer to talk. Update it, then try again.`;
   };
 
+  /**
+   * Make sure the conversation app is the app holding the robot. Returns
+   * the reason it cannot be, or null when it is running (or was just
+   * started). Never takes the robot away from another app: that is an
+   * explicit user action in the Apps tab, not a side effect of a tap.
+   *
+   * Sets `adopted` when the app was running before we asked: the robot
+   * started it by itself (antenna touch) or it outlived a lost link. That
+   * conversation is already under way with the robot's own settings, so
+   * `waitUntilReady` attaches to it without pushing the phone's.
+   */
   const ensureAppRunning = async (activeClient: ConvAppClient): Promise<string | null> => {
+    adopted = false;
     const app = await activeClient.getCurrentAppStatus();
     if (app.state === 'running' || app.state === 'starting') {
       const name = app.info?.name ?? null;
-      if (name === CONV_APP_NAME) return null;
+      if (name === CONV_APP_NAME) {
+        adopted = true;
+        return null;
+      }
       return `Reachy is busy with ${name ?? 'another app'}. Stop it from the Apps tab first.`;
     }
     if (app.state === 'error') {
@@ -310,7 +321,10 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (reason === 'already_running') {
         // Fine if it is ours (another tab, a race); not if someone else's.
         const now = await activeClient.getCurrentAppStatus();
-        if (now.info?.name === CONV_APP_NAME) return null;
+        if (now.info?.name === CONV_APP_NAME) {
+          adopted = true;
+          return null;
+        }
         return `Reachy is busy with ${now.info?.name ?? 'another app'}. Stop it from the Apps tab first.`;
       }
       // A reasoned refusal we did not anticipate is most likely "not
@@ -334,7 +348,9 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
    * soon as the app answers, then poll `conversation.status` until the backend
    * is connected. Before the backend connects, not after: the app greets the
    * moment it connects, and a changed setting restarts it, which would greet
-   * twice, first with the old settings.
+   * twice, first with the old settings. Not at all when the conversation was
+   * already running (`adopted`): pushing a language or a personality restarts
+   * its backend mid-sentence.
    */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
     let deadline = performance.now() + READY_TIMEOUT_MS;
@@ -354,7 +370,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (status) {
         if (!status.has_hf_connection)
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
-        if (!settingsApplied) {
+        if (!settingsApplied && !adopted) {
           settingsApplied = true;
           const syncStartedAt = performance.now();
           await applySettingsToRobot(activeClient, status);
@@ -364,7 +380,10 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
           // Re-read at once: a changed setting restarts the backend.
           continue;
         }
-        if (status.backend_connected) return null;
+        if (status.backend_connected) {
+          if (adopted) await refreshMemory();
+          return null;
+        }
         if (status.backend_error) lastError = status.backend_error;
       }
       await sleep(READY_POLL_MS);
