@@ -33,6 +33,7 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import WifiRoundedIcon from '@mui/icons-material/WifiRounded';
 
 import {
   LANGUAGES,
@@ -47,8 +48,12 @@ import {
   useVisionEnabled,
 } from '@/features/conversation-settings';
 import { useRobotMemory } from '@/features/conv-app/memory-cache';
+import { useStartupApp } from '@/features/conv-app/useStartupApp';
 import { useDaemonState } from '@/features/daemon-state';
-import { MAX_ROBOT_NAME_LENGTH } from '@/features/robot-session/sdk-types';
+import {
+  MAX_ROBOT_NAME_LENGTH,
+  type ReachyMiniInstance,
+} from '@/features/robot-session/sdk-types';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 import { FONT_WEIGHT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
@@ -67,6 +72,10 @@ export interface ConversationSettingsPanelProps {
    *  panel for `<RobotInfoPanel>`). Surfaced as a tappable row at the
    *  end of the panel. */
   onOpenAbout: () => void;
+  /** Leave the session for the Bluetooth tools' "Change Wi-Fi network"
+   *  flow (the daemon can't switch networks over the live session; BLE
+   *  also survives the switch, so the user sees it through). */
+  onChangeWifi: () => void;
   /** Display name of the connected robot, used in the sign-out confirm
    *  copy ("Sign out <name>?") and to seed the rename field. */
   robotName: string;
@@ -93,18 +102,27 @@ export interface ConversationSettingsPanelProps {
    *  would silently no-op; we lock them while live and show a hint.
    *  Audio (robot-level, live) and About stay usable. */
   conversationLive: boolean;
+  /** The live robot, to read and set the antenna start (`useStartupApp`). */
+  getRobot: () => ReachyMiniInstance | null;
+  /** Whether the link to the robot is up right now (not the sticky
+   *  `audioReady`): the antenna start is hidden while it is down. */
+  robotLive: boolean;
 }
 
 export function ConversationSettingsPanel({
   audioReady,
   onOpenAbout,
+  onChangeWifi,
   conversationLive,
   robotName,
   renameRobot,
   signOutRobot,
   onSignedOutRobot,
+  getRobot,
+  robotLive,
 }: ConversationSettingsPanelProps) {
   const theme = useTheme();
+  const startupApp = useStartupApp(getRobot, robotLive);
   const activeLanguageId = useActiveLanguageId();
   const visionEnabled = useVisionEnabled();
   const memoryEnabled = useMemoryEnabled();
@@ -116,6 +134,7 @@ export function ConversationSettingsPanel({
   const daemon = useDaemonState();
 
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingWifi, setConfirmingWifi] = useState(false);
 
   // Rename flow. The field is seeded with the current display name and
   // auto-saves - there is no Save button. Editing schedules a debounced
@@ -457,6 +476,47 @@ export function ConversationSettingsPanel({
             </Card>
           </Section>
 
+          {/* WITHOUT THE PHONE: the daemon's startup app. Applied live on the
+              robot, so not locked while a conversation runs; hidden on a
+              daemon that cannot read it over the data channel, and while
+              the link is down. The slot is daemon-wide, so say which other
+              app turning this on would replace. */}
+          {startupApp.enabled !== null && (
+            <Section label="Without the phone">
+              <Card>
+                <Row divider={false}>
+                  <Stack sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
+                      Talk when the antennas are touched
+                    </Typography>
+                    <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
+                      Touch Reachy&apos;s antennas while it sleeps to wake it up and start talking.
+                    </Typography>
+                    {startupApp.otherApp && (
+                      <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.5 }}>
+                        Replaces {startupApp.otherApp}, which the antennas start today.
+                      </Typography>
+                    )}
+                    {startupApp.error && (
+                      <Typography
+                        role="alert"
+                        sx={{ fontSize: TYPO.xs, color: 'error.main', lineHeight: 1.4, mt: 0.5 }}
+                      >
+                        {startupApp.error}
+                      </Typography>
+                    )}
+                  </Stack>
+                  <OutlinedSwitch
+                    checked={startupApp.enabled}
+                    disabled={startupApp.busy}
+                    onChange={(_, checked) => startupApp.setStartup(checked)}
+                    slotProps={{ input: { 'aria-label': 'Talk when the antennas are touched' } }}
+                  />
+                </Row>
+              </Card>
+            </Section>
+          )}
+
           {/* ROBOT block (bottom): robot identity + management. Leads with
               Name (rename over the data channel via SDK `setRobotName`; the
               daemon stores it and applies it live, no restart), then About
@@ -512,6 +572,77 @@ export function ConversationSettingsPanel({
                 )}
               </Stack>
             </Box>
+          </Section>
+
+          {/* WI-FI - robot-level. Switching networks goes over Bluetooth, so
+              it ends this session: an inline confirm says so (and what the
+              user needs) before leaving. */}
+          <Section label="Wi-Fi" blurb="Move Reachy to another network, or update its Wi-Fi password.">
+            <Card>
+              <Row
+                as="button"
+                onClick={() => setConfirmingWifi(c => !c)}
+                aria-label="Change Wi-Fi network"
+                aria-pressed={confirmingWifi}
+              >
+                <WifiRoundedIcon sx={{ fontSize: TYPO.xl, color: 'text.secondary', flexShrink: 0 }} />
+                <Stack sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: TYPO.body, fontWeight: FONT_WEIGHT.medium }}>
+                    Change Wi-Fi network
+                  </Typography>
+                  <Typography sx={{ fontSize: TYPO.xs, color: 'text.secondary', mt: 0.25 }}>
+                    Over Bluetooth, next to the robot.
+                  </Typography>
+                </Stack>
+                <ChevronRightRoundedIcon
+                  sx={{
+                    fontSize: TYPO.xl,
+                    color: 'primary.main',
+                    flexShrink: 0,
+                    transform: confirmingWifi ? 'rotate(90deg)' : 'none',
+                    transition: 'transform 0.2s ease',
+                  }}
+                />
+              </Row>
+              {confirmingWifi && (
+                <Stack spacing={1.5} sx={{ px: 2, pb: 2, pt: 0.5 }}>
+                  <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', lineHeight: 1.4 }}>
+                    This ends the session and connects to {robotName} over Bluetooth. Stay close to it
+                    and have its setup code ready (the 5 characters under the robot).
+                  </Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={() => setConfirmingWifi(false)}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.text.secondary),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${theme.palette.divider}`,
+                      }}
+                    >
+                      Cancel
+                    </Box>
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={onChangeWifi}
+                      sx={{
+                        ...ghostBtnSx(theme.palette.primary.main),
+                        py: 1.5,
+                        fontSize: TYPO.body,
+                        fontWeight: FONT_WEIGHT.semibold,
+                        border: `1.5px solid ${alpha(theme.palette.primary.main, 0.45)}`,
+                      }}
+                    >
+                      Continue
+                    </Box>
+                  </Stack>
+                </Stack>
+              )}
+            </Card>
           </Section>
 
           {/* ABOUT & DIAGNOSTICS - robot-level. Drills into the old info

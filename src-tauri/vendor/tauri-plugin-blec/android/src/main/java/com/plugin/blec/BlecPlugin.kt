@@ -1,11 +1,17 @@
 package com.plugin.blec
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -13,6 +19,9 @@ import org.json.JSONObject
 
 /** Arbitrary; nobody owns the Activity, so the result is never delivered to us. */
 private const val PERMISSION_REQUEST_CODE = 0xB1EC
+
+/** How long [BlecPlugin.removeBond] waits for the stack to drop the bond. */
+private const val REMOVE_BOND_TIMEOUT_MS = 5000L
 
 private fun result(value: Any): JSONObject = JSONObject().put("result", value)
 
@@ -62,6 +71,8 @@ class BlecPlugin(private val context: Context) {
             "disconnect" -> disconnect(invoke)
             "is_connected" -> isConnected(invoke)
             "is_bonded" -> isBonded(invoke)
+            "remove_bond" -> removeBond(invoke)
+            "open_bluetooth_settings" -> openBluetoothSettings(invoke)
             "discover_services" -> withConnected(cmd, invoke) { it.discoverServices(invoke) }
             "services" -> withConnected(cmd, invoke) { it.services(invoke) }
             "notifications" -> notifications(invoke)
@@ -167,6 +178,74 @@ class BlecPlugin(private val context: Context) {
         val args = ConnectParams.from(invoke.args)
         val device = this.devices[args.address]
         invoke.resolve(result(device?.isBonded() ?: false))
+    }
+
+    /**
+     * Forgets the phone's bond with a peripheral, for when that bond is stale:
+     * android encrypts every connection to a bonded device, and once the
+     * peripheral no longer has the matching keys each connect ends in
+     * GATT_INSUFFICIENT_AUTHENTICATION until the bond is gone. Android has no
+     * public API for this, only the hidden `BluetoothDevice.removeBond()`.
+     *
+     * Resolves `true` once the device is no longer bonded, which includes a
+     * device that never was, and `false` when the stack refused or did not
+     * finish within [REMOVE_BOND_TIMEOUT_MS].
+     */
+    @SuppressLint("MissingPermission")
+    private fun removeBond(invoke: Invoke) {
+        if (!hasBTPermissions()) {
+            invoke.reject("remove_bond: Missing bluetooth permission!")
+            return
+        }
+        val args = ConnectParams.from(invoke.args)
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+        val device = adapter?.bondedDevices?.firstOrNull {
+            it.address.equals(args.address, ignoreCase = true)
+        }
+        if (device == null) {
+            invoke.resolve(result(true))
+            return
+        }
+        val started = try {
+            device.javaClass.getMethod("removeBond").invoke(device) as Boolean
+        } catch (e: Exception) {
+            Log.w(TAG, "removeBond(${args.address}) failed: ${e.message}")
+            false
+        }
+        if (!started) {
+            invoke.resolve(result(false))
+            return
+        }
+        // The bond goes away asynchronously; poll instead of registering a
+        // receiver for ACTION_BOND_STATE_CHANGED for this one call.
+        val handler = Handler(Looper.getMainLooper())
+        val deadline = SystemClock.uptimeMillis() + REMOVE_BOND_TIMEOUT_MS
+        handler.post(object : Runnable {
+            override fun run() {
+                when {
+                    device.bondState == BluetoothDevice.BOND_NONE -> invoke.resolve(result(true))
+                    SystemClock.uptimeMillis() > deadline -> invoke.resolve(result(false))
+                    else -> handler.postDelayed(this, 100)
+                }
+            }
+        })
+    }
+
+    /** Opens the system Bluetooth settings, where the user can forget a device. */
+    private fun openBluetoothSettings(invoke: Invoke) {
+        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+        val activity = currentActivity
+        try {
+            if (activity != null) {
+                activity.startActivity(intent)
+            } else {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            invoke.resolve(result(true))
+        } catch (e: Exception) {
+            Log.w(TAG, "could not open the bluetooth settings: ${e.message}")
+            invoke.resolve(result(false))
+        }
     }
 
     private fun notifications(invoke: Invoke) {

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConversationState } from '@/features/conversation/engine/types';
+import { setActiveLanguageId } from '@/features/conversation-language';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { cacheFacts, getFacts } from './memory-cache';
@@ -52,6 +53,7 @@ function harness(robot: ReachyMiniInstance, daemonVersion: string | null = '1.10
     getLevelsTarget: () => null,
     onLevels: null,
     onToolToast: vi.fn(),
+    onEnded: vi.fn(),
   };
   return { conversation: createRobotConversation(deps), states, errors, deps };
 }
@@ -73,11 +75,46 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveLanguageId('en');
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe('start', () => {
+  it('clears a crashed app holding the slot before starting', async () => {
+    let state: Record<string, unknown> = { state: 'error', info: { name: 'marionette' } };
+    const { robot, calls } = fakeRobot({
+      'apps.status': () => state,
+      'apps.stop': () => {
+        state = { state: 'idle' };
+        return { stopped: true };
+      },
+      'apps.start': () => {
+        state = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+        return state;
+      },
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+    });
+    const { conversation } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+    expect(calls.indexOf('apps.stop')).toBeLessThan(calls.indexOf('apps.start'));
+  });
+
+  it('reports another app that won the slot during the start', async () => {
+    let reads = 0;
+    const { robot } = fakeRobot({
+      'apps.status': () =>
+        reads++ === 0 ? { state: 'idle' } : { state: 'running', info: { name: 'marionette' } },
+      'apps.start': Object.assign(new Error('busy'), { reason: 'already_running' }),
+    });
+    const { conversation, errors } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(false);
+    expect(errors.at(-1)).toMatch(/busy with marionette/);
+  });
+
   it('refuses a daemon too old to relay JSON-RPC', async () => {
     const { robot, calls } = fakeRobot({});
     const { conversation, errors } = harness(robot, '1.9.3');
@@ -98,26 +135,77 @@ describe('start', () => {
 
     await expect(conversation.start()).resolves.toBe(true);
 
-    // The last two are the settings sync: the robot's catalog, then its memory.
+    // The settings sync (the robot's catalog, then its memory) runs on the
+    // first answer, then the status is read again.
     expect(calls).toEqual([
       'apps.status',
       'apps.start',
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
     expect(states).toEqual(['starting', 'listening']);
   });
 
-  it('adopts a conversation app that is already running', async () => {
+  it('hands the robot its settings before the backend connects, so it greets once', async () => {
+    setActiveLanguageId('fr');
+    let polls = 0;
     const { robot, calls } = fakeRobot({
-      'apps.status': { state: 'running', info: { name: 'reachy_mini_conversation_app' } },
-      'conversation.status': READY,
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      // Connected from the second read on, as after a fast backend start.
+      'conversation.status': () => ({ ...READY, backend_connected: polls++ > 0 }),
+      'personalities.all': { personalities: [] },
+      'language.set': (params: Record<string, unknown>) => ({ language: params.language }),
+      'memory.list': { facts: [] },
     });
     const { conversation } = harness(robot);
 
     await expect(conversation.start()).resolves.toBe(true);
-    expect(calls).not.toContain('apps.start');
+
+    // Pushed after the first status read, which still saw no backend.
+    expect(calls.indexOf('language.set')).toBeGreaterThan(calls.indexOf('conversation.status'));
+    expect(calls.indexOf('language.set')).toBeLessThan(calls.lastIndexOf('conversation.status'));
+  });
+
+  it('adopts a conversation app that is already running', async () => {
+    // What the phone would push if it owned this conversation: none of it
+    // matches the robot, which keeps its own.
+    const { robot, calls } = fakeRobot({
+      'apps.status': { state: 'running', info: { name: 'reachy_mini_conversation_app' } },
+      'conversation.status': { ...READY, language: 'xx', personality: 'not-the-phones' },
+      'memory.list': { facts: ['likes tea'] },
+    });
+    const { conversation, states } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+    // Attached, the memory counter read, and nothing written to the robot.
+    expect(calls).toEqual(['apps.status', 'conversation.status', 'memory.list']);
+    expect(getFacts()).toEqual(['likes tea']);
+    expect(states).toEqual(['starting', 'listening']);
+  });
+
+  it('pushes its settings again once it starts the app itself', async () => {
+    let appState = 'running';
+    const { robot, calls } = fakeRobot({
+      'apps.status': () => ({ state: appState, info: { name: 'reachy_mini_conversation_app' } }),
+      'apps.stop': () => {
+        appState = 'idle';
+        return {};
+      },
+      'apps.start': {},
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+    });
+    const { conversation } = harness(robot);
+
+    await conversation.start();
+    await conversation.stop();
+    calls.length = 0;
+    await conversation.start();
+    expect(calls).toContain('apps.start');
+    expect(calls).toContain('personalities.all');
   });
 
   it('never takes the robot away from another app', async () => {
@@ -159,6 +247,7 @@ describe('start', () => {
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
   });
 
@@ -206,13 +295,42 @@ describe('start', () => {
     expect(polls).toBeGreaterThan(1);
     expect(errors.at(-1)).toMatch(/allocator 503/);
   });
+  it('does not count a slow settings sync against the readiness budget', async () => {
+    const { robot } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+      // Slower than the whole budget, on an app whose backend is connected.
+      'personalities.all': () =>
+        new Promise(resolve => setTimeout(() => resolve({ personalities: [] }), 61_000)),
+    });
+    const { conversation, states, errors } = harness(robot);
+
+    const started = conversation.start();
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    await expect(started).resolves.toBe(true);
+    expect(states.at(-1)).toBe('listening');
+    expect(errors.at(-1)).toBeNull();
+  });
 });
 
 describe('following the robot', () => {
   async function live() {
-    const fake = fakeRobot({
-      'apps.status': { state: 'idle' },
-      'apps.start': {},
+    // `apps.status` follows the app's life unless a test pins an answer.
+    let started = false;
+    const answers: Record<string, unknown> = {};
+    const fake = fakeRobot(answers);
+    Object.assign(answers, {
+      'apps.status': () =>
+        started
+          ? { state: 'running', info: { name: 'reachy_mini_conversation_app' } }
+          : { state: 'idle' },
+      'apps.start': () => {
+        started = true;
+        return {};
+      },
       'apps.stop': {},
       'conversation.status': READY,
       'memory.list': { facts: [] },
@@ -221,7 +339,7 @@ describe('following the robot', () => {
     const h = harness(fake.robot);
     await h.conversation.start();
     h.states.length = 0;
-    return { ...fake, ...h };
+    return { ...fake, ...h, answers };
   }
 
   it('maps the robot turn vocabulary onto the orb states', async () => {
@@ -269,7 +387,7 @@ describe('following the robot', () => {
 
   it('stops the app and unsubscribes on stop', async () => {
     const { conversation, calls, handlers } = await live();
-    expect(handlers.size).toBe(3);
+    expect(handlers.size).toBe(4);
 
     await conversation.stop();
 
@@ -277,5 +395,81 @@ describe('following the robot', () => {
     expect(handlers.size).toBe(0);
     await conversation.stop();
     expect(calls.filter(c => c === 'apps.stop')).toHaveLength(1);
+  });
+
+  it('only stops following on a lost link: the robot keeps its conversation', async () => {
+    const { conversation, calls, handlers } = await live();
+
+    await conversation.stop({ keepRobotApp: true });
+
+    expect(calls).not.toContain('apps.stop');
+    expect(handlers.size).toBe(0);
+  });
+
+  it('leaves an app the user launched running when a refused start is torn down', async () => {
+    const { robot, calls } = fakeRobot({
+      'apps.status': { state: 'running', info: { name: 'marionette' } },
+    });
+    const { conversation, errors } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(false);
+    expect(errors.at(-1)).toMatch(/busy with marionette/);
+    await conversation.stop();
+
+    expect(calls).not.toContain('apps.stop');
+  });
+
+  it('ends when the robot is sent to sleep, without stopping the app itself', async () => {
+    const { conversation, calls, handlers, emit, states, deps, answers } = await live();
+    // The app says `ended` first and exits after the sleep move.
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+
+    expect(handlers.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(states).toEqual(['stopping']);
+    expect(deps.onEnded).not.toHaveBeenCalled();
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+    await conversation.stop();
+    expect(calls).not.toContain('apps.stop');
+  });
+
+  it('gives up waiting for an app that never exits', async () => {
+    const { emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('holds a new start until the ended app has exited', async () => {
+    const { conversation, calls, emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(0);
+    calls.length = 0;
+
+    const restarted = conversation.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Still waiting: it must not have followed the dying app.
+    expect(calls).not.toContain('conversation.status');
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(restarted).resolves.toBe(true);
+    expect(calls).toContain('apps.start');
+    expect(states.at(-1)).toBe('listening');
+    // The new start owns the state: the old end must not clear its flags.
+    expect(deps.onEnded).not.toHaveBeenCalled();
   });
 });

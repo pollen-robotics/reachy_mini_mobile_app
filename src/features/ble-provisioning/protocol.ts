@@ -12,6 +12,7 @@
  *   WIFI_STATUS        → {"mode","connected","error","known"?}
  *   WIFI_SCAN          → ["SSID", …] | "ERROR: Busy" | "ERROR: …"
  *   WIFI_CONNECT_ENC … → "OK: Connecting to <ssid>" | "ERROR: Bad credentials (wrong PIN?)" | …
+ *   WIFI_FORGET <ssid> → "OK: Forgotten <ssid>" | "ERROR: Unknown ssid" | "ERROR: Busy" | …
  */
 
 import {
@@ -166,11 +167,18 @@ export async function scanWifi(): Promise<string[]> {
   try {
     const parsed = JSON.parse(r) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s): s is string => typeof s === 'string' && s.length > 0);
+    return parsed.filter(
+      (s): s is string => typeof s === 'string' && s.length > 0 && s !== ROBOT_HOTSPOT_SSID,
+    );
   } catch {
     return [];
   }
 }
+
+/** SSID of the access point a Reachy Mini opens while it has no Wi-Fi
+ *  (`HOTSPOT_SSID` in the daemon). The robot sees its own (and any other
+ *  robot's) in a scan, but it is never a network to join. */
+const ROBOT_HOTSPOT_SSID = 'reachy-mini-ap';
 
 // Emotions-library move names played as onboarding cues over BLE. All ship in
 // the robot's pre-downloaded library (`pollen-robotics/reachy-mini-emotions-
@@ -257,5 +265,17 @@ export async function connectSealed(
 ): Promise<void> {
   const cmd = buildSealedConnect(ssid, password, pin, keyexJson);
   const r = await sendCommand(cmd, 20000);
+  if (isError(r)) throw new Error(r);
+}
+
+/**
+ * `WIFI_FORGET <ssid>` → deletes a saved network on the robot. Resolves once
+ * the daemon accepted the request; the removal itself runs in the background
+ * (watch `wifiStatus().known`). Forgetting the ACTIVE network drops the robot
+ * to hotspot mode. Needs a live `PIN_` session.
+ */
+export async function forgetNetwork(ssid: string): Promise<void> {
+  const r = await sendCommand(`WIFI_FORGET ${ssid}`, 8000);
+  if (isUnsupported(r)) throw new RobotOutdatedError();
   if (isError(r)) throw new Error(r);
 }

@@ -54,6 +54,7 @@ import {
   type LiveSession,
 } from "@/features/robot-session/live-session";
 import { createConversationHandle } from "./host-handle";
+import { isConvAppRunning } from "@/features/conv-app/app-slot";
 import { createRobotConversation } from "@/features/conv-app/robot-conversation";
 import { createEngineCore } from "./engine-core";
 import {
@@ -451,7 +452,7 @@ const connectionController: ConnectionController = createConnectionController({
   emitErrorMessage,
   emitDaemonVersion,
   onConnectionLive: () => onConnectionLive(),
-  onConnectionLost: () => onConnectionLost(),
+  onConnectionLost: (opts) => onConnectionLost(opts),
   applyMicMuted: (muted) => applyMicMuted(muted),
 });
 
@@ -468,6 +469,14 @@ const robotConversation = createRobotConversation({
   getLevelsTarget: getAudioLevelsTarget,
   onLevels,
   onToolToast,
+  // The robot went to sleep on its own (voice or inactivity timeout): clear
+  // the flags so the next tap starts again, and forget the motor mode so the
+  // next start re-asserts `enabled` instead of deduping against a stale cache.
+  onEnded: () => {
+    convoActiveRequested.off();
+    conversationStarted.off();
+    session.recordMotorMode(null);
+  },
 });
 
 // ─── Host-driven controls ──────────────────────────────────────────────
@@ -500,6 +509,12 @@ async function handleOrbClick(): Promise<void> {
         // conversation is running yet (conversation idle); ignore taps
         // while a conversation is already live / winding down.
         if (conversation.current() !== "idle") return;
+        // Mid re-dial there is no data channel to start the app over:
+        // the start would time out and drop the tap anyway. Ask the SDK
+        // itself rather than mirroring its redial in a flag: a redial can
+        // be cancelled silently (handoff, stop, disconnect), which left a
+        // mirrored flag stuck and the orb dead.
+        if (connectionController.getRobot()?.state !== "streaming") return;
         // Flip `convoActiveRequested` so re-entries do not bounce back
         // to idle if the runner is interrupted, then start the app on
         // the robot. `runConversationParts` flips the conversation FSM
@@ -577,7 +592,17 @@ async function handleHostStop(): Promise<void> {
  *     `runConversationParts()`.
  */
 async function onConnectionLive(): Promise<void> {
-  if (!convoActiveRequested.get()) return;
+  if (!convoActiveRequested.get()) {
+    // The robot may already be talking: touching its antennas starts the
+    // conversation app with no phone involved. Attach to that conversation
+    // as a tap on the orb would, rather than showing "tap to start" over
+    // it. `robotConversation.start()` sees the app was already running and
+    // leaves its settings alone.
+    const robot = liveSession.getRobot();
+    if (!robot || !(await isConvAppRunning(robot))) return;
+    if (unmounted.get() || !session.isEstablished()) return;
+    convoActiveRequested.on();
+  }
   await runConversationParts();
 }
 
@@ -611,10 +636,12 @@ async function runConversationParts(): Promise<void> {
  * Hub-app handoff, power-off) lands here, so "stop" always means the app on
  * the robot stops too. Idempotent.
  */
-async function tearDownConversationPipeline(): Promise<void> {
+async function tearDownConversationPipeline(
+  opts: { keepRobotApp?: boolean } = {},
+): Promise<void> {
   if (!conversationStarted.get()) return;
   convoActiveRequested.off();
-  await robotConversation.stop();
+  await robotConversation.stop({ keepRobotApp: opts.keepRobotApp });
   conversationStarted.off();
 }
 
@@ -626,8 +653,8 @@ async function tearDownConversationPipeline(): Promise<void> {
  * conversation FSM to `idle`, so every teardown caller inherits a clean
  * conversation cursor.
  */
-async function onConnectionLost(): Promise<void> {
-  await tearDownConversationPipeline();
+async function onConnectionLost(opts: { keepRobotApp?: boolean } = {}): Promise<void> {
+  await tearDownConversationPipeline({ keepRobotApp: opts.keepRobotApp });
   setConversationState("idle");
 }
 
@@ -700,6 +727,7 @@ const handle: ConversationEngineHandle = createConversationHandle({
   setConversationState,
   emitConnectionAttempt,
   onFatalError: connectionController.onFatalError,
+  getFatalCount: connectionController.getFatalCount,
   getMicLevel: robotConversation.getMicLevel,
 });
 return handle;

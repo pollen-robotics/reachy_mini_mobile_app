@@ -31,15 +31,19 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { AppEntry } from '@/features/apps/types';
 
 import AppCompactTile from './AppCompactTile';
+import type { RunsOn } from './RunsOnChip';
 import { COLUMN_SX, LIST_ROW_GAP_PX } from './layout';
 
 interface VirtualAppListProps {
   apps: AppEntry[];
   /** The Apps tab's scrollable body. The window is computed against it. */
   scrollRef: RefObject<HTMLElement | null>;
-  pinnedSet: ReadonlySet<string>;
+  /** Omit with `onTogglePin` for lists whose apps cannot be pinned. */
+  pinnedSet?: ReadonlySet<string>;
   onOpen: (app: AppEntry) => void;
-  onTogglePin: (app: AppEntry) => void;
+  onTogglePin?: (app: AppEntry) => void;
+  actionLabel?: (app: AppEntry) => string;
+  runsOn?: RunsOn;
 }
 
 /**
@@ -55,6 +59,8 @@ export default function VirtualAppList({
   pinnedSet,
   onOpen,
   onTogglePin,
+  actionLabel,
+  runsOn,
 }: VirtualAppListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
@@ -115,9 +121,11 @@ export default function VirtualAppList({
             >
               <AppCompactTile
                 app={app}
-                isPinned={pinnedSet.has(app.id)}
+                isPinned={pinnedSet?.has(app.id) ?? false}
                 onOpen={onOpen}
                 onTogglePin={onTogglePin}
+                actionLabel={actionLabel?.(app)}
+                runsOn={runsOn}
                 fullWidth
               />
             </Box>
