@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConversationState } from '@/features/conversation/engine/types';
+import { setActiveLanguageId } from '@/features/conversation-language';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { cacheFacts, getFacts } from './memory-cache';
@@ -52,6 +53,7 @@ function harness(robot: ReachyMiniInstance, daemonVersion: string | null = '1.10
     getLevelsTarget: () => null,
     onLevels: null,
     onToolToast: vi.fn(),
+    onEnded: vi.fn(),
   };
   return { conversation: createRobotConversation(deps), states, errors, deps };
 }
@@ -73,6 +75,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveLanguageId('en');
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -132,15 +135,38 @@ describe('start', () => {
 
     await expect(conversation.start()).resolves.toBe(true);
 
-    // The last two are the settings sync: the robot's catalog, then its memory.
+    // The settings sync (the robot's catalog, then its memory) runs on the
+    // first answer, then the status is read again.
     expect(calls).toEqual([
       'apps.status',
       'apps.start',
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
     expect(states).toEqual(['starting', 'listening']);
+  });
+
+  it('hands the robot its settings before the backend connects, so it greets once', async () => {
+    setActiveLanguageId('fr');
+    let polls = 0;
+    const { robot, calls } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      // Connected from the second read on, as after a fast backend start.
+      'conversation.status': () => ({ ...READY, backend_connected: polls++ > 0 }),
+      'personalities.all': { personalities: [] },
+      'language.set': (params: Record<string, unknown>) => ({ language: params.language }),
+      'memory.list': { facts: [] },
+    });
+    const { conversation } = harness(robot);
+
+    await expect(conversation.start()).resolves.toBe(true);
+
+    // Pushed after the first status read, which still saw no backend.
+    expect(calls.indexOf('language.set')).toBeGreaterThan(calls.indexOf('conversation.status'));
+    expect(calls.indexOf('language.set')).toBeLessThan(calls.lastIndexOf('conversation.status'));
   });
 
   it('adopts a conversation app that is already running', async () => {
@@ -221,6 +247,7 @@ describe('start', () => {
       'conversation.status',
       'personalities.all',
       'memory.list',
+      'conversation.status',
     ]);
   });
 
@@ -268,12 +295,34 @@ describe('start', () => {
     expect(polls).toBeGreaterThan(1);
     expect(errors.at(-1)).toMatch(/allocator 503/);
   });
+  it('does not count a slow settings sync against the readiness budget', async () => {
+    const { robot } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+      // Slower than the whole budget, on an app whose backend is connected.
+      'personalities.all': () =>
+        new Promise(resolve => setTimeout(() => resolve({ personalities: [] }), 61_000)),
+    });
+    const { conversation, states, errors } = harness(robot);
+
+    const started = conversation.start();
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    await expect(started).resolves.toBe(true);
+    expect(states.at(-1)).toBe('listening');
+    expect(errors.at(-1)).toBeNull();
+  });
 });
 
 describe('following the robot', () => {
   async function live() {
+    // `apps.status` follows the app's life unless a test pins an answer.
     let started = false;
-    const fake = fakeRobot({
+    const answers: Record<string, unknown> = {};
+    const fake = fakeRobot(answers);
+    Object.assign(answers, {
       'apps.status': () =>
         started
           ? { state: 'running', info: { name: 'reachy_mini_conversation_app' } }
@@ -290,7 +339,7 @@ describe('following the robot', () => {
     const h = harness(fake.robot);
     await h.conversation.start();
     h.states.length = 0;
-    return { ...fake, ...h };
+    return { ...fake, ...h, answers };
   }
 
   it('maps the robot turn vocabulary onto the orb states', async () => {
@@ -338,7 +387,7 @@ describe('following the robot', () => {
 
   it('stops the app and unsubscribes on stop', async () => {
     const { conversation, calls, handlers } = await live();
-    expect(handlers.size).toBe(3);
+    expect(handlers.size).toBe(4);
 
     await conversation.stop();
 
@@ -368,5 +417,59 @@ describe('following the robot', () => {
     await conversation.stop();
 
     expect(calls).not.toContain('apps.stop');
+  });
+
+  it('ends when the robot is sent to sleep, without stopping the app itself', async () => {
+    const { conversation, calls, handlers, emit, states, deps, answers } = await live();
+    // The app says `ended` first and exits after the sleep move.
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+
+    expect(handlers.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(states).toEqual(['stopping']);
+    expect(deps.onEnded).not.toHaveBeenCalled();
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+    await conversation.stop();
+    expect(calls).not.toContain('apps.stop');
+  });
+
+  it('gives up waiting for an app that never exits', async () => {
+    const { emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    expect(states).toEqual(['stopping', 'idle']);
+    expect(deps.onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('holds a new start until the ended app has exited', async () => {
+    const { conversation, calls, emit, states, deps, answers } = await live();
+    answers['apps.status'] = { state: 'running', info: { name: 'reachy_mini_conversation_app' } };
+    emit('conversation.phase', { phase: 'ended', reason: 'sleep' });
+    await vi.advanceTimersByTimeAsync(0);
+    calls.length = 0;
+
+    const restarted = conversation.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Still waiting: it must not have followed the dying app.
+    expect(calls).not.toContain('conversation.status');
+
+    answers['apps.status'] = { state: 'idle' };
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(restarted).resolves.toBe(true);
+    expect(calls).toContain('apps.start');
+    expect(states.at(-1)).toBe('listening');
+    // The new start owns the state: the old end must not clear its flags.
+    expect(deps.onEnded).not.toHaveBeenCalled();
   });
 });

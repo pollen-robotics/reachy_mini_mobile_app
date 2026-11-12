@@ -90,6 +90,54 @@ describe('applySettingsToRobot', () => {
     expect(client.setLanguage).toHaveBeenCalledWith('auto');
   });
 
+  it('pushes the language before the personality sync, which can be slow', async () => {
+    setActiveLanguageId('fr');
+    const client = fakeClient();
+    client.getPersonalities.mockRejectedValue(new Error('timed out'));
+
+    await applySettingsToRobot(client, status());
+
+    expect(client.setLanguage).toHaveBeenCalledWith('fr');
+  });
+
+  it('still pushes the rest when the robot has no language.set', async () => {
+    setActiveLanguageId('fr');
+    setVisionEnabled(false);
+    const client = fakeClient();
+    client.setLanguage.mockRejectedValue(new Error('method_not_found'));
+
+    await applySettingsToRobot(client, status());
+
+    expect(client.setVisionEnabled).toHaveBeenCalledWith(false);
+    expect(client.getPersonalities).toHaveBeenCalled();
+  });
+
+  it('applies the personality before fetching the robot drawings, which is slow', async () => {
+    const kitchen = {
+      name: 'cosmic_kitchen',
+      instructions: 'Cook.',
+      greeting: 'Hi',
+      voice: 'Ethan',
+      avatar_id: 'cosmic-kitchen-sync-settings',
+    };
+    const client = fakeClient();
+    client.getPersonalities.mockResolvedValue([kitchen]);
+    const getAvatar = vi.fn().mockResolvedValue('<svg/>');
+    Object.assign(client, { getAvatar });
+
+    await applySettingsToRobot(client, status({ personality: 'not_the_active_one' }));
+
+    expect(client.applyPersonality).toHaveBeenCalledOnce();
+    expect(getAvatar).toHaveBeenCalledWith('cosmic_kitchen');
+    expect(client.applyPersonality.mock.invocationCallOrder[0]).toBeLessThan(
+      getAvatar.mock.invocationCallOrder[0]
+    );
+    // The memory is read before the drawings too: nothing waits on them.
+    expect(client.listMemory.mock.invocationCallOrder[0]).toBeLessThan(
+      getAvatar.mock.invocationCallOrder[0]
+    );
+  });
+
   it('pushes nothing when the robot already agrees', async () => {
     const client = fakeClient();
 

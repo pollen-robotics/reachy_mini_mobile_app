@@ -15,9 +15,13 @@
  */
 import { getActiveLanguageId } from '@/features/conversation-language';
 import { isMemoryEnabled, isVisionEnabled } from '@/features/conversation-settings';
-import { getActivePersonalityId, syncPersonalitiesToRobot } from '@/features/personalities';
+import {
+  fetchRobotAvatars,
+  getActivePersonalityId,
+  reconcilePersonalities,
+} from '@/features/personalities';
 
-import type { ConvAppClient, ConvAppStatus } from './client';
+import type { ConvAppClient, ConvAppStatus, RobotPersonality } from './client';
 import { cacheFacts, consumeClearPending, isClearPending } from './memory-cache';
 
 export async function applySettingsToRobot(
@@ -28,17 +32,23 @@ export async function applySettingsToRobot(
   const memory = isMemoryEnabled();
   const vision = isVisionEnabled();
 
+  // One failure must not skip the rest: an older app has no `language.set`.
+  const warn = (err: unknown) => console.warn('[conv-app] could not apply a setting:', err);
+  // The plain settings first: the app greets once its backend connects, and
+  // reconciling the personalities below is several calls.
+  if (status.language !== language) await client.setLanguage(language).catch(warn);
+  if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory).catch(warn);
+  if (status.vision_enabled !== vision) await client.setVisionEnabled(vision).catch(warn);
+
+  let robots: RobotPersonality[] | null = null;
   try {
-    // Personalities first: the robot owns the catalog, and the phone's active
-    // id is only meaningful once the two have been reconciled.
-    await syncPersonalitiesToRobot(client);
+    // The robot owns the catalog, and the phone's active id is only
+    // meaningful once the two have been reconciled.
+    robots = await reconcilePersonalities(client);
     const personality = getActivePersonalityId();
     if (status.personality !== personality) await client.applyPersonality(personality);
-    if (status.language !== language) await client.setLanguage(language);
-    if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory);
-    if (status.vision_enabled !== vision) await client.setVisionEnabled(vision);
   } catch (err) {
-    console.warn('[conv-app] could not apply settings to the robot:', err);
+    console.warn('[conv-app] could not apply the personality to the robot:', err);
   }
 
   try {
@@ -49,5 +59,13 @@ export async function applySettingsToRobot(
     cacheFacts(await client.listMemory());
   } catch (err) {
     console.warn('[conv-app] could not sync memory with the robot:', err);
+  }
+
+  // Last: the drawings are cosmetic and can take seconds to fetch. Anything
+  // that restarts the backend has to be out before the robot greets.
+  if (robots) {
+    await fetchRobotAvatars(client, robots).catch((err: unknown) => {
+      console.warn('[conv-app] could not fetch the robot avatars:', err);
+    });
   }
 }

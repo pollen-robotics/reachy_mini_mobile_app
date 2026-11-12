@@ -53,6 +53,9 @@ const MIN_DAEMON_VERSION = '1.10.0';
 /** How long the app may take from `apps.start` to a connected backend. */
 const READY_TIMEOUT_MS = 60_000;
 const READY_POLL_MS = 1_000;
+/** How long the app may take to exit after it announced its own end. */
+const EXIT_TIMEOUT_MS = 15_000;
+const EXIT_POLL_MS = 500;
 /** Mic RMS (0..1, robot-scaled) above which the user counts as speaking. */
 const USER_SPEAKING_THRESHOLD = 0.15;
 /** How long after the last loud frame the user still counts as speaking. */
@@ -83,6 +86,11 @@ export interface RobotConversationDeps {
   getLevelsTarget: () => HTMLElement | null;
   onLevels: ((level: ConversationLevelEvent) => void) | null;
   onToolToast: ((toast: ConversationToolToastEvent) => void) | null;
+  /**
+   * The robot ended the conversation on its own (sleep tool or inactivity
+   * timeout) and its app has exited; the state is already `idle`.
+   */
+  onEnded: () => void;
 }
 
 export interface RobotConversation {
@@ -108,6 +116,8 @@ function sleep(ms: number): Promise<void> {
 export function createRobotConversation(deps: RobotConversationDeps): RobotConversation {
   let client: ConvAppClient | null = null;
   let running = false;
+  /** Pending while an app that announced its end is still exiting. */
+  let ending: Promise<void> | null = null;
   // The app was already running when `start()` looked (see `ensureAppRunning`).
   let adopted = false;
   const unsubscribes: Array<() => void> = [];
@@ -198,11 +208,57 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     }
   };
 
+  /**
+   * Resolve once the conversation app no longer holds the robot. It says
+   * `ended` first and exits after the sleep move, a few seconds later.
+   * Bounded, and a dead link counts as gone: there is nothing left to wait on.
+   */
+  const waitForAppExit = async (activeClient: ConvAppClient): Promise<void> => {
+    const deadline = performance.now() + EXIT_TIMEOUT_MS;
+    while (performance.now() < deadline) {
+      try {
+        const app = await activeClient.getCurrentAppStatus();
+        const exiting =
+          (app.state === 'running' || app.state === 'stopping') &&
+          (app.info?.name ?? CONV_APP_NAME) === CONV_APP_NAME;
+        if (!exiting) return;
+      } catch {
+        return;
+      }
+      await sleep(EXIT_POLL_MS);
+    }
+  };
+
+  // The robot ended the conversation itself (sleep tool or inactivity
+  // timeout): the app is already stopping, so stop following without an
+  // `apps.stop`. The orb stays on `stopping` until the app is really gone:
+  // going `idle` at once would let a tap re-attach to the dying app, which
+  // then exits without a second event.
+  const onPhase = (params: Record<string, unknown>): void => {
+    if (params.phase !== 'ended' || !running) return;
+    const endedClient = client;
+    running = false;
+    client = null;
+    setLiveRobot(null);
+    unfollow();
+    if (!endedClient) return;
+    deps.setConversationState('stopping');
+    const exit = waitForAppExit(endedClient).then(() => {
+      if (ending === exit) ending = null;
+      // A new start took over while we waited: the state is its to set.
+      if (running || deps.isUnmounted()) return;
+      deps.setConversationState('idle');
+      deps.onEnded();
+    });
+    ending = exit;
+  };
+
   const follow = (activeClient: ConvAppClient): void => {
     unsubscribes.push(
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
-      activeClient.on('conversation.activity', onActivity)
+      activeClient.on('conversation.activity', onActivity),
+      activeClient.on('conversation.phase', onPhase)
     );
     raf = requestAnimationFrame(tick);
   };
@@ -288,14 +344,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   };
 
   /**
-   * Poll `conversation.status` until the backend is connected, then hand the
-   * robot the settings the phone owns (see `sync-settings.ts`), unless the
-   * conversation was already running (`adopted`): pushing a language or a
-   * personality restarts its backend mid-sentence.
+   * Hand the robot the settings the phone owns (see `sync-settings.ts`) as
+   * soon as the app answers, then poll `conversation.status` until the backend
+   * is connected. Before the backend connects, not after: the app greets the
+   * moment it connects, and a changed setting restarts it, which would greet
+   * twice, first with the old settings. Not at all when the conversation was
+   * already running (`adopted`): pushing a language or a personality restarts
+   * its backend mid-sentence.
    */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
-    const deadline = performance.now() + READY_TIMEOUT_MS;
+    let deadline = performance.now() + READY_TIMEOUT_MS;
     let lastError: string | null = null;
+    let settingsApplied = false;
     while (performance.now() < deadline) {
       if (!running) return 'Stopped before the conversation was ready.';
       let status: ConvAppStatus | null = null;
@@ -310,9 +370,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (status) {
         if (!status.has_hf_connection)
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
+        if (!settingsApplied && !adopted) {
+          settingsApplied = true;
+          const syncStartedAt = performance.now();
+          await applySettingsToRobot(activeClient, status);
+          // The budget is for the app to come up. A slow sync is not the app
+          // being slow, and must not fail a start whose backend is connected.
+          deadline += performance.now() - syncStartedAt;
+          // Re-read at once: a changed setting restarts the backend.
+          continue;
+        }
         if (status.backend_connected) {
           if (adopted) await refreshMemory();
-          else await applySettingsToRobot(activeClient, status);
           return null;
         }
         if (status.backend_error) lastError = status.backend_error;
@@ -333,6 +402,8 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       running = true;
       deps.emitErrorMessage(null);
       deps.setConversationState('starting');
+      // An app that just ended on its own is still exiting: let it go first.
+      if (ending) await ending;
 
       const tooOld = daemonTooOld(deps.getDaemonVersion());
       if (tooOld) {
