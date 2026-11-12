@@ -135,6 +135,8 @@ const FAMILY_BY_ID: Record<string, string> = {
   'builtin:noir_detective': 'character',
   'builtin:victorian_butler': 'character',
   'builtin:captain_circuit': 'character',
+  'builtin:chef_bot_appetit': 'character',
+  'builtin:queen_antennette': 'character',
   'builtin:mad_scientist': 'character',
   'builtin:time_traveler': 'character',
   'builtin:bored_teenager': 'character',
@@ -152,6 +154,8 @@ const FAMILY_ORDER: Record<string, string[]> = {
     'builtin:default', // Reachy - always first
     'builtin:captain_circuit', // Captain Circuit - second
     'builtin:nature_documentarian', // Nature Doc - third
+    'builtin:queen_antennette',
+    'builtin:chef_bot_appetit',
     'builtin:mars_rover',
     'builtin:noir_detective',
     'builtin:mad_scientist',

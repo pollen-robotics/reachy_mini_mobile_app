@@ -10,6 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationState } from '@/features/conversation/engine/types';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
+import {
+  getActivePersonalityId,
+  setActivePersonality,
+  wasActivePersonalitySetByRobot,
+} from '@/features/personalities';
+
 import { cacheFacts, getFacts } from './memory-cache';
 import { createRobotConversation, type RobotConversationDeps } from './robot-conversation';
 
@@ -308,9 +314,21 @@ describe('following the robot', () => {
     expect(getFacts()).toHaveLength(1);
   });
 
+  it('follows a personality an accessory switched on the robot, without pushing it back', async () => {
+    const { emit, calls } = await live();
+    setActivePersonality('builtin:default');
+    const before = calls.length;
+
+    emit('conversation.personality', { profile: 'noir_detective' });
+
+    expect(getActivePersonalityId()).toBe('builtin:noir_detective');
+    expect(wasActivePersonalitySetByRobot()).toBe(true);
+    expect(calls.slice(before)).not.toContain('personalities.apply');
+  });
+
   it('stops the app and unsubscribes on stop', async () => {
     const { conversation, calls, handlers } = await live();
-    expect(handlers.size).toBe(3);
+    expect(handlers.size).toBe(4);
 
     await conversation.stop();
 

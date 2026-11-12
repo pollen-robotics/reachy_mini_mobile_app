@@ -29,6 +29,7 @@ const ACTIVE_KEY = 'reachyMini.personalities.activeId';
 const CATALOG_KEY = 'reachyMini.personalities.catalog';
 const PENDING_KEY = 'reachyMini.personalities.pending';
 const SEEDED_KEY = 'reachyMini.personalities.seeded';
+const BEFORE_ACCESSORY_KEY = 'reachyMini.personalities.beforeAccessory';
 /** Where phone-authored personalities lived before the robot owned them. */
 const LEGACY_CUSTOM_KEY = 'reachyMini.personalities.custom';
 
@@ -93,6 +94,29 @@ export function writeActivePersonalityId(id: string): void {
     storage.setItem(ACTIVE_KEY, id);
   } catch (err) {
     console.warn('[personalities] failed to write active id:', err);
+  }
+}
+
+/** The id to go back to once the NFC accessory comes off, or null without one. */
+export function readPersonalityBeforeAccessory(): string | null {
+  const storage = safeStorage();
+  if (!storage) return null;
+  try {
+    return storage.getItem(BEFORE_ACCESSORY_KEY)?.trim() || null;
+  } catch (err) {
+    console.warn('[personalities] failed to read the personality before the accessory:', err);
+    return null;
+  }
+}
+
+export function writePersonalityBeforeAccessory(id: string | null): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (id) storage.setItem(BEFORE_ACCESSORY_KEY, id);
+    else storage.removeItem(BEFORE_ACCESSORY_KEY);
+  } catch (err) {
+    console.warn('[personalities] failed to write the personality before the accessory:', err);
   }
 }
 
