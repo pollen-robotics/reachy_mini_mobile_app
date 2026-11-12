@@ -337,7 +337,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
    * twice, first with the old settings.
    */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
-    const deadline = performance.now() + READY_TIMEOUT_MS;
+    let deadline = performance.now() + READY_TIMEOUT_MS;
     let lastError: string | null = null;
     let settingsApplied = false;
     while (performance.now() < deadline) {
@@ -356,7 +356,11 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
         if (!settingsApplied) {
           settingsApplied = true;
+          const syncStartedAt = performance.now();
           await applySettingsToRobot(activeClient, status);
+          // The budget is for the app to come up. A slow sync is not the app
+          // being slow, and must not fail a start whose backend is connected.
+          deadline += performance.now() - syncStartedAt;
           // Re-read at once: a changed setting restarts the backend.
           continue;
         }

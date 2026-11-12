@@ -112,6 +112,32 @@ describe('applySettingsToRobot', () => {
     expect(client.getPersonalities).toHaveBeenCalled();
   });
 
+  it('applies the personality before fetching the robot drawings, which is slow', async () => {
+    const kitchen = {
+      name: 'cosmic_kitchen',
+      instructions: 'Cook.',
+      greeting: 'Hi',
+      voice: 'Ethan',
+      avatar_id: 'cosmic-kitchen-sync-settings',
+    };
+    const client = fakeClient();
+    client.getPersonalities.mockResolvedValue([kitchen]);
+    const getAvatar = vi.fn().mockResolvedValue('<svg/>');
+    Object.assign(client, { getAvatar });
+
+    await applySettingsToRobot(client, status({ personality: 'not_the_active_one' }));
+
+    expect(client.applyPersonality).toHaveBeenCalledOnce();
+    expect(getAvatar).toHaveBeenCalledWith('cosmic_kitchen');
+    expect(client.applyPersonality.mock.invocationCallOrder[0]).toBeLessThan(
+      getAvatar.mock.invocationCallOrder[0]
+    );
+    // The memory is read before the drawings too: nothing waits on them.
+    expect(client.listMemory.mock.invocationCallOrder[0]).toBeLessThan(
+      getAvatar.mock.invocationCallOrder[0]
+    );
+  });
+
   it('pushes nothing when the robot already agrees', async () => {
     const client = fakeClient();
 

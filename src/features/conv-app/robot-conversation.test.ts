@@ -267,6 +267,25 @@ describe('start', () => {
     expect(polls).toBeGreaterThan(1);
     expect(errors.at(-1)).toMatch(/allocator 503/);
   });
+  it('does not count a slow settings sync against the readiness budget', async () => {
+    const { robot } = fakeRobot({
+      'apps.status': { state: 'idle' },
+      'apps.start': {},
+      'conversation.status': READY,
+      'memory.list': { facts: [] },
+      // Slower than the whole budget, on an app whose backend is connected.
+      'personalities.all': () =>
+        new Promise(resolve => setTimeout(() => resolve({ personalities: [] }), 61_000)),
+    });
+    const { conversation, states, errors } = harness(robot);
+
+    const started = conversation.start();
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    await expect(started).resolves.toBe(true);
+    expect(states.at(-1)).toBe('listening');
+    expect(errors.at(-1)).toBeNull();
+  });
 });
 
 describe('following the robot', () => {
