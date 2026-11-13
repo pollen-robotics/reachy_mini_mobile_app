@@ -118,6 +118,7 @@ import SessionErrorView from './session/SessionErrorView';
 import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
+import { RobotVolumeKeys } from '@/ui/widgets/volume-keys/RobotVolumeKeys';
 
 export type ConnectionTarget = {
   kind: 'remote';
@@ -774,6 +775,8 @@ function ConnectedSession({
        `session.hasReachedReady` so we only round-trip once the
        engine is past bring-up. */
     <DaemonStateProvider session={session} enabled={session.hasReachedReady}>
+      {/* Phone volume buttons drive the robot speaker while it is up. */}
+      <RobotVolumeKeys active={session.hasReachedReady} />
       <Stack
         sx={{
           height: '100%',
