@@ -130,13 +130,15 @@ describe('start', () => {
       'apps.start': {},
       'conversation.status': READY,
       'memory.list': { facts: [] },
+      'personalities.apply': {},
     });
     const { conversation, states } = harness(robot);
 
     await expect(conversation.start()).resolves.toBe(true);
 
     // The settings sync (the robot's catalog, then its memory) runs on the
-    // first answer, then the status is read again.
+    // first answer, then the status is read again. Once following, the
+    // persona is confirmed: the start-time apply can miss a booting app.
     expect(calls).toEqual([
       'apps.status',
       'apps.start',
@@ -144,6 +146,7 @@ describe('start', () => {
       'personalities.all',
       'memory.list',
       'conversation.status',
+      'personalities.apply',
     ]);
     expect(states).toEqual(['starting', 'listening']);
   });
@@ -235,6 +238,7 @@ describe('start', () => {
       },
       'conversation.status': READY,
       'memory.list': { facts: [] },
+      'personalities.apply': {},
     });
     const { conversation } = harness(robot);
 
@@ -248,6 +252,7 @@ describe('start', () => {
       'personalities.all',
       'memory.list',
       'conversation.status',
+      'personalities.apply',
     ]);
   });
 
