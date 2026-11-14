@@ -20,12 +20,12 @@
  * `RobotSessionScreen`), threaded through whichever surface
  * mounts the rows.
  */
-import { IconButton, Slider, Stack, alpha } from '@mui/material';
+import { IconButton, Slider, Stack, alpha, type SliderProps } from '@mui/material';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
 import MicOffRoundedIcon from '@mui/icons-material/MicOffRounded';
 import VolumeUpRoundedIcon from '@mui/icons-material/VolumeUpRounded';
 import VolumeOffRoundedIcon from '@mui/icons-material/VolumeOffRounded';
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 import { TYPO } from '@/ui/design/tokens';
 
@@ -42,6 +42,9 @@ interface AudioControlCardProps {
    *  (handled upstream in `useDaemonState`). */
   onToggleMute: () => void;
   disabled?: boolean;
+  /** Slider to render. Defaults to MUI's; the telepresence sheet passes
+   *  one that survives its rotated landscape stage. */
+  SliderComponent?: ComponentType<SliderProps<'span', unknown, number>>;
 }
 
 /** Icon button height. Drives the row's `minHeight` so both card
@@ -78,6 +81,7 @@ export default function AudioControlCard({
   onChange,
   onToggleMute,
   disabled = false,
+  SliderComponent = Slider,
 }: AudioControlCardProps) {
   const isOn = value > 0;
   const { muteAria, sliderAria } = LABELS[kind];
@@ -135,7 +139,7 @@ export default function AudioControlCard({
       >
         {icon}
       </IconButton>
-      <Slider
+      <SliderComponent
         value={value}
         onChange={(_, val) => onChange(val as number)}
         disabled={disabled}
@@ -157,14 +161,17 @@ export default function AudioControlCard({
           '& .MuiSlider-track': {
             backgroundColor: theme.palette.primary.main,
             border: 'none',
-            height: 1.5,
           },
           '& .MuiSlider-rail': {
             backgroundColor:
               theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)',
-            height: 1.5,
             opacity: 1,
           },
+          // Thin line on either axis (`SliderComponent` may be vertical).
+          '&:not(.MuiSlider-vertical) .MuiSlider-track, &:not(.MuiSlider-vertical) .MuiSlider-rail': {
+            height: 1.5,
+          },
+          '&.MuiSlider-vertical .MuiSlider-track, &.MuiSlider-vertical .MuiSlider-rail': { width: 1.5 },
         })}
       />
     </Stack>

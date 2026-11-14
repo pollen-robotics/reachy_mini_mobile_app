@@ -1,7 +1,9 @@
 /**
  * Full-screen robot camera for the telepresence tab.
  *
- * Two layers, same cover-fit:
+ * Two layers, same contain-fit (the whole field of view, letterboxed:
+ * cropping the feed to fill the screen is what made the old portrait
+ * view feel zoomed in):
  *  - `<video>`: the browser's own WebRTC path. Always attached, so it's
  *    the instant fallback (and what shows while the low-latency path
  *    waits for its first keyframe).
@@ -34,7 +36,7 @@ const layerSx = {
   inset: 0,
   width: '100%',
   height: '100%',
-  objectFit: 'cover',
+  objectFit: 'contain',
 } as const;
 
 export default function LiveVideo({ attachVideo, live, lowLatency, onModeChange }: LiveVideoProps) {
@@ -75,7 +77,7 @@ export default function LiveVideo({ attachVideo, live, lowLatency, onModeChange 
     const host = canvasHostRef.current;
     if (!host) return;
     const canvas = document.createElement('canvas');
-    Object.assign(canvas.style, { width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
+    Object.assign(canvas.style, { width: '100%', height: '100%', objectFit: 'contain', display: 'block' });
     host.appendChild(canvas);
     const tryAttach = () => {
       if (cancelled) return;

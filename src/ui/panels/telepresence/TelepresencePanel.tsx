@@ -1,15 +1,15 @@
 /**
- * Telepresence tab - immersive, full-screen operator view.
+ * Telepresence tab - immersive, full-screen operator view, always laid
+ * out landscape (`LandscapeStage`: a portrait phone shows it rotated, to
+ * be held sideways).
  *
- *   ┌──────────────────────────────────────┐
- *   │ [←]                    [🎤][🔊][⚙]  │  ← glass controls over the feed
- *   │                                      │
- *   │        live camera (cover-fit)       │
- *   │                                      │
- *   │                              ╭──╮    │
- *   │                        HEAD  │✥ │[⊙]│  ← head joystick + recenter
- *   │                              ╰──╯    │
- *   └──────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────┐
+ *   │ [←]                            [🎤][🔊][☺][⚙]  │  ← glass controls over the feed
+ *   │     ┌──────────────────────────────────────┐     │
+ *   │     │    live camera (contain: whole FOV)  │ ╭──╮│
+ *   │     └──────────────────────────────────────┘ │✥ ││  ← head joystick + recenter
+ *   │                                              ╰──╯│
+ *   └──────────────────────────────────────────────────┘
  *
  * Native counterpart of the telepresence HF Space: instead of an iframe
  * that re-authenticates and re-dials, it reuses the app's live
@@ -35,14 +35,16 @@ import { useDaemonState } from '@/features/daemon-state';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { useTelepresence } from '@/features/telepresence';
 import { useEmotionPlayer } from '@/features/emotions';
-import { LAYOUT, TYPO } from '@/ui/design/tokens';
+import { TYPO } from '@/ui/design/tokens';
 
 import { glassIconButtonSx, glassSurfaceSx } from './glass';
 import { Joystick, MoveIcon } from './joystick';
+import LandscapeStage from './LandscapeStage';
 import LiveVideo, { type LiveVideoMode } from './LiveVideo';
 import SoundButton from './SoundButton';
 import EmotionSheet from './EmotionSheet';
 import TelepresenceSettingsSheet from './TelepresenceSettingsSheet';
+import { STAGE_INSET } from './stage';
 
 type DeflectionRef = React.RefObject<{ x: number; y: number }>;
 
@@ -96,18 +98,7 @@ export default function TelepresencePanel({
         : undefined;
 
   return (
-    <Box
-      sx={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 1250,
-        bgcolor: '#000',
-        overflow: 'hidden',
-        // No text selection / callouts while thumbs are all over the screen.
-        userSelect: 'none',
-        WebkitUserSelect: 'none',
-      }}
-    >
+    <LandscapeStage>
       <LiveVideo
         attachVideo={session.attachVideo}
         live={live}
@@ -168,9 +159,8 @@ export default function TelepresencePanel({
         sx={{
           position: 'absolute',
           left: 0,
-          right: 0,
-          bottom: `calc(${LAYOUT.safeAreaBottom} + 28px)`,
-          px: 2.5,
+          right: `calc(${STAGE_INSET.right} + 20px)`,
+          bottom: `calc(${STAGE_INSET.bottom} + 20px)`,
           alignItems: 'flex-end',
           justifyContent: 'flex-end',
         }}
@@ -210,9 +200,9 @@ export default function TelepresencePanel({
         spacing={1}
         sx={{
           position: 'absolute',
-          top: `calc(${LAYOUT.safeAreaTop} + 12px)`,
-          left: 16,
-          right: 16,
+          top: `calc(${STAGE_INSET.top} + 12px)`,
+          left: `calc(${STAGE_INSET.left} + 16px)`,
+          right: `calc(${STAGE_INSET.right} + 16px)`,
           alignItems: 'center',
         }}
       >
@@ -262,8 +252,8 @@ export default function TelepresencePanel({
             glassSurfaceSx,
             {
               position: 'absolute',
-              top: `calc(${LAYOUT.safeAreaTop} + 68px)`,
-              right: 16,
+              top: `calc(${STAGE_INSET.top} + 68px)`,
+              right: `calc(${STAGE_INSET.right} + 16px)`,
               maxWidth: 260,
               borderRadius: 2,
               px: 1.5,
@@ -301,6 +291,6 @@ export default function TelepresencePanel({
         videoMode={videoMode}
         audioReady={session.hasReachedReady && live}
       />
-    </Box>
+    </LandscapeStage>
   );
 }

@@ -22,6 +22,8 @@ import { useEffect } from 'react';
 import type { SxProps, Theme } from '@mui/material';
 import { Box, Typography } from '@mui/material';
 
+import { useStage } from '@/ui/panels/telepresence/stage';
+
 import MoveIcon from './MoveIcon';
 import { useGamepadDeflection } from './useGamepadDeflection';
 import { useJoystickPointer } from './useJoystickPointer';
@@ -68,10 +70,12 @@ export default function Joystick({
   const ringDiameter = size;
   const thumbDiameter = Math.round(size * THUMB_RATIO);
 
+  const { rotation } = useStage();
   const pointer = useJoystickPointer({
     disabled: !enabled,
     ringDiameter,
     thumbDiameter,
+    stageRotation: rotation,
   });
 
   // A paired game controller drives the same puck/deflection as touch.

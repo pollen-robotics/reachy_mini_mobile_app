@@ -1,5 +1,5 @@
 /**
- * Bottom sheet behind the telepresence emotion button.
+ * Side sheet behind the telepresence emotion button.
  *
  *   status line   ("Playing 😂 laughing…" / hint)
  *   Plutchik wheel (tap a family, 🎲 for random)
@@ -7,7 +7,7 @@
  *   dances (the non-Plutchik moves of the library)
  *
  * Emotions play daemon-side (see `useEmotionPlayer`); the sheet stays
- * open so the operator can chain them while watching the video above.
+ * open so the operator can chain them while watching the video beside it.
  */
 import { useState } from 'react';
 import { Box, Chip, Drawer, Stack, Typography } from '@mui/material';
@@ -26,6 +26,11 @@ import {
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import EmotionWheel from './EmotionWheel';
+import { stageSheetProps } from './sheet';
+import { useStage } from './stage';
+
+/** Fits the sheet's ~350px content column. */
+const WHEEL_SIZE = 260;
 
 interface EmotionSheetProps {
   open: boolean;
@@ -51,6 +56,7 @@ function IntensityDots({ level, color }: { level: 1 | 2 | 3; color: string }) {
 
 export default function EmotionSheet({ open, onClose, player, blockedReason }: EmotionSheetProps) {
   const [family, setFamily] = useState<PlutchikFamily | null>(null);
+  const stage = useStage();
   const disabled = blockedReason !== null || player.busy;
 
   const play = (e: EmotionDef) => {
@@ -97,30 +103,8 @@ export default function EmotionSheet({ open, onClose, player, blockedReason }: E
   };
 
   return (
-    <Drawer
-      anchor="bottom"
-      open={open}
-      onClose={onClose}
-      // Same layer as the settings sheet: above the telepresence view
-      // (1250), below the session transition covers (1300).
-      sx={{ zIndex: 1280 }}
-      slotProps={{
-        paper: {
-          sx: {
-            borderTopLeftRadius: RADIUS.xxl,
-            borderTopRightRadius: RADIUS.xxl,
-            maxHeight: '85vh',
-            px: 2.5,
-            pt: 1.5,
-            pb: 'calc(var(--inset-bottom, env(safe-area-inset-bottom, 0px)) + 20px)',
-          },
-        },
-        // Keep the live video readable behind the sheet.
-        backdrop: { sx: { bgcolor: 'rgba(0,0,0,0.25)' } },
-      }}
-    >
-      <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider', mx: 'auto', mb: 1.5 }} />
-      <Stack spacing={2} sx={{ maxWidth: 480, width: '100%', mx: 'auto' }}>
+    <Drawer open={open} onClose={onClose} {...stageSheetProps(stage)}>
+      <Stack spacing={2}>
         <Typography
           role="status"
           aria-live="polite"
@@ -134,7 +118,7 @@ export default function EmotionSheet({ open, onClose, player, blockedReason }: E
           onSelect={(f) => setFamily((cur) => (cur === f ? null : f))}
           onRandom={() => play(family ? randomEmotionFromFamily(family) : randomEmotion())}
           disabled={disabled}
-          size={Math.min(300, typeof window !== 'undefined' ? window.innerWidth - 64 : 300)}
+          size={WHEEL_SIZE}
         />
 
         {family && (
