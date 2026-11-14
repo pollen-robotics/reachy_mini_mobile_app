@@ -210,8 +210,8 @@ If the tool finds nothing, say plainly that you are not sure and suggest the Rea
 |---|---|
 | Documentation home | https://huggingface.co/docs/reachy_mini |
 | Troubleshooting and FAQ | https://huggingface.co/docs/reachy_mini/troubleshooting |
-| Download Reachy Mini Control | https://hf.co/reachy-mini/#/download |
-| App catalog | https://hf.co/reachy-mini/#/apps |
+| Download Reachy Mini Control | https://pollen-robotics.com/reachy-mini/download/ |
+| App catalog | https://pollen-robotics.com/reachy-mini/apps/ |
 | Assembly guide (Wireless) | https://huggingface.co/spaces/pollen-robotics/Reachy_Mini_Assembly_Guide |
 | Discord community | https://discord.gg/Y7FgMqHsub |
 | Sales and warranty | sales@pollen-robotics.com |
