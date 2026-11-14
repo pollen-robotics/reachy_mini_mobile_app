@@ -333,9 +333,15 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (reason === undefined)
         return 'Lost the robot while starting the conversation. Retry in a moment.';
     }
+    // A first install takes minutes: say so, or the caption reads
+    // "Connecting" all along.
+    deps.emitErrorMessage(
+      'Installing the conversation on Reachy. First time only, it can take a few minutes.'
+    );
     try {
       await activeClient.installConvApp();
       await activeClient.startConvApp();
+      deps.emitErrorMessage(null);
       return null;
     } catch (err) {
       console.warn('[robot-conversation] install + start failed:', err);
