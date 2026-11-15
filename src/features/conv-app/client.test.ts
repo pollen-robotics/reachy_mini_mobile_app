@@ -38,7 +38,7 @@ describe('app lifecycle', () => {
     expect(rpcCall).toHaveBeenCalledWith(
       'apps.install',
       { name: CONV_APP_NAME },
-      { timeoutMs: 300_000 }
+      { timeoutMs: 900_000 }
     );
   });
 

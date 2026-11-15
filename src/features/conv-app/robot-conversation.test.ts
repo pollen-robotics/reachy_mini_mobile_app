@@ -240,9 +240,11 @@ describe('start', () => {
       'memory.list': { facts: [] },
       'personalities.apply': {},
     });
-    const { conversation } = harness(robot);
+    const { conversation, errors } = harness(robot);
 
     await expect(conversation.start()).resolves.toBe(true);
+    // Says it is installing, then clears it once the app starts.
+    expect(errors).toEqual([null, expect.stringMatching(/Installing the conversation/), null]);
     expect(calls).toEqual([
       'apps.status',
       'apps.start',

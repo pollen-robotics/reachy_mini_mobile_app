@@ -23,8 +23,13 @@ const USER_PREFIX = 'user_personalities/';
 
 /** `apps.start` covers a cold start of the app's Python process. */
 const START_TIMEOUT_MS = 60_000;
-/** A first install pulls the app from the Hub; minutes, not seconds. */
-const INSTALL_TIMEOUT_MS = 300_000;
+/**
+ * A first install pulls the app and builds its dependencies on the robot:
+ * minutes, more than five on a slow network. The robot keeps installing
+ * after the phone stops waiting, so a short budget only reports a failure
+ * that is not one. A lost link still rejects at once.
+ */
+const INSTALL_TIMEOUT_MS = 15 * 60_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
 /** Setting the startup app re-arms the daemon's antenna watcher. */
