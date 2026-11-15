@@ -1091,7 +1091,10 @@ function AlreadyOnlineView({
       body={<RobotAddressBadge ip={robotIp} resolving={resolvingIp} reachable={robotReachable} />}
       actions={
         <Stack spacing={1} sx={{ width: '100%' }}>
-          <PrimaryButton onClick={onSkip}>Continue</PrimaryButton>
+          {/* Continue waits for the address: the update before sign-in needs it. */}
+          <PrimaryButton onClick={onSkip} disabled={resolvingIp}>
+            Continue
+          </PrimaryButton>
           <TextButton onClick={onChangeNetwork}>
             Use a different network
           </TextButton>
