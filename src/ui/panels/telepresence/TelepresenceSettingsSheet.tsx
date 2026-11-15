@@ -1,6 +1,5 @@
 /**
- * Side sheet behind the telepresence cog (right edge of the landscape
- * stage, so the video stays visible on the left).
+ * Bottom sheet behind the telepresence cog.
  *
  *   Pose      head roll · base yaw · left / right antenna · reset
  *   Video     low-latency (WebCodecs) switch
@@ -9,19 +8,16 @@
  * Pose sliders show the controller's TARGETS: the base slider moves on
  * its own when the head joystick drags the base past the head's leash.
  */
-import { Box, Button, Drawer, Stack, Typography } from '@mui/material';
+import { Box, Button, Drawer, Slider, Stack, Typography } from '@mui/material';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 
 import { TELEPRESENCE_LIMITS, type TelepresenceHandle } from '@/features/telepresence';
 import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
-import { FONT_WEIGHT, TYPO } from '@/ui/design/tokens';
+import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 
 import type { LiveVideoMode } from './LiveVideo';
-import { stageSheetProps } from './sheet';
-import { useStage } from './stage';
-import StageSlider from './StageSlider';
 
 interface TelepresenceSettingsSheetProps {
   open: boolean;
@@ -56,11 +52,30 @@ export default function TelepresenceSettingsSheet({
   const daemon = useDaemonState();
   const { targets } = telepresence.motion;
   const L = TELEPRESENCE_LIMITS;
-  const stage = useStage();
 
   return (
-    <Drawer open={open} onClose={onClose} {...stageSheetProps(stage)}>
-      <Stack spacing={3}>
+    <Drawer
+      anchor="bottom"
+      open={open}
+      onClose={onClose}
+      // Above the full-screen telepresence layer (1250), below the
+      // session transition covers (1300).
+      sx={{ zIndex: 1280 }}
+      slotProps={{
+        paper: {
+          sx: {
+            borderTopLeftRadius: RADIUS.xxl,
+            borderTopRightRadius: RADIUS.xxl,
+            maxHeight: '80vh',
+            px: 3,
+            pt: 1.5,
+            pb: 'calc(var(--inset-bottom, env(safe-area-inset-bottom, 0px)) + 20px)',
+          },
+        },
+      }}
+    >
+      <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider', mx: 'auto', mb: 2 }} />
+      <Stack spacing={3} sx={{ maxWidth: 480, width: '100%', mx: 'auto' }}>
         <SheetSection
           title="Pose"
           action={
@@ -129,7 +144,6 @@ export default function TelepresenceSettingsSheet({
             onChange={daemon.setSpeakerVolume}
             onToggleMute={daemon.toggleSpeakerMute}
             disabled={!audioReady}
-            SliderComponent={StageSlider}
           />
           <AudioControlCard
             kind="microphone"
@@ -137,7 +151,6 @@ export default function TelepresenceSettingsSheet({
             onChange={daemon.setMicrophoneVolume}
             onToggleMute={daemon.toggleMicrophoneMute}
             disabled={!audioReady}
-            SliderComponent={StageSlider}
           />
         </SheetSection>
       </Stack>
@@ -194,7 +207,7 @@ function PoseSlider({
   return (
     <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
       <Typography sx={{ fontSize: TYPO.sm, width: 100, flexShrink: 0 }}>{label}</Typography>
-      <StageSlider
+      <Slider
         size="small"
         aria-label={label}
         value={value}

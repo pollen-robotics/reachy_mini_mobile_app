@@ -8,15 +8,11 @@
  * mutate `style.transform` at native frame rate without re-rendering).
  *
  * Deflection lives in the unit disk: +x = right, +y = DOWN (screen
- * convention), in the frame of the joystick as drawn: inside a rotated
- * stage (`stageRotation`), finger deltas are mapped back from screen
- * space first. It is reset to `{0, 0}` on release / cancel and whenever
+ * convention). It is reset to `{0, 0}` on release / cancel and whenever
  * `disabled` flips to true.
  */
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-import { screenToStageDelta, type StageRotation } from '@/ui/panels/telepresence/stage';
 
 import { computeDeflection, JOYSTICK_DEADZONE } from './deflection';
 
@@ -56,8 +52,6 @@ export interface UseJoystickPointerOptions {
   thumbDiameter: number;
   /** Radial deadzone as a fraction of the ring radius. Default 0.1. */
   deadzone?: number;
-  /** Clockwise CSS rotation of the stage the ring is drawn in. Default 0. */
-  stageRotation?: StageRotation;
 }
 
 const HOME_TRANSFORM = 'translate3d(-50%, -50%, 0)';
@@ -67,7 +61,6 @@ export function useJoystickPointer({
   ringDiameter,
   thumbDiameter,
   deadzone = JOYSTICK_DEADZONE,
-  stageRotation = 0,
 }: UseJoystickPointerOptions): JoystickPointerState {
   const deflectionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isActive, setIsActive] = useState(false);
@@ -81,8 +74,8 @@ export function useJoystickPointer({
   const ringRadius = ringDiameter / 2;
   // The thumb's centre may travel until its edge touches the ring edge.
   const visualRadius = Math.max(0, ringRadius - thumbDiameter / 2);
-  const geometryRef = useRef({ ringRadius, visualRadius, deadzone, stageRotation });
-  geometryRef.current = { ringRadius, visualRadius, deadzone, stageRotation };
+  const geometryRef = useRef({ ringRadius, visualRadius, deadzone });
+  geometryRef.current = { ringRadius, visualRadius, deadzone };
 
   const thumbDomRef = useRef<HTMLDivElement | null>(null);
   const thumbRef = useCallback((node: HTMLDivElement | null) => {
@@ -115,11 +108,13 @@ export function useJoystickPointer({
     (clientX: number, clientY: number) => {
       const centre = ringCentreRef.current;
       if (!centre) return;
-      const { ringRadius: radius, deadzone: dz, stageRotation: rotation } = geometryRef.current;
-      // The ring's bounding-box centre is rotation-invariant; only the
-      // finger delta needs mapping into the stage frame.
-      const local = screenToStageDelta(clientX - centre.x, clientY - centre.y, rotation);
-      const d = computeDeflection(local.x, local.y, radius, dz);
+      const { ringRadius: radius, deadzone: dz } = geometryRef.current;
+      const d = computeDeflection(
+        clientX - centre.x,
+        clientY - centre.y,
+        radius,
+        dz,
+      );
       applyDeflection(d.x, d.y);
     },
     [applyDeflection],

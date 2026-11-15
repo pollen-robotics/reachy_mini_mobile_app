@@ -1,9 +1,9 @@
 /**
- * Full-screen robot camera for the telepresence tab.
+ * Robot camera for the telepresence tab. Fills its (16:9) parent.
  *
- * Two layers, same contain-fit (the whole field of view, letterboxed:
- * cropping the feed to fill the screen is what made the old portrait
- * view feel zoomed in):
+ * Two layers, same contain-fit (the whole field of view, letterboxed if
+ * the parent's ratio ever differs: cropping the feed to fill a portrait
+ * screen is what made the old view feel zoomed in):
  *  - `<video>`: the browser's own WebRTC path. Always attached, so it's
  *    the instant fallback (and what shows while the low-latency path
  *    waits for its first keyframe).
