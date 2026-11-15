@@ -93,6 +93,7 @@ import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
 import { isConvAppRunning } from '@/features/conv-app/app-slot';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { renameRobot } from '@/features/robot-session/robot-name';
 import { SESSION_TIMINGS } from '@/features/robot-session/timings';
 import { recordConnectionEvent } from '@/features/robot-session/connection-journal';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
@@ -350,15 +351,16 @@ function ConnectedSession({
   // name locally the moment a rename lands, so the topbar identity + settings
   // reflect it immediately instead of only on the next app launch.
   const [displayName, setDisplayName] = useState(robotName);
+  const { getRobot } = session;
   const handleRenameRobot = useCallback(
     async (name: string): Promise<string | null> => {
-      const robot = session.getRobot();
+      const robot = getRobot();
       if (!robot) return null;
-      const saved = await robot.setRobotName(name);
+      const saved = await renameRobot(robot, name);
       if (saved) setDisplayName(saved);
       return saved;
     },
-    [session],
+    [getRobot],
   );
 
   // The wizard will run: warm the robot's HF cache for the onboarding moves
