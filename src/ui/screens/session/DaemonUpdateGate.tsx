@@ -120,8 +120,8 @@ interface DaemonUpdateGateProps {
   /** Leave the session and return to the robot list. */
   onBackToRobots: () => void;
   /**
-   * The robot is restarting to finish the update (or the user chose to
-   * keep waiting for it). The screen's recovery loop stretches its window
+   * The robot is restarting to finish the update (or the user
+   * tapped Reconnect). The screen's recovery loop stretches its window
    * to `SESSION_TIMINGS.rebootRecoverWindowMs` meanwhile.
    */
   onRebootingChange?: (rebooting: boolean) => void;
@@ -349,7 +349,7 @@ export default function DaemonUpdateGate({
             <PrimaryButton onClick={() => setPhase('prompt')}>Try again</PrimaryButton>
           )}
           {effectivePhase === 'lost' && (
-            <PrimaryButton onClick={() => setPhase('rebooting')}>Keep waiting</PrimaryButton>
+            <PrimaryButton onClick={() => setPhase('rebooting')}>Reconnect</PrimaryButton>
           )}
           {effectivePhase === 'prompt' && !canSelfUpdate && (
             <PrimaryButton onClick={() => void openExternalUrl(FLASHER_PAGE_URL)}>
@@ -411,7 +411,7 @@ function bodyFor(
     case 'done':
       return current ? `Now running v${current}.` : 'Your Reachy is now up to date.';
     case 'lost':
-      return 'The update may have finished, but the robot has not reconnected yet. Check that it is powered on and on Wi-Fi, then keep waiting or go back to your robots and reconnect.';
+      return 'The update may have finished, but Reachy has not reconnected. Turn it off, wait 10 seconds and turn it back on, then tap Reconnect. It takes about a minute to come back online.';
     case 'failed':
       return 'The robot did not respond to the update request. Make sure you are close to it and it is online, then try again.';
     default:

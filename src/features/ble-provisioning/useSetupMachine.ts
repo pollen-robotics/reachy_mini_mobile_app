@@ -924,17 +924,21 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const skipWifiSetup = useCallback(() => {
     const runId = (runIdRef.current += 1);
     setError(null);
-    if (!robotIpRef.current) {
-      setPhase('linking-account');
-      // The runId bump above kills the fast path's background IP resolve;
-      // restart it under the new runId so the link view's address badge keeps
-      // resolving instead of flipping to "not found". Without an IP there is
-      // no way to confirm an update, so this path signs in on the current
-      // daemon (the in-session gate still applies).
-      void resolveRobotIp(runId, IP_POLL_TIMEOUT_MS);
-      return;
-    }
-    void updateThenLink(runId);
+    void (async () => {
+      if (!robotIpRef.current) {
+        // The runId bump above kills the fast path's background IP resolve;
+        // finish it under the new runId before moving on. Without an IP the
+        // update can't be confirmed and is skipped, so going straight to
+        // sign-in would link an outdated daemon (legacy sign-in, then the
+        // in-session update gate). From the pick list, a network the user
+        // only expanded must not show as the current one meanwhile.
+        if (connectedSsidRef.current) setSelectedSsid(connectedSsidRef.current);
+        setPhase('wifi-already-connected');
+        await resolveRobotIp(runId, IP_POLL_TIMEOUT_MS);
+        if (runId !== runIdRef.current || !mountedRef.current) return;
+      }
+      await updateThenLink(runId);
+    })();
   }, [resolveRobotIp, updateThenLink]);
 
   // ── ACCOUNT LINK (robot-side OAuth) - the last human step ────────────────────

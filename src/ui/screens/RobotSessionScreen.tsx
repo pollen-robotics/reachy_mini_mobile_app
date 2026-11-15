@@ -664,7 +664,7 @@ function ConnectedSession({
   const [autoRecovering, setAutoRecovering] = useState(false);
   const recoverIncidentStartRef = useRef<number | null>(null);
   // Set by the update gate while the robot restarts after a self-update:
-  // the loop then gets the longer reboot window. "Keep waiting" re-arms
+  // the loop then gets the longer reboot window. "Reconnect" re-arms
   // it, which restarts the incident below.
   const [daemonRebooting, setDaemonRebooting] = useState(false);
   useEffect(() => {
