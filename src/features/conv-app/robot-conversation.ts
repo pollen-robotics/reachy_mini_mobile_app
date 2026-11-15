@@ -38,7 +38,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
-import { setLiveRobot } from './live-client';
+import { followPersonality } from './live-personality';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
 
@@ -239,7 +239,6 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     const endedClient = client;
     running = false;
     client = null;
-    setLiveRobot(null);
     unfollow();
     if (!endedClient) return;
     deps.setConversationState('stopping');
@@ -258,7 +257,8 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
       activeClient.on('conversation.activity', onActivity),
-      activeClient.on('conversation.phase', onPhase)
+      activeClient.on('conversation.phase', onPhase),
+      followPersonality(activeClient, { confirmStart: !adopted })
     );
     raf = requestAnimationFrame(tick);
   };
@@ -425,7 +425,6 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       }
 
       robotTurn = 'ready';
-      setLiveRobot(robot);
       follow(activeClient);
       deps.setConversationState('listening');
       return true;
@@ -434,8 +433,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     async stop(opts) {
       if (!running && client === null) return;
       running = false;
-      setLiveRobot(null);
-      unfollow();
+        unfollow();
       const activeClient = client;
       client = null;
       if (!activeClient || opts?.keepRobotApp) return;

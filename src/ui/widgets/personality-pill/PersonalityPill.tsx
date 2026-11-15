@@ -33,15 +33,13 @@
  * Selection flow
  * ──────────────
  * The band ITSELF doesn't pick a personality - it just opens the
- * grid. The grid mutates the personality store on tap; the
- * conversation panel above watches the active id and triggers
- * `restartConversation()` if a session is live, so the running
- * realtime client picks up the new instructions + voice on the next
- * reconnect. Editing a custom persona lives on the grid tiles (a
- * pencil badge), not here.
+ * grid, during a conversation too. The grid mutates the personality
+ * store on tap, and the store hands the choice to the robot at once
+ * when a conversation is running there (the robot swaps its voice
+ * backend in place and greets as the new persona). Editing a custom
+ * persona lives on the grid tiles (a pencil badge), not here.
  */
-import { useState } from 'react';
-import { Alert, Box, ButtonBase, Snackbar, Stack, Typography, useTheme } from '@mui/material';
+import { Box, ButtonBase, Stack, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
@@ -93,16 +91,6 @@ interface PersonalityPillProps {
    * practice (the host only opens one form at a time).
    */
   editingPersona?: Personality | null;
-  /**
-   * Disable the picker entirely. Used by the host while a live
-   * conversation is running so the user can't switch personas
-   * mid-call (which would force a stop+start of the realtime client
-   * and audibly cut Reachy off mid-sentence). The band stays
-   * mounted and keeps showing the active persona; a tap surfaces a
-   * short snackbar explaining the lock instead of silently ignoring
-   * the gesture.
-   */
-  disabled?: boolean;
 }
 
 export function PersonalityPill({
@@ -111,15 +99,9 @@ export function PersonalityPill({
   onCreate,
   creating = false,
   editingPersona = null,
-  disabled = false,
 }: PersonalityPillProps) {
   const theme = useTheme();
   const active = useActivePersonality();
-  // Transient "why is this locked" hint, shown when the user taps the
-  // band while a live conversation holds the picker closed. Without
-  // it the tap would be silently swallowed and the band would feel
-  // broken (the lock is otherwise only exposed via aria-label).
-  const [lockedHint, setLockedHint] = useState(false);
   // "A form is open" - covers both authoring a new persona and editing
   // an existing one. Drives the inert toggle, the hidden chevron, and
   // the trailing "✕".
@@ -167,33 +149,24 @@ export function PersonalityPill({
   // Tap anywhere on the band:
   //   - form open  -> close the form (the whole band acts as the "✕",
   //     which stays as the visual cue at the right edge),
-  //   - live call  -> surface the locked hint instead of toggling,
-  //   - otherwise  -> toggle the picker.
+  //   - otherwise  -> toggle the picker, live conversation or not.
   const handleBandClick = (): void => {
     if (authoring) {
       onCreate();
-      return;
-    }
-    if (disabled) {
-      setLockedHint(true);
       return;
     }
     onToggle();
   };
 
   return (
-    <>
-    {/* THE toggle: the WHOLE band is one tap target (avatar + name +
-        chevron). Rendered as a div-based ButtonBase so the nested "✕" /
-        regenerate controls (which stop propagation) stay valid and keep
-        their own pointer events. While locked (live call) the band stays
-        tappable ONLY to surface the locked hint - no ripple, so it
-        doesn't falsely read as an actionable control. */}
+    // THE toggle: the WHOLE band is one tap target (avatar + name +
+    // chevron). Rendered as a div-based ButtonBase so the nested "✕" /
+    // regenerate controls (which stop propagation) stay valid and keep
+    // their own pointer events.
     <ButtonBase
       component="div"
       onClick={handleBandClick}
-      focusRipple={!disabled}
-      disableRipple={disabled}
+      focusRipple
       // `aria-controls` would be ideal but the grid is rendered
       // conditionally in the host with no stable id; `aria-expanded` alone
       // still reads as "this control toggles a related region".
@@ -201,11 +174,9 @@ export function PersonalityPill({
       aria-label={
         authoring
           ? 'Close the form'
-          : disabled
-            ? `Personality: ${active.name}. Locked while talking - end the conversation to change.`
-            : open
-              ? 'Close personality picker'
-              : `Personality: ${active.name}. Tap to open the picker.`
+          : open
+            ? 'Close personality picker'
+            : `Personality: ${active.name}. Tap to open the picker.`
       }
       sx={{
         display: 'flex',
@@ -582,7 +553,7 @@ export function PersonalityPill({
             // Half the slot's intrinsic right gap (8 -> 4px) so the chevron
             // sits closer to the band edge.
             mr: -1,
-            color: disabled ? 'action.disabled' : 'primary.main',
+            color: 'primary.main',
             transition: 'color 0.18s ease',
           }}
         >
@@ -597,26 +568,5 @@ export function PersonalityPill({
       )}
       </Box>
     </ButtonBase>
-    {/* Locked hint: same Snackbar+Alert pattern as the apps tab's
-        pin-cap toast, raised above the bottom nav. OUTSIDE the band's
-        ButtonBase so taps on the alert (e.g. its close button) don't
-        bubble into the band's click handler and re-trigger the hint. */}
-    <Snackbar
-      open={lockedHint}
-      autoHideDuration={3500}
-      onClose={() => setLockedHint(false)}
-      anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      sx={{ bottom: { xs: 88, sm: 88 } }}
-    >
-      <Alert
-        severity="info"
-        variant="filled"
-        onClose={() => setLockedHint(false)}
-        sx={{ fontSize: TYPO.xs }}
-      >
-        End the conversation to change personality.
-      </Alert>
-    </Snackbar>
-    </>
   );
 }

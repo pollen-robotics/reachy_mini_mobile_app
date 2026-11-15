@@ -44,6 +44,7 @@ export {
   clearAvatarPending,
   getActivePersonality,
   getActivePersonalityId,
+  getPendingWrites,
   markAvatarPending,
   removeCustomPersonality,
   reorderCustomPersonalities,

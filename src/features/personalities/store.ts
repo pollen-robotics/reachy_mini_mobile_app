@@ -19,10 +19,9 @@
  *      ref through several layers; a module-level store lets the
  *      engine pull it lazily on every reconnect.
  *
- *   2. Multiple consumers (the strip widget, the orb tint, the
- *      conversation panel restart effect) need to react to the same
- *      change. A single subject keeps them in sync without prop
- *      drilling.
+ *   2. Multiple consumers (the strip widget, the orb tint, the live
+ *      conversation's robot sync) need to react to the same change. A
+ *      single subject keeps them in sync without prop drilling.
  *
  *   3. Persistence is colocated with mutation: writes go through
  *      `setActive` / `addCustom` / `removeCustom` which always update
@@ -52,7 +51,6 @@ import {
 } from './storage';
 import type { PendingWrites } from './storage';
 import type { RobotPersonality } from '@/features/conv-app/client';
-import { getLiveClient } from '@/features/conv-app/live-client';
 
 import { ROBOT_DEFAULT_PROFILE, USER_PREFIX, presentationKey, toCatalog } from './from-robot';
 import type { CustomPersonalityInput, Personality } from './types';
@@ -300,9 +298,9 @@ function update(next: Partial<State>): void {
 
 /**
  * Subscribe to changes. Returns an unsubscribe callback. Used by
- * the React `useSyncExternalStore` adapter and by the engine's
- * conversation panel effect (which restarts the conv when the active
- * id changes mid-session).
+ * the React `useSyncExternalStore` adapter and by a running
+ * conversation, which switches the robot when the active id or the
+ * authoring changes mid-session.
  */
 export function subscribe(listener: Listener): () => void {
   listeners.add(listener);
@@ -343,14 +341,9 @@ export function setActivePersonality(id: string): void {
     return;
   }
   writeActivePersonalityId(id);
+  // A running conversation follows this store and switches the robot live
+  // (`conv-app/live-personality.ts`); otherwise the next start carries it.
   update({ activeId: id });
-  // Tell the robot now when it is listening; otherwise the next conversation
-  // start carries it (see `sync-settings.ts`).
-  getLiveClient()
-    ?.applyPersonality(id)
-    .catch((err: unknown) => {
-      console.warn('[personalities] could not apply on the robot:', err);
-    });
 }
 
 /** Add a custom personality. Its id is the robot's own naming for what

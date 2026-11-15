@@ -97,7 +97,11 @@ export interface ConvAppClient {
   getPersonalities(): Promise<RobotPersonality[]>;
   /** The profile's avatar as SVG markup. */
   getAvatar(name: string): Promise<string>;
-  applyPersonality(name: string): Promise<void>;
+  /**
+   * Make `name` the robot's personality, live when a conversation runs.
+   * `force` re-applies a name the robot is already on, after an edit.
+   */
+  applyPersonality(name: string, opts?: { force?: boolean }): Promise<void>;
   savePersonality(personality: RobotPersonality): Promise<void>;
   deletePersonality(name: string): Promise<void>;
   setLanguage(language: string): Promise<string>;
@@ -159,8 +163,12 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     async getAvatar(name) {
       return (await robot.rpcCall<{ svg: string }>('personalities.avatar', { name })).svg;
     },
-    async applyPersonality(name) {
-      await robot.rpcCall('personalities.apply', { name, persist: true });
+    async applyPersonality(name, opts) {
+      await robot.rpcCall('personalities.apply', {
+        name,
+        persist: true,
+        force: opts?.force ?? false,
+      });
     },
     async savePersonality({ name, instructions, greeting, voice }) {
       // `personalities.save` names a profile by its bare slug and puts it in
