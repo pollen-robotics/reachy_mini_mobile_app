@@ -54,6 +54,7 @@ import {
   type LiveSession,
 } from "@/features/robot-session/live-session";
 import { createConversationHandle } from "./host-handle";
+import { isConvAppRunning } from "@/features/conv-app/app-slot";
 import { createRobotConversation } from "@/features/conv-app/robot-conversation";
 import { createEngineCore } from "./engine-core";
 import {
@@ -468,6 +469,14 @@ const robotConversation = createRobotConversation({
   getLevelsTarget: getAudioLevelsTarget,
   onLevels,
   onToolToast,
+  // The robot went to sleep on its own (voice or inactivity timeout): clear
+  // the flags so the next tap starts again, and forget the motor mode so the
+  // next start re-asserts `enabled` instead of deduping against a stale cache.
+  onEnded: () => {
+    convoActiveRequested.off();
+    conversationStarted.off();
+    session.recordMotorMode(null);
+  },
 });
 
 // ─── Host-driven controls ──────────────────────────────────────────────
@@ -583,7 +592,17 @@ async function handleHostStop(): Promise<void> {
  *     `runConversationParts()`.
  */
 async function onConnectionLive(): Promise<void> {
-  if (!convoActiveRequested.get()) return;
+  if (!convoActiveRequested.get()) {
+    // The robot may already be talking: touching its antennas starts the
+    // conversation app with no phone involved. Attach to that conversation
+    // as a tap on the orb would, rather than showing "tap to start" over
+    // it. `robotConversation.start()` sees the app was already running and
+    // leaves its settings alone.
+    const robot = liveSession.getRobot();
+    if (!robot || !(await isConvAppRunning(robot))) return;
+    if (unmounted.get() || !session.isEstablished()) return;
+    convoActiveRequested.on();
+  }
   await runConversationParts();
 }
 

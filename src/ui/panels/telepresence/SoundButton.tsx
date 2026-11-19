@@ -3,7 +3,7 @@
  *
  *   tap         → mute / unmute the stream (phone mic → robot, or
  *                 robot mic → phone)
- *   long-press  → pop a vertical volume slider underneath, bound to
+ *   long-press  → pop a vertical volume slider above, bound to
  *                 the matching FAR-END daemon volume (robot speaker for
  *                 the mic button, robot mic gain for the speaker button)
  */
@@ -86,13 +86,14 @@ export default function SoundButton({
         open={open}
         anchorEl={anchorRef.current}
         onClose={() => setOpen(false)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+        // Above: the button sits on the joystick's ring, the puck is below.
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         slotProps={{
           paper: {
             sx: {
               ...glassSurfaceSx,
-              mt: 1,
+              mt: -1,
               borderRadius: 999,
               px: 1,
               py: 2,

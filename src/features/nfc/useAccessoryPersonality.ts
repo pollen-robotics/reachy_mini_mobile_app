@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef } from 'react';
 
-import { getLiveClient } from '@/features/conv-app/live-client';
+import { createConvAppClient } from '@/features/conv-app/client';
 import {
   followRobotPersonality,
   getActivePersonalityId,
@@ -20,6 +20,7 @@ import {
   setPersonalityBeforeAccessory,
   toRobotPersonalityName,
 } from '@/features/personalities';
+import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import type { AccessoryView } from './accessory';
 import { IDLE_FOLLOWER, followAccessory, type FollowerState } from './accessory-follower';
@@ -32,11 +33,10 @@ import { IDLE_FOLLOWER, followAccessory, type FollowerState } from './accessory-
 const RECONCILE_AFTER_MS = 20_000;
 
 /** Show the personality the robot runs, if the panel shows another one. */
-async function reconcileWithRobot(): Promise<void> {
-  const client = getLiveClient();
-  if (!client) return;
+async function reconcileWithRobot(robot: ReachyMiniInstance | null): Promise<void> {
+  if (!robot) return;
   try {
-    const status = await client.getStatus();
+    const status = await createConvAppClient(robot).getStatus();
     const running = resolveRobotPersonality(status.personality ?? 'default');
     if (running) followRobotPersonality(running.id);
   } catch (err) {
@@ -48,7 +48,11 @@ function idOf(name: string | null): string | null {
   return name === null ? null : (resolveRobotPersonality(name)?.id ?? null);
 }
 
-export function useAccessoryPersonality(accessory: AccessoryView, acting: boolean): void {
+export function useAccessoryPersonality(
+  accessory: AccessoryView,
+  acting: boolean,
+  getRobot: () => ReachyMiniInstance | null
+): void {
   const previousRef = useRef<AccessoryView | null>(null);
   const stateRef = useRef<FollowerState>(IDLE_FOLLOWER);
   const { state: accessoryState, personality } = accessory;
@@ -59,6 +63,12 @@ export function useAccessoryPersonality(accessory: AccessoryView, acting: boolea
     },
     []
   );
+  // The conversation is over: there is no switch left to check.
+  useEffect(() => {
+    if (!acting || !reconcileRef.current) return;
+    clearTimeout(reconcileRef.current);
+    reconcileRef.current = null;
+  }, [acting]);
 
   useEffect(() => {
     const next: AccessoryView = { state: accessoryState, personality };
@@ -74,13 +84,16 @@ export function useAccessoryPersonality(accessory: AccessoryView, acting: boolea
     if (!acting) {
       // The conversation app switches it and announces it; check it did.
       if (reconcileRef.current) clearTimeout(reconcileRef.current);
-      reconcileRef.current = setTimeout(() => void reconcileWithRobot(), RECONCILE_AFTER_MS);
+      reconcileRef.current = setTimeout(
+        () => void reconcileWithRobot(getRobot()),
+        RECONCILE_AFTER_MS
+      );
       return;
     }
     const target = idOf(step.switchTo);
     if (target) setActivePersonalityForAccessory(target);
-    // `acting` is read, not watched: a conversation starting or stopping is
-    // not an accessory coming or going.
+    // `acting` and `getRobot` are read, not watched: a conversation starting
+    // or stopping is not an accessory coming or going.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessoryState, personality]);
 }

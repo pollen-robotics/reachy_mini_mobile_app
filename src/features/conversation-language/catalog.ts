@@ -1,33 +1,31 @@
 /**
  * Conversation language catalog.
  *
- * Centralises the 7 languages we ship, their flag emoji, and their
+ * Centralises the languages we ship, their flag emoji, and their
  * native + English names. Imported by:
  *   - the store (for `useActiveLanguage()` + persistence),
- *   - the prompt fragment (system-prompt nudge),
  *   - the UI picker (menu options).
  *
- * Default = English. The picker exposes the seven entries below in
- * the order they appear here, which roughly mirrors the user base
- * we expect for the early demos (English + the European market we
- * target first, with Mandarin as the lone non-Latin script to
- * cover the largest mobile audience by headcount).
+ * Default = Auto: speech recognition detects the language, so a
+ * conversation that switches language mid-way gets the right accent
+ * too (a pinned language keeps its accent). The fixed languages
+ * follow in the order the picker shows them, which roughly mirrors
+ * the user base we expect for the early demos (English + the
+ * European market we target first, with Mandarin as the lone
+ * non-Latin script to cover the largest mobile audience by headcount).
  *
  * Adding a language
  * ─────────────────
  * 1. Add an entry below + the matching `LanguageId` literal in
  *    `types.ts`.
- * 2. Run the type-checker - everywhere a `LanguageId` switch lives
- *    (currently only `prompt-fragment.ts` if we ever pivot to a
- *    per-language wording; the generic builder works for any
- *    `LanguageMeta`) will fail and force you to handle the new case.
- * 3. No UI change needed - the picker iterates `LANGUAGES`.
+ * 2. No UI change needed - the picker iterates `LANGUAGES`.
  */
 import type { LanguageId, LanguageMeta } from './types';
 
-export const DEFAULT_LANGUAGE_ID: LanguageId = 'en';
+export const DEFAULT_LANGUAGE_ID: LanguageId = 'auto';
 
 export const LANGUAGES: readonly LanguageMeta[] = [
+  { id: 'auto', flag: '🌐', nameNative: 'Auto',     nameEnglish: 'any language' },
   { id: 'en', flag: '🇬🇧', nameNative: 'English',    nameEnglish: 'English'    },
   { id: 'fr', flag: '🇫🇷', nameNative: 'Français',   nameEnglish: 'French'     },
   { id: 'es', flag: '🇪🇸', nameNative: 'Español',    nameEnglish: 'Spanish'    },
@@ -39,15 +37,14 @@ export const LANGUAGES: readonly LanguageMeta[] = [
 
 /**
  * O(1) lookup table built once at module load. Avoids re-scanning
- * `LANGUAGES` on every `getLanguageMeta()` call - the prompt
- * fragment + the UI both hit this on every conv start.
+ * `LANGUAGES` on every `getLanguageMeta()` call.
  */
 const BY_ID = new Map<LanguageId, LanguageMeta>(
   LANGUAGES.map((entry) => [entry.id, entry]),
 );
 
 /**
- * Resolve a `LanguageId` to its metadata. Returns the English
+ * Resolve a `LanguageId` to its metadata. Returns the default
  * entry as a defensive fallback if a caller somehow passes an id
  * not in the catalog (should never happen given the type, but the
  * store reads localStorage which is `string` until we narrow it).

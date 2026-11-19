@@ -8,6 +8,12 @@
  * card/drop-zone container and no fleet-list chrome (hero illustration /
  * "Your Reachies" header are hidden by the parent), so this reads as a
  * dedicated onboarding screen rather than an empty list.
+ *
+ * The setup CTA is Bluetooth Wi-Fi provisioning, which only applies to the
+ * Wireless version. A Lite is never provisioned: it shows up here once
+ * Reachy Mini Control runs its daemon on the host computer, so the Lite
+ * hint under the CTA keeps Lite owners out of a wizard that can't work
+ * for them.
  */
 
 import { Box, Button, Stack, Typography } from '@mui/material';
@@ -46,6 +52,18 @@ export default function FirstReachyInvite({ onStartSetup }: { onStartSetup: () =
           Set up a new Reachy
         </Button>
       </Box>
+      <Typography
+        sx={{
+          fontSize: TYPO.sm,
+          color: 'text.secondary',
+          textAlign: 'center',
+          maxWidth: 320,
+          lineHeight: 1.5,
+        }}
+      >
+        Have a Reachy Mini Lite? No setup needed: open Reachy Mini Control on the computer
+        it&apos;s plugged into, signed in with this Hugging Face account, and it will show up here.
+      </Typography>
     </Stack>
   );
 }

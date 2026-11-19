@@ -3,11 +3,12 @@
  *
  * Language, scene awareness and long-term memory are chosen in the settings
  * panel, which disables all three while a conversation runs, and personalities
- * are authored from a picker reachable at any time. So the moment the user can
- * change any of it is exactly the moment the conversation app is stopped and
- * unreachable. Rather than write through on every toggle, the phone keeps the
- * values and pushes them once the app is up: one mechanism, applied where the
- * robot can actually hear it.
+ * are authored from a picker reachable at any time. So most changes happen
+ * while the conversation app is stopped and unreachable. Rather than write
+ * through on every toggle, the phone keeps the values and pushes them once the
+ * app is up: one mechanism, applied where the robot can actually hear it. The
+ * one exception is a personality changed mid-conversation, which
+ * `live-personality.ts` hands over at once.
  *
  * Each push is skipped when the robot already agrees, so a start costs nothing
  * when nothing changed. Failures are logged and swallowed: a setting that did
@@ -16,12 +17,13 @@
 import { getActiveLanguageId } from '@/features/conversation-language';
 import { isMemoryEnabled, isVisionEnabled } from '@/features/conversation-settings';
 import {
+  fetchRobotAvatars,
   getActivePersonalityId,
   getPersonalityBeforeAccessory,
-  syncPersonalitiesToRobot,
+  reconcilePersonalities,
 } from '@/features/personalities';
 
-import type { ConvAppClient, ConvAppStatus } from './client';
+import type { ConvAppClient, ConvAppStatus, RobotPersonality } from './client';
 import { cacheFacts, consumeClearPending, isClearPending } from './memory-cache';
 
 export async function applySettingsToRobot(
@@ -32,10 +34,19 @@ export async function applySettingsToRobot(
   const memory = isMemoryEnabled();
   const vision = isVisionEnabled();
 
+  // One failure must not skip the rest: an older app has no `language.set`.
+  const warn = (err: unknown) => console.warn('[conv-app] could not apply a setting:', err);
+  // The plain settings first: the app greets once its backend connects, and
+  // reconciling the personalities below is several calls.
+  if (status.language !== language) await client.setLanguage(language).catch(warn);
+  if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory).catch(warn);
+  if (status.vision_enabled !== vision) await client.setVisionEnabled(vision).catch(warn);
+
+  let robots: RobotPersonality[] | null = null;
   try {
-    // Personalities first: the robot owns the catalog, and the phone's active
-    // id is only meaningful once the two have been reconciled.
-    await syncPersonalitiesToRobot(client);
+    // The robot owns the catalog, and the phone's active id is only
+    // meaningful once the two have been reconciled.
+    robots = await reconcilePersonalities(client);
     const personality = getActivePersonalityId();
     // Running an accessory's personality: the one from before it stays the
     // robot's default, so taking the accessory off mid-conversation goes back
@@ -49,11 +60,8 @@ export async function applySettingsToRobot(
         console.warn('[conv-app] could not set the fallback personality:', err);
       });
     }
-    if (status.language !== language) await client.setLanguage(language);
-    if (status.memory_enabled !== memory) await client.setMemoryEnabled(memory);
-    if (status.vision_enabled !== vision) await client.setVisionEnabled(vision);
   } catch (err) {
-    console.warn('[conv-app] could not apply settings to the robot:', err);
+    console.warn('[conv-app] could not apply the personality to the robot:', err);
   }
 
   try {
@@ -64,5 +72,13 @@ export async function applySettingsToRobot(
     cacheFacts(await client.listMemory());
   } catch (err) {
     console.warn('[conv-app] could not sync memory with the robot:', err);
+  }
+
+  // Last: the drawings are cosmetic and can take seconds to fetch. Anything
+  // that restarts the backend has to be out before the robot greets.
+  if (robots) {
+    await fetchRobotAvatars(client, robots).catch((err: unknown) => {
+      console.warn('[conv-app] could not fetch the robot avatars:', err);
+    });
   }
 }

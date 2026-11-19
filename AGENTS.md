@@ -222,6 +222,14 @@ Tested on / AI assistance). Title the PR like a commit
 (`type(scope): what it does`), label it, add the `Assisted-by:` trailer
 to assisted commits, and never add `Signed-off-by` yourself.
 
+### Releases
+
+"Do a release" / "bump the version" has a fixed procedure: follow
+[`.claude/skills/release/SKILL.md`](./.claude/skills/release/SKILL.md)
+(version bump commit on `main`, `vX.Y.Z` GitHub release, signed store
+build). Claude Code loads it as the `release` skill; other tools read it
+as a runbook.
+
 ### Validation cycle
 
 After substantive changes:

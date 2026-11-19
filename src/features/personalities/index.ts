@@ -38,13 +38,14 @@ export type {
   StreamPersonalityOptions,
 } from './generate';
 export { presentationKey } from './from-robot';
-export { syncPersonalitiesToRobot } from './sync';
+export { fetchRobotAvatars, reconcilePersonalities, syncPersonalitiesToRobot } from './sync';
 export {
   addCustomPersonality,
   clearAvatarPending,
   followRobotPersonality,
   getActivePersonality,
   getActivePersonalityId,
+  getPendingWrites,
   getPersonalityBeforeAccessory,
   markAvatarPending,
   removeCustomPersonality,

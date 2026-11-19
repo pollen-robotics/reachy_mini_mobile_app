@@ -39,7 +39,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
-import { setLiveRobot } from './live-client';
+import { followPersonality } from './live-personality';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
 
@@ -54,6 +54,9 @@ const MIN_DAEMON_VERSION = '1.10.0';
 /** How long the app may take from `apps.start` to a connected backend. */
 const READY_TIMEOUT_MS = 60_000;
 const READY_POLL_MS = 1_000;
+/** How long the app may take to exit after it announced its own end. */
+const EXIT_TIMEOUT_MS = 15_000;
+const EXIT_POLL_MS = 500;
 /** Mic RMS (0..1, robot-scaled) above which the user counts as speaking. */
 const USER_SPEAKING_THRESHOLD = 0.15;
 /** How long after the last loud frame the user still counts as speaking. */
@@ -84,6 +87,11 @@ export interface RobotConversationDeps {
   getLevelsTarget: () => HTMLElement | null;
   onLevels: ((level: ConversationLevelEvent) => void) | null;
   onToolToast: ((toast: ConversationToolToastEvent) => void) | null;
+  /**
+   * The robot ended the conversation on its own (sleep tool or inactivity
+   * timeout) and its app has exited; the state is already `idle`.
+   */
+  onEnded: () => void;
 }
 
 export interface RobotConversation {
@@ -109,6 +117,10 @@ function sleep(ms: number): Promise<void> {
 export function createRobotConversation(deps: RobotConversationDeps): RobotConversation {
   let client: ConvAppClient | null = null;
   let running = false;
+  /** Pending while an app that announced its end is still exiting. */
+  let ending: Promise<void> | null = null;
+  // The app was already running when `start()` looked (see `ensureAppRunning`).
+  let adopted = false;
   const unsubscribes: Array<() => void> = [];
 
   // Levels are peak-held here and decayed in the rAF loop, so a 15 Hz feed
@@ -205,12 +217,58 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     }
   };
 
+  /**
+   * Resolve once the conversation app no longer holds the robot. It says
+   * `ended` first and exits after the sleep move, a few seconds later.
+   * Bounded, and a dead link counts as gone: there is nothing left to wait on.
+   */
+  const waitForAppExit = async (activeClient: ConvAppClient): Promise<void> => {
+    const deadline = performance.now() + EXIT_TIMEOUT_MS;
+    while (performance.now() < deadline) {
+      try {
+        const app = await activeClient.getCurrentAppStatus();
+        const exiting =
+          (app.state === 'running' || app.state === 'stopping') &&
+          (app.info?.name ?? CONV_APP_NAME) === CONV_APP_NAME;
+        if (!exiting) return;
+      } catch {
+        return;
+      }
+      await sleep(EXIT_POLL_MS);
+    }
+  };
+
+  // The robot ended the conversation itself (sleep tool or inactivity
+  // timeout): the app is already stopping, so stop following without an
+  // `apps.stop`. The orb stays on `stopping` until the app is really gone:
+  // going `idle` at once would let a tap re-attach to the dying app, which
+  // then exits without a second event.
+  const onPhase = (params: Record<string, unknown>): void => {
+    if (params.phase !== 'ended' || !running) return;
+    const endedClient = client;
+    running = false;
+    client = null;
+    unfollow();
+    if (!endedClient) return;
+    deps.setConversationState('stopping');
+    const exit = waitForAppExit(endedClient).then(() => {
+      if (ending === exit) ending = null;
+      // A new start took over while we waited: the state is its to set.
+      if (running || deps.isUnmounted()) return;
+      deps.setConversationState('idle');
+      deps.onEnded();
+    });
+    ending = exit;
+  };
+
   const follow = (activeClient: ConvAppClient): void => {
     unsubscribes.push(
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
       activeClient.on('conversation.activity', onActivity),
-      activeClient.on('conversation.personality', onPersonality)
+      activeClient.on('conversation.personality', onPersonality),
+      activeClient.on('conversation.phase', onPhase),
+      followPersonality(activeClient, { confirmStart: !adopted })
     );
     raf = requestAnimationFrame(tick);
   };
@@ -224,12 +282,6 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   };
 
   /**
-   * Make sure the conversation app is the app holding the robot. Returns
-   * the reason it cannot be, or null when it is running (or was just
-   * started). Never takes the robot away from another app: that is an
-   * explicit user action in the Apps tab, not a side effect of a tap.
-   */
-  /**
    * A daemon we could read and that predates the relay cannot host the
    * conversation. One we could not read is let through: the bring-up version
    * probe is best-effort, and failing there is not evidence of an old robot.
@@ -241,11 +293,26 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     return `Reachy needs version v${MIN_DAEMON_VERSION} or newer to talk. Update it, then try again.`;
   };
 
+  /**
+   * Make sure the conversation app is the app holding the robot. Returns
+   * the reason it cannot be, or null when it is running (or was just
+   * started). Never takes the robot away from another app: that is an
+   * explicit user action in the Apps tab, not a side effect of a tap.
+   *
+   * Sets `adopted` when the app was running before we asked: the robot
+   * started it by itself (antenna touch) or it outlived a lost link. That
+   * conversation is already under way with the robot's own settings, so
+   * `waitUntilReady` attaches to it without pushing the phone's.
+   */
   const ensureAppRunning = async (activeClient: ConvAppClient): Promise<string | null> => {
+    adopted = false;
     const app = await activeClient.getCurrentAppStatus();
     if (app.state === 'running' || app.state === 'starting') {
       const name = app.info?.name ?? null;
-      if (name === CONV_APP_NAME) return null;
+      if (name === CONV_APP_NAME) {
+        adopted = true;
+        return null;
+      }
       return `Reachy is busy with ${name ?? 'another app'}. Stop it from the Apps tab first.`;
     }
     if (app.state === 'error') {
@@ -264,7 +331,10 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (reason === 'already_running') {
         // Fine if it is ours (another tab, a race); not if someone else's.
         const now = await activeClient.getCurrentAppStatus();
-        if (now.info?.name === CONV_APP_NAME) return null;
+        if (now.info?.name === CONV_APP_NAME) {
+          adopted = true;
+          return null;
+        }
         return `Reachy is busy with ${now.info?.name ?? 'another app'}. Stop it from the Apps tab first.`;
       }
       // A reasoned refusal we did not anticipate is most likely "not
@@ -273,9 +343,15 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (reason === undefined)
         return 'Lost the robot while starting the conversation. Retry in a moment.';
     }
+    // A first install takes minutes: say so, or the caption reads
+    // "Connecting" all along.
+    deps.emitErrorMessage(
+      'Installing the conversation on Reachy. First time only, it can take a few minutes.'
+    );
     try {
       await activeClient.installConvApp();
       await activeClient.startConvApp();
+      deps.emitErrorMessage(null);
       return null;
     } catch (err) {
       console.warn('[robot-conversation] install + start failed:', err);
@@ -284,12 +360,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
   };
 
   /**
-   * Poll `conversation.status` until the backend is connected, then hand the
-   * robot the settings the phone owns (see `sync-settings.ts`).
+   * Hand the robot the settings the phone owns (see `sync-settings.ts`) as
+   * soon as the app answers, then poll `conversation.status` until the backend
+   * is connected. Before the backend connects, not after: the app greets the
+   * moment it connects, and a changed setting restarts it, which would greet
+   * twice, first with the old settings. Not at all when the conversation was
+   * already running (`adopted`): pushing a language or a personality restarts
+   * its backend mid-sentence.
    */
   const waitUntilReady = async (activeClient: ConvAppClient): Promise<string | null> => {
-    const deadline = performance.now() + READY_TIMEOUT_MS;
+    let deadline = performance.now() + READY_TIMEOUT_MS;
     let lastError: string | null = null;
+    let settingsApplied = false;
     while (performance.now() < deadline) {
       if (!running) return 'Stopped before the conversation was ready.';
       let status: ConvAppStatus | null = null;
@@ -304,8 +386,18 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       if (status) {
         if (!status.has_hf_connection)
           return 'Sign your Reachy in to Hugging Face from the setup wizard to start talking.';
-        if (status.backend_connected) {
+        if (!settingsApplied && !adopted) {
+          settingsApplied = true;
+          const syncStartedAt = performance.now();
           await applySettingsToRobot(activeClient, status);
+          // The budget is for the app to come up. A slow sync is not the app
+          // being slow, and must not fail a start whose backend is connected.
+          deadline += performance.now() - syncStartedAt;
+          // Re-read at once: a changed setting restarts the backend.
+          continue;
+        }
+        if (status.backend_connected) {
+          if (adopted) await refreshMemory();
           return null;
         }
         if (status.backend_error) lastError = status.backend_error;
@@ -326,6 +418,8 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       running = true;
       deps.emitErrorMessage(null);
       deps.setConversationState('starting');
+      // An app that just ended on its own is still exiting: let it go first.
+      if (ending) await ending;
 
       const tooOld = daemonTooOld(deps.getDaemonVersion());
       if (tooOld) {
@@ -347,7 +441,6 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       }
 
       robotTurn = 'ready';
-      setLiveRobot(robot);
       follow(activeClient);
       deps.setConversationState('listening');
       return true;
@@ -356,8 +449,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     async stop(opts) {
       if (!running && client === null) return;
       running = false;
-      setLiveRobot(null);
-      unfollow();
+        unfollow();
       const activeClient = client;
       client = null;
       if (!activeClient || opts?.keepRobotApp) return;

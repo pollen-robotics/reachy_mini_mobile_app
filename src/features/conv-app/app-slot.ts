@@ -36,6 +36,16 @@ export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promi
   return app !== null && app.info?.name !== CONV_APP_NAME;
 }
 
+/**
+ * True when any app, the conversation app included, runs on the robot. The
+ * bring-up wake asks this rather than `isAnotherAppDrivingRobot`: at connect
+ * nothing has been torn down yet, and the conversation app may be running
+ * because the robot started it by itself (antenna touch, see `startup-app.ts`).
+ */
+export async function isAnyAppDrivingRobot(robot: ReachyMiniInstance): Promise<boolean> {
+  return (await readActiveApp(robot)) !== null;
+}
+
 /** True when the robot is running (or starting) the conversation app. */
 export async function isConvAppRunning(robot: ReachyMiniInstance): Promise<boolean> {
   const app = await readActiveApp(robot);

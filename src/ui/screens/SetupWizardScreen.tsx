@@ -16,14 +16,11 @@
  */
 
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
   CircularProgress,
-  Collapse,
-  IconButton,
-  InputAdornment,
   List,
   ListItemButton,
   Stack,
@@ -40,10 +37,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WifiIcon from '@mui/icons-material/Wifi';
-import WifiLockIcon from '@mui/icons-material/WifiLock';
 
 import { type BleDevice, openBluetoothSettings } from '@/features/ble/bleWifi';
 import { useSetupMachine, type SetupMachine } from '@/features/ble-provisioning/useSetupMachine';
@@ -52,6 +46,7 @@ import type { RobotUpdateProgress } from '@/features/ble-provisioning/robotUpdat
 import { openAppSettings, openExternalUrl } from '@/shared/tauri/openUrl';
 import { getPlatform } from '@/shared/platform';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
+import { WifiNetworkList } from '@/ui/widgets/wifi-picker';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 import serialNumberImg from '@/assets/serial-number.jpg';
@@ -59,10 +54,10 @@ import serialNumberImg from '@/assets/serial-number.jpg';
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
 
-/** Showcase site download page (Reachy Mini website Space). Where users grab
- *  the desktop app that can update a robot too old for Bluetooth Wi-Fi setup.
- *  Mirrors `DaemonUpdateGate`'s desktop-app fallback. */
-const DESKTOP_APP_DOWNLOAD_URL = 'https://pollen-robotics-reachy-mini-website.hf.space/download';
+/** Pollen website Flasher page: Reachy Mini Flasher download and the reflash
+ *  walkthrough, to bring a robot too old for Bluetooth Wi-Fi setup up to date.
+ *  Mirrors `DaemonUpdateGate`'s reflash fallback. */
+const FLASHER_PAGE_URL = 'https://pollen-robotics.com/reachy-mini/flasher/';
 
 /** Public troubleshooting docs (same target as the Help & Support overlay). */
 const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshooting';
@@ -229,8 +224,8 @@ function StepView({
 }) {
   if (m.phase === 'error' && m.error) {
     // An outdated robot can't be fixed by retrying the BLE flow - it needs a
-    // software update first. Route it to the dedicated "update from the desktop
-    // app" view (mirrors the in-session `DaemonUpdateGate`) instead of the
+    // software update first. Route it to the dedicated "reflash with the
+    // Flasher" view (mirrors the in-session `DaemonUpdateGate`) instead of the
     // generic "Something went wrong / Try again" error.
     if (m.error.code === 'robot-outdated') {
       return <OutdatedView message={m.error.message} onCancel={onCancel} />;
@@ -742,40 +737,19 @@ function WifiPickView({
   onConnect: (password: string, ssid: string) => void;
   onRescan: () => void;
 }) {
-  // The currently expanded network (accordion). Only one row is open at a
-  // time; opening a row records the SSID on the FSM via `onSelect` so the
-  // wrong-password recovery still knows which network to retry.
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  const toggle = (ssid: string) => {
-    setExpanded(prev => {
-      const next = prev === ssid ? null : ssid;
-      if (next) onSelect(next);
-      return next;
-    });
-  };
-
   return (
     <SetupScaffold
       title="Get Me Online"
       caption="Connect me to Wi-Fi so I can access all my features and stay up to date."
       body={
         networks.length > 0 ? (
-          <List disablePadding sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {networks.map(ssid =>
-              ssid === currentSsid ? (
-                <ConnectedNetworkRow key={ssid} ssid={ssid} onContinue={onKeepCurrent} />
-              ) : (
-                <WifiNetworkRow
-                  key={ssid}
-                  ssid={ssid}
-                  expanded={expanded === ssid}
-                  onToggle={() => toggle(ssid)}
-                  onConnect={password => onConnect(password, ssid)}
-                />
-              ),
-            )}
-          </List>
+          <WifiNetworkList
+            networks={networks}
+            currentSsid={currentSsid}
+            onKeepCurrent={onKeepCurrent}
+            onSelect={onSelect}
+            onConnect={onConnect}
+          />
         ) : (
           <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', textAlign: 'center', maxWidth: 300 }}>
             No networks found nearby. Move the robot closer to your router and rescan.
@@ -790,158 +764,6 @@ function WifiPickView({
         </Stack>
       }
     />
-  );
-}
-
-/**
- * A single Wi-Fi network in the pick list. Collapsed it's a tappable row;
- * expanded it reveals an inline password field + Connect button so the whole
- * "choose network → enter password" flow stays in one step. The password state
- * is local and remounts on each expand (`unmountOnExit`) so autofocus fires and
- * the field starts empty every time.
- */
-/**
- * Row for the network the robot is already connected to: no password
- * accordion - tapping it continues straight to account linking (same action
- * as the "already online" screen's Continue).
- */
-function ConnectedNetworkRow({ ssid, onContinue }: { ssid: string; onContinue: () => void }) {
-  return (
-    <Box sx={{ ...paperCardSx(false), overflow: 'hidden' }}>
-      <ListItemButton onClick={onContinue} sx={{ px: 2, py: 1.75, borderRadius: `${RADIUS.lg}px` }}>
-        <Stack direction="row" spacing={1.75} sx={{ alignItems: 'center', width: '100%' }}>
-          <WifiIcon sx={{ color: STATUS.success, fontSize: 22 }} />
-          <Typography
-            sx={{ flex: 1, minWidth: 0, fontSize: TYPO.md, fontWeight: FONT_WEIGHT.semibold }}
-            noWrap
-          >
-            {ssid}
-          </Typography>
-          <Typography
-            component="span"
-            sx={{
-              px: 1,
-              py: 0.25,
-              borderRadius: `${RADIUS.sm}px`,
-              bgcolor: alpha(STATUS.success, 0.12),
-              color: STATUS.success,
-              fontSize: TYPO.xs,
-              fontWeight: FONT_WEIGHT.semibold,
-              flexShrink: 0,
-            }}
-          >
-            Connected
-          </Typography>
-          <ChevronRightIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
-        </Stack>
-      </ListItemButton>
-    </Box>
-  );
-}
-
-function WifiNetworkRow({
-  ssid,
-  expanded,
-  onToggle,
-  onConnect,
-}: {
-  ssid: string;
-  expanded: boolean;
-  onToggle: () => void;
-  onConnect: (password: string) => void;
-}) {
-  const [psk, setPsk] = useState('');
-  const [show, setShow] = useState(false);
-  // Ties the toggle button to the collapsible password panel for assistive tech.
-  const panelId = useId();
-
-  return (
-    <Box
-      sx={{
-        ...paperCardSx(expanded),
-        overflow: 'hidden',
-        transition: 'border-color 200ms ease, box-shadow 200ms ease',
-        boxShadow: theme =>
-          expanded ? `0 2px 12px ${alpha(theme.palette.primary.main, 0.12)}` : 'none',
-      }}
-    >
-      <ListItemButton
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        sx={{ px: 2, py: 1.75, borderRadius: `${RADIUS.lg}px` }}
-      >
-        <Stack direction="row" spacing={1.75} sx={{ alignItems: 'center', width: '100%' }}>
-          <WifiLockIcon
-            sx={{ color: expanded ? 'primary.main' : 'text.secondary', fontSize: 22, transition: 'color 200ms ease' }}
-          />
-          <Typography
-            sx={{ flex: 1, minWidth: 0, fontSize: TYPO.md, fontWeight: expanded ? FONT_WEIGHT.semibold : FONT_WEIGHT.regular }}
-            noWrap
-          >
-            {ssid}
-          </Typography>
-          <ChevronRightIcon
-            sx={{
-              color: 'primary.main',
-              flexShrink: 0,
-              transform: expanded ? 'rotate(90deg)' : 'none',
-              transition: 'transform 220ms cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-          />
-        </Stack>
-      </ListItemButton>
-      <Collapse in={expanded} unmountOnExit id={panelId}>
-        <Stack
-          spacing={2}
-          sx={{
-            px: 2,
-            pb: 2.25,
-            pt: 2,
-            borderTop: theme => `1px solid ${theme.palette.divider}`,
-            bgcolor: theme => alpha(theme.palette.text.primary, 0.015),
-          }}
-        >
-          <TextField
-            value={psk}
-            onChange={e => setPsk(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && psk.length > 0) onConnect(psk);
-            }}
-            type={show ? 'text' : 'password'}
-            label="Wi-Fi password"
-            placeholder={`Password for ${ssid}`}
-            autoFocus
-            fullWidth
-            slotProps={{
-              input: {
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      aria-label={show ? 'Hide password' : 'Show password'}
-                      onClick={() => setShow(s => !s)}
-                      edge="end"
-                      size="small"
-                    >
-                      {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
-          <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', color: 'text.secondary', px: 0.25 }}>
-            <LockOutlinedIcon sx={{ fontSize: 15 }} />
-            <Typography sx={{ fontSize: TYPO.xs, lineHeight: 1.4 }}>
-              Encrypted on this phone before it's sent
-            </Typography>
-          </Stack>
-          <SecondaryButton onClick={() => onConnect(psk)} disabled={psk.length === 0} sx={{ mt: 0.5 }}>
-            Connect
-          </SecondaryButton>
-        </Stack>
-      </Collapse>
-    </Box>
   );
 }
 
@@ -1269,7 +1091,10 @@ function AlreadyOnlineView({
       body={<RobotAddressBadge ip={robotIp} resolving={resolvingIp} reachable={robotReachable} />}
       actions={
         <Stack spacing={1} sx={{ width: '100%' }}>
-          <PrimaryButton onClick={onSkip}>Continue</PrimaryButton>
+          {/* Continue waits for the address: the update before sign-in needs it. */}
+          <PrimaryButton onClick={onSkip} disabled={resolvingIp}>
+            Continue
+          </PrimaryButton>
           <TextButton onClick={onChangeNetwork}>
             Use a different network
           </TextButton>
@@ -1538,10 +1363,10 @@ function StaleBondView({
 /**
  * Shown when the robot's software is too old to provision Wi-Fi over Bluetooth
  * (pre-v1.8.2: `WIFI_SCAN` is unsupported). Unlike a transient error, there is
- * no "Try again": fixing it means updating from the Reachy desktop app, which
- * takes the robot offline and reboots it, tearing down this BLE session. The
- * user must update, then start setup fresh (Cancel → back to the robot list).
- * Mirrors the desktop-app fallback of the in-session `DaemonUpdateGate`.
+ * no "Try again": fixing it means reflashing the OS over USB with the Reachy
+ * Mini Flasher, which tears down this BLE session. The user must reflash, then
+ * start setup fresh (Cancel → back to the robot list).
+ * Mirrors the reflash fallback of the in-session `DaemonUpdateGate`.
  */
 function OutdatedView({
   message,
@@ -1552,12 +1377,12 @@ function OutdatedView({
 }) {
   return (
     <SetupScaffold
-      title="Update from the desktop app"
+      title="Reflash required"
       caption={message}
       actions={
         <Stack spacing={1.25}>
-          <PrimaryButton onClick={() => void openExternalUrl(DESKTOP_APP_DOWNLOAD_URL)}>
-            Get the desktop app ↗
+          <PrimaryButton onClick={() => void openExternalUrl(FLASHER_PAGE_URL)}>
+            Get the Reachy Mini Flasher ↗
           </PrimaryButton>
           <Button
             variant="text"

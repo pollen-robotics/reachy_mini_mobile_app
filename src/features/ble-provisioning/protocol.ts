@@ -12,6 +12,7 @@
  *   WIFI_STATUS        → {"mode","connected","error","known"?}
  *   WIFI_SCAN          → ["SSID", …] | "ERROR: Busy" | "ERROR: …"
  *   WIFI_CONNECT_ENC … → "OK: Connecting to <ssid>" | "ERROR: Bad credentials (wrong PIN?)" | …
+ *   WIFI_FORGET <ssid> → "OK: Forgotten <ssid>" | "ERROR: Unknown ssid" | "ERROR: Busy" | …
  */
 
 import {
@@ -264,5 +265,17 @@ export async function connectSealed(
 ): Promise<void> {
   const cmd = buildSealedConnect(ssid, password, pin, keyexJson);
   const r = await sendCommand(cmd, 20000);
+  if (isError(r)) throw new Error(r);
+}
+
+/**
+ * `WIFI_FORGET <ssid>` → deletes a saved network on the robot. Resolves once
+ * the daemon accepted the request; the removal itself runs in the background
+ * (watch `wifiStatus().known`). Forgetting the ACTIVE network drops the robot
+ * to hotspot mode. Needs a live `PIN_` session.
+ */
+export async function forgetNetwork(ssid: string): Promise<void> {
+  const r = await sendCommand(`WIFI_FORGET ${ssid}`, 8000);
+  if (isUnsupported(r)) throw new RobotOutdatedError();
   if (isError(r)) throw new Error(r);
 }

@@ -10,7 +10,11 @@
  *                              ├─ logs
  *                              ├─ update: check ─┬─ up to date
  *                              │                 └─ available → updating → done / failed
+ *                              ├─ change Wi-Fi: status → pick (+ scan on request) → joining → joined / failed
  *                              └─ recovery script: confirm → running → result / failed
+ *
+ * `skipIntro` (robot settings → "Change Wi-Fi network") starts on the scan:
+ * the user already said what they came for. The PIN still lands on the menu.
  *
  * The BLE commands (`UPDATE_*`, `JOURNAL_*`, `CMD_<script>`, `PING`, see
  * `features/ble-provisioning/{update,tools}Protocol.ts`) all share ONE
@@ -57,6 +61,7 @@ import SettingsBackupRestoreRoundedIcon from '@mui/icons-material/SettingsBackup
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded';
 import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
 import WifiOffRoundedIcon from '@mui/icons-material/WifiOffRounded';
+import WifiRoundedIcon from '@mui/icons-material/WifiRounded';
 import WifiTetheringRoundedIcon from '@mui/icons-material/WifiTetheringRounded';
 
 import {
@@ -70,9 +75,12 @@ import {
   watchConnection,
 } from '@/features/ble/bleWifi';
 import {
+  RobotOutdatedError,
   authenticate,
+  keyExchange,
   readIdentity,
   readNetworkInfo,
+  toSetupError,
   wifiStatus,
   type WifiStatus,
 } from '@/features/ble-provisioning/protocol';
@@ -91,11 +99,20 @@ import {
   updateStart,
   type UpdateInfo,
 } from '@/features/ble-provisioning/updateProtocol';
+import { WifiJoinError, joinNetwork, scanWifiResilient } from '@/features/ble-provisioning/wifiJoin';
 import Section from '@/ui/design/Section';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 import LogsView from './ble-tools/LogsView';
+import { Headline, IconHero, InfoCard, PrimaryButton, TextButton } from './ble-tools/parts';
+import {
+  WifiFailedView,
+  WifiJoinedView,
+  WifiJoiningView,
+  WifiPickView,
+  WifiLoadingView,
+} from './ble-tools/WifiViews';
 
 /** The PIN printed under the robot is the 5-char serial suffix. */
 const PIN_LENGTH = 5;
@@ -126,10 +143,46 @@ type Step =
   | 'uptodate'
   | 'updating'
   | 'done'
-  | 'failed';
+  | 'failed'
+  | 'wifi-loading'
+  | 'wifi-pick'
+  | 'wifi-joining'
+  | 'wifi-joined'
+  | 'wifi-failed';
 
 /** Steps where the BLE link is expected to be up (a drop is a failure). */
-const LINKED_STEPS = new Set<Step>(['pin', 'menu', 'status', 'logs', 'checking', 'available', 'uptodate']);
+const LINKED_STEPS = new Set<Step>([
+  'pin',
+  'menu',
+  'status',
+  'logs',
+  'checking',
+  'available',
+  'uptodate',
+  'wifi-loading',
+  'wifi-pick',
+  'wifi-joining',
+  'wifi-failed',
+]);
+
+/** What the Wi-Fi steps know about the robot's networks. */
+interface WifiState {
+  /** Nearby networks from the last on-request scan (null until one ran). */
+  networks: string[] | null;
+  /** Network the robot is on right now (null in hotspot / offline). */
+  current: string | null;
+  /** Networks saved on the robot. */
+  saved: string[];
+  /** Network it was on when the flow opened: the way back after a failed join. */
+  previous: string | null;
+}
+
+/** The network a WIFI_STATUS reply says the robot is really on (its own
+ *  hotspot doesn't count). */
+function stationSsid(status: WifiStatus | null): string | null {
+  if (!status?.connected || status.mode === 'hotspot' || status.connected === 'Hotspot') return null;
+  return status.connected;
+}
 
 /** What the status view collects, one command at a time. `undefined` = not fetched yet. */
 interface RobotStatus {
@@ -167,7 +220,7 @@ const SCRIPT_META: Record<string, ScriptMeta> = {
     caption: "Leaves Wi-Fi and broadcasts the robot's own network",
     icon: <WifiTetheringRoundedIcon fontSize="small" />,
     confirm:
-      'The robot will leave its Wi-Fi network and broadcast its own hotspot. You can put it back on Wi-Fi from the setup wizard.',
+      'The robot will leave its Wi-Fi network and broadcast its own hotspot. You can put it back on Wi-Fi with "Change Wi-Fi network".',
     after:
       "The robot is switching to hotspot mode and restarting its software. Its network should show up in your phone's Wi-Fi settings within a minute.",
   },
@@ -176,9 +229,9 @@ const SCRIPT_META: Record<string, ScriptMeta> = {
     caption: 'Robot falls back to hotspot mode',
     icon: <WifiOffRoundedIcon fontSize="small" />,
     confirm:
-      "Every Wi-Fi network saved on the robot will be deleted and it will fall back to hotspot mode. You'll need the setup wizard to put it back online.",
+      'Every Wi-Fi network saved on the robot will be deleted and it will fall back to hotspot mode. Use "Change Wi-Fi network" to put it back online.',
     after:
-      'The robot is forgetting its Wi-Fi networks and restarting in hotspot mode. Run the setup wizard to reconnect it.',
+      'The robot is forgetting its Wi-Fi networks and restarting in hotspot mode. Use "Change Wi-Fi network" to reconnect it.',
     destructive: true,
   },
   SOFTWARE_RESET: {
@@ -204,7 +257,14 @@ function scriptMeta(name: string): ScriptMeta {
   );
 }
 
-export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
+export default function BleToolsScreen({
+  onBack,
+  skipIntro = false,
+}: {
+  onBack: () => void;
+  /** Start scanning right away instead of on the intro (from the robot settings). */
+  skipIntro?: boolean;
+}) {
   const [step, setStep] = useState<Step>('intro');
   const [devices, setDevices] = useState<BleDevice[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -227,6 +287,11 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
   });
   const [progress, setProgress] = useState<UpdateInfo | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [wifi, setWifi] = useState<WifiState>({ networks: null, current: null, saved: [], previous: null });
+  const [wifiTarget, setWifiTarget] = useState<string | null>(null);
+  const [wifiJoined, setWifiJoined] = useState<{ ssid: string; ip: string } | null>(null);
+  const [wifiError, setWifiError] = useState<string>('');
+  const [wifiSearching, setWifiSearching] = useState(false);
 
   const pinRef = useRef('');
   const linkUpRef = useRef(false);
@@ -238,6 +303,7 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
   const journalGenRef = useRef(0);
   const journalPausedRef = useRef(false);
   const statusGenRef = useRef(0);
+  const wifiGenRef = useRef(0);
   const bleChainRef = useRef<Promise<unknown>>(Promise.resolve());
   const stepRef = useRef<Step>(step);
   stepRef.current = step;
@@ -336,6 +402,15 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
     runScan();
   }, [runScan]);
 
+  // Opened from the robot settings: the user already knows why they're here,
+  // skip the intro and start looking for the robot right away.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!skipIntro || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    handleStart();
+  }, [handleStart, skipIntro]);
+
   // Re-scan when the app returns to the foreground while on the scan step:
   // mobile OSes kill an in-flight BLE scan when the app is backgrounded.
   useEffect(() => {
@@ -396,6 +471,113 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
     const other = names.filter(n => !(n in SCRIPT_META));
     setScripts(names.length > 0 ? [...known, ...other] : FALLBACK_SCRIPTS);
   }, [withBle]);
+
+  /* --- change Wi-Fi ------------------------------------------------------ */
+
+  // One generation per visit: Back (or a new scan / join) bumps it and the
+  // sequence in flight exits quietly after its current BLE command.
+  const wifiIsStale = (gen: number) => () =>
+    wifiGenRef.current !== gen || !stepRef.current.startsWith('wifi-');
+
+  const failWifi = useCallback((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    setErrorText(
+      e instanceof RobotOutdatedError
+        ? "This robot's software is too old to change its Wi-Fi over Bluetooth. Update it first."
+        : `Wi-Fi: ${toSetupError(msg, 'wifi-pick').message}`
+    );
+    setStep('failed');
+  }, []);
+
+  /** Read where the robot is and which networks it has saved: no radio
+   *  scan. `remember` records the current network as the way back (first
+   *  visit only). */
+  const readWifi = useCallback(
+    async (remember: boolean) => {
+      const gen = ++wifiGenRef.current;
+      const stale = wifiIsStale(gen);
+      setStep('wifi-loading');
+      try {
+        await withBle(async () => {
+          if (!(await ensureAuthed())) return;
+          // The reply carries `known` only on an authed session. Retried once:
+          // right after PIN_ the response channel can still hold the previous
+          // reply, which parses to an all-null status.
+          let status = await wifiStatus().catch(() => null);
+          if (!status?.mode && !status?.connected) status = await wifiStatus().catch(() => null);
+          if (stale()) return;
+          const current = stationSsid(status);
+          setWifi(w => ({
+            ...w,
+            current,
+            saved: status?.known ?? [],
+            previous: remember ? current : w.previous,
+          }));
+          setStep('wifi-pick');
+        });
+      } catch (e) {
+        if (!stale()) failWifi(e);
+      }
+    },
+    [ensureAuthed, failWifi, withBle]
+  );
+
+  /** `WIFI_SCAN`, only when the user asks for it: it ties up the robot's
+   *  Wi-Fi chip for ~10 s. Runs from the pick view, which stays up. A join
+   *  started meanwhile bumps the generation and drops the result. */
+  const findNetworks = useCallback(async () => {
+    const stale = wifiIsStale(wifiGenRef.current);
+    setWifiSearching(true);
+    try {
+      const networks = await withBle(async () => {
+        if (!(await ensureAuthed())) return null;
+        return scanWifiResilient(stale);
+      });
+      if (!stale() && networks) setWifi(w => ({ ...w, networks }));
+    } catch (e) {
+      if (!stale()) failWifi(e);
+    } finally {
+      setWifiSearching(false);
+    }
+  }, [ensureAuthed, failWifi, withBle]);
+
+  const handleOpenWifi = useCallback(() => {
+    setWifiJoined(null);
+    setWifi(w => ({ ...w, networks: null }));
+    void readWifi(true);
+  }, [readWifi]);
+
+  const handleJoin = useCallback(
+    async (password: string, ssid: string) => {
+      const gen = ++wifiGenRef.current;
+      const stale = wifiIsStale(gen);
+      setWifiTarget(ssid);
+      setStep('wifi-joining');
+      try {
+        const ip = await withBle(async () => {
+          // The user may have spent a while typing: refresh the PIN session
+          // and the sealing key (it rotates robot-side) right before the join.
+          if (!(await ensureAuthed())) return null;
+          const keyex = await keyExchange();
+          return joinNetwork({ ssid, password, pin: pinRef.current, keyex, known: wifi.saved, isStale: stale });
+        });
+        if (stale() || ip === null) return;
+        setWifiJoined({ ssid, ip });
+        setStep('wifi-joined');
+      } catch (e) {
+        if (stale()) return;
+        if (e instanceof WifiJoinError) {
+          setWifiError(
+            e.code === 'wrong-password' ? 'The robot was refused. Check the password and try again.' : e.message
+          );
+          setStep('wifi-failed');
+          return;
+        }
+        failWifi(e);
+      }
+    },
+    [ensureAuthed, failWifi, wifi.saved, withBle]
+  );
 
   const handleAuth = useCallback(
     async (pin: string) => {
@@ -741,17 +923,24 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
       case 'checking':
       case 'available':
       case 'uptodate':
-        // BLE link stays alive; back to the tools menu.
+      case 'wifi-loading':
+      case 'wifi-pick':
+      case 'wifi-joined':
+      case 'wifi-failed':
+        // BLE link stays alive; back to the tools menu (a Wi-Fi scan in
+        // flight sees the step change and stops after its current command).
         setStep('menu');
         return;
       default:
         // intro, updating, running, done, failed → full exit.
+        // (wifi-joining hides Back, like updating.)
         handleExit();
     }
   }, [handleExit, handleRetry, linkLost, runScan, stopJournal, stopScanLoop]);
 
   const backToMenu = useCallback(() => setStep('menu'), []);
-  const listLayout = step === 'scan' || step === 'menu' || step === 'status' || step === 'logs';
+  const listLayout =
+    step === 'scan' || step === 'menu' || step === 'status' || step === 'logs' || step === 'wifi-pick';
 
   return (
     <Stack
@@ -765,7 +954,10 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
           exits from intro / terminal steps). Hidden during `updating` and
           `running` so an in-flight install / script can't be interrupted. */}
       <Stack direction="row" sx={{ alignItems: 'center', px: 1, py: 1, flexShrink: 0, minHeight: 48 }}>
-        {step !== 'updating' && step !== 'running' && !(busy && (step === 'scan' || step === 'pin')) && (
+        {step !== 'updating' &&
+          step !== 'running' &&
+          step !== 'wifi-joining' &&
+          !(busy && (step === 'scan' || step === 'pin')) && (
           <Button
             variant="text"
             aria-label="Back"
@@ -815,7 +1007,34 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
               onStatus={handleOpenStatus}
               onLogs={handleOpenLogs}
               onUpdate={() => void handleUpdate()}
+              onWifi={handleOpenWifi}
               onScript={setPendingScript}
+            />
+          )}
+          {step === 'wifi-loading' && <WifiLoadingView />}
+          {step === 'wifi-pick' && (
+            <WifiPickView
+              networks={wifi.networks}
+              current={wifi.current}
+              saved={wifi.saved}
+              onConnect={(password, ssid) => void handleJoin(password, ssid)}
+              searching={wifiSearching}
+              onFind={() => void findNetworks()}
+            />
+          )}
+          {step === 'wifi-joining' && <WifiJoiningView ssid={wifiTarget ?? ''} />}
+          {step === 'wifi-joined' && wifiJoined && (
+            <WifiJoinedView ssid={wifiJoined.ssid} ip={wifiJoined.ip} onMenu={backToMenu} onDone={handleExit} />
+          )}
+          {step === 'wifi-failed' && (
+            <WifiFailedView
+              ssid={wifiTarget ?? 'the network'}
+              message={wifiError}
+              // Only offered when it's a different network from the one that failed.
+              previous={wifi.previous && wifi.previous !== wifiTarget ? wifi.previous : null}
+              onPickAgain={() => void readWifi(false)}
+              onRejoinPrevious={() => wifi.previous && void handleJoin('', wifi.previous)}
+              onMenu={backToMenu}
             />
           )}
           {step === 'status' && (
@@ -866,87 +1085,6 @@ export default function BleToolsScreen({ onBack }: { onBack: () => void }) {
 }
 
 /* --- shared bits ---------------------------------------------------------- */
-
-function Headline({ title, caption }: { title: string; caption?: string }) {
-  return (
-    <Stack spacing={0.75} sx={{ alignItems: 'center', textAlign: 'center' }}>
-      <Typography sx={{ fontSize: TYPO.xl, fontWeight: FONT_WEIGHT.semibold }}>{title}</Typography>
-      {caption ? (
-        <Typography sx={{ fontSize: TYPO.sm, color: 'text.secondary', maxWidth: 300, lineHeight: 1.5 }}>
-          {caption}
-        </Typography>
-      ) : null}
-    </Stack>
-  );
-}
-
-function PrimaryButton(props: React.ComponentProps<typeof Button>) {
-  return (
-    <Button
-      variant="outlined"
-      color="primary"
-      fullWidth
-      disableElevation
-      {...props}
-      sx={{
-        textTransform: 'none',
-        fontSize: TYPO.md,
-        fontWeight: FONT_WEIGHT.semibold,
-        borderRadius: `${RADIUS.md}px`,
-        py: 1.25,
-        ...props.sx,
-      }}
-    />
-  );
-}
-
-function TextButton(props: React.ComponentProps<typeof Button>) {
-  return (
-    <Button
-      variant="text"
-      {...props}
-      sx={{ textTransform: 'none', fontWeight: FONT_WEIGHT.semibold, ...props.sx }}
-    />
-  );
-}
-
-function IconHero({ children, tint }: { children: React.ReactNode; tint?: string }) {
-  return (
-    <Box
-      sx={{
-        width: LAYOUT.heroSizeSmall,
-        height: LAYOUT.heroSizeSmall,
-        borderRadius: RADIUS.circle,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        bgcolor: theme => alpha(tint ?? theme.palette.primary.main, 0.1),
-        color: tint ?? 'primary.main',
-      }}
-    >
-      {children}
-    </Box>
-  );
-}
-
-/** Framed card for the version / status rows. */
-function InfoCard({ children }: { children: React.ReactNode }) {
-  return (
-    <Stack
-      spacing={1}
-      sx={theme => ({
-        width: '100%',
-        maxWidth: 320,
-        p: 2,
-        borderRadius: `${RADIUS.md}px`,
-        border: `1px solid ${theme.palette.divider}`,
-        bgcolor: 'background.paper',
-      })}
-    >
-      {children}
-    </Stack>
-  );
-}
 
 /* --- 0. intro ------------------------------------------------------------- */
 
@@ -1191,6 +1329,7 @@ function MenuView({
   onStatus,
   onLogs,
   onUpdate,
+  onWifi,
   onScript,
 }: {
   scripts: string[];
@@ -1198,6 +1337,7 @@ function MenuView({
   onStatus: () => void;
   onLogs: () => void;
   onUpdate: () => void;
+  onWifi: () => void;
   onScript: (name: string) => void;
 }) {
   return (
@@ -1224,6 +1364,15 @@ function MenuView({
           caption="Check for a newer version and install it"
           disabled={busy}
           onTap={onUpdate}
+        />
+      </Section>
+      <Section label="Network">
+        <MenuRow
+          icon={<WifiRoundedIcon fontSize="small" />}
+          label="Change Wi-Fi network"
+          caption="Join another network or re-enter a password"
+          disabled={busy}
+          onTap={onWifi}
         />
       </Section>
       <Section label="Recovery">

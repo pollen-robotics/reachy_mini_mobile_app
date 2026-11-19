@@ -110,16 +110,20 @@ export default function FirstWakeUpWizard({
   // - the slider is already at the real value instead of showing a default then
   // jumping once the async read lands. `null` only during the initial fetch.
   const [speakerVolume, setSpeakerVolume] = useState<number | null>(null);
+  // Both mount-time reads below depend on the handle's stable callbacks, not
+  // on `session` itself: the parent re-creates that object on every render,
+  // which would re-send the read each time.
+  const { getSpeakerVolume, getRobot } = session;
   useEffect(() => {
     let cancelled = false;
-    void session.getSpeakerVolume().then(v => {
+    void getSpeakerVolume().then(v => {
       if (cancelled) return;
       setSpeakerVolume(typeof v === 'number' ? v : 50);
     });
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [getSpeakerVolume]);
   // While true, the closing finale is on screen (last step confirmed): the step
   // UI fades out and the robot plays the closing move in place. A timer then
   // hands back to the conversation UI.
@@ -137,17 +141,20 @@ export default function FirstWakeUpWizard({
   // non-empty answer means "already named, don't ask again". Fetched on mount;
   // it resolves long before the user reaches the end (naming is the last step),
   // and defaults to keeping the step on a slow/failed/unsupported read.
+  // It must not run again later: the SDK answers name reads and renames on
+  // one slot, so a read sent while the naming step saves cancels that save's
+  // answer (the robot keeps the name, the app shows the old one).
   const [hasCustomName, setHasCustomName] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    void Promise.resolve(session.getRobot()?.getRobotName() ?? null).then(name => {
+    void Promise.resolve(getRobot()?.getRobotName() ?? null).then(name => {
       if (cancelled) return;
       setHasCustomName(typeof name === 'string' && name.trim().length > 0);
     });
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [getRobot]);
   // Effective step list: drop `name` once we know the robot is already named,
   // so both the router and the progress bar treat the prior step as the last.
   const steps = useMemo<readonly Step[]>(

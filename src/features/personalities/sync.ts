@@ -26,6 +26,16 @@ import {
 } from './store';
 
 export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<void> {
+  const robots = await reconcilePersonalities(client);
+  await fetchRobotAvatars(client, robots);
+}
+
+/**
+ * The half that decides what the robot can be asked to play: adopt its
+ * catalog, push the queued authoring. Resolves the robot's list, for
+ * `fetchRobotAvatars`.
+ */
+export async function reconcilePersonalities(client: ConvAppClient): Promise<RobotPersonality[]> {
   const robots = await client.getPersonalities();
   cacheCatalog(robots);
 
@@ -65,8 +75,18 @@ export async function syncPersonalitiesToRobot(client: ConvAppClient): Promise<v
   }
 
   clearPendingWrites(pushed);
+  return robots;
+}
 
-  // Drawings the robot has and the phone does not; re-adopt so they show.
+/**
+ * The cosmetic half: drawings the robot has and the phone does not, re-adopted
+ * so they show. One call per missing drawing, which takes seconds on a fresh
+ * install, so nothing the conversation waits on should come after it.
+ */
+export async function fetchRobotAvatars(
+  client: ConvAppClient,
+  robots: readonly RobotPersonality[]
+): Promise<void> {
   if (await fetchMissingAvatars(client, robots)) cacheCatalog(robots);
 }
 

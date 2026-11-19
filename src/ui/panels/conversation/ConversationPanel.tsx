@@ -53,7 +53,6 @@ import {
   useActivePersonality,
   toRobotPersonalityName,
   useIsPersonalityOnRobot,
-  wasActivePersonalitySetByRobot,
 } from '@/features/personalities';
 import type { AccessoryBadgeView, LinkOutcome } from '@/features/nfc';
 import { useActiveLanguageId } from '@/features/conversation-language';
@@ -132,22 +131,18 @@ export function ConversationPanel({
   // the orb, regardless of whether the backend has answered yet.
   // Tapping the orb flips the conversation FSM to `starting` (handshake)
   // BEFORE it reaches `listening`, so `live` alone would leave the
-  // personality picker reachable during that gap - we treat that
+  // personality picker open through that gap - we treat that
   // `starting` as engaged too. The connection bring-up's own `starting`
-  // lives on a SEPARATE FSM now, so the picker stays available while
+  // lives on a SEPARATE FSM now, so the picker stays open while
   // the orb says "Tap to start conversation".
   const conversationEngaged =
     live || session.conversationState === 'starting';
 
-  // Active personality is consumed for its `id` only: when the user
-  // picks a new persona via the grid, the engine reads the active
-  // personality lazily on every reconnect (see `composeInstructions`
-  // and the `voice` getter in `conversation-engine.ts`), so all we
-  // need to do here is restart the conversation parts when a switch
-  // happens mid-call.
+  // The active personality, for the accessory badge's "Link personality".
   const activePersona = useActivePersonality();
   const activePersonalityId = activePersona.id;
   const activeOnRobot = useIsPersonalityOnRobot(activePersonalityId);
+
 
   // Personality picker open / closed. When open, the body slot
   // below the sub-header swaps from the orb area to the persona
@@ -156,7 +151,8 @@ export function ConversationPanel({
   //
   // We deliberately auto-close the picker when a conversation
   // becomes live: a backend session firing while the user is still
-  // browsing the picker would feel like the app skipped a beat.
+  // browsing the picker would feel like the app skipped a beat. Only
+  // on that edge: the user can reopen it while Reachy talks.
   // Same idea on engine errors - the user needs to see the orb's
   // error state, not a stale picker.
   // Defaults to closed so the orb is the landing surface when the
@@ -259,32 +255,12 @@ export function ConversationPanel({
     setImmersiveForm(false);
   }, [active]);
 
-  // Mid-conversation personality switch: when the user picks a new
-  // personality while the realtime client is live, restart the
-  // conversation parts so the new instructions + voice take effect.
-  //
-  // We skip the restart on the very first render (the store ALWAYS
-  // emits the bootstrap value as a first effect run, otherwise we'd
-  // restart on every fresh mount). We also skip it when the engine
-  // is not live: the next `startConversation()` will already pull
-  // the up-to-date personality on its own.
-  const previousPersonalityIdRef = useRef<string | null>(null);
+  // No personality counterpart to the language restart below: a
+  // persona picked mid-conversation is applied on the robot in place by
+  // the personality store, without stopping the conversation app.
   const { restartConversation } = session;
-  useEffect(() => {
-    const previous = previousPersonalityIdRef.current;
-    previousPersonalityIdRef.current = activePersonalityId;
-    if (previous === null) return; // first render, nothing to restart
-    if (previous === activePersonalityId) return; // no actual change
-    if (!live) return; // not in conversation, will be picked up on next start
-    // An accessory switched it on the robot, which is already running it.
-    if (wasActivePersonalitySetByRobot()) return;
-    void restartConversation().catch(err => {
-      console.warn('[conversation-panel] restartConversation threw:', err);
-    });
-  }, [activePersonalityId, live, restartConversation]);
 
-  // Mid-conversation language switch. Same shape as the personality
-  // restart effect above: `composeInstructions()` (in the engine)
+  // Mid-conversation language switch: `composeInstructions()` (in the engine)
   // reads the active language lazily from the store, so the only
   // thing this panel needs to do on a language change is drop the
   // live realtime client and bring it back. The next handshake then
@@ -378,21 +354,15 @@ export function ConversationPanel({
         }}
       >
         <Box sx={{ maxWidth: 720, mx: 'auto' }}>
-          {/* Disable the persona switcher while a conversation is
-              live: changing the active persona mid-call would
-              force a stop+start of the realtime client and audibly
-              cut Reachy off mid-sentence. The pill stays mounted
-              and keeps showing the current persona; a tap surfaces
-              a "locked while talking" snackbar. The user can stop
-              the conversation from the orb's stop button (or finish
-              naturally) to re-enable the picker. */}
+          {/* Reachable during a conversation too: the user can reread
+              the personas while Reachy talks, and a pick is applied
+              on the robot in place (see `setActivePersonality`). */}
           <PersonalityPill
             open={pickerOpen}
             onToggle={togglePicker}
             onCreate={toggleForm}
             creating={formMode?.kind === 'create'}
             editingPersona={formMode?.kind === 'edit' ? formMode.persona : null}
-            disabled={conversationEngaged}
           />
         </Box>
       </Box>

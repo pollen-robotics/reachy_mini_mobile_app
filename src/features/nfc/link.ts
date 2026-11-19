@@ -7,7 +7,7 @@
  * Otherwise the app is not running, and the phone writes the same token
  * through the daemon itself.
  */
-import { getLiveClient } from '@/features/conv-app/live-client';
+import { createConvAppClient } from '@/features/conv-app/client';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
 import { toTagToken } from './accessory';
@@ -19,21 +19,21 @@ export type LinkOutcome = { ok: true; written: boolean } | { ok: false; error: s
 export async function linkAccessory(
   robot: ReachyMiniInstance | null,
   personality: string,
-  tag: NfcTag | null
+  tag: NfcTag | null,
+  { conversationLive }: { conversationLive: boolean }
 ): Promise<LinkOutcome> {
   const token = toTagToken(personality);
   if (!token) return { ok: false, error: 'This personality cannot be written to an accessory.' };
+  if (!robot) return { ok: false, error: describeTagError('LINK_LOST') };
 
-  const live = getLiveClient();
-  if (live) {
+  if (conversationLive) {
     try {
-      return { ok: true, ...(await live.linkAccessory(personality)) };
+      return { ok: true, ...(await createConvAppClient(robot).linkAccessory(personality)) };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  if (!robot) return { ok: false, error: describeTagError('LINK_LOST') };
   if (tag?.content === token) return { ok: true, written: false };
   const result = await createNfcClient(robot).write({ text: token });
   return result.success

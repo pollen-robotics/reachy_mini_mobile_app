@@ -1,15 +1,23 @@
 /**
- * Telepresence tab - immersive, full-screen operator view.
+ * Telepresence tab - full-screen operator view, portrait.
  *
  *   ┌──────────────────────────────────────┐
- *   │ [←]                    [🎤][🔊][⚙]  │  ← glass controls over the feed
+ *   │ [←]                             [⚙]  │
  *   │                                      │
- *   │        live camera (cover-fit)       │
- *   │                                      │
- *   │                              ╭──╮    │
- *   │                        HEAD  │✥ │[⊙]│  ← head joystick + recenter
- *   │                              ╰──╯    │
+ *   ├──────────────────────────────────────┤
+ *   │       live camera, 16:9, whole       │  ← full width, never cropped
+ *   │            field of view             │
+ *   ├──────────────────────────────────────┤
+ *   │             [🔊]    [☺]              │
+ *   │          [🎤]  ╭────╮  [⊙]           │  ← shortcuts on a ring around
+ *   │                │ ✥  │               │     the head joystick (recenter
+ *   │                ╰────╯               │     shows when off-centre)
+ *   │                 HEAD                 │
  *   └──────────────────────────────────────┘
+ *
+ * The feed is landscape and the phone is locked to portrait: filling
+ * the screen with it cropped two thirds of the field of view and made
+ * panning feel zoomed in. Same layout as the telepresence HF Space.
  *
  * Native counterpart of the telepresence HF Space: instead of an iframe
  * that re-authenticates and re-dials, it reuses the app's live
@@ -45,6 +53,32 @@ import EmotionSheet from './EmotionSheet';
 import TelepresenceSettingsSheet from './TelepresenceSettingsSheet';
 
 type DeflectionRef = React.RefObject<{ x: number; y: number }>;
+
+/** Bigger than over the video: the joystick now has the lower half to itself. */
+const JOYSTICK_SIZE = 148;
+/** Shortcut buttons (44 px) sit on a ring around the puck, clear of its edge. */
+const RING_RADIUS = JOYSTICK_SIZE / 2 + 14 + 22;
+/** How far the ring reaches past the puck. */
+const RING_OVERFLOW = RING_RADIUS + 22 - JOYSTICK_SIZE / 2;
+
+/**
+ * Places a 44 px button on the joystick's ring, `deg` counter-clockwise
+ * from 3 o'clock. Positions are relative to the Joystick root, whose top
+ * square is the puck.
+ *
+ * The upper half carries the shortcuts so the thumb reaches them without
+ * leaving the stick. Room is kept for the hoverboard: its base stick will
+ * mirror this one on the left, each stick keeping the half of the ring on
+ * its outer side (audio on the base, head + emotions on this one).
+ */
+function ringSlotSx(deg: number) {
+  const rad = (deg * Math.PI) / 180;
+  return {
+    position: 'absolute',
+    left: JOYSTICK_SIZE / 2 + RING_RADIUS * Math.cos(rad) - 22,
+    top: JOYSTICK_SIZE / 2 - RING_RADIUS * Math.sin(rad) - 22,
+  } as const;
+}
 
 interface TelepresencePanelProps {
   session: RobotSessionHandle;
@@ -103,82 +137,84 @@ export default function TelepresencePanel({
         zIndex: 1250,
         bgcolor: '#000',
         overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        pt: LAYOUT.safeAreaTop,
+        pb: LAYOUT.safeAreaBottom,
         // No text selection / callouts while thumbs are all over the screen.
         userSelect: 'none',
         WebkitUserSelect: 'none',
       }}
     >
-      <LiveVideo
-        attachVideo={session.attachVideo}
-        live={live}
-        lowLatency={lowLatency}
-        onModeChange={setVideoMode}
-      />
-      {/* Top + bottom scrims keep the white controls readable over bright scenes. */}
+      {/* Top controls. */}
+      <Stack direction="row" spacing={1} sx={{ px: 2, py: 1.5, alignItems: 'center' }}>
+        <IconButton aria-label="Leave telepresence" onClick={onExit} sx={glassIconButtonSx}>
+          <ArrowBackRoundedIcon />
+        </IconButton>
+        <Box sx={{ flex: 1 }} />
+        <IconButton aria-label="Telepresence settings" onClick={() => setSettingsOpen(true)} sx={glassIconButtonSx}>
+          <SettingsOutlinedIcon />
+        </IconButton>
+      </Stack>
+
+      <Box sx={{ flex: 1 }} />
+
+      <Box sx={{ position: 'relative', width: '100%', aspectRatio: '16 / 9', flexShrink: 0, bgcolor: '#111' }}>
+        <LiveVideo
+          attachVideo={session.attachVideo}
+          live={live}
+          lowLatency={lowLatency}
+          onModeChange={setVideoMode}
+        />
+        {!live && (
+          <Stack
+            spacing={1.5}
+            sx={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', color: '#fff' }}
+          >
+            <CircularProgress size={32} sx={{ color: 'rgba(255,255,255,0.8)' }} />
+            <Typography sx={{ fontSize: TYPO.sm, color: 'rgba(255,255,255,0.8)' }}>
+              {session.phase === 'reacquiring' ? 'Reconnecting to the robot…' : 'Waiting for the robot…'}
+            </Typography>
+          </Stack>
+        )}
+
+        {asleep && (
+          <Stack
+            spacing={1.5}
+            sx={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Typography sx={{ fontSize: TYPO.sm, color: 'rgba(255,255,255,0.85)' }}>
+              Reachy is asleep
+            </Typography>
+            <Button
+              variant="contained"
+              disabled={telepresence.wakingUp || !allowMotion}
+              onClick={() => void telepresence.wakeUp()}
+              startIcon={
+                telepresence.wakingUp ? <CircularProgress size={16} color="inherit" /> : undefined
+              }
+            >
+              {telepresence.wakingUp ? 'Waking up…' : 'Wake up'}
+            </Button>
+          </Stack>
+        )}
+      </Box>
+
       <Box
         sx={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          background:
-            'linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 22%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.5) 100%)',
-        }}
-      />
-      {!live && (
-        <Stack
-          spacing={1.5}
-          sx={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', color: '#fff' }}
-        >
-          <CircularProgress size={32} sx={{ color: 'rgba(255,255,255,0.8)' }} />
-          <Typography sx={{ fontSize: TYPO.sm, color: 'rgba(255,255,255,0.8)' }}>
-            {session.phase === 'reacquiring' ? 'Reconnecting to the robot…' : 'Waiting for the robot…'}
-          </Typography>
-        </Stack>
-      )}
-
-      {asleep && (
-        <Stack
-          spacing={1.5}
-          sx={{
-            position: 'absolute',
-            top: '38%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            alignItems: 'center',
-          }}
-        >
-          <Typography sx={{ fontSize: TYPO.sm, color: 'rgba(255,255,255,0.85)' }}>
-            Reachy is asleep
-          </Typography>
-          <Button
-            variant="contained"
-            disabled={telepresence.wakingUp || !allowMotion}
-            onClick={() => void telepresence.wakeUp()}
-            startIcon={
-              telepresence.wakingUp ? <CircularProgress size={16} color="inherit" /> : undefined
-            }
-          >
-            {telepresence.wakingUp ? 'Waking up…' : 'Wake up'}
-          </Button>
-        </Stack>
-      )}
-
-      <Stack
-        direction="row"
-        sx={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: `calc(${LAYOUT.safeAreaBottom} + 28px)`,
-          px: 2.5,
-          alignItems: 'flex-end',
-          justifyContent: 'flex-end',
+          flex: 3,
+          minHeight: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          // The ring overflows the puck: centre the whole cluster.
+          pt: `${RING_OVERFLOW}px`,
         }}
       >
         <Joystick
           onDeflectionRef={onHeadRef}
           enabled={motionEnabled}
-          size={128}
+          size={JOYSTICK_SIZE}
           label="Head"
           disabledLabel={headDisabledLabel}
           gamepadStick="right"
@@ -190,9 +226,7 @@ export default function TelepresencePanel({
             sx={[
               glassIconButtonSx,
               {
-                position: 'absolute',
-                top: -52,
-                right: 0,
+                ...ringSlotSx(10),
                 opacity: telepresence.motion.headOffCenter ? 1 : 0,
                 pointerEvents: telepresence.motion.headOffCenter ? 'auto' : 'none',
                 transition: 'opacity 200ms ease',
@@ -201,60 +235,43 @@ export default function TelepresencePanel({
           >
             <CenterFocusWeakOutlinedIcon />
           </IconButton>
+          <Box sx={ringSlotSx(170)}>
+            <SoundButton
+              on={telepresence.talkEnabled}
+              pending={telepresence.talkPending}
+              onToggle={() => telepresence.setTalkEnabled(!telepresence.talkEnabled)}
+              iconOn={<MicRoundedIcon />}
+              iconOff={<MicOffRoundedIcon />}
+              ariaLabel={telepresence.talkEnabled ? 'Mute my microphone' : 'Talk through the robot'}
+              volume={daemon.speakerVolume}
+              onVolumeChange={daemon.setSpeakerVolume}
+              volumeLabel="Robot speaker"
+              disabled={!live || telepresence.talkPending}
+            />
+          </Box>
+          <Box sx={ringSlotSx(125)}>
+            <SoundButton
+              on={telepresence.listenEnabled}
+              onToggle={() => telepresence.setListenEnabled(!telepresence.listenEnabled)}
+              iconOn={<VolumeUpRoundedIcon />}
+              iconOff={<VolumeOffRoundedIcon />}
+              ariaLabel={telepresence.listenEnabled ? 'Mute the robot' : 'Listen to the robot'}
+              volume={daemon.microphoneVolume}
+              onVolumeChange={daemon.setMicrophoneVolume}
+              volumeLabel="Robot mic"
+              disabled={!live}
+            />
+          </Box>
+          <IconButton
+            aria-label="Play an emotion"
+            onClick={() => setEmotionsOpen(true)}
+            disabled={!live}
+            sx={[glassIconButtonSx, ringSlotSx(55)]}
+          >
+            <EmojiEmotionsOutlinedIcon />
+          </IconButton>
         </Joystick>
-      </Stack>
-
-      {/* Top controls. */}
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{
-          position: 'absolute',
-          top: `calc(${LAYOUT.safeAreaTop} + 12px)`,
-          left: 16,
-          right: 16,
-          alignItems: 'center',
-        }}
-      >
-        <IconButton aria-label="Leave telepresence" onClick={onExit} sx={glassIconButtonSx}>
-          <ArrowBackRoundedIcon />
-        </IconButton>
-        <Box sx={{ flex: 1 }} />
-        <SoundButton
-          on={telepresence.talkEnabled}
-          pending={telepresence.talkPending}
-          onToggle={() => telepresence.setTalkEnabled(!telepresence.talkEnabled)}
-          iconOn={<MicRoundedIcon />}
-          iconOff={<MicOffRoundedIcon />}
-          ariaLabel={telepresence.talkEnabled ? 'Mute my microphone' : 'Talk through the robot'}
-          volume={daemon.speakerVolume}
-          onVolumeChange={daemon.setSpeakerVolume}
-          volumeLabel="Robot speaker"
-          disabled={!live || telepresence.talkPending}
-        />
-        <SoundButton
-          on={telepresence.listenEnabled}
-          onToggle={() => telepresence.setListenEnabled(!telepresence.listenEnabled)}
-          iconOn={<VolumeUpRoundedIcon />}
-          iconOff={<VolumeOffRoundedIcon />}
-          ariaLabel={telepresence.listenEnabled ? 'Mute the robot' : 'Listen to the robot'}
-          volume={daemon.microphoneVolume}
-          onVolumeChange={daemon.setMicrophoneVolume}
-          volumeLabel="Robot mic"
-          disabled={!live}
-        />
-        <IconButton
-          aria-label="Play an emotion"
-          onClick={() => setEmotionsOpen(true)}
-          disabled={!live}
-          sx={glassIconButtonSx}
-        >
-          <EmojiEmotionsOutlinedIcon />
-        </IconButton>
-        <IconButton aria-label="Telepresence settings" onClick={() => setSettingsOpen(true)} sx={glassIconButtonSx}>
-          <SettingsOutlinedIcon />
-        </IconButton>
-      </Stack>
+      </Box>
 
       {telepresence.talkError && (
         <Typography

@@ -23,12 +23,19 @@ const USER_PREFIX = 'user_personalities/';
 
 /** `apps.start` covers a cold start of the app's Python process. */
 const START_TIMEOUT_MS = 60_000;
-/** A first install pulls the app from the Hub; minutes, not seconds. */
-const INSTALL_TIMEOUT_MS = 300_000;
+/**
+ * A first install pulls the app and builds its dependencies on the robot:
+ * minutes, more than five on a slow network. The robot keeps installing
+ * after the phone stops waiting, so a short budget only reports a failure
+ * that is not one. A lost link still rejects at once.
+ */
+const INSTALL_TIMEOUT_MS = 15 * 60_000;
 /** Stopping should be prompt, but must not hang a power-off. */
 const STOP_TIMEOUT_MS = 15_000;
 /** `rfid.link_tag` writes the tag through the daemon, which retries for a while. */
 const LINK_TIMEOUT_MS = 60_000;
+/** Setting the startup app re-arms the daemon's antenna watcher. */
+const STARTUP_TIMEOUT_MS = 15_000;
 
 /** One personality as the robot stores it. `name` is its canonical id. */
 export interface RobotPersonality {
@@ -84,6 +91,10 @@ export interface ConvAppClient {
   /** Stops whatever holds the slot. Only for clearing a crashed app. */
   stopCurrentApp(): Promise<void>;
   installConvApp(): Promise<void>;
+  /** The app the antennas start on wake-up (any app, not only this one), or `null`. */
+  getStartupApp(): Promise<string | null>;
+  /** Sets that app by name; `null` clears it. */
+  setStartupApp(name: string | null): Promise<void>;
 
   // The running conversation app.
   getStatus(): Promise<ConvAppStatus>;
@@ -93,8 +104,12 @@ export interface ConvAppClient {
   getPersonalities(): Promise<RobotPersonality[]>;
   /** The profile's avatar as SVG markup. */
   getAvatar(name: string): Promise<string>;
-  /** Run `name`. `persist` (the default) also makes it the one to start with. */
-  applyPersonality(name: string, options?: { persist?: boolean }): Promise<void>;
+  /**
+   * Make `name` the robot's personality, live when a conversation runs.
+   * `persist` (the default) also makes it the one to start with.
+   * `force` re-applies a name the robot is already on, after an edit.
+   */
+  applyPersonality(name: string, opts?: { persist?: boolean; force?: boolean }): Promise<void>;
   /**
    * Make `name` the personality to start with and to fall back to when an
    * accessory comes off, without running it. Needs an app with
@@ -138,6 +153,17 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
         { timeoutMs: INSTALL_TIMEOUT_MS }
       );
     },
+    async getStartupApp() {
+      const res = await robot.rpcCall<{ name: string | null } | null>(
+        'apps.get_startup',
+        {},
+        { timeoutMs: STARTUP_TIMEOUT_MS }
+      );
+      return res?.name ?? null;
+    },
+    async setStartupApp(name) {
+      await robot.rpcCall('apps.set_startup', { name }, { timeoutMs: STARTUP_TIMEOUT_MS });
+    },
 
     getStatus() {
       return robot.rpcCall<ConvAppStatus>('conversation.status');
@@ -153,8 +179,12 @@ export function createConvAppClient(robot: ReachyMiniInstance): ConvAppClient {
     async getAvatar(name) {
       return (await robot.rpcCall<{ svg: string }>('personalities.avatar', { name })).svg;
     },
-    async applyPersonality(name, { persist = true } = {}) {
-      await robot.rpcCall('personalities.apply', { name, persist });
+    async applyPersonality(name, opts) {
+      await robot.rpcCall('personalities.apply', {
+        name,
+        persist: opts?.persist ?? true,
+        force: opts?.force ?? false,
+      });
     },
     async setDefaultPersonality(name) {
       await robot.rpcCall('personalities.set_default', { name });

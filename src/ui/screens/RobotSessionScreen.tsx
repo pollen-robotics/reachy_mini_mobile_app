@@ -90,8 +90,10 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
+import { isConvAppRunning } from '@/features/conv-app/app-slot';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
+import { renameRobot } from '@/features/robot-session/robot-name';
 import { SESSION_TIMINGS } from '@/features/robot-session/timings';
 import { recordConnectionEvent } from '@/features/robot-session/connection-journal';
 import { rememberRobotPersona, useActivePersonality } from '@/features/personalities';
@@ -125,6 +127,7 @@ import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-upda
 import { SKIP_DAEMON_UPDATE } from '@/shared/env';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
+import { RobotVolumeKeys } from '@/ui/widgets/volume-keys/RobotVolumeKeys';
 
 export type ConnectionTarget = {
   kind: 'remote';
@@ -136,6 +139,8 @@ interface RobotSessionScreenProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  /** Leave the session for the Bluetooth "Change Wi-Fi network" flow. */
+  onChangeWifi: () => void;
 }
 
 type Tab = 'conv' | 'apps' | 'tele';
@@ -145,6 +150,7 @@ export default function RobotSessionScreen({
   token,
   username,
   onBack,
+  onChangeWifi,
 }: RobotSessionScreenProps) {
   const robotId = extractRobotId(target.robot);
   const robotName = extractRobotName(target.robot) ?? robotId ?? 'Reachy Mini';
@@ -167,6 +173,7 @@ export default function RobotSessionScreen({
       token={token}
       username={username}
       onBack={onBack}
+      onChangeWifi={onChangeWifi}
     />
   );
 }
@@ -179,6 +186,7 @@ interface ConnectedSessionProps {
   token: string;
   username: string | null;
   onBack: () => void;
+  onChangeWifi: () => void;
 }
 
 /**
@@ -227,6 +235,7 @@ function ConnectedSession({
   token,
   username,
   onBack,
+  onChangeWifi,
 }: ConnectedSessionProps) {
   const orbRef = useRef<HTMLButtonElement | null>(null);
 
@@ -284,8 +293,31 @@ function ConnectedSession({
   // flag was still unknown. Fail-open: an old daemon / closed channel
   // (`null`) skips the wizard. Dev-force / disabled short-circuit the seed
   // above, so this only runs for the real production gating.
+  //
+  // First, though: a robot that is already talking (its antennas started the
+  // conversation app with no phone involved) is neither woken nor walked
+  // through the wizard. Both command the motors the app is driving. The
+  // engine attaches to that conversation by itself (`onConnectionLive`); here
+  // we only close the gate. A wizard that was due shows on the next connection.
+  // This also covers the dev-forced `show` seed, so the wizard waits for the
+  // answer (`talkingChecked`) before it mounts. Asked once per screen, and
+  // never cancelled: `session` is a fresh object on every render, so an
+  // effect cleanup would abandon the question each time the screen repaints.
+  const talkingCheckStartedRef = useRef(false);
+  const [talkingChecked, setTalkingChecked] = useState(false);
   useEffect(() => {
-    if (wizardGate !== 'pending') return;
+    if (talkingCheckStartedRef.current || session.phase !== 'live') return;
+    const robot = session.getRobot();
+    if (!robot) return;
+    talkingCheckStartedRef.current = true;
+    void isConvAppRunning(robot).then(talking => {
+      if (talking) setWizardGate('done');
+      setTalkingChecked(true);
+    });
+  }, [session]);
+
+  useEffect(() => {
+    if (wizardGate !== 'pending' || !talkingChecked) return;
     if (session.phase !== 'live') return;
     // Wait out the blocking daemon-update gate first. An outdated daemon
     // predates `get_first_wake_up`, so querying it now would just time out
@@ -320,7 +352,7 @@ function ConnectedSession({
     return () => {
       cancelled = true;
     };
-  }, [wizardGate, session, daemonOutdated]);
+  }, [wizardGate, talkingChecked, session, daemonOutdated]);
 
   // Optimistic display name. `robotName` comes from the central listing we
   // booted the session from, which is fixed for the session's lifetime. The
@@ -329,15 +361,16 @@ function ConnectedSession({
   // name locally the moment a rename lands, so the topbar identity + settings
   // reflect it immediately instead of only on the next app launch.
   const [displayName, setDisplayName] = useState(robotName);
+  const { getRobot } = session;
   const handleRenameRobot = useCallback(
     async (name: string): Promise<string | null> => {
-      const robot = session.getRobot();
+      const robot = getRobot();
       if (!robot) return null;
-      const saved = await robot.setRobotName(name);
+      const saved = await renameRobot(robot, name);
       if (saved) setDisplayName(saved);
       return saved;
     },
-    [session],
+    [getRobot],
   );
 
   // The wizard will run: warm the robot's HF cache for the onboarding moves
@@ -354,7 +387,7 @@ function ConnectedSession({
   const [onboardingMovesReady, setOnboardingMovesReady] = useState(false);
   useEffect(() => {
     if (preloadedOnboardingRef.current) return;
-    if (wizardGate !== 'show' || session.phase !== 'live') return;
+    if (wizardGate !== 'show' || !talkingChecked || session.phase !== 'live') return;
     const robot = session.getRobot();
     if (!robot) return;
     preloadedOnboardingRef.current = true;
@@ -376,7 +409,7 @@ function ConnectedSession({
     } else {
       setOnboardingMovesReady(true);
     }
-  }, [wizardGate, session]);
+  }, [wizardGate, talkingChecked, session]);
 
   // Wizard finished: close the gate and persist the completion flag on the
   // robot so it never shows again (dev-force ignores the flag on the next
@@ -508,7 +541,7 @@ function ConnectedSession({
   const accessory = useAccessory(nfc.state, nfc.tag);
   // Switch personality as accessories come and go. While a conversation runs
   // the conversation app on the robot does it, as on desktop.
-  useAccessoryPersonality(accessory, session.conversationState === 'idle');
+  useAccessoryPersonality(accessory, session.conversationState === 'idle', session.getRobot);
   // The topbar NFC pill and the accessory badge both land on Settings > NFC.
   const openNfcSettings = useCallback(() => {
     setSettingsView('root');
@@ -534,23 +567,32 @@ function ConnectedSession({
   // screen renders the leaving view in the meantime.
   const [leaving, setLeaving] = useState(false);
   const leavingTriggeredRef = useRef(false);
+  /** Where to go once torn down: the robot list, or the Bluetooth Wi-Fi flow. */
+  const leaveToRef = useRef<'back' | 'wifi'>('back');
   useEffect(() => {
     if (!leaving) return;
     let cancelled = false;
     void (async () => {
       await session.tearDown();
       if (cancelled) return;
-      onBack();
+      if (leaveToRef.current === 'wifi') onChangeWifi();
+      else onBack();
     })();
     return () => {
       cancelled = true;
     };
-  }, [leaving, onBack, session]);
+  }, [leaving, onBack, onChangeWifi, session]);
 
   const handleLeave = (): void => {
     if (leavingTriggeredRef.current) return;
     leavingTriggeredRef.current = true;
     setLeaving(true);
+  };
+
+  const handleLeaveToChangeWifi = (): void => {
+    if (leavingTriggeredRef.current) return;
+    leaveToRef.current = 'wifi';
+    handleLeave();
   };
 
   // Handoff lifecycle for the apps iframe.
@@ -655,7 +697,7 @@ function ConnectedSession({
   const [autoRecovering, setAutoRecovering] = useState(false);
   const recoverIncidentStartRef = useRef<number | null>(null);
   // Set by the update gate while the robot restarts after a self-update:
-  // the loop then gets the longer reboot window. "Keep waiting" re-arms
+  // the loop then gets the longer reboot window. "Reconnect" re-arms
   // it, which restarts the incident below.
   const [daemonRebooting, setDaemonRebooting] = useState(false);
   useEffect(() => {
@@ -766,6 +808,8 @@ function ConnectedSession({
        `session.hasReachedReady` so we only round-trip once the
        engine is past bring-up. */
     <DaemonStateProvider session={session} enabled={session.hasReachedReady}>
+      {/* Phone volume buttons drive the robot speaker while it is up. */}
+      <RobotVolumeKeys active={session.hasReachedReady} />
       <Stack
         sx={{
           height: '100%',
@@ -1001,7 +1045,9 @@ function ConnectedSession({
                   accessory={accessory}
                   onOpenAccessory={openNfcSettings}
                   onLinkAccessory={personality =>
-                    linkAccessory(session.getRobot(), personality, nfc.tag)
+                    linkAccessory(session.getRobot(), personality, nfc.tag, {
+                      conversationLive: isConversing,
+                    })
                   }
                 />
               </Box>
@@ -1279,10 +1325,16 @@ function ConnectedSession({
                 nfc={nfc}
                 nfcFocusKey={nfcFocusKey}
                 onOpenAbout={() => setSettingsView('about')}
+                onChangeWifi={() => {
+                  setSettingsOpen(false);
+                  handleLeaveToChangeWifi();
+                }}
                 conversationLive={session.conversationState !== 'idle'}
                 robotName={displayName}
                 renameRobot={handleRenameRobot}
                 signOutRobot={() => session.getRobot()?.signOut() ?? Promise.resolve(null)}
+                getRobot={session.getRobot}
+                robotLive={session.connectionState === 'live'}
                 onSignedOutRobot={() => {
                   setSettingsOpen(false);
                   handleLeave();
@@ -1411,7 +1463,7 @@ function ConnectedSession({
             conversation UI (already mounted behind it) cross-fades in instead
             of hard-cutting when `wakeUpDone` flips true. */}
         <AnimatePresence>
-          {!leaving && session.phase === 'live' && wizardGate === 'show' && (
+          {!leaving && session.phase === 'live' && wizardGate === 'show' && talkingChecked && (
             <FirstWakeUpWizard
               key="first-wake-up"
               session={session}
