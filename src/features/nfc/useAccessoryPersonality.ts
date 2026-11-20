@@ -3,7 +3,7 @@
  *
  * `acting` is false while the conversation app runs on the robot: it switches
  * personality on its own then and announces it (`conversation.personality`,
- * followed in `robot-conversation.ts`), so the phone only keeps track.
+ * followed in `conv-app/live-personality.ts`), so the phone only keeps track.
  *
  * The personality to go back to is kept in the personalities store, so a
  * conversation start can make it the robot's default too (`sync-settings.ts`).
@@ -12,7 +12,6 @@ import { useEffect, useRef } from 'react';
 
 import { createConvAppClient } from '@/features/conv-app/client';
 import {
-  followRobotPersonality,
   getActivePersonalityId,
   getPersonalityBeforeAccessory,
   resolveRobotPersonality,
@@ -32,13 +31,16 @@ import { IDLE_FOLLOWER, followAccessory, type FollowerState } from './accessory-
  */
 const RECONCILE_AFTER_MS = 20_000;
 
-/** Show the personality the robot runs, if the panel shows another one. */
+/**
+ * Show the personality the robot runs, if the panel shows another one. The
+ * live follower then asks the robot for it, which changes nothing there.
+ */
 async function reconcileWithRobot(robot: ReachyMiniInstance | null): Promise<void> {
   if (!robot) return;
   try {
     const status = await createConvAppClient(robot).getStatus();
     const running = resolveRobotPersonality(status.personality ?? 'default');
-    if (running) followRobotPersonality(running.id);
+    if (running) setActivePersonalityForAccessory(running.id);
   } catch (err) {
     console.warn('[nfc] could not read the personality the robot runs:', err);
   }

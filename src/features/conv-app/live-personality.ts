@@ -14,10 +14,11 @@
  *   created one with "Save & use" → push it, apply it
  *   deleted the active one        → push the delete, apply the fallback
  *
- * The other way round, an accessory on the robot's NFC reader switches the
- * personality there and the phone follows (`conversation.personality`, in
- * `robot-conversation.ts`). That change is the robot's own: it is noted as
- * applied, not sent back.
+ * The other way round, the robot announces every switch it makes
+ * (`conversation.personality`). One the phone asked for comes back as an echo
+ * and is ignored. Any other is the robot's own, an accessory put on or taken
+ * off its NFC reader: the phone shows it and notes it as applied, so it is not
+ * sent back.
  *
  * Runs are serialised and loop until the robot has caught up, so a burst of
  * taps ends on the last one. A push that keeps failing is not retried on every
@@ -28,8 +29,9 @@ import {
   getPendingWrites,
   getPersonalityBeforeAccessory,
   reconcilePersonalities,
+  resolveRobotPersonality,
+  setActivePersonalityForAccessory,
   subscribePersonalities,
-  wasActivePersonalitySetByRobot,
 } from '@/features/personalities';
 
 import type { ConvAppClient } from './client';
@@ -47,7 +49,11 @@ export function followPersonality(
   client: ConvAppClient,
   { confirmStart }: { confirmStart: boolean }
 ): () => void {
+  // What the robot runs, as far as the phone knows.
   let appliedId: string | null = confirmStart ? null : getActivePersonalityId();
+  // The personality of the apply in flight, to tell its echo from a switch
+  // the robot made on its own.
+  let requestedId: string | null = null;
   let settledPending = getPendingWrites();
   let busy = false;
   let stopped = false;
@@ -65,13 +71,6 @@ export function followPersonality(
     try {
       while (!stopped && behind()) {
         const target = getActivePersonalityId();
-        // An accessory switched it on the robot, which is already running it.
-        // Not on the run that confirms a start (`appliedId` still null): the
-        // flag may date from an earlier conversation.
-        if (appliedId !== null && target !== appliedId && wasActivePersonalitySetByRobot()) {
-          appliedId = target;
-          continue;
-        }
         const pending = getPendingWrites();
         const edited = pending.dirty.includes(target);
         // A plain pick of a persona the robot already has needs no catalog
@@ -85,12 +84,18 @@ export function followPersonality(
         const pushed = edited && !settledPending.dirty.includes(target);
         if (stopped) return;
         if (target !== appliedId || pushed) {
-          // Under an accessory the robot's default stays the personality from
-          // before it (see `sync-settings.ts`): run this one without saving it.
-          await client.applyPersonality(target, {
-            persist: getPersonalityBeforeAccessory() === null,
-            force: pushed,
-          });
+          requestedId = target;
+          try {
+            // Under an accessory the robot's default stays the personality
+            // from before it (see `sync-settings.ts`): run this one without
+            // saving it.
+            await client.applyPersonality(target, {
+              persist: getPersonalityBeforeAccessory() === null,
+              force: pushed,
+            });
+          } finally {
+            requestedId = null;
+          }
         }
         appliedId = target;
       }
@@ -104,10 +109,20 @@ export function followPersonality(
     }
   };
 
+  const onRobotSwitch = (params: Record<string, unknown>): void => {
+    if (typeof params.profile !== 'string') return;
+    const id = resolveRobotPersonality(params.profile)?.id;
+    if (!id || id === requestedId || id === appliedId) return;
+    appliedId = id;
+    setActivePersonalityForAccessory(id);
+  };
+
   const unsubscribe = subscribePersonalities(() => void catchUp());
+  const unlisten = client.on('conversation.personality', onRobotSwitch);
   if (confirmStart) void catchUp();
   return () => {
     stopped = true;
     unsubscribe();
+    unlisten();
   };
 }

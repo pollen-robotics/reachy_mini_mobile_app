@@ -11,11 +11,7 @@ import type { ConversationState } from '@/features/conversation/engine/types';
 import { setActiveLanguageId } from '@/features/conversation-language';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 
-import {
-  getActivePersonalityId,
-  setActivePersonality,
-  wasActivePersonalitySetByRobot,
-} from '@/features/personalities';
+import { getActivePersonalityId, setActivePersonality } from '@/features/personalities';
 
 import { cacheFacts, getFacts } from './memory-cache';
 import { createRobotConversation, type RobotConversationDeps } from './robot-conversation';
@@ -409,7 +405,6 @@ describe('following the robot', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(getActivePersonalityId()).toBe('builtin:noir_detective');
-    expect(wasActivePersonalitySetByRobot()).toBe(true);
     expect(calls.slice(before)).not.toContain('personalities.apply');
   });
 

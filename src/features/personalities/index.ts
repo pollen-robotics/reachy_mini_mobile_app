@@ -42,7 +42,6 @@ export { fetchRobotAvatars, reconcilePersonalities, syncPersonalitiesToRobot } f
 export {
   addCustomPersonality,
   clearAvatarPending,
-  followRobotPersonality,
   getActivePersonality,
   getActivePersonalityId,
   getPendingWrites,
@@ -64,7 +63,6 @@ export {
   useIsAvatarPending,
   useIsPersonalityOnRobot,
   usePersonalitiesCatalog,
-  wasActivePersonalitySetByRobot,
 } from './store';
 export {
   getRememberedPersonaId,

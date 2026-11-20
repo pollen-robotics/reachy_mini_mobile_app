@@ -374,36 +374,19 @@ export function toRobotPersonalityName(id: string): string {
   return id.startsWith(BUNDLED_PREFIX) ? id.slice(BUNDLED_PREFIX.length) : id;
 }
 
-/** Whether the last switch of the active personality was the robot's own
- *  (an accessory on its NFC reader), already in effect there. */
-let activeSetByRobot = false;
-
-export function wasActivePersonalitySetByRobot(): boolean {
-  return activeSetByRobot;
-}
-
 /** The catalog entry for a personality as the robot names it (`noir_detective`),
  *  also before the robot's catalog has replaced the bundled ids. */
 export function resolveRobotPersonality(name: string): Personality | null {
   return resolvePersonalityById(name) ?? resolvePersonalityById(`${BUNDLED_PREFIX}${name}`);
 }
 
-/** Switch personality for an NFC accessory, keeping the one to go back to. */
+/**
+ * Switch personality because an accessory came or went, whether the phone
+ * follows the reader itself or the robot did and announced it. Unlike a pick
+ * by hand, it keeps the personality to go back to.
+ */
 export function setActivePersonalityForAccessory(id: string): void {
   if (id === state.activeId || !resolvePersonalityById(id)) return;
-  activeSetByRobot = false;
-  writeActivePersonalityId(id);
-  update({ activeId: id });
-}
-
-/**
- * Follow a personality the robot switched to on its own, while it is
- * listening: the same as `setActivePersonality`, minus telling the robot
- * what it already did.
- */
-export function followRobotPersonality(id: string): void {
-  if (id === state.activeId || !resolvePersonalityById(id)) return;
-  activeSetByRobot = true;
   writeActivePersonalityId(id);
   update({ activeId: id });
 }
@@ -419,7 +402,6 @@ export function setActivePersonality(id: string): void {
     console.warn(`[personalities] refusing to set unknown active id: ${id}`);
     return;
   }
-  activeSetByRobot = false;
   setPersonalityBeforeAccessory(null);
   writeActivePersonalityId(id);
   // A running conversation follows this store and switches the robot live
