@@ -42,12 +42,19 @@ import { ConversationOrb, type OrbState } from './orb/ConversationOrb';
 import { ConversationCaption } from './orb/ConversationCaption';
 import { MuteSideButton, StopSideButton } from './orb/ConversationSideButtons';
 import { ConversationToolToast } from './orb/ConversationToolToast';
+import { AccessoryBadge } from './AccessoryBadge';
 import type {
   ConnectionState,
   ConversationState,
 } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
-import { type Personality } from '@/features/personalities';
+import {
+  type Personality,
+  useActivePersonality,
+  toRobotPersonalityName,
+  useIsPersonalityOnRobot,
+} from '@/features/personalities';
+import type { AccessoryBadgeView, LinkOutcome } from '@/features/nfc';
 import { useActiveLanguageId } from '@/features/conversation-language';
 import {
   PersonalityStore,
@@ -89,6 +96,13 @@ export interface ConversationPanelProps {
    * CTA is a trap. Always fired with `false` on unmount.
    */
   onAuthoringChange?: (authoring: boolean) => void;
+  /** What is on the NFC reader, shown in the orb area like the
+   *  conversation app's own "Accessory" badge. Omitted: no badge. */
+  accessory?: AccessoryBadgeView;
+  /** Tapping the accessory badge: the host opens Settings on NFC. */
+  onOpenAccessory?: () => void;
+  /** "Link personality": write `personality` (as the robot names it) onto the accessory. */
+  onLinkAccessory?: (personality: string) => Promise<LinkOutcome>;
 }
 
 /** Which persona-authoring form (if any) is open in the body slot. */
@@ -102,6 +116,9 @@ export function ConversationPanel({
   orbRef,
   active = true,
   onAuthoringChange,
+  accessory,
+  onOpenAccessory,
+  onLinkAccessory,
 }: ConversationPanelProps) {
   const orbState = mapToOrb(session.connectionState, session.conversationState);
   const live =
@@ -120,6 +137,12 @@ export function ConversationPanel({
   // the orb says "Tap to start conversation".
   const conversationEngaged =
     live || session.conversationState === 'starting';
+
+  // The active personality, for the accessory badge's "Link personality".
+  const activePersona = useActivePersonality();
+  const activePersonalityId = activePersona.id;
+  const activeOnRobot = useIsPersonalityOnRobot(activePersonalityId);
+
 
   // Personality picker open / closed. When open, the body slot
   // below the sub-header swaps from the orb area to the persona
@@ -387,9 +410,23 @@ export function ConversationPanel({
             justifyItems: 'center',
           }}
         >
-          {/* Top spacer: balances the third row so the orb stays
-              centred regardless of caption / toast content. */}
-          <Box />
+          {/* Top row: balances the third one so the orb stays centred,
+              and holds the accessory on the NFC reader, top-right like
+              the conversation app's own badge group. In the flow rather
+              than overlaid, so on a short screen it pushes the orb down
+              instead of covering it. */}
+          <Box sx={{ justifySelf: 'stretch', display: 'flex', justifyContent: 'flex-end', px: 3 }}>
+            {accessory && onOpenAccessory && onLinkAccessory && (
+              <AccessoryBadge
+                accessory={accessory}
+                activePersonality={toRobotPersonalityName(activePersonalityId)}
+                activePersonalityName={activePersona.name}
+                canLink={activeOnRobot}
+                onOpen={onOpenAccessory}
+                onLink={() => onLinkAccessory(toRobotPersonalityName(activePersonalityId))}
+              />
+            )}
+          </Box>
           <Stack
             direction="row"
             spacing={1.25}

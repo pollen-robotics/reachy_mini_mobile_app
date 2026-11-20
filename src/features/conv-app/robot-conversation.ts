@@ -19,6 +19,8 @@
  *                         state, which the robot never emits itself.
  *   conversation.activity { reason }
  *                       → a tool toast on `tool_call_received`.
+ *   conversation.personality { profile }
+ *                       → the active personality, in `live-personality.ts`.
  *
  * Readiness is `conversation.status.backend_connected`: `apps.status` says
  * `running` the moment the process forks, long before the app can talk.
