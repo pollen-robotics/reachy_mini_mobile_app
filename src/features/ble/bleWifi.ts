@@ -23,6 +23,7 @@
 import {
   stopScan,
   checkPermissions,
+  getAdapterState,
   getConnectionUpdates,
   connect as blecConnect,
   disconnect as blecDisconnect,
@@ -195,6 +196,25 @@ export interface ScanController {
 const CONT_SCAN_WINDOW_MS = 5_000;
 const CONT_SCAN_STALE_MS = 11_000;
 const CONT_SCAN_PRUNE_MS = 2_000;
+const ADAPTER_ON_WAIT_MS = 30_000;
+
+/**
+ * After a failed scan: if the adapter is off, poll until it turns on ('on')
+ * or `ADAPTER_ON_WAIT_MS` passes / `cancelled()` ('off'). 'not-off' when it
+ * wasn't off, so a real scan error isn't retried forever.
+ */
+async function waitForAdapterOn(
+  cancelled: () => boolean,
+): Promise<'on' | 'off' | 'not-off'> {
+  const state = () => getAdapterState().catch(() => 'Unknown');
+  if ((await state()) !== 'Off') return 'not-off';
+  const deadline = Date.now() + ADAPTER_ON_WAIT_MS;
+  while (Date.now() < deadline && !cancelled()) {
+    await new Promise((r) => setTimeout(r, 500));
+    if ((await state()) === 'On') return 'on';
+  }
+  return 'off';
+}
 
 /**
  * Continuously scan for BLE devices until `stop()` is called.
@@ -265,7 +285,17 @@ export function startContinuousScan(opts: {
         // wait the window out, then loop to re-arm.
         await startScan(handler, windowMs);
       } catch (e) {
-        opts.onError?.(e as Error);
+        // Bluetooth off: the plugin shows the "turn on" prompt but fails the
+        // scan right away. Wait for the user to accept it, then re-arm.
+        const adapter = await waitForAdapterOn(() => stopped || myToken !== _scanToken);
+        if (adapter === 'on') continue;
+        // Superseded while waiting: the newer scan owns the UI now.
+        if (stopped || myToken !== _scanToken) break;
+        opts.onError?.(
+          adapter === 'off'
+            ? new Error('Bluetooth is off. Turn it on, then scan again.')
+            : (e as Error),
+        );
         break;
       }
       await new Promise((r) => setTimeout(r, windowMs));
