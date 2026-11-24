@@ -108,26 +108,29 @@ class BleClient(private val context: Context, private val plugin: BlecPlugin) {
         }
         val args = ScanParams.from(invoke.args)
 
-        // get scanner
-        if (scanner == null) {
+        // get scanner: checked on every scan, Bluetooth can be turned off
+        // between scans and a cached scanner then fails silently.
+        if (manager == null) {
             manager = context.getSystemService(BluetoothManager::class.java)
                 ?: throw RuntimeException("No bluetooth manager found")
-            val bluetoothAdapter: BluetoothAdapter = manager!!.adapter
-                ?: throw RuntimeException("No bluetooth adapter available")
-            // check if bluetooth is on
-            if (!bluetoothAdapter.isEnabled ) {
-                val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-                val activity = currentActivity
-                if (activity != null) {
-                    activity.startActivity(enableBtIntent)
-                } else {
-                    // Without an activity the intent needs its own task.
-                    context.startActivity(enableBtIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            }
-            scanner = bluetoothAdapter.bluetoothLeScanner
-                ?: throw RuntimeException("No bluetooth scanner available for adapter")
         }
+        val bluetoothAdapter: BluetoothAdapter = manager!!.adapter
+            ?: throw RuntimeException("No bluetooth adapter available")
+        if (!bluetoothAdapter.isEnabled ) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            val activity = currentActivity
+            if (activity != null) {
+                activity.startActivity(enableBtIntent)
+            } else {
+                // Without an activity the intent needs its own task.
+                context.startActivity(enableBtIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            // No scanner until the user accepts; the caller waits and retries.
+            invoke.reject("Bluetooth is off")
+            return
+        }
+        scanner = bluetoothAdapter.bluetoothLeScanner
+            ?: throw RuntimeException("No bluetooth scanner available for adapter")
 
         // clear old devices
         this.plugin.devices.clear()
@@ -207,7 +210,14 @@ class BleClient(private val context: Context, private val plugin: BlecPlugin) {
     @SuppressLint("MissingPermission")
     fun stopScan(invoke: Invoke){
         if (scanCb!=null) {
-            scanner?.stopScan(scanCb!!)
+            // Throws when Bluetooth is off (the scan is gone anyway); clear the
+            // callback regardless, or every later startScan is rejected as
+            // "already running".
+            try {
+                scanner?.stopScan(scanCb!!)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "stopScan with Bluetooth off: ${e.message}")
+            }
             scanCb = null
         }
         invoke.resolve()
