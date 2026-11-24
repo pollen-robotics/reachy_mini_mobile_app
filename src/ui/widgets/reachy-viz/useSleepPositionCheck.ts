@@ -107,7 +107,10 @@ export function useSleepPositionCheck(session: RobotSessionHandle): SleepPositio
 
       for (let i = 0; i < MOTOR_SPECS.length; i++) {
         const spec = MOTOR_SPECS[i]!;
-        if (Math.abs(values[i]! - spec.target) > spec.tolerance + margin) {
+        // Shortest angle: antennas sit near ±π and read wrapped (power-up) or
+        // multi-turn (spun while limp), so a plain difference is ~2π off.
+        const d = values[i]! - spec.target;
+        if (Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > spec.tolerance + margin) {
           offMotors.push(spec.label);
         }
       }
