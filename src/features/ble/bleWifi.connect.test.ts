@@ -11,6 +11,7 @@ const plugin = {
   startScan: vi.fn(),
   stopScan: vi.fn(),
   checkPermissions: vi.fn(),
+  getAdapterState: vi.fn(),
   getConnectionUpdates: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
@@ -140,4 +141,59 @@ it('drops a bond the scan reported before the first connect', async () => {
   await connect('AA:BB', undefined, { bonded: true });
   expect(tauriInvoke).toHaveBeenCalledTimes(1);
   expect(tauriInvoke.mock.invocationCallOrder[0]).toBeLessThan(plugin.connect.mock.invocationCallOrder[0]);
+});
+
+// Bluetooth off: Android's scan opens the "turn on" prompt and fails at once.
+it('waits for Bluetooth to come on after the prompt, then scans again', async () => {
+  const { startContinuousScan } = await load();
+  plugin.checkPermissions.mockResolvedValue(true);
+  plugin.startScan.mockRejectedValueOnce('Bluetooth is off').mockResolvedValue(undefined);
+  plugin.getAdapterState.mockResolvedValueOnce('Off').mockResolvedValue('On');
+  const onError = vi.fn();
+  vi.useFakeTimers();
+  try {
+    const ctrl = startContinuousScan({ onUpdate: () => {}, onError });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await ctrl.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(plugin.startScan).toHaveBeenCalledTimes(2);
+  expect(onError).not.toHaveBeenCalled();
+});
+
+it('says Bluetooth is off when the prompt is declined', async () => {
+  const { startContinuousScan } = await load();
+  plugin.checkPermissions.mockResolvedValue(true);
+  plugin.startScan.mockRejectedValue('Bluetooth is off');
+  plugin.getAdapterState.mockResolvedValue('Off');
+  const onError = vi.fn();
+  vi.useFakeTimers();
+  try {
+    startContinuousScan({ onUpdate: () => {}, onError });
+    await vi.advanceTimersByTimeAsync(31_000);
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(plugin.startScan).toHaveBeenCalledTimes(1);
+  expect(onError).toHaveBeenCalledWith(new Error('Bluetooth is off. Turn it on, then scan again.'));
+});
+
+it('stays quiet when a newer scan replaces one waiting for Bluetooth', async () => {
+  const { startContinuousScan } = await load();
+  plugin.checkPermissions.mockResolvedValue(true);
+  plugin.startScan.mockRejectedValueOnce('Bluetooth is off').mockResolvedValue(undefined);
+  plugin.getAdapterState.mockResolvedValue('Off');
+  const onError = vi.fn();
+  vi.useFakeTimers();
+  try {
+    startContinuousScan({ onUpdate: () => {}, onError });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const newer = startContinuousScan({ onUpdate: () => {} });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await newer.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(onError).not.toHaveBeenCalled();
 });
