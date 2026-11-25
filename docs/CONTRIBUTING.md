@@ -64,6 +64,21 @@ fixups and work-in-progress before asking for review. On a branch nobody
 has reviewed yet, rewrite history freely and `git push --force-with-lease`.
 Once review has started, stop rewriting, or reviewers lose their place.
 
+## User documentation
+
+The app's user documentation doesn't live here: it's the **Mobile app**
+section of the reachy_mini docs
+([source](https://github.com/pollen-robotics/reachy_mini/tree/main/docs/source/platforms/mobile_app),
+[published](https://huggingface.co/docs/reachy_mini/platforms/mobile_app/get_started)).
+
+Any new feature, or any change to what users see (a screen, a flow, a
+label), must be documented there. Open a PR on reachy_mini that updates
+the pages and their screenshots (`docs/assets/mobile_app/`), and link it
+from the app PR. A user-facing change without its docs PR is not done.
+
+Every new or changed screen, button or control must come with a
+screenshot showing it, not just a text description.
+
 ## AI coding assistants
 
 AI-assisted contributions are welcome, but the human author owns the
