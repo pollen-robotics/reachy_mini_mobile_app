@@ -631,6 +631,22 @@ jobs:
               else:
                   print("Locked MainActivity to portrait.")
               s = s2
+          # screenOrientation="portrait" implies a *required*
+          # android.hardware.screen.portrait feature, so Play filters out
+          # every device that doesn't declare it (TVs, Chromebooks, XR,
+          # some tablets and phones) and flags the release. Declaring it
+          # optional keeps the lock where it applies without the filter.
+          if "android.hardware.screen.portrait" not in s:
+              anchor = '    <uses-feature android:name="android.software.leanback" android:required="false" />'
+              s2 = s.replace(
+                  anchor,
+                  anchor + '\n    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />',
+                  1,
+              )
+              if s2 == s:
+                  print("::error::leanback <uses-feature> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Declared screen.portrait as optional.")
           if "RECORD_AUDIO" not in s:
               perms = (
                   '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
@@ -1638,6 +1654,22 @@ jobs:
               else:
                   print("Locked MainActivity to portrait.")
               s = s2
+          # screenOrientation="portrait" implies a *required*
+          # android.hardware.screen.portrait feature, so Play filters out
+          # every device that doesn't declare it (TVs, Chromebooks, XR,
+          # some tablets and phones) and flags the release. Declaring it
+          # optional keeps the lock where it applies without the filter.
+          if "android.hardware.screen.portrait" not in s:
+              anchor = '    <uses-feature android:name="android.software.leanback" android:required="false" />'
+              s2 = s.replace(
+                  anchor,
+                  anchor + '\n    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />',
+                  1,
+              )
+              if s2 == s:
+                  print("::error::leanback <uses-feature> anchor not found.", file=sys.stderr); sys.exit(1)
+              s = s2
+              print("Declared screen.portrait as optional.")
           if "RECORD_AUDIO" not in s:
               perms = (
                   '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
