@@ -37,6 +37,18 @@ export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promi
 }
 
 /**
+ * Name of the app other than the conversation that runs on the robot, or
+ * `null`. For callers that have to name it to the user before taking the
+ * motors from it.
+ */
+export async function getOtherRunningAppName(robot: ReachyMiniInstance): Promise<string | null> {
+  const app = await readActiveApp(robot);
+  if (app === null) return null;
+  const name = app.info?.name ?? null;
+  return name === CONV_APP_NAME ? null : (name ?? 'another app');
+}
+
+/**
  * True when any app, the conversation app included, runs on the robot. The
  * bring-up wake asks this rather than `isAnotherAppDrivingRobot`: at connect
  * nothing has been torn down yet, and the conversation app may be running

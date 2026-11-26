@@ -90,7 +90,7 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { ConversationPanel } from '@/ui/panels/conversation/ConversationPanel';
-import { isConvAppRunning } from '@/features/conv-app/app-slot';
+import { getOtherRunningAppName, isConvAppRunning } from '@/features/conv-app/app-slot';
 import { ConversationSettingsPanel } from '@/ui/panels/conversation/ConversationSettingsPanel';
 import { useRobotSession } from '@/features/robot-session/useRobotSession';
 import { renameRobot } from '@/features/robot-session/robot-name';
@@ -116,6 +116,7 @@ import LeavingView from './session/LeavingView';
 import ReconnectingView from './session/ReconnectingView';
 import RobotInfoPanel from './session/RobotInfoPanel';
 import SessionErrorView from './session/SessionErrorView';
+import StopAppDialog from './session/StopAppDialog';
 import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
@@ -478,6 +479,12 @@ function ConnectedSession({
   // Imperative handle into the Apps tab so the shell can pop its
   // sub-navigation (store / drill-down) back to the launcher.
   const appsViewRef = useRef<AppsTabViewHandle | null>(null);
+  const switchTab = (value: Tab): void => {
+    if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    setTabSpinner(true);
+    setTab(value);
+    tabSpinnerTimerRef.current = setTimeout(() => setTabSpinner(false), 250);
+  };
   const handleTabChange = (value: Tab): void => {
     if (leaving) return;
     if (value === tab) {
@@ -487,10 +494,78 @@ function ConnectedSession({
       if (value === 'apps') appsViewRef.current?.popToRoot();
       return;
     }
-    if (tabSpinnerTimerRef.current) clearTimeout(tabSpinnerTimerRef.current);
+    requestedTabRef.current = value;
+    if (value === 'tele') {
+      void enterTelepresence();
+      return;
+    }
+    switchTab(value);
+  };
+
+  // Telepresence drives the head, and so does an app running on the
+  // robot: the two would fight over the motors. The other tabs leave the
+  // app running, so this one asks before stopping it rather than letting
+  // the app lose the robot without a word. The conversation app is not
+  // asked about: leaving the Talk tab already stops it.
+  const [stopAppPrompt, setStopAppPrompt] = useState<string | null>(null);
+  const [stoppingApp, setStoppingApp] = useState(false);
+  const [stopAppError, setStopAppError] = useState<string | null>(null);
+  const teleCheckRef = useRef(false);
+  // The tab the user asked for last: the check below takes up to 2 s, and a
+  // tap elsewhere (or leaving the session) in the meantime wins.
+  const requestedTabRef = useRef<Tab>(tab);
+  const stillWantsTele = (): boolean =>
+    requestedTabRef.current === 'tele' && !leavingTriggeredRef.current;
+  const enterTelepresence = async (): Promise<void> => {
+    if (teleCheckRef.current) return;
+    const robot = session.getRobot();
+    if (!robot || session.phase !== 'live') {
+      switchTab('tele');
+      return;
+    }
+    teleCheckRef.current = true;
+    // The tab spinner covers the check; `switchTab` clears it on its own.
     setTabSpinner(true);
-    setTab(value);
-    tabSpinnerTimerRef.current = setTimeout(() => setTabSpinner(false), 250);
+    let switched = false;
+    try {
+      const running = await getOtherRunningAppName(robot);
+      if (!stillWantsTele()) return;
+      if (running === null) {
+        switchTab('tele');
+        switched = true;
+        return;
+      }
+      const installed = robotApps.snapshot.installed?.find(app => app.name === running);
+      setStopAppError(null);
+      setStopAppPrompt(installed?.title ?? running);
+    } finally {
+      teleCheckRef.current = false;
+      if (!switched && requestedTabRef.current === 'tele') setTabSpinner(false);
+    }
+  };
+  const closeStopAppPrompt = (): void => {
+    requestedTabRef.current = tab;
+    setStopAppPrompt(null);
+  };
+  const confirmStopApp = async (): Promise<void> => {
+    setStoppingApp(true);
+    setStopAppError(null);
+    let stopped = false;
+    try {
+      stopped = await robotApps.controller.stop();
+    } finally {
+      setStoppingApp(false);
+    }
+    if (!stopped) {
+      // Say why here: the controller's error otherwise only shows on the
+      // Apps tab, which may not be the one on screen.
+      setStopAppError(
+        robotApps.controller.getSnapshot().error ?? "Couldn't stop it. Try again in a moment."
+      );
+      return;
+    }
+    setStopAppPrompt(null);
+    if (stillWantsTele()) switchTab('tele');
   };
   /**
    * App selected from the catalog; non-null while the iframe overlay
@@ -1322,6 +1397,14 @@ function ConnectedSession({
             allowMotion={!leaving && !waking && wizardGate !== 'show'}
           />
         )}
+
+        <StopAppDialog
+          appName={stopAppPrompt}
+          stopping={stoppingApp}
+          error={stopAppError}
+          onCancel={closeStopAppPrompt}
+          onConfirm={() => void confirmStopApp()}
+        />
 
         {openedApp && (
           <AppIframeOverlay
