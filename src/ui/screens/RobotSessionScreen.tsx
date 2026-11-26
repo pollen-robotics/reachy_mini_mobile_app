@@ -101,6 +101,7 @@ import { useChangePersonaAnimation } from '@/features/personalities/useChangePer
 import { DaemonStateProvider } from '@/features/daemon-state';
 import type { AppEntry } from '@/features/apps/types';
 import { useRobotApps } from '@/features/robot-apps/useRobotApps';
+import { forgetRobot } from '@/features/auth/knownRobots';
 import AppIframeOverlay from '@/ui/panels/apps-list/AppIframeOverlay';
 import AppsTabView, { type AppsTabViewHandle } from '@/ui/panels/apps-list/AppsTabView';
 import TelepresencePanel from '@/ui/panels/telepresence/TelepresencePanel';
@@ -1375,6 +1376,8 @@ function ConnectedSession({
                 getRobot={session.getRobot}
                 robotLive={session.connectionState === 'live'}
                 onSignedOutRobot={() => {
+                  // It left the account: don't keep it as an offline robot.
+                  if (robotHardwareId) forgetRobot(username, robotHardwareId);
                   setSettingsOpen(false);
                   handleLeave();
                 }}

@@ -76,6 +76,11 @@ import {
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   keyframes,
   List,
@@ -108,12 +113,19 @@ import {
   type CentralRobotEntry,
 } from '@/features/auth/fetchRobotsFromCentral';
 import { useHfProfile } from '@/features/auth/useHfProfile';
+import {
+  forgetRobot,
+  rememberRobots,
+  useKnownRobots,
+  type KnownRobot,
+} from '@/features/auth/knownRobots';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { VariantTag } from '@/ui/design/MetaPill';
 import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 import FirstReachyInvite from './scan/FirstReachyInvite';
+import OfflineRobotSheet from './scan/OfflineRobotSheet';
 
 interface ScanScreenProps {
   onRemotePicked: (robot: CentralRobotEntry) => void;
@@ -131,6 +143,9 @@ interface ScanScreenProps {
   token: string;
   username: string | null;
 }
+
+/** Stable empty list, so effects keyed on `robots` don't re-run every render. */
+const NO_ROBOTS: CentralRobotEntry[] = [];
 
 export default function ScanScreen({
   onRemotePicked,
@@ -151,24 +166,51 @@ export default function ScanScreen({
   // flight or if it fails - the top bar always renders.
   const profile = useHfProfile(token);
   const displayName = profile.username ?? username;
-  const robots = remote.state.kind !== 'no-token' ? remote.state.robots : [];
+  const robots = remote.state.kind !== 'no-token' ? remote.state.robots : NO_ROBOTS;
   const hasRobots = robots.length > 0;
-  // "Loaded, but zero robots linked" → show the dedicated onboarding
+  // Central only lists the robots online right now. The ones it listed
+  // before stay on the list as offline rows, so a robot that is off or
+  // lost its Wi-Fi is not mistaken for an account with no robot (which
+  // would send the user back through first setup).
+  // Keyed on the sign-in username first: the session screen, which forgets
+  // a robot signed out of the account, only has that one.
+  const accountKey = username ?? profile.username;
+  const knownRobots = useKnownRobots(accountKey);
+  const listReady = remote.state.kind === 'ready';
+  // Every refetch (poll, central event, refresh) reports `loading` again:
+  // once a list has landed, keep the offline rows through those.
+  const [listLoadedOnce, setListLoadedOnce] = useState(false);
+  useEffect(() => {
+    if (!listReady) return;
+    setListLoadedOnce(true);
+    rememberRobots(accountKey, robots);
+  }, [listReady, accountKey, robots]);
+  const onlineHardwareIds = new Set(robots.map(robot => extractRobotHardwareId(robot)));
+  const offlineRobots = listLoadedOnce
+    ? knownRobots.filter(known => !onlineHardwareIds.has(known.hardwareId))
+    : [];
+  const hasOffline = offlineRobots.length > 0;
+  const [offlineHelp, setOfflineHelp] = useState<KnownRobot | null>(null);
+  const [forgetPrompt, setForgetPrompt] = useState<KnownRobot | null>(null);
+  // "Loaded, and no robot on this account" → show the dedicated onboarding
   // invitation (a prominent CTA to register a first Reachy) instead of
   // the terse empty card. Loading / error keep their own states. When the
   // invite is up we hide the sticky bottom bar so the screen shows a
   // single, unambiguous call to action rather than two identical buttons.
   const showEmptyInvite =
-    !hasRobots && remote.state.kind !== 'loading' && remote.state.kind !== 'error';
+    !hasRobots &&
+    !hasOffline &&
+    remote.state.kind !== 'loading' &&
+    remote.state.kind !== 'error';
   // Initial fetch with no robots yet: the whole screen collapses to a single
   // centered spinner (no hero illustration, no "Your Reachies" header, no
   // sticky add bar) so the first paint is quiet while we wait on central -
   // matching the lightweight loading treatment used elsewhere in the app.
-  const isInitialLoading = !hasRobots && remote.state.kind === 'loading';
+  const isInitialLoading = !hasRobots && !hasOffline && remote.state.kind === 'loading';
   // Fleet-listing chrome (hero + header) only makes sense once there's a list
   // to head, or on the error state that keeps its message in place. The
   // loading and empty-invite states are deliberately chrome-free.
-  const showListChrome = hasRobots || remote.state.kind === 'error';
+  const showListChrome = hasRobots || hasOffline || remote.state.kind === 'error';
   // The refresh icon spins for ANY in-flight fetch (initial load
   // included). Both the refresh icon (right of the list) and the
   // bottom add bar stay mounted in every state: conditionally
@@ -260,7 +302,7 @@ export default function ScanScreen({
             </Stack>
           )}
 
-          {hasRobots ? (
+          {hasRobots || hasOffline ? (
             <List
               disablePadding
               sx={{
@@ -295,6 +337,14 @@ export default function ScanScreen({
                   />
                 );
               })}
+              {offlineRobots.map(known => (
+                <OfflineRobotCard
+                  key={known.hardwareId}
+                  robot={known}
+                  onTap={() => setOfflineHelp(known)}
+                  onLongPress={() => setForgetPrompt(known)}
+                />
+              ))}
             </List>
           ) : isInitialLoading ? (
             <Box
@@ -324,6 +374,26 @@ export default function ScanScreen({
           the available height of the centred content above never
           changes. */}
       {!showEmptyInvite && !isInitialLoading && <StickyAddBar onStartSetup={onStartSetup} />}
+      <OfflineRobotSheet
+        robot={offlineHelp}
+        onClose={() => setOfflineHelp(null)}
+        onConnectWifi={() => {
+          setOfflineHelp(null);
+          onStartSetup();
+        }}
+        onForget={robot => {
+          forgetRobot(accountKey, robot.hardwareId);
+          setOfflineHelp(null);
+        }}
+      />
+      <ForgetRobotDialog
+        robot={forgetPrompt}
+        onCancel={() => setForgetPrompt(null)}
+        onConfirm={robot => {
+          forgetRobot(accountKey, robot.hardwareId);
+          setForgetPrompt(null);
+        }}
+      />
       {/* App-Store-1.2 compliance: Help & Support overlay reachable
           from the HfAccountBar's "?" button, providing Apple- and
           Google-mandated contact channels for UGC-bearing apps.
@@ -1084,6 +1154,148 @@ function RemoteRobotCard({
       </Stack>
     </ListItemButton>
   );
+}
+
+/** How long a press on an offline row lasts before it offers to forget it. */
+const LONG_PRESS_MS = 500;
+
+/**
+ * A robot on the account that central does not list right now. Same
+ * footprint as `RemoteRobotCard` so the list keeps its rhythm, faded, with
+ * when it was last seen; a tap opens the offline help, not a session, and a
+ * long press offers to forget it.
+ */
+function OfflineRobotCard({
+  robot,
+  onTap,
+  onLongPress,
+}: {
+  robot: KnownRobot;
+  onTap: () => void;
+  onLongPress: () => void;
+}) {
+  const pressTimerRef = useRef<number | null>(null);
+  // Set once the long press fired, so the click that ends it is not a tap.
+  const longPressedRef = useRef(false);
+  const cancelPress = (): void => {
+    if (pressTimerRef.current !== null) window.clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = null;
+  };
+  const firePress = (): void => {
+    cancelPress();
+    longPressedRef.current = true;
+    onLongPress();
+  };
+  useEffect(() => cancelPress, []);
+
+  return (
+    <ListItemButton
+      onPointerDown={() => {
+        longPressedRef.current = false;
+        cancelPress();
+        pressTimerRef.current = window.setTimeout(firePress, LONG_PRESS_MS);
+      }}
+      onPointerUp={cancelPress}
+      onPointerLeave={cancelPress}
+      // A scroll takes the pointer over: not a press.
+      onPointerCancel={cancelPress}
+      // Android reports a long press as a context menu; the timer may not
+      // have fired yet.
+      onContextMenu={e => {
+        e.preventDefault();
+        if (!longPressedRef.current) firePress();
+      }}
+      onClick={() => {
+        if (longPressedRef.current) {
+          longPressedRef.current = false;
+          return;
+        }
+        onTap();
+      }}
+      aria-label={`${robot.name}, offline`}
+      sx={{
+        // No iOS callout / text selection on the long press.
+        WebkitTouchCallout: 'none',
+        userSelect: 'none',
+        p: 2,
+        pr: 2.5,
+        minHeight: STATE_CARD_MIN_HEIGHT,
+        borderRadius: '14px',
+        bgcolor: 'background.paper',
+        border: theme => `1px dashed ${theme.palette.divider}`,
+        '&:hover': { bgcolor: 'background.paper' },
+        '&:active': { transform: 'scale(0.99)' },
+      }}
+    >
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'center', width: '100%' }}>
+        <Box sx={{ opacity: 0.45, filter: 'grayscale(1)', flexShrink: 0 }}>
+          <CardAvatar robotKey={robot.hardwareId} />
+        </Box>
+        <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.25}>
+          <Typography
+            noWrap
+            sx={{
+              fontSize: TYPO.lg,
+              fontWeight: FONT_WEIGHT.bold,
+              color: 'text.secondary',
+              letterSpacing: '-0.1px',
+              lineHeight: 1.2,
+            }}
+          >
+            {robot.name}
+          </Typography>
+          <Typography sx={{ fontSize: TYPO.xs, color: 'text.disabled' }}>
+            Offline · seen {formatLastSeen(robot.lastSeen)}
+          </Typography>
+        </Stack>
+        <HelpOutlineIcon sx={{ color: 'text.disabled', flexShrink: 0, fontSize: 22 }} />
+      </Stack>
+    </ListItemButton>
+  );
+}
+
+/** Confirms removing an offline robot from the list, after a long press on its row. */
+function ForgetRobotDialog({
+  robot,
+  onCancel,
+  onConfirm,
+}: {
+  robot: KnownRobot | null;
+  onCancel: () => void;
+  onConfirm: (robot: KnownRobot) => void;
+}) {
+  useAndroidBack(robot !== null, onCancel);
+  // Keep the name on screen while the dialog fades out.
+  const shownRef = useRef<KnownRobot | null>(null);
+  if (robot) shownRef.current = robot;
+  return (
+    <Dialog open={robot !== null} onClose={onCancel}>
+      <DialogTitle sx={{ fontSize: TYPO.lg }}>Remove {shownRef.current?.name}?</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ fontSize: TYPO.body }}>
+          It leaves this list. If it's still linked to your account, it comes back the next time
+          it's online.
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel}>Cancel</Button>
+        <Button color="error" onClick={() => robot && onConfirm(robot)}>
+          Remove
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago". */
+function formatLastSeen(lastSeen: number, now: number = Date.now()): string {
+  const minutes = Math.floor((now - lastSeen) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
 }
 
 /**
