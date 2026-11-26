@@ -20,7 +20,7 @@ plugins {
 
 android {
     namespace = "com.plugin.blec"
-    compileSdk = 34
+    compileSdk = 36 // tauri-android 2.12 requires 36+
 
     defaultConfig {
         minSdk = 26

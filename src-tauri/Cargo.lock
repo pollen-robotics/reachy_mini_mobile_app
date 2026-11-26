@@ -5061,8 +5061,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-keep-screen-on"
 version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78455e6e7c7b1636084393b2b70289b1f8adb8ea5e9731c634b50961344420c3"
 dependencies = [
  "serde",
  "tauri",
@@ -5113,8 +5111,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-sharekit"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875bdd9fb587e38505db5394df2542f2af4f63d5b2b6356728c9d73692c26900"
 dependencies = [
  "log",
  "objc2",
