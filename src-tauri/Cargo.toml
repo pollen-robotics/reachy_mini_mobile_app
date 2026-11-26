@@ -114,7 +114,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # mapped, so every iOS / macOS connect fails. The vendored copy ignores those
 # descriptors instead; this app never reads GATT descriptors.
 # See: https://github.com/deviceplug/btleplug/issues/397
+#
+# Tauri 2.12's Android library (`:tauri-android`) requires every plugin to
+# compile against API 36 or later, and its `android init` generates the
+# project on AGP 9. The vendored copies below only raise `compileSdk` to 36
+# (blec too):
+#   - tauri-plugin-keep-screen-on 0.1.4 (last release, 2024; compileSdk 34).
+#     It also set `targetSdk` in its library module, which AGP 9 rejects
+#     ("Unresolved reference 'targetSdk'"): dropped.
+#   - tauri-plugin-sharekit 0.3.1 (compileSdk 35; 0.4 is still a release
+#     candidate).
 [patch.crates-io]
+tauri-plugin-keep-screen-on = { path = "vendor/tauri-plugin-keep-screen-on" }
+tauri-plugin-sharekit = { path = "vendor/tauri-plugin-sharekit" }
 blec = { path = "vendor/blec" }
 tauri-plugin-blec = { path = "vendor/tauri-plugin-blec" }
 btleplug = { path = "vendor/btleplug" }
