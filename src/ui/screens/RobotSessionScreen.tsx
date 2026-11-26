@@ -276,6 +276,8 @@ function ConnectedSession({
   // gate closed until an outdated daemon has been updated. Unknown versions
   // (offline / pre-update) read as not-outdated (fail-open).
   const daemonOutdated = isDaemonOutdated(session.daemonVersion, latestDaemonVersion);
+  // The user dismissed the update gate on a compatible daemon.
+  const [daemonUpdateSkipped, setDaemonUpdateSkipped] = useState(false);
 
   // Resolve the gate once the session is live: query the robot's persisted
   // first-wake-up flag and either show the wizard or skip it. On skip we
@@ -316,8 +318,9 @@ function ConnectedSession({
     // reacquires, `session.daemonVersion` changes, `daemonOutdated` flips
     // false and this re-runs against a current daemon. Dev branch builds can
     // read "outdated" vs the public release yet still support the command,
-    // so we never block them (mirrors the update gate's own DEV bypass).
-    if (!import.meta.env.DEV && daemonOutdated) return;
+    // so we never block them (mirrors the update gate's own DEV bypass). A
+    // skipped update lets an old daemon through: `getFirstWakeUp` fails open.
+    if (!import.meta.env.DEV && daemonOutdated && !daemonUpdateSkipped) return;
     let cancelled = false;
     void (async () => {
       const robot = session.getRobot();
@@ -342,7 +345,7 @@ function ConnectedSession({
     return () => {
       cancelled = true;
     };
-  }, [wizardGate, talkingChecked, session, daemonOutdated]);
+  }, [wizardGate, talkingChecked, session, daemonOutdated, daemonUpdateSkipped]);
 
   // Optimistic display name. `robotName` comes from the central listing we
   // booted the session from, which is fixed for the session's lifetime. The
@@ -1409,6 +1412,7 @@ function ConnectedSession({
             latestVersion={latestDaemonVersion}
             onBackToRobots={handleLeave}
             onRebootingChange={setDaemonRebooting}
+            onSkip={() => setDaemonUpdateSkipped(true)}
           />
         )}
 

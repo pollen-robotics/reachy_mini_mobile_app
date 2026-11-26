@@ -23,7 +23,11 @@
  * Readiness is `conversation.status.backend_connected`: `apps.status` says
  * `running` the moment the process forks, long before the app can talk.
  */
-import { compareSemver, parseSemver } from '@/features/daemon-update/latestRelease';
+import {
+  compareSemver,
+  MIN_COMPATIBLE_DAEMON_VERSION,
+  parseSemver,
+} from '@/features/daemon-update/latestRelease';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import { rpcErrorReason } from '@/features/robot-session/sdk-types';
 import type {
@@ -42,13 +46,9 @@ import { followPersonality } from './live-personality';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
 
-/**
- * First daemon release that relays JSON-RPC over the WebRTC data channel
- * (reachy_mini#1266, landed in v1.10.0). Everything the phone does with the
- * conversation goes through that relay, so an older robot cannot host it at
- * all and the user is sent to the update gate instead of a timeout.
- */
-const MIN_DAEMON_VERSION = '1.10.0';
+// Everything the phone does with the conversation goes through the JSON-RPC
+// relay, so an older robot is sent to the update gate instead of a timeout.
+const MIN_DAEMON_VERSION = MIN_COMPATIBLE_DAEMON_VERSION;
 
 /** How long the app may take from `apps.start` to a connected backend. */
 const READY_TIMEOUT_MS = 60_000;

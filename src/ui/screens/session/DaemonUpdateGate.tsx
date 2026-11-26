@@ -40,9 +40,9 @@ import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 
 import updateBoxUrl from '@/assets/reachy-update-box.svg';
 import {
-  compareSemver,
+  isAtLeast,
   isDaemonOutdated,
-  parseSemver,
+  MIN_COMPATIBLE_DAEMON_VERSION,
   updateLanded,
 } from '@/features/daemon-update/latestRelease';
 import { useDaemonLogs } from '@/features/daemon-logs';
@@ -84,31 +84,13 @@ const TROUBLESHOOTING_URL = 'https://huggingface.co/docs/reachy_mini/troubleshoo
 const FLASHER_PAGE_URL = 'https://pollen-robotics.com/reachy-mini/flasher/';
 
 /**
- * Dev-only escape hatch for the blocking update prompt.
- *
- * When testing a daemon built from a feature branch (e.g. one based on
- * v1.8.3 while the latest public release is v1.8.4), `isDaemonOutdated`
- * trips and the prompt offers no skip - so a developer connected to a
- * branch build would be forced through "Update now", which pip-installs
- * the released wheel and wipes the branch under test. This flag surfaces a
- * discreet "Skip" button that dismisses the gate for the session without
- * touching the daemon.
- *
- * `import.meta.env.DEV` is statically `false` in any production build
- * (`vite build`), so both the flag and the button are tree-shaken away:
- * release users always hit the hard gate. Matches the dev-only gating of
- * `VITE_DEV_HF_TOKEN` & friends in `shared/env.ts`.
+ * Skip is offered to everyone on a daemon the app works with
+ * (`MIN_COMPATIBLE_DAEMON_VERSION`): a demo shouldn't be held hostage by an
+ * update. Below it the app can't work, so the gate stays hard - except in
+ * dev builds, where a branch daemon must not be wiped by the released wheel.
+ * `import.meta.env.DEV` is statically `false` in `vite build`.
  */
 const DEV_BYPASS = import.meta.env.DEV;
-
-/** True only when the daemon version is known AND new enough to self-update
- *  over the WebRTC data channel. Unknown / unparseable → false (→ reflash
- *  fallback). */
-function supportsSelfUpdate(current: string | null): boolean {
-  const c = parseSemver(current);
-  const min = parseSemver(MIN_DAEMON_VERSION_FOR_SELF_UPDATE);
-  return !!c && !!min && compareSemver(c, min) >= 0;
-}
 
 type Phase = 'idle' | 'prompt' | 'updating' | 'rebooting' | 'done' | 'failed' | 'lost';
 
@@ -125,6 +107,8 @@ interface DaemonUpdateGateProps {
    * to `SESSION_TIMINGS.rebootRecoverWindowMs` meanwhile.
    */
   onRebootingChange?: (rebooting: boolean) => void;
+  /** The user dismissed the update for this session. */
+  onSkip?: () => void;
 }
 
 export default function DaemonUpdateGate({
@@ -132,6 +116,7 @@ export default function DaemonUpdateGate({
   latestVersion,
   onBackToRobots,
   onRebootingChange,
+  onSkip,
 }: DaemonUpdateGateProps) {
   const live = session.phase === 'live';
   const [phase, setPhase] = useState<Phase>('idle');
@@ -167,7 +152,9 @@ export default function DaemonUpdateGate({
   // Can this robot update itself from the app? Needs a daemon new enough to
   // understand the WebRTC `start_update` command. When false, the prompt
   // switches to a "reflash with the Flasher" message instead of "Update now".
-  const canSelfUpdate = supportsSelfUpdate(current);
+  const canSelfUpdate = isAtLeast(current, MIN_DAEMON_VERSION_FOR_SELF_UPDATE);
+  const compatible = isAtLeast(current, MIN_COMPATIBLE_DAEMON_VERSION);
+  const canSkip = DEV_BYPASS || compatible;
 
   // Derive the prompt SYNCHRONOUSLY (no effect) the moment we positively
   // know the robot is behind. Flipping `phase` from an effect would leave
@@ -255,6 +242,11 @@ export default function DaemonUpdateGate({
     setPhase('idle');
   }, []);
 
+  const handleSkip = useCallback(() => {
+    handleContinue();
+    onSkip?.();
+  }, [handleContinue, onSkip]);
+
   if (effectivePhase === 'idle') return null;
 
   return (
@@ -314,7 +306,7 @@ export default function DaemonUpdateGate({
               letterSpacing: '-0.2px',
             }}
           >
-            {titleFor(effectivePhase, canSelfUpdate)}
+            {titleFor(effectivePhase, canSelfUpdate, compatible)}
           </Typography>
           <Typography
             sx={{
@@ -325,7 +317,7 @@ export default function DaemonUpdateGate({
               maxWidth: 320,
             }}
           >
-            {bodyFor(effectivePhase, current, latestVersion, canSelfUpdate)}
+            {bodyFor(effectivePhase, current, latestVersion, canSelfUpdate, compatible)}
           </Typography>
         </Stack>
 
@@ -358,8 +350,8 @@ export default function DaemonUpdateGate({
           )}
           {((effectivePhase === 'prompt' && !canSelfUpdate) ||
             effectivePhase === 'failed') && <TroubleshootingLink />}
-          {effectivePhase === 'prompt' && DEV_BYPASS && (
-            <DevSkipButton onClick={handleContinue} />
+          {(effectivePhase === 'prompt' || effectivePhase === 'failed') && canSkip && (
+            <SkipButton onClick={handleSkip} />
           )}
         </Stack>
       </Stack>
@@ -380,7 +372,7 @@ function PhaseIcon({ phase }: { phase: Phase }) {
   return <Box component="img" src={updateBoxUrl} alt="" aria-hidden sx={{ width: 200, height: 200 }} />;
 }
 
-function titleFor(phase: Phase, canSelfUpdate: boolean): string {
+function titleFor(phase: Phase, canSelfUpdate: boolean, compatible: boolean): string {
   switch (phase) {
     case 'updating':
       return 'Updating your Reachy…';
@@ -393,6 +385,7 @@ function titleFor(phase: Phase, canSelfUpdate: boolean): string {
     case 'lost':
       return "Reachy didn't come back online";
     default:
+      if (compatible) return 'Update available';
       return canSelfUpdate ? 'Update required' : 'Reflash required';
   }
 }
@@ -402,6 +395,7 @@ function bodyFor(
   current: string | null,
   latest: string | null,
   canSelfUpdate: boolean,
+  compatible: boolean,
 ): string {
   switch (phase) {
     case 'updating':
@@ -422,6 +416,11 @@ function bodyFor(
         return current
           ? `This Reachy runs v${current}, which is too old to update over the air. Reflash it from a computer with the Reachy Mini Flasher (this resets the robot to factory settings), then reconnect here.`
           : `This Reachy needs version v${MIN_DAEMON_VERSION_FOR_SELF_UPDATE} or newer to update from the app. Reflash it from a computer with the Reachy Mini Flasher (this resets the robot to factory settings), then reconnect here.`;
+      }
+      if (compatible) {
+        return latest
+          ? `This Reachy runs v${current}. Version v${latest} is available. The robot will reboot during the update (~2 min).`
+          : 'A software update is available for this Reachy.';
       }
       return current && latest
         ? `This Reachy runs v${current}. Version v${latest} is required to continue. The robot will reboot during the update (~2 min).`
@@ -480,10 +479,8 @@ function UpdateLogDisclosure({
   );
 }
 
-/** Dev-only "skip the gate" button. Rendered only in dev builds (see
- *  {@link DEV_BYPASS}); dismisses the prompt for the session so a branch
- *  daemon can be tested without being force-updated to the latest wheel. */
-function DevSkipButton({ onClick }: { onClick: () => void }) {
+/** Dismisses the gate for this session without touching the daemon. */
+function SkipButton({ onClick }: { onClick: () => void }) {
   return (
     <Button
       variant="text"
@@ -491,13 +488,12 @@ function DevSkipButton({ onClick }: { onClick: () => void }) {
       size="small"
       sx={{
         textTransform: 'none',
-        fontSize: TYPO.xs,
+        fontSize: TYPO.sm,
         fontWeight: FONT_WEIGHT.medium,
         color: 'text.secondary',
-        opacity: 0.7,
       }}
     >
-      Skip for now (dev build)
+      Skip for now
     </Button>
   );
 }
