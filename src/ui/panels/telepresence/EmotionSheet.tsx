@@ -23,6 +23,7 @@ import {
   type EmotionPlayer,
   type PlutchikFamily,
 } from '@/features/emotions';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 
 import EmotionWheel from './EmotionWheel';
@@ -51,6 +52,7 @@ function IntensityDots({ level, color }: { level: 1 | 2 | 3; color: string }) {
 
 export default function EmotionSheet({ open, onClose, player, blockedReason }: EmotionSheetProps) {
   const [family, setFamily] = useState<PlutchikFamily | null>(null);
+  useAndroidBack(open, onClose);
   const disabled = blockedReason !== null || player.busy;
 
   const play = (e: EmotionDef) => {

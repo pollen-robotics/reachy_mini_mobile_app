@@ -23,6 +23,7 @@
  * Readiness is `conversation.status.backend_connected`: `apps.status` says
  * `running` the moment the process forks, long before the app can talk.
  */
+import { getActiveLanguageId } from '@/features/conversation-language';
 import { compareSemver, parseSemver } from '@/features/daemon-update/latestRelease';
 import type { ReachyMiniInstance } from '@/features/robot-session/sdk-types';
 import { rpcErrorReason } from '@/features/robot-session/sdk-types';
@@ -38,6 +39,7 @@ import {
   type ConvAppClient,
   type ConvAppStatus,
 } from './client';
+import { followLanguage } from './live-language';
 import { followPersonality } from './live-personality';
 import { cacheFacts } from './memory-cache';
 import { applySettingsToRobot } from './sync-settings';
@@ -252,13 +254,15 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
     ending = exit;
   };
 
-  const follow = (activeClient: ConvAppClient): void => {
+  /** `startLanguage`: the language the phone had when this start began. */
+  const follow = (activeClient: ConvAppClient, startLanguage: string): void => {
     unsubscribes.push(
       activeClient.on('conversation.turn', onTurn),
       activeClient.on('conversation.level', onLevel),
       activeClient.on('conversation.activity', onActivity),
       activeClient.on('conversation.phase', onPhase),
-      followPersonality(activeClient, { confirmStart: !adopted })
+      followPersonality(activeClient, { confirmStart: !adopted }),
+      followLanguage(activeClient, { appliedId: startLanguage })
     );
     raf = requestAnimationFrame(tick);
   };
@@ -408,6 +412,9 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       running = true;
       deps.emitErrorMessage(null);
       deps.setConversationState('starting');
+      // The language chips stay usable while the conversation starts: a pick
+      // made after the settings push is caught up once following begins.
+      const startLanguage = getActiveLanguageId();
       // An app that just ended on its own is still exiting: let it go first.
       if (ending) await ending;
 
@@ -431,7 +438,7 @@ export function createRobotConversation(deps: RobotConversationDeps): RobotConve
       }
 
       robotTurn = 'ready';
-      follow(activeClient);
+      follow(activeClient, startLanguage);
       deps.setConversationState('listening');
       return true;
     },

@@ -2,13 +2,13 @@
  * Apply the phone's conversation settings to the robot, at conversation start.
  *
  * Language, scene awareness and long-term memory are chosen in the settings
- * panel, which disables all three while a conversation runs, and personalities
- * are authored from a picker reachable at any time. So most changes happen
- * while the conversation app is stopped and unreachable. Rather than write
- * through on every toggle, the phone keeps the values and pushes them once the
- * app is up: one mechanism, applied where the robot can actually hear it. The
- * one exception is a personality changed mid-conversation, which
- * `live-personality.ts` hands over at once.
+ * panel, and personalities are authored from a picker reachable at any time.
+ * Most changes happen while the conversation app is stopped and unreachable.
+ * Rather than write through on every toggle, the phone keeps the values and
+ * pushes them once the app is up: one mechanism, applied where the robot can
+ * actually hear it. The exceptions are a personality or a language changed
+ * mid-conversation, which `live-personality.ts` and `live-language.ts` hand
+ * over at once.
  *
  * Each push is skipped when the robot already agrees, so a start costs nothing
  * when nothing changed. Failures are logged and swallowed: a setting that did

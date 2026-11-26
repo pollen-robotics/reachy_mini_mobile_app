@@ -37,6 +37,7 @@ import { crashSummary } from '@/features/robot-apps/crash';
 import { describeJobPhase } from '@/features/robot-apps/job-phase';
 import type { InstalledRobotApp, RobotAppJob } from '@/features/robot-apps/types';
 import type { RobotAppsHandle } from '@/features/robot-apps/useRobotApps';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { openExternalUrl } from '@/shared/tauri/openUrl';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 
@@ -70,6 +71,8 @@ export default function RobotAppSheet({
   const [showFullLog, setShowFullLog] = useState(false);
 
   const open = app !== null;
+  useAndroidBack(open, onClose);
+  useAndroidBack(confirm !== null, () => setConfirm(null));
   const name = installed?.name ?? null;
   const { running, job, pending, support, online } = snapshot;
 

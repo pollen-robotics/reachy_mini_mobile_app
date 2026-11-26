@@ -97,6 +97,16 @@ export const SESSION_TIMINGS = {
    * restarting after a self-update: a reinstall + reboot outlasts 90 s.
    */
   rebootRecoverWindowMs: 240_000,
+
+  /**
+   * Power-off / leave: how long the teardown waits for the robot's
+   * conversation app to actually exit before playing goto-sleep. The
+   * daemon returns the robot to its zero pose (motors on) once an app it
+   * was asked to stop has exited, and only force-kills a stuck one after
+   * 20 s; a goto-sleep played earlier is undone by that reset and the
+   * robot stays awake. Covers the forced kill plus the pose reset.
+   */
+  convAppExitWaitMs: 25_000,
 } as const;
 
 /**

@@ -37,6 +37,18 @@ export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promi
 }
 
 /**
+ * Name of the app other than the conversation that runs on the robot, or
+ * `null`. For callers that have to name it to the user before taking the
+ * motors from it.
+ */
+export async function getOtherRunningAppName(robot: ReachyMiniInstance): Promise<string | null> {
+  const app = await readActiveApp(robot);
+  if (app === null) return null;
+  const name = app.info?.name ?? null;
+  return name === CONV_APP_NAME ? null : (name ?? 'another app');
+}
+
+/**
  * True when any app, the conversation app included, runs on the robot. The
  * bring-up wake asks this rather than `isAnotherAppDrivingRobot`: at connect
  * nothing has been torn down yet, and the conversation app may be running
@@ -44,6 +56,35 @@ export async function isAnotherAppDrivingRobot(robot: ReachyMiniInstance): Promi
  */
 export async function isAnyAppDrivingRobot(robot: ReachyMiniInstance): Promise<boolean> {
   return (await readActiveApp(robot)) !== null;
+}
+
+/**
+ * Resolve once the conversation app no longer holds the robot (not running,
+ * starting or stopping), or after `timeoutMs`. An unreadable status counts
+ * as gone: this only orders the caller after the app's exit, it must not
+ * hold a teardown on a robot that stopped answering.
+ */
+export async function waitForConvAppExit(
+  robot: ReachyMiniInstance,
+  timeoutMs: number,
+  pollMs = 500
+): Promise<void> {
+  const client = createConvAppClient(robot);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let app: CurrentAppStatus | null;
+    try {
+      app = await Promise.race([
+        client.getCurrentAppStatus(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), STATUS_TIMEOUT_MS)),
+      ]);
+    } catch {
+      return;
+    }
+    if (!app || app.info?.name !== CONV_APP_NAME) return;
+    if (app.state !== 'running' && app.state !== 'starting' && app.state !== 'stopping') return;
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
 }
 
 /** True when the robot is running (or starting) the conversation app. */

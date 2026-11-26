@@ -96,11 +96,10 @@ export interface ConversationSettingsPanelProps {
    *  down the (now orphaned) session and returns to the robot list,
    *  where the robot has disappeared from central. */
   onSignedOutRobot: () => void;
-  /** `true` while a conversation is running (state ≠ `idle`). The
-   *  conversation-scoped options (Language, Privacy & memory) are read
-   *  by the engine at conversation start, so changing them mid-talk
-   *  would silently no-op; we lock them while live and show a hint.
-   *  Audio (robot-level, live) and About stay usable. */
+  /** `true` while a conversation is running (state ≠ `idle`). Privacy &
+   *  memory are pushed to the robot at conversation start, so changing
+   *  them mid-talk would silently no-op; they are locked while live with
+   *  a hint. Language, Audio and About stay usable. */
   conversationLive: boolean;
   /** The live robot, to read and set the antenna start (`useStartupApp`). */
   getRobot: () => ReachyMiniInstance | null;
@@ -288,15 +287,6 @@ export function ConversationSettingsPanel({
               (Language, Privacy & memory). About & diagnostics and the
               account sign-out live at the very bottom of the panel. */}
           <GroupLabel>Conversation</GroupLabel>
-          {/* These options are read by the engine when a conversation
-              starts, so they're locked while one is running. */}
-          {conversationLive && (
-            <Typography
-              sx={{ px: 3, fontSize: TYPO.xs, color: 'text.disabled', lineHeight: 1.4 }}
-            >
-              Locked while talking - stop the conversation to change these.
-            </Typography>
-          )}
 
           {/* LANGUAGE - compact wrapping chip row. A vertical 7-row list
               ate too much height; the chips fold the same options into
@@ -310,8 +300,9 @@ export function ConversationSettingsPanel({
                   return (
                     <ButtonBase
                       key={lang.id}
+                      // Live: a running conversation reconnects its voice
+                      // in the new language (`conv-app/live-language.ts`).
                       onClick={() => setActiveLanguageId(lang.id as LanguageId)}
-                      disabled={conversationLive}
                       aria-pressed={active}
                       aria-label={`Speak ${lang.nameEnglish}`}
                       sx={{
@@ -323,7 +314,6 @@ export function ConversationSettingsPanel({
                         py: 0.75,
                         borderRadius: `${RADIUS.sm}px`,
                         fontSize: TYPO.sm,
-                        opacity: conversationLive && !active ? 0.45 : 1,
                         // Constant weight in both states: switching to
                         // semibold on active made the (bolder) text wider
                         // and nudged the neighbouring chips in x. Active
@@ -355,11 +345,19 @@ export function ConversationSettingsPanel({
             </Box>
           </Section>
 
-          {/* PRIVACY & MEMORY */}
+          {/* PRIVACY & MEMORY - read by the robot when a conversation
+              starts, so locked while one is running. */}
           <Section
             label="Privacy & memory"
             blurb="Control what Reachy can see and remember."
           >
+            {conversationLive && (
+              <Typography
+                sx={{ px: 3, pb: 1, fontSize: TYPO.xs, color: 'text.disabled', lineHeight: 1.4 }}
+              >
+                Locked while talking - stop the conversation to change these.
+              </Typography>
+            )}
             <Card>
               <Row divider={false}>
                 <Stack sx={{ flex: 1, minWidth: 0 }}>
