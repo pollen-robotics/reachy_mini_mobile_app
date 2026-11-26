@@ -19,6 +19,7 @@ import { isMemoryEnabled, isVisionEnabled } from '@/features/conversation-settin
 import {
   fetchRobotAvatars,
   getActivePersonalityId,
+  getPersonalityBeforeAccessory,
   reconcilePersonalities,
 } from '@/features/personalities';
 
@@ -47,7 +48,18 @@ export async function applySettingsToRobot(
     // meaningful once the two have been reconciled.
     robots = await reconcilePersonalities(client);
     const personality = getActivePersonalityId();
-    if (status.personality !== personality) await client.applyPersonality(personality);
+    // Running an accessory's personality: the one from before it stays the
+    // robot's default, so taking the accessory off mid-conversation goes back
+    // to the same personality as it does here.
+    const beforeAccessory = getPersonalityBeforeAccessory();
+    if (status.personality !== personality) {
+      await client.applyPersonality(personality, { persist: beforeAccessory === null });
+    }
+    if (beforeAccessory !== null) {
+      await client.setDefaultPersonality(beforeAccessory).catch((err: unknown) => {
+        console.warn('[conv-app] could not set the fallback personality:', err);
+      });
+    }
   } catch (err) {
     console.warn('[conv-app] could not apply the personality to the robot:', err);
   }

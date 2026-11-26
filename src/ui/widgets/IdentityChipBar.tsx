@@ -37,6 +37,7 @@
  * renders identity.
  */
 import { CircularProgress, Stack, Typography } from '@mui/material';
+import type { ReactNode } from 'react';
 
 import type { ConversationTransportKind } from '@/features/conversation/engine/conversation-engine';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
@@ -117,6 +118,8 @@ interface IdentityChipBarProps {
    *    Lite/Wireless + latency facts stay legible.
    */
   variant?: 'primary' | 'secondary';
+  /** Extra pill after the latency one (the session topbar's NFC state). */
+  accessory?: ReactNode;
 }
 
 /** Mini spinner for in-flight (Connecting / Reconnecting) tags - reads
@@ -133,6 +136,7 @@ export default function IdentityChipBar({
   sessionPhase,
   showLatency = true,
   variant = 'primary',
+  accessory,
 }: IdentityChipBarProps) {
   const typeTag = resolveTypeTag(sessionPhase);
   // Latency is now a permanent indicator: always shown, even at `0 ms`
@@ -182,6 +186,7 @@ export default function IdentityChipBar({
             <TagLabel>{latencyText}</TagLabel>
           </MetaPill>
         )}
+        {accessory}
         {typeTag && typeTag.pulse && typeTag.tone && (
           // In-flight (Connecting / Reconnecting): just a mini spinner, no
           // label - the toned spinner already reads as "working on it".

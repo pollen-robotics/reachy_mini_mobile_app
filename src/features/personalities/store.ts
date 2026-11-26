@@ -48,6 +48,8 @@ import {
   writeCachedCatalog,
   writePendingWrites,
   writeSeeded,
+  readPersonalityBeforeAccessory,
+  writePersonalityBeforeAccessory,
 } from './storage';
 import type { PendingWrites } from './storage';
 import type { RobotPersonality } from '@/features/conv-app/client';
@@ -174,6 +176,16 @@ export function cacheCatalog(fromRobot: readonly RobotPersonality[]): void {
     catalog.find(p => presentationKey(p.id) === presentationKey(state.activeId))?.id ??
     catalog.find(p => p.id === ROBOT_DEFAULT_PROFILE)?.id ??
     catalog[0].id;
+  // Same for the personality to go back to after an accessory, which the robot
+  // is told by its name; one that is gone leaves nothing to go back to.
+  if (personalityBeforeAccessory !== null) {
+    const before = personalityBeforeAccessory;
+    setPersonalityBeforeAccessory(
+      catalog.find(p => p.id === before)?.id ??
+        catalog.find(p => presentationKey(p.id) === presentationKey(before))?.id ??
+        null
+    );
+  }
   writeCachedCatalog(catalog);
   if (activeId !== state.activeId) writeActivePersonalityId(activeId);
   update({ catalog, activeId });
@@ -329,9 +341,59 @@ export function resolvePersonalityById(id: string): Personality | null {
   return state.catalog.find(p => p.id === id) ?? BUILTIN_BY_ID.get(id) ?? null;
 }
 
-/** Switch the active personality. Persists to localStorage in the
- *  same tick so a hard refresh keeps the choice. No-op when the id
- *  is already active. */
+/** The id to go back to once the NFC accessory switching the personality
+ *  comes off (see `features/nfc/accessory-follower.ts`), null without one.
+ *  Kept across restarts: the accessory may still be on when the app reopens. */
+let personalityBeforeAccessory = readPersonalityBeforeAccessory();
+
+export function getPersonalityBeforeAccessory(): string | null {
+  return personalityBeforeAccessory;
+}
+
+export function setPersonalityBeforeAccessory(id: string | null): void {
+  if (id === personalityBeforeAccessory) return;
+  personalityBeforeAccessory = id;
+  writePersonalityBeforeAccessory(id);
+}
+
+/** Whether the robot already has this personality: not still waiting to be
+ *  pushed at the next conversation start (`syncPersonalitiesToRobot`). */
+function isPersonalityOnRobot(id: string): boolean {
+  return !state.pending.dirty.includes(id) && !state.pending.deleted.includes(id);
+}
+
+/** React hook over `isPersonalityOnRobot`, re-rendering as pushes land. */
+export function useIsPersonalityOnRobot(id: string): boolean {
+  return useSyncExternalStore(subscribe, () => isPersonalityOnRobot(id));
+}
+
+const BUNDLED_PREFIX = 'builtin:';
+
+/** A catalog id as the robot names the personality (`noir_detective`). */
+export function toRobotPersonalityName(id: string): string {
+  return id.startsWith(BUNDLED_PREFIX) ? id.slice(BUNDLED_PREFIX.length) : id;
+}
+
+/** The catalog entry for a personality as the robot names it (`noir_detective`),
+ *  also before the robot's catalog has replaced the bundled ids. */
+export function resolveRobotPersonality(name: string): Personality | null {
+  return resolvePersonalityById(name) ?? resolvePersonalityById(`${BUNDLED_PREFIX}${name}`);
+}
+
+/**
+ * Switch personality because an accessory came or went, whether the phone
+ * follows the reader itself or the robot did and announced it. Unlike a pick
+ * by hand, it keeps the personality to go back to.
+ */
+export function setActivePersonalityForAccessory(id: string): void {
+  if (id === state.activeId || !resolvePersonalityById(id)) return;
+  writeActivePersonalityId(id);
+  update({ activeId: id });
+}
+
+/** Switch the active personality, as picked by hand. Persists to
+ *  localStorage in the same tick so a hard refresh keeps the choice.
+ *  No-op when the id is already active. */
 export function setActivePersonality(id: string): void {
   if (id === state.activeId) return;
   // Defensive: refuse to switch to an unknown id rather than leaving
@@ -340,6 +402,7 @@ export function setActivePersonality(id: string): void {
     console.warn(`[personalities] refusing to set unknown active id: ${id}`);
     return;
   }
+  setPersonalityBeforeAccessory(null);
   writeActivePersonalityId(id);
   // A running conversation follows this store and switches the robot live
   // (`conv-app/live-personality.ts`); otherwise the next start carries it.
