@@ -139,6 +139,7 @@ import type { AppEntry } from '@/features/apps/types';
 import { APPS_QUERY_KEY, type CatalogPayload } from '@/features/apps/useApps';
 import { APP_HANDOFF_TIMINGS } from '@/features/robot-session/timings';
 import type { SessionPhase } from '@/features/robot-session/useRobotSession';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import IdentityChipBar from '@/ui/widgets/IdentityChipBar';
 import AppActionsMenu from './AppActionsMenu';
@@ -299,6 +300,13 @@ export default function AppIframeOverlay({
       onClose();
     }, APP_HANDOFF_TIMINGS.closingBeatMs);
   }, [isClosing, onClose]);
+
+  // Android Back: a page back inside the app when it navigated, else the
+  // same close as the × button (instead of the OS closing the whole app).
+  useAndroidBack(true, ({ canGoBack }) => {
+    if (canGoBack) window.history.back();
+    else requestClose();
+  });
 
   // Clear the pending teardown if we unmount for any other reason
   // (parent decides to drop us, hot-reload, etc.) so we don't fire

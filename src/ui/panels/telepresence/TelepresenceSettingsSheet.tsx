@@ -14,6 +14,7 @@ import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 import { TELEPRESENCE_LIMITS, type TelepresenceHandle } from '@/features/telepresence';
 import { useDaemonState } from '@/features/daemon-state';
 import { OutlinedSwitch } from '@/ui/design/OutlinedSwitch';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, RADIUS, TYPO } from '@/ui/design/tokens';
 import AudioControlCard from '@/ui/widgets/audio-controls/AudioControlCard';
 
@@ -48,6 +49,7 @@ export default function TelepresenceSettingsSheet({
   onLowLatencyChange,
   videoMode,
 }: TelepresenceSettingsSheetProps) {
+  useAndroidBack(open, onClose);
   const poseDisabled = !motionEnabled;
   const daemon = useDaemonState();
   const { targets } = telepresence.motion;

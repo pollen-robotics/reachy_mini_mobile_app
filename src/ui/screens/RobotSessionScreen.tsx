@@ -119,6 +119,7 @@ import SessionErrorView from './session/SessionErrorView';
 import { isDaemonOutdated, useLatestDaemonVersion } from '@/features/daemon-update/latestRelease';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import { useKeepScreenOn } from '@/shared/tauri/useKeepScreenOn';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { RobotVolumeKeys } from '@/ui/widgets/volume-keys/RobotVolumeKeys';
 
 export type ConnectionTarget = {
@@ -524,6 +525,11 @@ function ConnectedSession({
    * top level and a fresh open never lands deep in diagnostics.
    */
   const [settingsView, setSettingsView] = useState<'root' | 'about'>('root');
+  // Android Back steps out of "About" first, then closes the sheet.
+  useAndroidBack(settingsOpen, () => {
+    if (settingsView === 'about') setSettingsView('root');
+    else setSettingsOpen(false);
+  });
 
   // Daemon version is fetched (with retry-on-null) by the
   // `<DaemonStateProvider>` further down and read by the info sheet

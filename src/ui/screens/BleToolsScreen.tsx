@@ -103,6 +103,7 @@ import { WifiJoinError, joinNetwork, scanWifiResilient } from '@/features/ble-pr
 import Section from '@/ui/design/Section';
 import { LinkQualityBars, type LinkQuality } from '@/ui/design/LinkQualityBars';
 import RobotAvatar from '@/ui/design/RobotAvatar';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, LAYOUT, RADIUS, STATUS, TYPO } from '@/ui/design/tokens';
 import LogsView from './ble-tools/LogsView';
 import { Headline, IconHero, InfoCard, PrimaryButton, TextButton } from './ble-tools/parts';
@@ -1573,6 +1574,7 @@ function ConfirmScriptDialog({
   onCancel: () => void;
   onConfirm: (name: string) => void;
 }) {
+  useAndroidBack(script !== null, onCancel);
   // Keep the last script's copy while the dialog fades out.
   const lastRef = useRef<string | null>(null);
   if (script) lastRef.current = script;

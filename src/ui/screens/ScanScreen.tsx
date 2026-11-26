@@ -110,6 +110,7 @@ import {
 import { useHfProfile } from '@/features/auth/useHfProfile';
 import { useRemoteRobots } from '@/features/auth/useRemoteRobots';
 import { VariantTag } from '@/ui/design/MetaPill';
+import { useAndroidBack } from '@/shared/tauri/useAndroidBack';
 import { FONT_WEIGHT, LAYOUT, TYPO } from '@/ui/design/tokens';
 import HelpAndSupportOverlay from './scan/HelpAndSupportOverlay';
 import FirstReachyInvite from './scan/FirstReachyInvite';
@@ -194,6 +195,7 @@ export default function ScanScreen({
   const [helpOpen, setHelpOpen] = useState(false);
   const toggleHelp = () => setHelpOpen(open => !open);
   const closeHelp = () => setHelpOpen(false);
+  useAndroidBack(helpOpen, closeHelp);
 
   return (
     <Stack
