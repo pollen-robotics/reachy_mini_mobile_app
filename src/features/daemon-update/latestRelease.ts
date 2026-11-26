@@ -76,6 +76,20 @@ export function isDaemonOutdated(
 }
 
 /**
+ * Oldest daemon the app works with: the first release that relays JSON-RPC
+ * over the WebRTC data channel (reachy_mini#1266), which the conversation
+ * needs. At or above it the in-session update can be skipped.
+ */
+export const MIN_COMPATIBLE_DAEMON_VERSION = '1.10.0';
+
+/** True only when `version` parses AND is at or past `min`. */
+export function isAtLeast(version: string | null | undefined, min: string): boolean {
+  const v = parseSemver(version);
+  const m = parseSemver(min);
+  return !!v && !!m && compareSemver(v, m) >= 0;
+}
+
+/**
  * True once a daemon reporting `version` has finished updating: at or past
  * `target`, or - when the target is unknown - past the version the update
  * started `from`. Unparseable input returns `false`.
