@@ -1,0 +1,82 @@
+name: Store promote
+
+# Moves a build between store channels: Play tracks (complete a draft,
+# promote, staged rollout, halt / resume) and TestFlight / App Store
+# (distribute to a group, submit for review, release, phased release).
+# `scripts/stores/play.py` and `scripts/stores/appstore.py` list the
+# commands; `args` is one of them, e.g.
+#   play:      promote --from internal --to production --rollout 0.1
+#   appstore:  submit --version 0.12.1 --notes "Bug fixes." --phased
+#
+# The `plan` job always runs first as a dry run (Play validates the edit and
+# discards it; App Store writes are printed). With `apply` ticked, the
+# `apply` job then runs for real in the `store-release` environment: add
+# required reviewers there so nothing reaches the stores without a human
+# approving the plan.
+
+on:
+  workflow_dispatch:
+    inputs:
+      store:
+        description: Store
+        type: choice
+        options: [play, appstore]
+        required: true
+      args:
+        description: Command and its options (see the scripts' help)
+        type: string
+        required: true
+      apply:
+        description: Apply for real after the dry run
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Play keeps one open edit per app, shared with store-status.yml.
+concurrency:
+  group: ${{ inputs.store == 'play' && 'play-edits' || 'store-promote-appstore' }}
+  cancel-in-progress: false
+
+env:
+  STORE: ${{ inputs.store }}
+  PLAY_SERVICE_ACCOUNT_JSON: ${{ inputs.store == 'play' && secrets.ANDROID_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+  ASC_KEY_ID: ${{ inputs.store == 'appstore' && secrets.APPLE_API_KEY_ID || '' }}
+  ASC_ISSUER_ID: ${{ inputs.store == 'appstore' && secrets.APPLE_API_KEY_ISSUER_ID || '' }}
+  ASC_KEY_BASE64: ${{ inputs.store == 'appstore' && secrets.APPLE_API_KEY_BASE64 || '' }}
+  ASC_APP_ID: ${{ inputs.store == 'appstore' && secrets.APPLE_APP_STORE_CONNECT_APP_ID || '' }}
+
+jobs:
+  plan:
+    name: Dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet -r scripts/stores/requirements.txt
+      - name: Dry run
+        env:
+          STORE_ARGS: --dry-run ${{ inputs.args }}
+        run: python3 "scripts/stores/$STORE.py"
+
+  apply:
+    name: Apply
+    needs: plan
+    if: inputs.apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: store-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet -r scripts/stores/requirements.txt
+      - name: Apply
+        env:
+          STORE_ARGS: ${{ inputs.args }}
+        run: python3 "scripts/stores/$STORE.py"

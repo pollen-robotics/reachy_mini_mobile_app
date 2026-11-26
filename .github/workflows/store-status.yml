@@ -1,0 +1,55 @@
+name: Store status
+
+# What is on each store channel, and whether the CI keys can do everything
+# `store-promote.yml` needs. Read-only: the access checks write nothing
+# (Play edits are validated then deleted, App Store Connect writes are
+# empty PATCHes). A red job means a role is missing; its summary says which
+# call was refused.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  play:
+    name: Google Play
+    runs-on: ubuntu-latest
+    # Play keeps one open edit per app: never run two Play jobs at once.
+    concurrency:
+      group: play-edits
+      cancel-in-progress: false
+    timeout-minutes: 10
+    env:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.ANDROID_PLAY_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet -r scripts/stores/requirements.txt
+      - name: Tracks
+        run: python3 scripts/stores/play.py status
+      - name: Access
+        run: python3 scripts/stores/play.py check-access
+
+  appstore:
+    name: App Store Connect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+      ASC_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+      ASC_APP_ID: ${{ secrets.APPLE_APP_STORE_CONNECT_APP_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet -r scripts/stores/requirements.txt
+      - name: Builds, TestFlight, App Store
+        run: python3 scripts/stores/appstore.py status
+      - name: Access
+        run: python3 scripts/stores/appstore.py check-access
