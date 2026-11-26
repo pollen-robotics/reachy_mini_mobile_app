@@ -48,7 +48,6 @@ import type {
 } from '@/features/conversation/engine/conversation-engine';
 import type { RobotSessionHandle } from '@/features/robot-session/useRobotSession';
 import { type Personality } from '@/features/personalities';
-import { useActiveLanguageId } from '@/features/conversation-language';
 import {
   PersonalityStore,
   PersonalityPill,
@@ -232,39 +231,10 @@ export function ConversationPanel({
     setImmersiveForm(false);
   }, [active]);
 
-  // No personality counterpart to the language restart below: a
-  // persona picked mid-conversation is applied on the robot in place by
-  // the personality store, without stopping the conversation app.
-  const { restartConversation } = session;
-
-  // Mid-conversation language switch: `composeInstructions()` (in the engine)
-  // reads the active language lazily from the store, so the only
-  // thing this panel needs to do on a language change is drop the
-  // live realtime client and bring it back. The next handshake then
-  // picks up the new prompt fragment automatically.
-  //
-  // Skip rules:
-  //   - first render: the store emits its bootstrap value before any
-  //     real user action, restarting on it would tear down a freshly
-  //     established session for nothing.
-  //   - no actual change: the store fires for every mutation, but
-  //     `setActiveLanguageId` is itself a no-op when the id matches,
-  //     so this guard is purely a belt-and-braces.
-  //   - engine not live: a future `startConversation()` will pull
-  //     the fresh language on its own, no need to restart from
-  //     `released` / `idle`.
-  const activeLanguageId = useActiveLanguageId();
-  const previousLanguageIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previous = previousLanguageIdRef.current;
-    previousLanguageIdRef.current = activeLanguageId;
-    if (previous === null) return;
-    if (previous === activeLanguageId) return;
-    if (!live) return;
-    void restartConversation().catch(err => {
-      console.warn('[conversation-panel] restartConversation (language) threw:', err);
-    });
-  }, [activeLanguageId, live, restartConversation]);
+  // A persona or a language picked mid-conversation needs nothing from
+  // this panel: the conversation follows both stores and applies the
+  // change on the robot in place (`conv-app/live-personality.ts`,
+  // `conv-app/live-language.ts`), without stopping the app.
 
   const handleToggleMute = (): void => {
     session.setMicMuted(!session.micMuted);
