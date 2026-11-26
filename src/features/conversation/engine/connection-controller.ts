@@ -35,7 +35,13 @@
 import type { ReachyMiniInstance, RobotInfo } from "@/features/robot-session/sdk-types";
 import { CENTRAL_SIGNALING_URL } from "@/shared/env";
 import { getPlatform } from "@/shared/platform";
-import { isAnotherAppDrivingRobot, isAnyAppDrivingRobot } from "@/features/conv-app/app-slot";
+import {
+  isAnotherAppDrivingRobot,
+  isAnyAppDrivingRobot,
+  isConvAppRunning,
+  waitForConvAppExit,
+} from "@/features/conv-app/app-slot";
+import { createConvAppClient } from "@/features/conv-app/client";
 import { unlockIosMicForWebRtc } from "../permissions/iosMicUnlock";
 import { applyAudioStartupConfig } from "./audio-startup-config";
 import { consumeTokenFromHash, whenReachyReady } from "@/features/robot-session/token-hash";
@@ -43,6 +49,7 @@ import { createDcHealthMonitor } from "@/features/robot-session/dc-health";
 import { installBackgroundResilience } from "@/features/robot-session/background-resilience";
 import { installPlaceholderAudioReaper } from "@/features/robot-session/sdk-placeholder-audio";
 import { recordConnectionEvent } from "@/features/robot-session/connection-journal";
+import { SESSION_TIMINGS } from "@/features/robot-session/timings";
 import type { RobotSession } from "@/features/robot-session/RobotSession";
 import { wireRobotEvents } from "./robot-events";
 import { formatConversationError } from "./conversation-error";
@@ -625,6 +632,28 @@ export function createConnectionController(
     // Flip the session flag here so the next connect → startSession →
     // startConversation cycle starts from a clean slate.
     session.setEstablished(false);
+
+    // The pipeline stop above only stops a conversation the phone is
+    // following. The robot can run one the phone is not following (an
+    // antenna touch while another tab was open, a recovery that has not
+    // re-attached yet), and the goto-sleep below would then put Reachy to
+    // sleep mid-conversation. A deliberate teardown leaves nothing
+    // running, so stop it here too. A lost link (`keepRobotApp`) never
+    // does: the robot's conversation is autonomous.
+    if (!opts.keepRobotApp && wasSessionEstablished && robot) {
+      if (await isConvAppRunning(robot)) {
+        await createConvAppClient(robot)
+          .stopConvApp()
+          .catch((err: unknown) => {
+            console.warn("[DIAG] teardown: stopping the robot's conversation failed:", err);
+          });
+      }
+      // The daemon returns the robot to its zero pose (motors on) once the
+      // app has exited, which can be after our stop call gave up (a stuck
+      // app is only force-killed at 20 s). Sleep after that, not before,
+      // or the reset undoes it and Reachy stays awake.
+      await waitForConvAppExit(robot, SESSION_TIMINGS.convAppExitWaitMs);
+    }
 
     // Self-contained: play the goto-sleep trajectory + release motors
     // BEFORE we tear the WebRTC session. Sending the command after

@@ -46,6 +46,35 @@ export async function isAnyAppDrivingRobot(robot: ReachyMiniInstance): Promise<b
   return (await readActiveApp(robot)) !== null;
 }
 
+/**
+ * Resolve once the conversation app no longer holds the robot (not running,
+ * starting or stopping), or after `timeoutMs`. An unreadable status counts
+ * as gone: this only orders the caller after the app's exit, it must not
+ * hold a teardown on a robot that stopped answering.
+ */
+export async function waitForConvAppExit(
+  robot: ReachyMiniInstance,
+  timeoutMs: number,
+  pollMs = 500
+): Promise<void> {
+  const client = createConvAppClient(robot);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let app: CurrentAppStatus | null;
+    try {
+      app = await Promise.race([
+        client.getCurrentAppStatus(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), STATUS_TIMEOUT_MS)),
+      ]);
+    } catch {
+      return;
+    }
+    if (!app || app.info?.name !== CONV_APP_NAME) return;
+    if (app.state !== 'running' && app.state !== 'starting' && app.state !== 'stopping') return;
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+}
+
 /** True when the robot is running (or starting) the conversation app. */
 export async function isConvAppRunning(robot: ReachyMiniInstance): Promise<boolean> {
   const app = await readActiveApp(robot);
