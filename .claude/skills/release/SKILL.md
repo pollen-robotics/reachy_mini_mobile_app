@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new release of the mobile app - bump the version on main, tag it, create the GitHub release and start the signed iOS (TestFlight) + Android (Play Internal) build. Use when the user says "release", "do a release", "release it", "ship it", "bump the version", "cut / tag a build", "push a new build to the stores" or similar.
+description: Cut a new release of the mobile app - bump the version on main, tag it, create the GitHub release and start the signed iOS (TestFlight) + Android (Play Internal) build - and move builds between store channels (Play tracks, TestFlight groups, App Store review, staged / phased rollouts). Use when the user says "release", "do a release", "release it", "ship it", "bump the version", "cut / tag a build", "push a new build to the stores", "what's on the stores", "promote to production", "submit to the App Store", "roll out to X %" or similar.
 ---
 
 # Release the mobile app
@@ -9,7 +9,11 @@ A release is: a `chore(release): bump version to X.Y.Z` commit on `main`
 (`package.json` + `src-tauri/tauri.conf.json`), then a `vX.Y.Z` GitHub
 release. Creating the release creates the tag, and the tag push runs
 `.github/workflows/build-mobile.yml`, which builds and uploads the signed
-iOS build to TestFlight and the Android build to Play Internal.
+iOS build to TestFlight and the Android build to Play Internal. Both reach
+internal testers on their own: the internal TestFlight group gets every
+build, and a tag upload is rolled out on Play's internal track. Anything
+further (closed / open testing, production, App Store review) is a
+promotion, see "Stores" below.
 
 The user asking for a release **is** the permission to push the bump to
 `main` and create the release. Don't ask again. Stop and ask only in the
@@ -92,6 +96,46 @@ gh run list --workflow build-mobile.yml --branch "v$NEW" -L 1 \
 The run can take a few seconds to show up; retry a few times. Check
 `headSha` is `$COMMIT`. Don't wait for the build to finish (it takes a
 long time) unless the user asks; `gh run view <id>` shows its state later.
+
+## Stores
+
+Two workflows drive the stores with the CI's own keys (the App Store
+Connect API key and the Play service account), through
+`scripts/stores/play.py` and `scripts/stores/appstore.py` (`--help` lists
+their commands).
+
+**What is where** (read-only, safe to run any time):
+
+```bash
+gh workflow run store-status.yml
+gh run list --workflow store-status.yml -L 1 --json databaseId,url
+gh run view <id> --log | grep -E '\| '   # the job summaries hold the tables
+```
+
+It also checks the keys can still do every promotion; a red job names the
+refused call (a missing role).
+
+**Promotions** go through `store-promote.yml`. Every run starts with a
+dry run (Play validates the change and discards it; App Store writes are
+printed). With `apply=true` the real run waits in the `store-release`
+environment for a human approval.
+
+```bash
+gh workflow run store-promote.yml -f store=play \
+  -f args='promote --from internal --to production --rollout 0.1'
+gh workflow run store-promote.yml -f store=appstore \
+  -f args='submit --version X.Y.Z --notes "What changed, for users." --phased' -f apply=true
+```
+
+Play tracks: `internal`, `alpha` (closed testing), `beta` (open testing),
+`production`. TestFlight groups and App Store versions are listed by
+`store-status`.
+
+Run a dry run first and show the user the plan. Moving a build to
+testers outside the team, to production, or submitting it for App Review
+is outward-facing: only with the user's explicit ask for that version and
+channel, and `apply=true` only then. The user writes the App Store "What's
+New" text or approves yours word for word.
 
 ## Report
 
