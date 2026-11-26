@@ -1820,24 +1820,18 @@ jobs:
         #      ANDROID_PLAY_SERVICE_ACCOUNT_JSON repo secret.
         #   3. The first AAB MUST have been uploaded manually to
         #      create the listing (already done at v0.4.0).
-        # `status: completed` rolls out to internal testers
-        # immediately; switch to `draft` if you want to gate behind
-        # a Play Console "Review and roll out" click.
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.ANDROID_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.pollenrobotics.reachymini
           releaseFiles: ${{ steps.pack.outputs.aab }}
           track: internal
-          # `status: draft` is required while the Play app itself
-          # is still in draft state (i.e. has never been through
-          # review). Completing the Play Console listing and
-          # submitting one release for review moves the app out of
-          # draft and unlocks `status: completed` for auto-rollout.
-          # Until then each CI run uploads a draft you must roll out
-          # manually in Play Console → Internal testing → "Review
-          # release → Roll out to internal testing".
-          status: draft
+          # A tag rolls straight out to internal testers. A manual
+          # dispatch (pipeline test, possibly from a branch) stays a
+          # draft: `scripts/stores/play.py complete-draft` or Play Console
+          # rolls it out. Draft-only uploads were needed while the Play
+          # app had never been through review; that is no longer the case.
+          status: ${{ startsWith(github.ref, 'refs/tags/v') && 'completed' || 'draft' }}
           # No whatsNewDirectory: Play falls back to the previous
           # release's notes. Acceptable for internal testing; switch
           # to a per-tag changelog later if testers ask for it.
