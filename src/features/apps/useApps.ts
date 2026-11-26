@@ -77,6 +77,7 @@ import { queryClient } from '@/queryClient';
 import { WEBSITE_API_URL } from '@/shared/env';
 
 import { prefetchAppIcons } from './iconCache';
+import { isReplacedByNativeSurface } from './nativeReplacements';
 import type {
   ApiCategoryEntry,
   AppEntry,
@@ -397,7 +398,7 @@ export function normalizeCatalog(payload: unknown): CatalogPayload {
   const apps: AppEntry[] = [];
   for (const r of raw.apps ?? []) {
     const normalized = normalizeApp(r);
-    if (normalized) apps.push(normalized);
+    if (normalized && !isReplacedByNativeSurface(normalized.id)) apps.push(normalized);
   }
   return {
     apps,
