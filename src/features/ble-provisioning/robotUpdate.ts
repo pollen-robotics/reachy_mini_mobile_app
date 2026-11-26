@@ -26,7 +26,11 @@
  * without a robot.
  */
 
-import { updateLanded } from '@/features/daemon-update/latestRelease';
+import {
+  isAtLeast,
+  MIN_SKIP_SETUP_UPDATE_VERSION,
+  updateLanded,
+} from '@/features/daemon-update/latestRelease';
 
 import type { UpdateCheck, UpdateInfo } from './updateProtocol';
 
@@ -35,7 +39,8 @@ export const UPDATE_POLL_INTERVAL_MS = 2_500;
 /** Hard ceiling for install + restart. A Pi on a slow link can take minutes. */
 export const UPDATE_TIMEOUT_MS = 8 * 60_000;
 
-export type RobotUpdateStage = 'installing' | 'restarting';
+/** `offer`: waiting for the user to install or skip. */
+export type RobotUpdateStage = 'offer' | 'installing' | 'restarting';
 
 export interface RobotUpdateProgress {
   stage: RobotUpdateStage;
@@ -74,6 +79,8 @@ export interface RobotUpdateDeps {
   /** Re-open the BLE PIN session (it expires after 300 s). */
   reauthenticate: () => Promise<boolean>;
   check: () => Promise<UpdateCheck>;
+  /** Ask the user whether to install now; false skips the update. */
+  offer: (check: UpdateCheck) => Promise<boolean>;
   start: () => Promise<string>;
   info: (jobId: string) => Promise<UpdateInfo>;
   /** Daemon version read over HTTP at the robot's LAN IP; null if unreachable. */
@@ -104,6 +111,14 @@ export async function updateRobot(deps: RobotUpdateDeps): Promise<RobotUpdateOut
   }
   if (deps.isCancelled()) return null;
   if (!check.available) return { kind: 'up-to-date', version: check.current };
+
+  // A daemon whose sign-in survives a later update can defer it (demo, no time).
+  if (isAtLeast(check.current, MIN_SKIP_SETUP_UPDATE_VERSION)) {
+    if (!(await deps.offer(check))) return { kind: 'skipped', reason: 'user' };
+    if (deps.isCancelled()) return null;
+    // The user may have taken longer than the PIN session lives.
+    if (!(await deps.reauthenticate())) return { kind: 'skipped', reason: 'pin' };
+  }
 
   const progress: RobotUpdateProgress = {
     stage: 'installing',

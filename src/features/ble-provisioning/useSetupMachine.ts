@@ -297,6 +297,8 @@ export interface SetupMachine {
   submitPassword: (password: string, ssid?: string) => void;
   /** Robot already on Wi-Fi: skip provisioning, jump to account linking. */
   skipWifiSetup: () => void;
+  /** Answer the pre-sign-in update offer: install now, or skip it. */
+  answerRobotUpdate: (install: boolean) => void;
   linkAccount: () => void;
   retry: () => void;
   reset: () => void;
@@ -329,6 +331,8 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
   const [deviceUserCode, setDeviceUserCode] = useState<string | null>(null);
   const [deviceVerificationUri, setDeviceVerificationUri] = useState<string | null>(null);
   const [robotUpdate, setRobotUpdate] = useState<RobotUpdateProgress | null>(null);
+  // Resolves the pending update offer (`robotUpdate.stage === 'offer'`).
+  const answerUpdateRef = useRef<((install: boolean) => void) | null>(null);
 
   // Values threaded through async chains (avoid stale-closure reads).
   const pinRef = useRef<string>('');
@@ -690,6 +694,13 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
           // can take longer than that.
           reauthenticate: () => authenticate(pinRef.current),
           check: updateCheck,
+          offer: (check) =>
+            new Promise<boolean>((resolve) => {
+              if (stale()) return resolve(false);
+              answerUpdateRef.current = resolve;
+              setRobotUpdate({ stage: 'offer', from: check.current, to: check.latest });
+              setPhase('updating-robot');
+            }),
           start: updateStart,
           info: updateInfo,
           readVersion: () => readDaemonVersion(ip),
@@ -1204,6 +1215,11 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     }
   }, [scheduleBleScanStart, resolveRobotIp]);
 
+  const answerRobotUpdate = useCallback((install: boolean) => {
+    answerUpdateRef.current?.(install);
+    answerUpdateRef.current = null;
+  }, []);
+
   const canGoBack =
     phase !== 'scanning' && phase !== 'done' && phase !== 'error' && phase !== 'updating-robot';
 
@@ -1258,6 +1274,7 @@ export function useSetupMachine({ token }: UseSetupMachineOptions): SetupMachine
     selectNetwork,
     submitPassword,
     skipWifiSetup,
+    answerRobotUpdate,
     linkAccount,
     retry,
     reset,

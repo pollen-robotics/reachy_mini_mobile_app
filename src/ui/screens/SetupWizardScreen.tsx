@@ -290,7 +290,7 @@ function StepView({
     case 'wifi-connecting':
       return <ConnectingView ssid={m.selectedSsid ?? ''} stage="joining" />;
     case 'updating-robot':
-      return <UpdatingRobotView progress={m.robotUpdate} />;
+      return <UpdatingRobotView progress={m.robotUpdate} onAnswer={m.answerRobotUpdate} />;
     case 'linking-account':
       return (
         <LinkAccountView
@@ -785,7 +785,30 @@ function ConnectingView({ ssid, stage }: { ssid: string; stage: 'joining' | 'reg
  * restarting on it. The restart drops Bluetooth; the flow moves on by itself
  * once the robot answers on its new version.
  */
-function UpdatingRobotView({ progress }: { progress: RobotUpdateProgress | null }) {
+function UpdatingRobotView({
+  progress,
+  onAnswer,
+}: {
+  progress: RobotUpdateProgress | null;
+  onAnswer: (install: boolean) => void;
+}) {
+  if (progress?.stage === 'offer') {
+    return (
+      <SetupScaffold
+        title="New software available"
+        caption={
+          `${progress.to ? `Version ${progress.to}` : 'A new version'} is available. ` +
+          'Installing takes a minute or two, or you can update later from the app.'
+        }
+        actions={
+          <Stack spacing={1} sx={{ width: '100%' }}>
+            <PrimaryButton onClick={() => onAnswer(true)}>Update now</PrimaryButton>
+            <TextButton onClick={() => onAnswer(false)}>Skip for now</TextButton>
+          </Stack>
+        }
+      />
+    );
+  }
   const caption =
     progress?.stage === 'restarting'
       ? 'Restarting with the new software. This takes about a minute.'

@@ -23,6 +23,7 @@ function deps(overrides: Partial<RobotUpdateDeps> = {}): RobotUpdateDeps & { clo
     clock,
     reauthenticate: vi.fn(async () => true),
     check: vi.fn(async () => ({ available: true, current: '1.8.2', latest: '1.13.0' })),
+    offer: vi.fn(async () => true),
     start: vi.fn(async () => 'job-1'),
     info: vi.fn(async (): Promise<UpdateInfo> => ({ status: 'in_progress', lines: 1, last: 'Installing' })),
     readVersion: vi.fn(async () => '1.8.2'),
@@ -66,6 +67,32 @@ describe('updateRobot', () => {
   it('skips when the PIN session cannot be reopened', async () => {
     const d = deps({ reauthenticate: vi.fn(async () => false) });
     await expect(updateRobot(d)).resolves.toMatchObject({ kind: 'skipped', reason: 'pin' });
+  });
+
+  it('never offers a skip below 1.12: the login would not survive the update', async () => {
+    const d = deps({ check: vi.fn(async () => ({ available: true, current: '1.11.9', latest: '1.13.0' })) });
+    d.readVersion = vi.fn(async () => '1.13.0');
+    await expect(updateRobot(d)).resolves.toEqual({ kind: 'updated', version: '1.13.0' });
+    expect(d.offer).not.toHaveBeenCalled();
+  });
+
+  it('lets a 1.12+ robot skip the update', async () => {
+    const d = deps({
+      check: vi.fn(async () => ({ available: true, current: '1.12.0', latest: '1.13.0' })),
+      offer: vi.fn(async () => false),
+    });
+    await expect(updateRobot(d)).resolves.toEqual({ kind: 'skipped', reason: 'user' });
+    expect(d.start).not.toHaveBeenCalled();
+  });
+
+  it('re-opens the PIN session before installing an accepted offer', async () => {
+    const d = deps({
+      check: vi.fn(async () => ({ available: true, current: '1.12.0', latest: '1.13.0' })),
+      readVersion: vi.fn(async () => '1.13.0'),
+    });
+    await expect(updateRobot(d)).resolves.toEqual({ kind: 'updated', version: '1.13.0' });
+    expect(d.offer).toHaveBeenCalledTimes(1);
+    expect(d.reauthenticate).toHaveBeenCalledTimes(2);
   });
 
   it('follows the install over BLE, then confirms the restart over HTTP', async () => {

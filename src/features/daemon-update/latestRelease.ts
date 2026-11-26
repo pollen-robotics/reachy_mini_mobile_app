@@ -82,6 +82,13 @@ export function isDaemonOutdated(
  */
 export const MIN_COMPATIBLE_DAEMON_VERSION = '1.10.0';
 
+/**
+ * Oldest daemon whose sign-in survives a later update: <= 1.11 store the
+ * login where 1.12+ no longer read it. At or above it the setup update can
+ * be skipped.
+ */
+export const MIN_SKIP_SETUP_UPDATE_VERSION = '1.12.0';
+
 /** True only when `version` parses AND is at or past `min`. */
 export function isAtLeast(version: string | null | undefined, min: string): boolean {
   const v = parseSemver(version);
