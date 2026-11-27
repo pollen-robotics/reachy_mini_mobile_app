@@ -7,6 +7,7 @@
     appstore.py submit --version X.Y.Z --notes TEXT [--build N] [--phased] [--manual-release]
     appstore.py release --version X.Y.Z          (after approval, with a manual release)
     appstore.py phased --version X.Y.Z --state ACTIVE|PAUSED|COMPLETE
+    appstore.py age-rating [--set QUESTION=VALUE ...]   (e.g. socialMedia=false)
 
 With --dry-run every read runs and every write is printed instead of sent.
 
@@ -377,6 +378,30 @@ def cmd_phased(asc: Asc, args) -> None:
         'attributes': {'phasedReleaseState': args.state}}}, f'set phased release {args.state}')
 
 
+def cmd_age_rating(asc: Asc, args) -> None:
+    """Show the age rating declaration of the version being prepared; --set answers questions."""
+    infos = asc.get(f'/v1/apps/{asc.app_id}/appInfos').get('data', [])
+    live = ('READY_FOR_DISTRIBUTION', 'REPLACED_WITH_NEW_INFO')
+    info = next((i for i in infos if i['attributes'].get('state') not in live), None)
+    if info is None:
+        sys.exit('No editable app info (nothing is being prepared)')
+    decl = asc.get(f"/v1/appInfos/{info['id']}/ageRatingDeclaration")['data']
+    attrs = decl['attributes']
+    print(f"Age rating declaration ({info['attributes'].get('state')}):")
+    for key in sorted(attrs):
+        print(f'  {key}: {"UNANSWERED" if attrs[key] is None else attrs[key]}')
+    changes = {}
+    for item in args.set or []:
+        key, _, raw = item.partition('=')
+        if key not in attrs:
+            sys.exit(f'Unknown age rating question: {key}')
+        changes[key] = {'true': True, 'false': False}.get(raw.lower(), raw)
+    if changes:
+        asc.write('PATCH', f"/v1/ageRatingDeclarations/{decl['id']}", {'data': {
+            'type': 'ageRatingDeclarations', 'id': decl['id'], 'attributes': changes}},
+            'answer ' + ', '.join(f'{k}={v}' for k, v in changes.items()))
+
+
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--dry-run', action='store_true', help='print writes instead of sending them')
@@ -398,6 +423,9 @@ def main(argv: list[str]) -> None:
     p.add_argument('--manual-release', action='store_true', help='hold the approved version for `release`')
     p = sub.add_parser('release', parents=[common])
     p.add_argument('--version', required=True)
+    p = sub.add_parser('age-rating', parents=[common])
+    p.add_argument('--set', action='append', metavar='QUESTION=VALUE',
+                   help='answer a question, e.g. socialMedia=false (repeatable)')
     p = sub.add_parser('phased', parents=[common])
     p.add_argument('--version', required=True)
     p.add_argument('--state', required=True, choices=['ACTIVE', 'PAUSED', 'COMPLETE'])
@@ -406,7 +434,7 @@ def main(argv: list[str]) -> None:
     asc = Asc(args.dry_run)
     handlers = {
         'status': cmd_status, 'check-access': cmd_check_access, 'testflight': cmd_testflight,
-        'submit': cmd_submit, 'release': cmd_release, 'phased': cmd_phased,
+        'submit': cmd_submit, 'release': cmd_release, 'phased': cmd_phased, 'age-rating': cmd_age_rating,
     }
     try:
         handlers[args.cmd](asc, args)
