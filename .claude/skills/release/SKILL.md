@@ -99,43 +99,18 @@ long time) unless the user asks; `gh run view <id>` shows its state later.
 
 ## Stores
 
-Two workflows drive the stores with the CI's own keys (the App Store
-Connect API key and the Play service account), through
-`scripts/stores/play.py` and `scripts/stores/appstore.py` (`--help` lists
-their commands).
+Moving a build between store channels (Play tracks, TestFlight groups,
+App Review, staged / phased rollouts, release notes, age rating) has its
+own guide: read [STORES.md](STORES.md) before any store command. In
+short:
 
-**What is where** (read-only, safe to run any time):
-
-```bash
-gh workflow run store-status.yml
-gh run list --workflow store-status.yml -L 1 --json databaseId,url
-gh run view <id> --log | grep -E '\| '   # the job summaries hold the tables
-```
-
-It also checks the keys can still do every promotion; a red job names the
-refused call (a missing role).
-
-**Promotions** go through `store-promote.yml`. Every run starts with a
-dry run (Play validates the change and discards it; App Store writes are
-printed). With `apply=true` the real run waits in the `store-release`
-environment for a human approval.
-
-```bash
-gh workflow run store-promote.yml -f store=play \
-  -f args='promote --from internal --to production --rollout 0.1'
-gh workflow run store-promote.yml -f store=appstore \
-  -f args='submit --version X.Y.Z --notes "What changed, for users." --phased' -f apply=true
-```
-
-Play tracks: `internal`, `alpha` (closed testing), `beta` (open testing),
-`production`. TestFlight groups and App Store versions are listed by
-`store-status`.
-
-Run a dry run first and show the user the plan. Moving a build to
-testers outside the team, to production, or submitting it for App Review
-is outward-facing: only with the user's explicit ask for that version and
-channel, and `apply=true` only then. The user writes the App Store "What's
-New" text or approves yours word for word.
+- `store-status.yml` shows what is where. Read-only, run it any time.
+- `store-promote.yml` moves builds: a dry run first, the real change only
+  with `apply=true`. The `store-release` environment has no required
+  reviewer yet, so `apply=true` goes through at once.
+- Anything past internal testing, the rollout percentage, the release
+  notes and any age-rating answer need the user's explicit ask for that
+  version and channel.
 
 ## Report
 
