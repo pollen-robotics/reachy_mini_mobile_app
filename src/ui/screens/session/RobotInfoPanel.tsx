@@ -82,14 +82,16 @@
  *                       while the engine hasn't reached `ready`.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, CircularProgress, IconButton, Stack, Tooltip, Typography } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
+import ArrowUpwardRoundedIcon from '@mui/icons-material/ArrowUpwardRounded';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 
 import { formatEntriesForCopy, useDaemonLogs } from '@/features/daemon-logs';
+import { useConvAppUpdate, type ConvAppUpdateState } from '@/features/conv-app/useConvAppUpdate';
 import { useDaemonState } from '@/features/daemon-state';
 import type { ConversationTransportInfo } from '@/features/conversation/engine/conversation-engine';
 import type { TelemetryStatus } from '@/features/robot-session/sdk-types';
@@ -178,7 +180,10 @@ interface RobotInfoPanelProps {
    * `Pick` so the dependency surface is explicit at the call site
    * and the panel can be unit-tested with a fake handle.
    */
-  session: Pick<RobotSessionHandle, 'subscribeLogs' | 'webrtcTransport' | 'getRobot'>;
+  session: Pick<
+    RobotSessionHandle,
+    'subscribeLogs' | 'webrtcTransport' | 'getRobot' | 'conversationState' | 'stopConversation'
+  >;
   /**
    * Becomes `true` once the engine has reached `ready` for the
    * first time. Gates the daemon log subscription so we don't
@@ -212,6 +217,13 @@ export default function RobotInfoPanel({
         `Daemon ${versionLabel}`,
       ])
     : undefined;
+  // The update stops the app on the robot: a live conversation is stopped
+  // through the engine first, so the Talk tab does not keep following it.
+  const convApp = useConvAppUpdate(
+    session.getRobot,
+    isLive,
+    session.conversationState === 'idle' ? undefined : session.stopConversation
+  );
   const fullHardwareId = hardwareId ?? fallbackId ?? null;
 
   // Daemon log buffer. Lives in the panel host so the copy button
@@ -611,37 +623,17 @@ export default function RobotInfoPanel({
               copyText={incidentsCopyText}
             />
           </Section>
-          {/* Software section. Both version numbers (daemon firmware
-            + this mobile app) are surfaced together on ONE row,
-            split into two equal cells by a hairline divider. The
-            section header ("SOFTWARE") already names the group,
-            so the row drops the redundant left-label column the
-            other sections use and gives each version balanced
-            visual weight - which is what the user actually copies
-            into a bug report ("daemon X, app Y"). The version
-            strings stay monospaced for legibility / line-up. */}
+          {/* Software section: one row per version (daemon, this app,
+            the on-robot conversation app), what a bug report needs. */}
           <Section label="Software">
-            <Stack
-              direction="row"
-              sx={{
-                alignItems: 'center',
-                px: 1.5,
-                py: 1,
-                minHeight: 40,
-              }}
-            >
-              <VersionCell label="Daemon" value={versionLabel} />
-              <Box
-                sx={theme => ({
-                  width: '1px',
-                  alignSelf: 'stretch',
-                  mx: 1.5,
-                  my: 0.25,
-                  bgcolor: theme.palette.divider,
-                })}
-              />
-              <VersionCell label="App" value={`v${__APP_VERSION__}`} />
-            </Stack>
+            <MetadataRow label="Daemon" value={versionLabel} mono />
+            <MetadataRow label="App" value={`v${__APP_VERSION__}`} mono />
+            <MetadataRow
+              label="Conversation"
+              value={convApp.version ? `v${convApp.version}` : '—'}
+              mono
+              trailing={<ConvAppUpdateBadge state={convApp.state} onUpdate={convApp.update} />}
+            />
           </Section>
           {telemetry && (
             <Section label="Privacy">
@@ -775,53 +767,30 @@ function StatusDotLabel({ color, label }: { color: string; label: string }) {
 }
 
 /**
- * One half of the "Software" row - a muted inline label followed
- * by a monospaced version string. Two of these sit side-by-side
- * inside the Software `<Section>`, separated by a hairline
- * divider, so the user reads both versions ("daemon X, app Y")
- * on a single visual line instead of stacked rows.
- *
- * `flex: 1` + `minWidth: 0` lets each cell shrink with truncation
- * if either version string blows out the row width (e.g. a long
- * pre-release tag); the labels stay pinned at full width thanks
- * to `flexShrink: 0`.
+ * Next to the conversation app's version: a spinner while it updates, an up
+ * arrow when its Space has a newer commit (red after a failed update) to run
+ * the update, which stops the conversation.
  */
-function VersionCell({ label, value }: { label: string; value: string }) {
+function ConvAppUpdateBadge({
+  state,
+  onUpdate,
+}: {
+  state: ConvAppUpdateState;
+  onUpdate: () => void;
+}) {
+  if (state === 'updating') return <CircularProgress size={12} aria-label="Updating the conversation app" />;
+  if (state !== 'available' && state !== 'failed') return null;
+  // No Tooltip on mobile, same as the copy buttons.
   return (
-    <Stack
-      direction="row"
-      spacing={1}
-      sx={{
-        alignItems: 'baseline',
-        flex: 1,
-        minWidth: 0,
-      }}
+    <IconButton
+      size="small"
+      color={state === 'failed' ? 'error' : 'primary'}
+      onClick={onUpdate}
+      aria-label={state === 'failed' ? 'Retry the conversation app update' : 'Update the conversation app'}
+      sx={{ width: 24, height: 24, p: 0.25 }}
     >
-      <Typography
-        component="span"
-        sx={{
-          fontSize: TYPO.sm,
-          color: 'text.secondary',
-          flexShrink: 0,
-        }}
-      >
-        {label}
-      </Typography>
-      <Typography
-        component="span"
-        sx={{
-          fontSize: TYPO.sm,
-          color: 'text.primary',
-          fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {value}
-      </Typography>
-    </Stack>
+      <ArrowUpwardRoundedIcon sx={{ fontSize: 16 }} />
+    </IconButton>
   );
 }
 
@@ -840,6 +809,7 @@ function MetadataRow({
   copyable = false,
   copyText,
   info,
+  trailing,
 }: {
   label: string;
   value: React.ReactNode;
@@ -858,6 +828,8 @@ function MetadataRow({
    * `Session` row in the Account section).
    */
   info?: string;
+  /** Rendered after the value (e.g. an action button). */
+  trailing?: React.ReactNode;
 }) {
   const stringValue = copyText ?? (typeof value === 'string' ? value : null);
 
@@ -962,6 +934,7 @@ function MetadataRow({
             <ContentCopyIcon sx={{ fontSize: 12 }} />
           </IconButton>
         )}
+        {trailing}
       </Box>
     </Stack>
   );
