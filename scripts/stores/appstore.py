@@ -44,10 +44,17 @@ class AscError(Exception):
     def short(self) -> str:
         try:
             errors = json.loads(self.body).get('errors', [])
-            text = '; '.join(f"{e.get('code')}: {e.get('detail') or e.get('title')}" for e in errors)
         except ValueError:
-            text = self.body
-        return f'HTTP {self.status}: {text.strip()[:300]}'
+            return f'HTTP {self.status}: {self.body.strip()[:300]}'
+        lines = [f"HTTP {self.status}: " + '; '.join(
+            f"{e.get('code')}: {e.get('detail') or e.get('title')}" for e in errors)]
+        # A refused review submission names the actual blockers here
+        # (missing screenshots, age rating, export compliance, ...).
+        for e in errors:
+            for resource, nested in ((e.get('meta') or {}).get('associatedErrors') or {}).items():
+                for n in nested:
+                    lines.append(f"  {resource}: {n.get('code')}: {n.get('detail') or n.get('title')}")
+        return '\n'.join(lines)
 
 
 class Asc:

@@ -217,6 +217,8 @@ def cmd_complete_draft(play: Play, args) -> None:
 
 def cmd_promote(play: Play, args) -> None:
     fraction = check_fraction(args.rollout)
+    if args.notes and len(args.notes) > 500:
+        sys.exit(f'--notes is {len(args.notes)} characters, Play allows 500')
     edit = Edit(play)
     try:
         source_releases = edit.track(args.source).get('releases', [])
@@ -227,13 +229,16 @@ def cmd_promote(play: Play, args) -> None:
         codes = set(source.get('versionCodes', []))
         if any(codes & set(r.get('versionCodes', [])) for r in before if r.get('status') != 'draft'):
             sys.exit(f"{describe(source)} is already on {args.target}")
+        promoted = as_status(source, 'completed') if fraction >= 1 else as_status(source, 'inProgress', fraction)
+        if args.notes:
+            promoted['releaseNotes'] = [{'language': args.notes_language, 'text': args.notes}]
         if fraction >= 1:
-            after = [as_status(source, 'completed')]
+            after = [promoted]
         else:
             # A staged rollout: the current completed release keeps serving
             # everyone outside the rollout fraction.
             serving = newest(before, ('completed',), None)
-            after = ([serving] if serving else []) + [as_status(source, 'inProgress', fraction)]
+            after = ([serving] if serving else []) + [promoted]
         show_plan(args.target, before, after)
         edit.set_releases(args.target, after)
         edit.finish(args.dry_run)
@@ -298,6 +303,8 @@ def main(argv: list[str]) -> None:
     p.add_argument('--to', dest='target', required=True)
     p.add_argument('--version-code')
     p.add_argument('--rollout', type=float, default=1.0, help='fraction of users, 1 = everyone')
+    p.add_argument('--notes', help="What's new, at most 500 characters")
+    p.add_argument('--notes-language', default='en-US')
     p = sub.add_parser('rollout', parents=[common])
     p.add_argument('--track', default='production')
     p.add_argument('--fraction', type=float, required=True)
